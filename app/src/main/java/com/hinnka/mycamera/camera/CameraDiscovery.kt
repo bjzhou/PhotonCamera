@@ -207,7 +207,7 @@ class CameraDiscovery(private val context: Context) {
     /**
      * 计算摄像头的固有变焦比例
      * 
-     * intrinsicZoomRatio = 设备默认视角 / 该摄像头视角
+     * intrinsicZoomRatio = 该摄像头35mm等效焦距 / 主摄35mm等效焦距
      * 
      * - 主摄返回 ~1.0
      * - 广角返回 < 1.0 (如 0.5, 0.6)
@@ -219,25 +219,14 @@ class CameraDiscovery(private val context: Context) {
         lensFacing: Int
     ): Float {
         try {
-            // 获取该摄像头的视角
-            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-            val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val current35mm = get35mmEquivalentFocalLength(characteristics)
+            val default35mm = getDefault35mmEquivalent(lensFacing)
             
-            if (focalLengths == null || focalLengths.isEmpty() || sensorSize == null) {
+            if (current35mm <= 0 || default35mm <= 0) {
                 return 1f
             }
             
-            val focalLength = focalLengths.first()
-            val viewAngle = focalLengthToViewAngle(focalLength, sensorSize.width)
-            
-            // 获取设备默认视角（主摄视角）
-            val defaultViewAngle = getDefaultViewAngle(lensFacing)
-            
-            if (viewAngle <= 0 || defaultViewAngle <= 0) {
-                return 1f
-            }
-            
-            return defaultViewAngle / viewAngle
+            return current35mm / default35mm
             
         } catch (e: Exception) {
             Log.w(TAG, "Failed to calculate intrinsicZoomRatio for camera $cameraId", e)
@@ -246,9 +235,9 @@ class CameraDiscovery(private val context: Context) {
     }
     
     /**
-     * 获取设备默认视角（主摄视角）
+     * 获取设备默认35mm等效焦距（主摄）
      */
-    private fun getDefaultViewAngle(lensFacing: Int): Float {
+    private fun getDefault35mmEquivalent(lensFacing: Int): Float {
         try {
             for (cameraId in cameraManager.cameraIdList) {
                 val characteristics = cameraManager.getCameraCharacteristics(cameraId)
@@ -256,27 +245,40 @@ class CameraDiscovery(private val context: Context) {
                 
                 if (facing != lensFacing) continue
                 
-                val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                
-                if (focalLengths != null && focalLengths.isNotEmpty() && sensorSize != null) {
-                    return focalLengthToViewAngle(focalLengths.first(), sensorSize.width)
-                }
+                return get35mmEquivalentFocalLength(characteristics)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get default view angle", e)
+            Log.w(TAG, "Failed to get default focal length", e)
         }
         
         return 0f
     }
     
     /**
-     * 焦距转视角（度）
-     * viewAngle = 2 * atan(sensorWidth / (2 * focalLength))
+     * 计算 35mm 等效焦距
+     * 35mm Equivalent = Physical Focal Length * (35mm Diagonal / Sensor Diagonal)
      */
-    private fun focalLengthToViewAngle(focalLength: Float, sensorWidth: Float): Float {
-        if (focalLength <= 0 || sensorWidth <= 0) return 0f
-        return Math.toDegrees(2 * kotlin.math.atan((sensorWidth / (2 * focalLength)).toDouble())).toFloat()
+    private fun get35mmEquivalentFocalLength(characteristics: CameraCharacteristics): Float {
+        val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+        val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        
+        if (focalLengths == null || focalLengths.isEmpty() || sensorSize == null) {
+            return 0f
+        }
+        
+        val focalLength = focalLengths[0]
+        
+        // 计算传感器对角线
+        val sensorDiagonal = kotlin.math.sqrt(
+            (sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height).toDouble()
+        ).toFloat()
+        
+        // 35mm 全画幅对角线 (36mm x 24mm)
+        val filmDiagonal = 43.2666f 
+        
+        if (sensorDiagonal <= 0) return 0f
+        
+        return focalLength * filmDiagonal / sensorDiagonal
     }
     
     /**
@@ -318,12 +320,7 @@ class CameraDiscovery(private val context: Context) {
         val focalLength = focalLengths?.firstOrNull() ?: 0f
         
         // 计算 35mm 等效焦距
-        val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-        val focalLength35mm = if (sensorSize != null && focalLength > 0) {
-            focalLength * (36f / sensorSize.width)
-        } else {
-            0f
-        }
+        val focalLength35mm = get35mmEquivalentFocalLength(characteristics)
         
         // ISO 范围
         val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
