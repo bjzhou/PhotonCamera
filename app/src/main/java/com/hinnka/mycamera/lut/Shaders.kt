@@ -25,11 +25,15 @@ object Shaders {
         // 输出到片元着色器
         out vec2 vTexCoord;
         
+        // MVP 变换矩阵（用于 center crop 缩放）
+        uniform mat4 uMVPMatrix;
+        
         // SurfaceTexture 变换矩阵
         uniform mat4 uSTMatrix;
         
         void main() {
-            gl_Position = aPosition;
+            // 应用 MVP 矩阵进行顶点变换（center crop）
+            gl_Position = uMVPMatrix * aPosition;
             // 应用 SurfaceTexture 变换矩阵
             vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
         }

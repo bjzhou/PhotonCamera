@@ -26,7 +26,6 @@ import com.hinnka.mycamera.ui.components.FocusIndicator
 @Composable
 fun CameraPreviewGL(
     aspectRatio: AspectRatio,
-    previewSize: Size,
     currentLut: LutConfig?,
     lutIntensity: Float,
     focusPoint: Pair<Float, Float>?,
@@ -82,7 +81,6 @@ fun CameraPreviewGL(
             AndroidView(
                 factory = { ctx ->
                     CameraGLSurfaceView(ctx).apply {
-                        setPreviewSize(previewSize.width, previewSize.height)
                         
                         // CameraX SurfaceProvider 准备好时通知
                         this.onSurfaceProviderReady = { surfaceProvider ->

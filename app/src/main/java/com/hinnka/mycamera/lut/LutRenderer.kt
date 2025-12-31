@@ -45,6 +45,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var indexBufferId: Int = 0
     
     // Uniform 位置
+    private var uMVPMatrixLocation: Int = 0
     private var uSTMatrixLocation: Int = 0
     private var uCameraTextureLocation: Int = 0
     private var uLutTextureLocation: Int = 0
@@ -58,6 +59,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     
     // SurfaceTexture 变换矩阵
     private val stMatrix = FloatArray(16)
+    
+    // MVP 变换矩阵（用于 center crop）
+    private val mvpMatrix = FloatArray(16)
     
     // 相机 SurfaceTexture
     private var surfaceTexture: SurfaceTexture? = null
@@ -139,6 +143,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         
         GLES30.glViewport(0, 0, width, height)
         
+        // 更新 MVP 矩阵以处理 center crop
+        updateMVPMatrix()
+        
         GlUtils.checkGlError("onSurfaceChanged")
     }
     
@@ -178,6 +185,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 始终设置 uLutTexture 指向 Unit 1
         // 即使 lutEnabled 为 false，Shader 内部可能不会采样它，但 Uniform 的值必须有效
         GLES30.glUniform1i(uLutTextureLocation, 1)
+        
+        // 设置 MVP 矩阵（用于 center crop）
+        GLES30.glUniformMatrix4fv(uMVPMatrixLocation, 1, false, mvpMatrix, 0)
         
         // 设置其他 Uniforms
         GLES30.glUniformMatrix4fv(uSTMatrixLocation, 1, false, stMatrix, 0)
@@ -251,6 +261,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
         
         // 获取 Uniform 位置
+        uMVPMatrixLocation = GLES30.glGetUniformLocation(programId, "uMVPMatrix")
         uSTMatrixLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
         uCameraTextureLocation = GLES30.glGetUniformLocation(programId, "uCameraTexture")
         uLutTextureLocation = GLES30.glGetUniformLocation(programId, "uLutTexture")
@@ -347,6 +358,47 @@ class LutRenderer : GLSurfaceView.Renderer {
         previewWidth = width
         previewHeight = height
         surfaceTexture?.setDefaultBufferSize(width, height)
+        // 更新 MVP 矩阵以处理 center crop
+        updateMVPMatrix()
+    }
+    
+    /**
+     * 更新 MVP 矩阵以实现 center crop 效果
+     * 
+     * 当预览尺寸与显示区域比例不匹配时，放大画面并裁切超出部分
+     */
+    private fun updateMVPMatrix() {
+        if (viewportWidth == 0 || viewportHeight == 0) {
+            Matrix.setIdentityM(mvpMatrix, 0)
+            return
+        }
+        
+        // 预览尺寸是横向的（如 1920x1080），但显示区域可能是竖向的
+        // 相机预览会自动旋转，所以这里需要交换预览的宽高来计算比例
+        val previewAspect = previewHeight.toFloat() / previewWidth.toFloat()
+        val viewAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
+        
+        Matrix.setIdentityM(mvpMatrix, 0)
+        
+        if (previewAspect != viewAspect) {
+            val scaleX: Float
+            val scaleY: Float
+            
+            if (viewAspect > previewAspect) {
+                // 显示区域更宽，需要基于宽度缩放，裁切上下
+                scaleX = 1f
+                scaleY = viewAspect / previewAspect
+            } else {
+                // 显示区域更高，需要基于高度缩放，裁切左右
+                scaleX = previewAspect / viewAspect
+                scaleY = 1f
+            }
+            
+            // 应用缩放
+            Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
+        }
+        
+        Log.d(TAG, "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}")
     }
     
     /**

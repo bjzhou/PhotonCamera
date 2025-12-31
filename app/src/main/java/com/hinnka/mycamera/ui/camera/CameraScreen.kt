@@ -78,7 +78,6 @@ fun CameraScreen(
         // 相机预览
         CameraPreviewGL(
             aspectRatio = state.aspectRatio,
-            previewSize = viewModel.getPreviewSize(),
             currentLut = viewModel.currentLutConfig,
             lutIntensity = state.lutIntensity,
             focusPoint = state.focusPoint,

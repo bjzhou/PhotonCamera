@@ -203,18 +203,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.focusOnPoint(x, y, viewWidth, viewHeight)
     }
     
-    /**
-     * 获取预览尺寸（固定 16:9）
-     * 使用固定尺寸，不同画面比例通过 UI 裁切实现
-     */
-    fun getPreviewSize(): Size {
-        val currentState = state.value
-        return CameraUtils.getFixedPreviewSize(
-            getApplication(),
-            currentState.currentCameraId
-        )
-    }
-    
     // ==================== LUT 相关方法 ====================
     
     /**
