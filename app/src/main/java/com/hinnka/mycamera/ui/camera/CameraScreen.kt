@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.camera
 
 import android.util.Log
 import android.view.Surface
+import androidx.camera.core.Preview
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -24,6 +25,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -49,20 +51,21 @@ fun CameraScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.state.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    var surface by remember { mutableStateOf<Surface?>(null) }
+    var surfaceProvider by remember { mutableStateOf<Preview.SurfaceProvider?>(null) }
     
-    // 当 surface 准备好时打开相机
-    LaunchedEffect(surface) {
-        surface?.let {
-            viewModel.openCamera(it)
+    // 当 surfaceProvider 准备好时绑定相机
+    LaunchedEffect(surfaceProvider) {
+        surfaceProvider?.let {
+            viewModel.bindCamera(lifecycleOwner, it)
         }
     }
     
     // 从后台返回时检查并恢复相机
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        // 只有在 surface 已经存在时才检查恢复
-        if (surface != null) {
+        // 只有在 surfaceProvider 已经存在时才检查恢复
+        if (surfaceProvider != null) {
             viewModel.checkAndRecoverCamera()
         }
     }
@@ -81,10 +84,12 @@ fun CameraScreen(
             focusPoint = state.focusPoint,
             isFocusing = state.isFocusing,
             focusSuccess = state.focusSuccess,
-            onSurfaceReady = { surface = it },
+            onSurfaceProviderReady = { provider ->
+                surfaceProvider = provider
+            },
             onSurfaceDestroyed = { 
                 viewModel.closeCamera()
-                surface = null
+                surfaceProvider = null
             },
             onTap = { x, y, w, h ->
                 viewModel.focusOnPoint(x, y, w, h)

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.camera
 
 import android.util.Size
 import android.view.Surface
+import androidx.camera.core.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -18,7 +19,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.ui.components.FocusIndicator
 
 /**
- * 相机预览组件 - OpenGL ES 版本
+ * 相机预览组件 - OpenGL ES 版本（CameraX 适配）
  * 
  * 使用 GLSurfaceView 渲染相机预览，支持实时 3D LUT 滤镜
  */
@@ -31,7 +32,7 @@ fun CameraPreviewGL(
     focusPoint: Pair<Float, Float>?,
     isFocusing: Boolean,
     focusSuccess: Boolean?,
-    onSurfaceReady: (Surface) -> Unit,
+    onSurfaceProviderReady: (Preview.SurfaceProvider) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
     modifier: Modifier = Modifier
@@ -83,8 +84,9 @@ fun CameraPreviewGL(
                     CameraGLSurfaceView(ctx).apply {
                         setPreviewSize(previewSize.width, previewSize.height)
                         
-                        this.onSurfaceReady = { surface ->
-                            onSurfaceReady(surface)
+                        // CameraX SurfaceProvider 准备好时通知
+                        this.onSurfaceProviderReady = { surfaceProvider ->
+                            onSurfaceProviderReady(surfaceProvider)
                         }
                         
                         this.onSurfaceDestroyed = {
@@ -118,6 +120,8 @@ fun CameraPreviewGL(
         }
     }
 }
+
+
 
 /**
  * 向后兼容的 CameraPreview（使用原有 TextureView 实现）

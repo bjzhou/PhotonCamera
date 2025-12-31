@@ -2,24 +2,28 @@ package com.hinnka.mycamera.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.ImageFormat
-import android.hardware.camera2.*
-import android.hardware.camera2.params.MeteringRectangle
-import android.hardware.camera2.params.OutputConfiguration
-import android.hardware.camera2.params.SessionConfiguration
-import android.media.ImageReader
-import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureRequest
 import android.util.Log
+import android.util.Range
 import android.view.Surface
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.CaptureRequestOptions
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executors
 
 /**
- * Camera2 API 核心控制器
+ * CameraX 核心控制器
  */
 class CameraController(private val context: Context) {
     
@@ -27,23 +31,22 @@ class CameraController(private val context: Context) {
         private const val TAG = "CameraController"
     }
     
-    private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var preview: Preview? = null
+    private var imageCapture: ImageCapture? = null
+    private var camera: Camera? = null
+    private var lifecycleOwner: LifecycleOwner? = null
     
-    private var cameraDevice: CameraDevice? = null
-    private var captureSession: CameraCaptureSession? = null
-    private var previewRequestBuilder: CaptureRequest.Builder? = null
-    
-    private var previewSurface: Surface? = null
-    private var imageReader: ImageReader? = null
-    
-    private var backgroundThread: HandlerThread? = null
-    private var backgroundHandler: Handler? = null
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
     
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
     
     // 设备旋转角度（由 ViewModel 更新）
     private var deviceRotation: Int = 0
+    
+    // Surface 提供者回调
+    private var currentSurfaceProvider: Preview.SurfaceProvider? = null
     
     // 图片拍摄回调
     var onImageCaptured: ((ByteArray) -> Unit)? = null
@@ -52,14 +55,39 @@ class CameraController(private val context: Context) {
      * 初始化相机
      */
     fun initialize() {
-        startBackgroundThread()
-        val cameras = CameraUtils.getAvailableCameras(context)
-        val defaultCameraId = CameraUtils.getDefaultBackCameraId(cameras) ?: cameras.firstOrNull()?.cameraId ?: ""
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            cameraProvider = cameraProviderFuture.get()
+            updateAvailableCameras()
+        }, ContextCompat.getMainExecutor(context))
+    }
+    
+    /**
+     * 更新可用相机列表
+     */
+    private fun updateAvailableCameras() {
+        val provider = cameraProvider ?: return
+        val cameras = mutableListOf<CameraInfo>()
+        
+        // 后置摄像头
+        if (provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
+            val backCameraInfo = createCameraInfo(provider, CameraSelector.DEFAULT_BACK_CAMERA, LensType.BACK_MAIN)
+            backCameraInfo?.let { cameras.add(it) }
+        }
+        
+        // 前置摄像头
+        if (provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+            val frontCameraInfo = createCameraInfo(provider, CameraSelector.DEFAULT_FRONT_CAMERA, LensType.FRONT)
+            frontCameraInfo?.let { cameras.add(it) }
+        }
+        
+        val defaultCameraId = cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }?.cameraId 
+            ?: cameras.firstOrNull()?.cameraId ?: ""
         
         _state.value = _state.value.copy(
             availableCameras = cameras,
             currentCameraId = defaultCameraId,
-            currentLensType = if (cameras.find { it.cameraId == defaultCameraId }?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+            currentLensType = if (cameras.find { it.cameraId == defaultCameraId }?.lensType == LensType.FRONT) {
                 LensType.FRONT
             } else {
                 LensType.BACK_MAIN
@@ -68,184 +96,150 @@ class CameraController(private val context: Context) {
     }
     
     /**
-     * 打开相机并开始预览
+     * 创建相机信息
      */
-    @SuppressLint("MissingPermission")
-    fun openCamera(surface: Surface) {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) {
-            Log.e(TAG, "No camera available")
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun createCameraInfo(
+        provider: ProcessCameraProvider,
+        cameraSelector: CameraSelector,
+        lensType: LensType
+    ): CameraInfo? {
+        return try {
+            val cameraInfos = provider.availableCameraInfos.filter {
+                cameraSelector.filter(listOf(it)).isNotEmpty()
+            }
+            val cameraInfo = cameraInfos.firstOrNull() ?: return null
+            val camera2Info = Camera2CameraInfo.from(cameraInfo)
+            
+            val cameraId = camera2Info.cameraId
+            val lensFacing = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_FACING)
+                ?: CameraCharacteristics.LENS_FACING_BACK
+            
+            // ISO 范围
+            val isoRange = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            
+            // 曝光时间范围
+            val exposureTimeRange = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            
+            // 曝光补偿范围
+            val exposureCompensationRange = cameraInfo.exposureState.exposureCompensationRange
+            
+            // 曝光补偿步长
+            val exposureCompensationStep = cameraInfo.exposureState.exposureCompensationStep.toFloat()
+            
+            // 最大变焦
+            val maxZoom = cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+            
+            // 传感器方向
+            val sensorOrientation = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            
+            // 活动区域大小
+            val activeArraySize = camera2Info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            
+            CameraInfo(
+                cameraId = cameraId,
+                lensFacing = lensFacing,
+                lensType = lensType,
+                physicalCameraIds = emptyList(),
+                isoRange = isoRange,
+                exposureTimeRange = exposureTimeRange,
+                exposureCompensationRange = Range(exposureCompensationRange.lower, exposureCompensationRange.upper),
+                exposureCompensationStep = exposureCompensationStep,
+                maxZoom = maxZoom,
+                sensorOrientation = sensorOrientation,
+                activeArraySize = activeArraySize
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create camera info", e)
+            null
+        }
+    }
+    
+    /**
+     * 绑定相机到生命周期
+     */
+    fun bindCamera(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider) {
+        this.lifecycleOwner = lifecycleOwner
+        this.currentSurfaceProvider = surfaceProvider
+        
+        val provider = cameraProvider ?: run {
+            Log.e(TAG, "CameraProvider is null")
             return
         }
         
-        previewSurface = surface
-        
-        // 创建 ImageReader 用于拍照
-        val captureSize = CameraUtils.getOptimalCaptureSize(
-            context, 
-            cameraId, 
-            _state.value.aspectRatio.getValue(true)
-        )
-        imageReader = ImageReader.newInstance(
-            captureSize.width,
-            captureSize.height,
-            ImageFormat.JPEG,
-            2
-        ).apply {
-            setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage()
-                image?.let {
-                    val buffer = it.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    onImageCaptured?.invoke(bytes)
-                    it.close()
-                }
-            }, backgroundHandler)
-        }
-        
         try {
-            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    Log.d(TAG, "Camera opened: $cameraId")
-                    cameraDevice = camera
-                    createCaptureSession()
-                }
-                
-                override fun onDisconnected(camera: CameraDevice) {
-                    Log.d(TAG, "Camera disconnected")
-                    camera.close()
-                    cameraDevice = null
-                }
-                
-                override fun onError(camera: CameraDevice, error: Int) {
-                    Log.e(TAG, "Camera error: $error")
-                    camera.close()
-                    cameraDevice = null
-                }
-            }, backgroundHandler)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to open camera", e)
-        }
-    }
-    
-    /**
-     * 创建拍摄会话
-     */
-    private fun createCaptureSession() {
-        val device = cameraDevice ?: return
-        val surface = previewSurface ?: return
-        val reader = imageReader ?: return
-        
-        try {
-            previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(surface)
-                // 设置自动对焦
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                // 设置自动曝光
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            }
+            // 解绑之前的用例
+            provider.unbindAll()
             
-            val surfaces = listOf(surface, reader.surface)
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val outputConfigs = surfaces.map { OutputConfiguration(it) }
-                val sessionConfig = SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
-                    outputConfigs,
-                    Executors.newSingleThreadExecutor(),
-                    object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            captureSession = session
-                            startPreview()
-                        }
-                        
-                        override fun onConfigureFailed(session: CameraCaptureSession) {
-                            Log.e(TAG, "Session configuration failed")
-                        }
-                    }
-                )
-                device.createCaptureSession(sessionConfig)
+            // 选择相机（前置或后置）
+            val cameraSelector = if (_state.value.currentLensType == LensType.FRONT) {
+                CameraSelector.DEFAULT_FRONT_CAMERA
             } else {
-                @Suppress("DEPRECATION")
-                device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        startPreview()
-                    }
-                    
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Session configuration failed")
-                    }
-                }, backgroundHandler)
+                CameraSelector.DEFAULT_BACK_CAMERA
             }
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to create capture session", e)
-        }
-    }
-    
-    /**
-     * 开始预览
-     */
-    private fun startPreview() {
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        
-        try {
-            applySettings(builder)
-            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+            
+            // 创建预览用例
+            preview = Preview.Builder()
+                .setTargetResolution(android.util.Size(1920, 1080))
+                .build()
+                .also {
+                    it.surfaceProvider = surfaceProvider
+                }
+            
+            // 创建拍照用例
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .setJpegQuality(95)
+                .build()
+            
+            // 绑定用例到生命周期
+            camera = provider.bindToLifecycle(
+                lifecycleOwner,
+                cameraSelector,
+                preview,
+                imageCapture
+            )
+            
+            // 更新相机信息
+            updateCameraInfoFromBoundCamera()
+            
             _state.value = _state.value.copy(isPreviewActive = true)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to start preview", e)
-        } catch (e: IllegalStateException) {
-            Log.e(TAG, "Failed to start preview", e)
-            checkAndRecoverCamera()
+            Log.d(TAG, "Camera bound successfully")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to bind camera", e)
         }
     }
     
     /**
-     * 应用当前设置到请求构建器
+     * 从已绑定的相机更新信息
      */
-    private fun applySettings(builder: CaptureRequest.Builder) {
-        val state = _state.value
-        val cameraInfo = state.getCurrentCameraInfo() ?: return
-        
-        // 曝光补偿
-        builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, state.exposureCompensation)
-        
-        // 手动曝光
-        if (!state.isAutoExposure) {
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, state.shutterSpeed)
-        } else {
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-        }
-        
-        // 变焦
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, state.zoomRatio)
-        } else {
-            cameraInfo.activeArraySize?.let { arraySize ->
-                val cropRegion = CameraUtils.calculateCropRegion(arraySize, state.zoomRatio)
-                builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+    @SuppressLint("RestrictedApi")
+    private fun updateCameraInfoFromBoundCamera() {
+        val cam = camera ?: return
+        val cameraInfo = cam.cameraInfo
+
+        // 更新 maxZoom
+        cameraInfo.zoomState.observeForever { zoomState ->
+            val currentState = _state.value
+            val currentCameraId = currentState.currentCameraId
+            val updatedCameras = currentState.availableCameras.map { info ->
+                if (info.cameraId == currentCameraId) {
+                    info.copy(maxZoom = zoomState.maxZoomRatio)
+                } else {
+                    info
+                }
             }
+            _state.value = currentState.copy(availableCameras = updatedCameras)
         }
     }
     
     /**
-     * 更新预览设置
+     * 打开相机（兼容旧接口，通过 SurfaceTexture 创建 SurfaceProvider）
      */
-    private fun updatePreview() {
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        
-        try {
-            applySettings(builder)
-            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to update preview", e)
-        }
+    fun openCamera(surface: Surface) {
+        Log.w(TAG, "openCamera(Surface) is deprecated. Use bindCamera(LifecycleOwner, SurfaceProvider) instead.")
+        // 此方法保留用于兼容，实际使用 bindCamera
     }
     
     /**
@@ -255,7 +249,8 @@ class CameraController(private val context: Context) {
         val range = _state.value.getExposureCompensationRange()
         val clampedValue = value.coerceIn(range.lower, range.upper)
         _state.value = _state.value.copy(exposureCompensation = clampedValue)
-        updatePreview()
+        
+        camera?.cameraControl?.setExposureCompensationIndex(clampedValue)
     }
     
     /**
@@ -263,7 +258,7 @@ class CameraController(private val context: Context) {
      */
     fun setAutoExposure(enabled: Boolean) {
         _state.value = _state.value.copy(isAutoExposure = enabled)
-        updatePreview()
+        updateManualExposure()
     }
     
     /**
@@ -276,7 +271,7 @@ class CameraController(private val context: Context) {
             iso = clampedValue,
             isAutoExposure = false
         )
-        updatePreview()
+        updateManualExposure()
     }
     
     /**
@@ -289,7 +284,43 @@ class CameraController(private val context: Context) {
             shutterSpeed = clampedValue,
             isAutoExposure = false
         )
-        updatePreview()
+        updateManualExposure()
+    }
+    
+    /**
+     * 更新手动曝光设置（使用 Camera2 Interop）
+     */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun updateManualExposure() {
+        val cam = camera ?: return
+        val camera2Control = Camera2CameraControl.from(cam.cameraControl)
+        val state = _state.value
+        
+        val optionsBuilder = CaptureRequestOptions.Builder()
+        
+        if (!state.isAutoExposure) {
+            // 手动曝光模式
+            optionsBuilder.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AE_MODE,
+                CameraMetadata.CONTROL_AE_MODE_OFF
+            )
+            optionsBuilder.setCaptureRequestOption(
+                CaptureRequest.SENSOR_SENSITIVITY,
+                state.iso
+            )
+            optionsBuilder.setCaptureRequestOption(
+                CaptureRequest.SENSOR_EXPOSURE_TIME,
+                state.shutterSpeed
+            )
+        } else {
+            // 自动曝光模式
+            optionsBuilder.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AE_MODE,
+                CameraMetadata.CONTROL_AE_MODE_ON
+            )
+        }
+        
+        camera2Control.captureRequestOptions = optionsBuilder.build()
     }
     
     /**
@@ -299,7 +330,8 @@ class CameraController(private val context: Context) {
         val maxZoom = _state.value.getMaxZoom()
         val clampedRatio = ratio.coerceIn(1f, maxZoom)
         _state.value = _state.value.copy(zoomRatio = clampedRatio)
-        updatePreview()
+        
+        camera?.cameraControl?.setZoomRatio(clampedRatio)
     }
     
     /**
@@ -315,6 +347,13 @@ class CameraController(private val context: Context) {
      */
     fun setDeviceRotation(degrees: Int) {
         deviceRotation = degrees
+        // CameraX 会自动处理旋转，但我们仍需保存用于拍照时的方向
+        imageCapture?.targetRotation = when (degrees) {
+            90 -> Surface.ROTATION_270
+            180 -> Surface.ROTATION_180
+            270 -> Surface.ROTATION_90
+            else -> Surface.ROTATION_0
+        }
     }
     
     /**
@@ -328,10 +367,7 @@ class CameraController(private val context: Context) {
      * 点击对焦
      */
     fun focusOnPoint(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        val cameraInfo = _state.value.getCurrentCameraInfo() ?: return
-        val sensorArraySize = cameraInfo.activeArraySize ?: return
+        val cam = camera ?: return
         
         _state.value = _state.value.copy(
             focusPoint = Pair(x / viewWidth, y / viewHeight),
@@ -339,54 +375,26 @@ class CameraController(private val context: Context) {
             focusSuccess = null
         )
         
-        val isFrontCamera = cameraInfo.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
-        val focusRegion = CameraUtils.convertTouchToSensorCoordinates(
-            x, y, viewWidth, viewHeight,
-            sensorArraySize,
-            cameraInfo.sensorOrientation,
-            isFrontCamera
-        )
+        // 使用 CameraX 的 MeteringPointFactory 和 FocusMeteringAction
+        val factory = SurfaceOrientedMeteringPointFactory(viewWidth.toFloat(), viewHeight.toFloat())
+        val point = factory.createPoint(x, y)
         
-        try {
-            // 停止连续对焦
-            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-            builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(MeteringRectangle(focusRegion, MeteringRectangle.METERING_WEIGHT_MAX)))
-            builder.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(MeteringRectangle(focusRegion, MeteringRectangle.METERING_WEIGHT_MAX)))
-            
-            // 触发对焦
-            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
-            
-            session.capture(builder.build(), object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    val afState = result.get(CaptureResult.CONTROL_AF_STATE)
-                    val focusSuccess = afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-                            afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED
-                    
-                    _state.value = _state.value.copy(
-                        isFocusing = false,
-                        focusSuccess = focusSuccess
-                    )
-                    
-                    // 重置为连续对焦
-                    builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                    builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    
-                    try {
-                        session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-                    } catch (e: CameraAccessException) {
-                        Log.e(TAG, "Failed to reset focus mode", e)
-                    }
-                }
-            }, backgroundHandler)
-            
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to focus", e)
-            _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
-        }
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(3, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        
+        cam.cameraControl.startFocusAndMetering(action).addListener({
+            try {
+                val result = cam.cameraControl.startFocusAndMetering(action).get()
+                _state.value = _state.value.copy(
+                    isFocusing = false,
+                    focusSuccess = result.isFocusSuccessful
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Focus failed", e)
+                _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
+            }
+        }, ContextCompat.getMainExecutor(context))
     }
     
     /**
@@ -394,17 +402,15 @@ class CameraController(private val context: Context) {
      */
     fun switchCamera() {
         val cameras = _state.value.availableCameras
-        val currentCameraId = _state.value.currentCameraId
+        val currentLensType = _state.value.currentLensType
         
-        // 找到下一个摄像头
-        val currentCamera = cameras.find { it.cameraId == currentCameraId }
-        val nextCamera = if (currentCamera?.lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
-            // 当前是后置，切换到前置
-            cameras.find { it.lensFacing == CameraCharacteristics.LENS_FACING_FRONT }
+        val nextLensType = if (currentLensType == LensType.FRONT) {
+            LensType.BACK_MAIN
         } else {
-            // 当前是前置，切换到后置
-            cameras.find { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
+            LensType.FRONT
         }
+        
+        val nextCamera = cameras.find { it.lensType == nextLensType }
         
         nextCamera?.let { camera ->
             _state.value = _state.value.copy(
@@ -412,7 +418,13 @@ class CameraController(private val context: Context) {
                 currentLensType = camera.lensType,
                 zoomRatio = 1f // 重置变焦
             )
-            reopenCamera()
+            
+            // 重新绑定相机
+            lifecycleOwner?.let { owner ->
+                currentSurfaceProvider?.let { provider ->
+                    bindCamera(owner, provider)
+                }
+            }
         }
     }
     
@@ -420,69 +432,29 @@ class CameraController(private val context: Context) {
      * 拍照
      */
     fun capture() {
-        val device = cameraDevice ?: return
-        val session = captureSession ?: return
-        val reader = imageReader ?: return
-        val cameraInfo = _state.value.getCurrentCameraInfo() ?: return
+        val imageCapture = imageCapture ?: return
         
         _state.value = _state.value.copy(isCapturing = true)
         
-        try {
-            val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                addTarget(reader.surface)
+        imageCapture.takePicture(
+            cameraExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    image.close()
+                    
+                    _state.value = _state.value.copy(isCapturing = false)
+                    onImageCaptured?.invoke(bytes)
+                }
                 
-                // 应用相同的设置
-                applySettings(this)
-                
-                // 设置 JPEG 方向
-                val isFrontCamera = cameraInfo.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
-                val jpegRotation = CameraUtils.computeImageRotation(
-                    cameraInfo.sensorOrientation,
-                    deviceRotation,
-                    isFrontCamera
-                )
-                set(CaptureRequest.JPEG_ORIENTATION, jpegRotation)
-                
-                // 使用最高质量
-                set(CaptureRequest.JPEG_QUALITY, 95.toByte())
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e(TAG, "Capture failed", exception)
+                    _state.value = _state.value.copy(isCapturing = false)
+                }
             }
-            
-            session.stopRepeating()
-            session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    _state.value = _state.value.copy(isCapturing = false)
-                    startPreview()
-                }
-                
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    Log.e(TAG, "Capture failed")
-                    _state.value = _state.value.copy(isCapturing = false)
-                    startPreview()
-                }
-            }, backgroundHandler)
-            
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to capture", e)
-            _state.value = _state.value.copy(isCapturing = false)
-        }
-    }
-    
-    /**
-     * 重新打开相机
-     */
-    private fun reopenCamera() {
-        closeCamera()
-        previewSurface?.let { surface ->
-            openCamera(surface)
-        }
+        )
     }
     
     /**
@@ -490,40 +462,15 @@ class CameraController(private val context: Context) {
      * 用于从后台切换回 App 时调用
      */
     fun checkAndRecoverCamera() {
-        // 检查 CameraDevice 和 CaptureSession 是否有效
-        val needRecover = when {
-            cameraDevice == null -> {
-                Log.d(TAG, "CameraDevice is null, need to recover")
-                true
-            }
-            captureSession == null -> {
-                Log.d(TAG, "CaptureSession is null, need to recover")
-                true
-            }
-            !_state.value.isPreviewActive -> {
-                Log.d(TAG, "Preview is not active, need to recover")
-                true
-            }
-            else -> {
-                // 尝试发送一个捕获请求来验证 session 是否有效
-                try {
-                    previewRequestBuilder?.let { builder ->
-                        captureSession?.capture(builder.build(), null, backgroundHandler)
-                    }
-                    false
-                } catch (e: CameraAccessException) {
-                    Log.w(TAG, "Session is invalid, need to recover", e)
-                    true
-                } catch (e: IllegalStateException) {
-                    Log.w(TAG, "Session is in invalid state, need to recover", e)
-                    true
+        // CameraX 自动处理生命周期，一般不需要手动恢复
+        // 但如果预览不活跃，尝试重新绑定
+        if (!_state.value.isPreviewActive) {
+            Log.d(TAG, "Preview not active, attempting to recover...")
+            lifecycleOwner?.let { owner ->
+                currentSurfaceProvider?.let { provider ->
+                    bindCamera(owner, provider)
                 }
             }
-        }
-        
-        if (needRecover) {
-            Log.d(TAG, "Recovering camera...")
-            reopenCamera()
         }
     }
     
@@ -532,12 +479,10 @@ class CameraController(private val context: Context) {
      */
     fun closeCamera() {
         try {
-            captureSession?.close()
-            captureSession = null
-            cameraDevice?.close()
-            cameraDevice = null
-            imageReader?.close()
-            imageReader = null
+            cameraProvider?.unbindAll()
+            camera = null
+            preview = null
+            imageCapture = null
             _state.value = _state.value.copy(isPreviewActive = false)
         } catch (e: Exception) {
             Log.e(TAG, "Error closing camera", e)
@@ -549,22 +494,6 @@ class CameraController(private val context: Context) {
      */
     fun release() {
         closeCamera()
-        stopBackgroundThread()
-    }
-    
-    private fun startBackgroundThread() {
-        backgroundThread = HandlerThread("CameraBackground").also { it.start() }
-        backgroundHandler = Handler(backgroundThread!!.looper)
-    }
-    
-    private fun stopBackgroundThread() {
-        backgroundThread?.quitSafely()
-        try {
-            backgroundThread?.join()
-            backgroundThread = null
-            backgroundHandler = null
-        } catch (e: InterruptedException) {
-            Log.e(TAG, "Error stopping background thread", e)
-        }
+        cameraExecutor.shutdown()
     }
 }

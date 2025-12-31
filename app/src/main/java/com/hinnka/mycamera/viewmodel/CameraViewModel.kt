@@ -8,10 +8,12 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import android.view.Surface
+import androidx.camera.core.Preview
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraController
@@ -108,8 +110,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * 打开相机
+     * 绑定相机到生命周期（CameraX 新接口）
      */
+    fun bindCamera(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider) {
+        cameraController.bindCamera(lifecycleOwner, surfaceProvider)
+    }
+    
+    /**
+     * 打开相机（旧接口，已弃用）
+     * @deprecated 使用 bindCamera(LifecycleOwner, SurfaceProvider) 代替
+     */
+    @Deprecated("Use bindCamera instead", ReplaceWith("bindCamera(lifecycleOwner, surfaceProvider)"))
     fun openCamera(surface: Surface) {
         cameraController.openCamera(surface)
     }
