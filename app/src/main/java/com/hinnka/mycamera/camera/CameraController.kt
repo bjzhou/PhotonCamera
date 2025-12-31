@@ -318,6 +318,13 @@ class CameraController(private val context: Context) {
     }
     
     /**
+     * 设置 LUT 强度
+     */
+    fun setLutIntensity(intensity: Float) {
+        _state.value = _state.value.copy(lutIntensity = intensity)
+    }
+    
+    /**
      * 点击对焦
      */
     fun focusOnPoint(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {

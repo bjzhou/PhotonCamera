@@ -86,7 +86,13 @@ data class CameraState(
     val isPreviewActive: Boolean = false,
     
     // 是否正在拍照
-    val isCapturing: Boolean = false
+    val isCapturing: Boolean = false,
+    
+    // LUT 设置
+    val currentLutName: String? = null,
+    val lutIntensity: Float = 1.0f,
+    val lutEnabled: Boolean = false,
+    val availableLuts: List<String> = emptyList()
 ) {
     /**
      * 获取当前相机信息

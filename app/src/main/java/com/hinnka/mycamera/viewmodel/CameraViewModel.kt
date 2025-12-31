@@ -17,8 +17,13 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraController
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
+import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.LutManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -35,7 +40,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     private val cameraController = CameraController(application)
     
+    // LUT 管理器
+    private val lutManager = LutManager(application)
+    
     val state: StateFlow<CameraState> = cameraController.state
+    
+    // LUT 相关状态
+    var currentLutConfig: LutConfig? by mutableStateOf(null)
+        private set
+        
+    var currentLutId: String? by mutableStateOf(null)
+        private set
+    
+    var availableLutList: List<LutInfo> by mutableStateOf(emptyList())
+        private set
 
     // 存储是否为横屏模式，而不是角度值，减少重组次数
     var isLandscape by mutableStateOf(false)
@@ -83,6 +101,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 saveImage(bytes)
             }
         }
+        
+        // 初始化 LUT 管理器
+        lutManager.initialize()
+        availableLutList = lutManager.getAvailableLuts()
     }
     
     /**
@@ -182,6 +204,48 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
     
+    // ==================== LUT 相关方法 ====================
+    
+    /**
+     * 设置当前 LUT
+     * 
+     * @param lutId LUT ID，传 null 表示移除 LUT
+     */
+    fun setLut(lutId: String?) {
+        currentLutId = lutId
+        if (lutId == null) {
+            currentLutConfig = null
+            return
+        }
+        
+        viewModelScope.launch {
+            currentLutConfig = withContext(Dispatchers.IO) {
+                lutManager.loadLut(lutId)
+            }
+        }
+    }
+    
+    /**
+     * 设置 LUT 强度
+     */
+    fun setLutIntensity(intensity: Float) {
+        cameraController.setLutIntensity(intensity)
+    }
+    
+    /**
+     * 获取 LUT 信息
+     */
+    fun getLutInfo(id: String): LutInfo? {
+        return lutManager.getLutInfo(id)
+    }
+    
+    /**
+     * 预加载 LUT
+     */
+    fun preloadLut(id: String) {
+        lutManager.preloadLut(id)
+    }
+    
     /**
      * 保存图片
      */
@@ -233,5 +297,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     override fun onCleared() {
         super.onCleared()
         cameraController.release()
+        lutManager.clearCache()
     }
 }

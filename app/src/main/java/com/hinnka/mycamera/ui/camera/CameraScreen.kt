@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlin.math.abs
 import kotlin.math.cos
@@ -35,6 +37,12 @@ import kotlin.math.sin
 /**
  * 主相机界面
  */
+enum class ActivePanel {
+    NONE,
+    SETTINGS,
+    FILTERS
+}
+
 @Composable
 fun CameraScreen(
     viewModel: CameraViewModel,
@@ -65,9 +73,11 @@ fun CameraScreen(
             .background(Color.Black)
     ) {
         // 相机预览
-        CameraPreview(
+        CameraPreviewGL(
             aspectRatio = state.aspectRatio,
             previewSize = viewModel.getPreviewSize(),
+            currentLut = viewModel.currentLutConfig,
+            lutIntensity = state.lutIntensity,
             focusPoint = state.focusPoint,
             isFocusing = state.isFocusing,
             focusSuccess = state.focusSuccess,
@@ -92,7 +102,7 @@ fun Controls(
     state: CameraState,
     viewModel: CameraViewModel
 ) {
-    var showControlPanel by remember { mutableStateOf(true) }
+    var activePanel by remember { mutableStateOf(ActivePanel.SETTINGS) }
 
     if (viewModel.isLandscape) {
         // 旋转整个UI布局
@@ -104,8 +114,9 @@ fun Controls(
         ) {
             LandscapeControlsContent(
                 state = state,
-                showControlPanel = showControlPanel,
-                onToggleControlPanel = { showControlPanel = !showControlPanel },
+                viewModel = viewModel,
+                activePanel = activePanel,
+                onActivePanelChange = { activePanel = it },
                 onCapture = { viewModel.capture() },
                 onSwitchCamera = { viewModel.switchCamera() },
                 onExposureCompensationChange = { viewModel.setExposureCompensation(it) },
@@ -119,8 +130,9 @@ fun Controls(
     } else {
         PortraitControls(
             state = state,
-            showControlPanel = showControlPanel,
-            onToggleControlPanel = { showControlPanel = !showControlPanel },
+            viewModel = viewModel,
+            activePanel = activePanel,
+            onActivePanelChange = { activePanel = it },
             onCapture = { viewModel.capture() },
             onSwitchCamera = { viewModel.switchCamera() },
             onExposureCompensationChange = { viewModel.setExposureCompensation(it) },
@@ -169,8 +181,9 @@ fun Modifier.rotateWithLayout(degrees: Float) = this.layout { measurable, constr
 @Composable
 fun LandscapeControlsContent(
     state: CameraState,
-    showControlPanel: Boolean,
-    onToggleControlPanel: () -> Unit,
+    viewModel: CameraViewModel,
+    activePanel: ActivePanel,
+    onActivePanelChange: (ActivePanel) -> Unit,
     onCapture: () -> Unit,
     onSwitchCamera: () -> Unit,
     onExposureCompensationChange: (Int) -> Unit,
@@ -187,22 +200,33 @@ fun LandscapeControlsContent(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         // 左侧控制面板
-        if (showControlPanel) {
+        if (activePanel != ActivePanel.NONE) {
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(200.dp)
+                    .width(260.dp) // 稍微加宽一点以适应滤镜
             ) {
-                ControlPanel(
-                    state = state,
-                    onExposureCompensationChange = onExposureCompensationChange,
-                    onIsoChange = onIsoChange,
-                    onShutterSpeedChange = onShutterSpeedChange,
-                    onZoomChange = onZoomChange,
-                    onAspectRatioChange = onAspectRatioChange,
-                    onAutoExposureToggle = onAutoExposureToggle,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (activePanel == ActivePanel.SETTINGS) {
+                    ControlPanel(
+                        state = state,
+                        onExposureCompensationChange = onExposureCompensationChange,
+                        onIsoChange = onIsoChange,
+                        onShutterSpeedChange = onShutterSpeedChange,
+                        onZoomChange = onZoomChange,
+                        onAspectRatioChange = onAspectRatioChange,
+                        onAutoExposureToggle = onAutoExposureToggle,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (activePanel == ActivePanel.FILTERS) {
+                    LutControlPanel(
+                        availableLuts = viewModel.availableLutList,
+                        currentLutId = viewModel.currentLutId,
+                        lutIntensity = state.lutIntensity,
+                        onLutSelected = { viewModel.setLut(it) },
+                        onIntensityChange = { viewModel.setLutIntensity(it) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
 
@@ -216,19 +240,44 @@ fun LandscapeControlsContent(
             verticalArrangement = Arrangement.SpaceEvenly,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 设置按钮（切换控制面板）
+            // 设置按钮
             IconButton(
-                onClick = onToggleControlPanel,
+                onClick = { 
+                    onActivePanelChange(
+                        if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
+                    )
+                },
                 modifier = Modifier
                     .size(48.dp)
                     .background(
-                        Color.Black.copy(alpha = 0.5f),
+                        if (activePanel == ActivePanel.SETTINGS) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.5f),
                         CircleShape
                     )
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
                     contentDescription = "Settings",
+                    tint = Color.White
+                )
+            }
+            
+            // 滤镜按钮
+            IconButton(
+                onClick = { 
+                    onActivePanelChange(
+                        if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                    )
+                },
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(
+                        if (activePanel == ActivePanel.FILTERS) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.5f),
+                        CircleShape
+                    )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Filters",
                     tint = Color.White
                 )
             }
@@ -265,8 +314,9 @@ fun LandscapeControlsContent(
 @Composable
 fun PortraitControls(
     state: CameraState,
-    showControlPanel: Boolean,
-    onToggleControlPanel: () -> Unit,
+    viewModel: CameraViewModel,
+    activePanel: ActivePanel,
+    onActivePanelChange: (ActivePanel) -> Unit,
     onCapture: () -> Unit,
     onSwitchCamera: () -> Unit,
     onExposureCompensationChange: (Int) -> Unit,
@@ -282,16 +332,26 @@ fun PortraitControls(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         // 顶部控制面板
-        if (showControlPanel) {
-            ControlPanel(
-                state = state,
-                onExposureCompensationChange = onExposureCompensationChange,
-                onIsoChange = onIsoChange,
-                onShutterSpeedChange = onShutterSpeedChange,
-                onZoomChange = onZoomChange,
-                onAspectRatioChange = onAspectRatioChange,
-                onAutoExposureToggle = onAutoExposureToggle
-            )
+        if (activePanel != ActivePanel.NONE) {
+            if (activePanel == ActivePanel.SETTINGS) {
+                ControlPanel(
+                    state = state,
+                    onExposureCompensationChange = onExposureCompensationChange,
+                    onIsoChange = onIsoChange,
+                    onShutterSpeedChange = onShutterSpeedChange,
+                    onZoomChange = onZoomChange,
+                    onAspectRatioChange = onAspectRatioChange,
+                    onAutoExposureToggle = onAutoExposureToggle
+                )
+            } else if (activePanel == ActivePanel.FILTERS) {
+                LutControlPanel(
+                    availableLuts = viewModel.availableLutList,
+                    currentLutId = viewModel.currentLutId,
+                    lutIntensity = state.lutIntensity,
+                    onLutSelected = { viewModel.setLut(it) },
+                    onIntensityChange = { viewModel.setLutIntensity(it) }
+                )
+            }
         }
         
         Spacer(modifier = Modifier.weight(1f))
@@ -305,19 +365,44 @@ fun PortraitControls(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 设置按钮（切换控制面板）
+            // 设置按钮
             IconButton(
-                onClick = onToggleControlPanel,
+                onClick = { 
+                    onActivePanelChange(
+                        if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
+                    )
+                },
                 modifier = Modifier
                     .size(48.dp)
                     .background(
-                        Color.White.copy(alpha = 0.2f),
+                        if (activePanel == ActivePanel.SETTINGS) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.2f),
                         CircleShape
                     )
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
                     contentDescription = "Settings",
+                    tint = Color.White
+                )
+            }
+            
+            // 滤镜按钮
+            IconButton(
+                onClick = { 
+                    onActivePanelChange(
+                        if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                    )
+                },
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(
+                        if (activePanel == ActivePanel.FILTERS) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.2f),
+                        CircleShape
+                    )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Filters",
                     tint = Color.White
                 )
             }
