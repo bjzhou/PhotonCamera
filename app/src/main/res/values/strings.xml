@@ -47,4 +47,8 @@
     <string name="delete_multiple_confirm">Delete %d photos?</string>
     <string name="no_photos">No photos yet</string>
     <string name="photo_info">Photo Info</string>
+    <string name="filter">Filter</string>
+    <string name="intensity">Intensity</string>
+    <string name="original">Original</string>
+    <string name="export_confirm">Export photo with LUT applied?</string>
 </resources>

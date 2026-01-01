@@ -20,6 +20,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
 /**
  * 相册入口缩略图组件
@@ -27,7 +29,8 @@ import coil.request.ImageRequest
  */
 @Composable
 fun GalleryThumbnail(
-    latestPhotoUri: Uri?,
+    latestPhoto: PhotoData?,
+    viewModel: GalleryViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -42,13 +45,18 @@ fun GalleryThumbnail(
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
-        if (latestPhotoUri != null) {
-            // 显示最近的照片缩略图
+        if (latestPhoto != null) {
+            // 显示最近的照片缩略图，优先使用带 LUT 的预览图
+            val imageSource = if (latestPhoto.metadata?.lutId != null) {
+                latestPhoto.previewUri
+            } else {
+                latestPhoto.thumbnailUri
+            }
+            
             AsyncImage(
                 model = ImageRequest.Builder(context)
-                    .data(latestPhotoUri)
+                    .data(imageSource)
                     .crossfade(true)
-                    .size(96) // 小尺寸缩略图
                     .build(),
                 contentDescription = "Gallery",
                 contentScale = ContentScale.Crop,

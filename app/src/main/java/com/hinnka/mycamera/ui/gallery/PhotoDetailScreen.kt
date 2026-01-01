@@ -190,6 +190,7 @@ fun PhotoDetailScreen(
                 ) { page ->
                     ZoomableImage(
                         photo = photos[page],
+                        viewModel = viewModel,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -280,6 +281,7 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun ZoomableImage(
     photo: PhotoData,
+    viewModel: GalleryViewModel,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -311,6 +313,7 @@ private fun ZoomableImage(
             model = ImageRequest.Builder(context)
                 .data(photo.uri)
                 .crossfade(true)
+                .transformations(viewModel.getLutTransformation(photo.metadata))
                 .build(),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Fit,

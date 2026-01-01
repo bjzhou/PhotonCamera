@@ -6,14 +6,17 @@ import android.net.Uri
  * 照片数据模型
  */
 data class PhotoData(
-    val id: Long,
+    val id: String,
     val uri: Uri,
+    val thumbnailUri: Uri,
+    val previewUri: Uri,
     val displayName: String,
     val dateAdded: Long,
     val dateTaken: Long?,
     val size: Long,
     val width: Int,
-    val height: Int
+    val height: Int,
+    var metadata: PhotoMetadata? = null
 ) {
     /**
      * 格式化的拍摄时间

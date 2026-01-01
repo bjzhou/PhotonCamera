@@ -128,7 +128,8 @@ fun CameraScreen(
         Controls(
             state = state,
             viewModel = viewModel,
-            latestPhotoUri = latestPhoto?.uri,
+            galleryViewModel = galleryViewModel,
+            latestPhoto = latestPhoto,
             onGalleryClick = {
                 galleryViewModel.loadPhotos()
                 onGalleryClick()
@@ -141,7 +142,8 @@ fun CameraScreen(
 fun Controls(
     state: CameraState,
     viewModel: CameraViewModel,
-    latestPhotoUri: android.net.Uri?,
+    galleryViewModel: GalleryViewModel,
+    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
     onGalleryClick: () -> Unit
 ) {
     var activePanel by remember { mutableStateOf(ActivePanel.SETTINGS) }
@@ -157,6 +159,7 @@ fun Controls(
             LandscapeControlsContent(
                 state = state,
                 viewModel = viewModel,
+                galleryViewModel = galleryViewModel,
                 activePanel = activePanel,
                 onActivePanelChange = { activePanel = it },
                 onCapture = { viewModel.capture() },
@@ -167,7 +170,7 @@ fun Controls(
                 onZoomChange = { viewModel.setZoomRatio(it) },
                 onAspectRatioChange = { viewModel.setAspectRatio(it) },
                 onAutoExposureToggle = { viewModel.setAutoExposure(it) },
-                latestPhotoUri = latestPhotoUri,
+                latestPhoto = latestPhoto,
                 onGalleryClick = onGalleryClick
             )
         }
@@ -175,6 +178,7 @@ fun Controls(
         PortraitControls(
             state = state,
             viewModel = viewModel,
+            galleryViewModel = galleryViewModel,
             activePanel = activePanel,
             onActivePanelChange = { activePanel = it },
             onCapture = { viewModel.capture() },
@@ -185,7 +189,7 @@ fun Controls(
             onZoomChange = { viewModel.setZoomRatio(it) },
             onAspectRatioChange = { viewModel.setAspectRatio(it) },
             onAutoExposureToggle = { viewModel.setAutoExposure(it) },
-            latestPhotoUri = latestPhotoUri,
+            latestPhoto = latestPhoto,
             onGalleryClick = onGalleryClick
         )
     }
@@ -238,7 +242,8 @@ fun LandscapeControlsContent(
     onZoomChange: (Float) -> Unit,
     onAspectRatioChange: (com.hinnka.mycamera.camera.AspectRatio) -> Unit,
     onAutoExposureToggle: (Boolean) -> Unit,
-    latestPhotoUri: android.net.Uri?,
+    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
+    galleryViewModel: GalleryViewModel,
     onGalleryClick: () -> Unit
 ) {
     // 横屏布局：左侧控制面板，右侧按钮
@@ -307,7 +312,8 @@ fun LandscapeControlsContent(
         ) {
             // 相册入口
             GalleryThumbnail(
-                latestPhotoUri = latestPhotoUri,
+                latestPhoto = latestPhoto,
+                viewModel = galleryViewModel,
                 onClick = onGalleryClick
             )
             
@@ -396,7 +402,8 @@ fun PortraitControls(
     onZoomChange: (Float) -> Unit,
     onAspectRatioChange: (com.hinnka.mycamera.camera.AspectRatio) -> Unit,
     onAutoExposureToggle: (Boolean) -> Unit,
-    latestPhotoUri: android.net.Uri?,
+    galleryViewModel: GalleryViewModel,
+    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
     onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -440,7 +447,8 @@ fun PortraitControls(
         ) {
             // 相册入口
             GalleryThumbnail(
-                latestPhotoUri = latestPhotoUri,
+                latestPhoto = latestPhoto,
+                viewModel = galleryViewModel,
                 onClick = onGalleryClick
             )
             

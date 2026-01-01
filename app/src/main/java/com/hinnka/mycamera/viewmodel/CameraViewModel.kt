@@ -16,7 +16,10 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +48,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     
     // LUT 管理器
     private val lutManager = LutManager(application)
+    private val lutImageProcessor = LutImageProcessor()
     
     val state: StateFlow<CameraState> = cameraController.state
     
@@ -321,45 +325,48 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     private suspend fun saveImage(bytes: ByteArray) {
         val context = getApplication<Application>()
-        val filename = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+        
+        // 保存当前 LUT 信息用于元数据
+        val lutIdToSave = currentLutId
+        val lutIntensityToSave = state.value.lutIntensity
+        val lutConfigToSave = currentLutConfig
         
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+ 使用 MediaStore
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/PhotonCamera")
+            // 保存 LUT 元数据到应用私有目录
+            val metadata = PhotoMetadata(
+                lutId = lutIdToSave,
+                lutIntensity = lutIntensityToSave
+            )
+            
+            // 生成预览图/缩略图源（缩小比例以提高性能）
+            val previewBitmap = withContext(Dispatchers.Default) {
+                val options = android.graphics.BitmapFactory.Options().apply {
+                    inSampleSize = 4 // 缩小比例，减小内存占用和处理时间
                 }
-                
-                val uri = context.contentResolver.insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    contentValues
-                )
-                
-                uri?.let {
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        outputStream.write(bytes)
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                if (bitmap != null) {
+                    // 如果有 LUT，在此处应用，此预览图将作为 baked preview 保存
+                    val processed = if (lutIdToSave != null && lutConfigToSave != null) {
+                        val result = lutImageProcessor.applyLut(bitmap, lutConfigToSave, lutIntensityToSave)
+                        if (result != bitmap) bitmap.recycle()
+                        result
+                    } else {
+                        bitmap
                     }
-                    Log.d(TAG, "Image saved: $uri")
-                    _imageSavedEvent.emit(Unit)
-                }
-            } else {
-                // 低版本直接写文件
-                val directory = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM),
-                    "PhotonCamera"
-                )
-                if (!directory.exists()) {
-                    directory.mkdirs()
-                }
-                
-                val file = File(directory, filename)
-                FileOutputStream(file).use { outputStream ->
-                    outputStream.write(bytes)
-                }
-                Log.d(TAG, "Image saved: ${file.absolutePath}")
+                    processed
+                } else null
+            }
+            
+            // 使用 PhotoManager 统一管理保存
+            val photoId = PhotoManager.savePhoto(context, bytes, metadata, previewBitmap)
+            
+            previewBitmap?.recycle()
+            
+            if (photoId != null) {
+                Log.d(TAG, "Image saved to private storage: $photoId, LUT: $lutIdToSave, Intensity: $lutIntensityToSave")
                 _imageSavedEvent.emit(Unit)
+            } else {
+                Log.e(TAG, "Failed to save image via PhotoManager")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save image", e)
@@ -370,5 +377,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         cameraController.release()
         lutManager.clearCache()
+        lutImageProcessor.release()
     }
 }

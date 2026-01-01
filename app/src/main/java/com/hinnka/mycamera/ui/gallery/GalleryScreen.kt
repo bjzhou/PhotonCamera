@@ -208,6 +208,7 @@ fun GalleryScreen(
                     itemsIndexed(photos) { index, photo ->
                         PhotoGridItem(
                             photo = photo,
+                            viewModel = viewModel,
                             isSelected = selectedPhotos.contains(photo),
                             isSelectionMode = isSelectionMode,
                             onClick = {
@@ -270,6 +271,7 @@ fun GalleryScreen(
 @Composable
 private fun PhotoGridItem(
     photo: PhotoData,
+    viewModel: GalleryViewModel,
     isSelected: Boolean,
     isSelectionMode: Boolean,
     onClick: () -> Unit,
@@ -291,9 +293,9 @@ private fun PhotoGridItem(
         // 照片缩略图
         AsyncImage(
             model = ImageRequest.Builder(context)
-                .data(photo.uri)
+                .data(photo.thumbnailUri)
                 .crossfade(true)
-                .size(300)
+                .transformations(viewModel.getLutTransformation(photo.metadata))
                 .build(),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,
