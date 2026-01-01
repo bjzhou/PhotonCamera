@@ -9,18 +9,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +24,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
@@ -40,43 +38,43 @@ import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
 /**
- * 应用屏幕枚举
+ * 路由常量
  */
-enum class Screen {
-    CAMERA,
-    GALLERY,
-    PHOTO_DETAIL,
-    PHOTO_EDIT
+object Routes {
+    const val CAMERA = "camera"
+    const val GALLERY = "gallery"
+    const val PHOTO_DETAIL = "photo_detail/{index}"
+    const val PHOTO_EDIT = "photo_edit"
+
+    fun photoDetail(index: Int) = "photo_detail/$index"
 }
 
 class MainActivity : ComponentActivity() {
-    
+
     private val cameraViewModel: CameraViewModel by viewModels()
     private val galleryViewModel: GalleryViewModel by viewModels()
-    
+
     private var hasCameraPermission by mutableStateOf(false)
-    private var currentScreen by mutableStateOf(Screen.CAMERA)
-    private var photoDetailIndex by mutableStateOf(0)
-    
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasCameraPermission = isGranted
     }
-    
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         // 启用全屏模式
         enableEdgeToEdge()
         hideSystemUI()
         orientationListen(cameraViewModel)
-        
+
         // 检查相机权限
         hasCameraPermission = ContextCompat.checkSelfPermission(
             this, Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
-        
+
         setContent {
             PhotonCameraTheme {
                 Surface(
@@ -84,49 +82,7 @@ class MainActivity : ComponentActivity() {
                     color = Color.Black
                 ) {
                     if (hasCameraPermission) {
-                        when (currentScreen) {
-                            Screen.CAMERA -> {
-                                CameraScreen(
-                                    viewModel = cameraViewModel,
-                                    galleryViewModel = galleryViewModel,
-                                    onGalleryClick = {
-                                        currentScreen = Screen.GALLERY
-                                    }
-                                )
-                            }
-                            Screen.GALLERY -> {
-                                GalleryScreen(
-                                    viewModel = galleryViewModel,
-                                    onBack = {
-                                        currentScreen = Screen.CAMERA
-                                    },
-                                    onPhotoClick = { index ->
-                                        photoDetailIndex = index
-                                        currentScreen = Screen.PHOTO_DETAIL
-                                    }
-                                )
-                            }
-                            Screen.PHOTO_DETAIL -> {
-                                PhotoDetailScreen(
-                                    viewModel = galleryViewModel,
-                                    initialIndex = photoDetailIndex,
-                                    onBack = {
-                                        currentScreen = Screen.GALLERY
-                                    },
-                                    onEdit = {
-                                        currentScreen = Screen.PHOTO_EDIT
-                                    }
-                                )
-                            }
-                            Screen.PHOTO_EDIT -> {
-                                PhotoEditScreen(
-                                    viewModel = galleryViewModel,
-                                    onBack = {
-                                        currentScreen = Screen.PHOTO_DETAIL
-                                    }
-                                )
-                            }
-                        }
+                        NavigationHost(cameraViewModel, galleryViewModel)
                     } else {
                         PermissionScreen(
                             onRequestPermission = {
@@ -138,30 +94,17 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
-    @Deprecated("Use OnBackPressedDispatcher instead")
-    override fun onBackPressed() {
-        when (currentScreen) {
-            Screen.GALLERY -> currentScreen = Screen.CAMERA
-            Screen.PHOTO_DETAIL -> currentScreen = Screen.GALLERY
-            Screen.PHOTO_EDIT -> {
-                galleryViewModel.exitEditMode()
-                currentScreen = Screen.PHOTO_DETAIL
-            }
-            Screen.CAMERA -> super.onBackPressed()
-        }
-    }
-    
+
     private fun hideSystemUI() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
             controller.hide(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior = 
+            controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
     }
 
-    fun orientationListen(viewModel: CameraViewModel) {
+    private fun orientationListen(viewModel: CameraViewModel) {
         val orientationListener: OrientationEventListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(orientation: Int) {
                 // 只在横竖屏切换时才更新状态，避免频繁重组
@@ -169,6 +112,79 @@ class MainActivity : ComponentActivity() {
             }
         }
         orientationListener.enable()
+    }
+}
+
+@Composable
+fun NavigationHost(
+    cameraViewModel: CameraViewModel,
+    galleryViewModel: GalleryViewModel
+) {
+    val navController = rememberNavController()
+
+    NavHost(
+        navController = navController,
+        startDestination = Routes.CAMERA,
+        enterTransition = {
+            slideInHorizontally(initialOffsetX = { it }) + fadeIn()
+        },
+        exitTransition = {
+            slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+        },
+        popEnterTransition = {
+            slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
+        },
+        popExitTransition = {
+            slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+        }
+    ) {
+        composable(Routes.CAMERA) {
+            CameraScreen(
+                viewModel = cameraViewModel,
+                galleryViewModel = galleryViewModel,
+                onGalleryClick = {
+                    navController.navigate(Routes.GALLERY)
+                }
+            )
+        }
+
+        composable(Routes.GALLERY) {
+            GalleryScreen(
+                viewModel = galleryViewModel,
+                onBack = {
+                    navController.popBackStack()
+                },
+                onPhotoClick = { index ->
+                    navController.navigate(Routes.photoDetail(index))
+                }
+            )
+        }
+
+        composable(
+            route = Routes.PHOTO_DETAIL,
+            arguments = listOf(navArgument("index") { type = NavType.IntType })
+        ) { backStackEntry ->
+            val index = backStackEntry.arguments?.getInt("index") ?: 0
+            PhotoDetailScreen(
+                viewModel = galleryViewModel,
+                initialIndex = index,
+                onBack = {
+                    navController.popBackStack()
+                },
+                onEdit = {
+                    navController.navigate(Routes.PHOTO_EDIT)
+                }
+            )
+        }
+
+        composable(Routes.PHOTO_EDIT) {
+            PhotoEditScreen(
+                viewModel = galleryViewModel,
+                onBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
     }
 }
 
@@ -193,7 +209,7 @@ fun PermissionScreen(
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center
             )
-            
+
             Button(
                 onClick = onRequestPermission,
                 colors = ButtonDefaults.buttonColors(

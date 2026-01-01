@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -59,6 +60,11 @@ fun PhotoEditScreen(
     var isSaving by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
+    
+    BackHandler {
+        viewModel.exitEditMode()
+        onBack()
+    }
     
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
