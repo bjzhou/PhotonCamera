@@ -31,7 +31,7 @@ class LutManager(private val context: Context) {
      * 初始化，扫描可用的 LUT 文件
      */
     fun initialize() {
-        availableLuts = CubeLutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER)
+        availableLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER)
         Log.d(TAG, "Found ${availableLuts.size} LUT files")
     }
     
@@ -68,7 +68,7 @@ class LutManager(private val context: Context) {
         
         // 从文件加载
         return try {
-            val lutConfig = CubeLutParser.parseFromAssets(context, lutInfo.fileName)
+            val lutConfig = LutParser.parseFromAssets(context, lutInfo.fileName)
             
             if (lutConfig.isValid()) {
                 // 添加到缓存
