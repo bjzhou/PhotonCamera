@@ -31,6 +31,7 @@ import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.ui.components.BackCameraSelector
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.EditControlPanel
+import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
@@ -103,6 +104,15 @@ fun CameraScreen(
                 viewModel.focusOnPoint(x, y, w, h)
             },
             modifier = Modifier.fillMaxSize()
+        )
+        
+        // 实时直方图
+        HistogramView(
+            histogram = state.histogram,
+            modifier = Modifier
+                .padding(16.dp)
+                .padding(top = 120.dp)
+                .align(Alignment.TopStart)
         )
         
         // 后置摄像头选择器（只有多个后置摄像头时显示）

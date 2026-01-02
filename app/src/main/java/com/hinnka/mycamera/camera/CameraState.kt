@@ -119,7 +119,10 @@ data class CameraState(
     val currentLutName: String? = null,
     val lutIntensity: Float = 1.0f,
     val lutEnabled: Boolean = false,
-    val availableLuts: List<String> = emptyList()
+    val availableLuts: List<String> = emptyList(),
+    
+    // 直方图数据 (256个灰度值)
+    val histogram: IntArray? = null
 ) {
     /**
      * 获取当前相机信息

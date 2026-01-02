@@ -48,6 +48,7 @@ class Camera2Controller(private val context: Context) {
     
     private var previewSurface: Surface? = null
     private var imageReader: ImageReader? = null
+    private var previewImageReader: ImageReader? = null
     
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
@@ -175,6 +176,38 @@ class Camera2Controller(private val context: Context) {
                 }, cameraHandler)
             }
             
+            // 创建用于直方图计算的预览 ImageReader (低分辨率 YUV)
+            previewImageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 2).apply {
+                setOnImageAvailableListener({ reader ->
+                    val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                    try {
+                        val planes = image.planes
+                        val buffer = planes[0].buffer // Y plane
+                        val pixelStride = planes[0].pixelStride
+                        val rowStride = planes[0].rowStride
+                        val width = image.width
+                        val height = image.height
+
+                        val histogram = IntArray(256)
+                        val rowBuffer = ByteArray(rowStride)
+                        
+                        for (y in 0 until height) {
+                            buffer.position(y * rowStride)
+                            buffer.get(rowBuffer, 0, rowStride)
+                            for (x in 0 until width) {
+                                val value = rowBuffer[x * pixelStride].toInt() and 0xFF
+                                histogram[value]++
+                            }
+                        }
+                        _state.value = _state.value.copy(histogram = histogram)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to calculate histogram", e)
+                    } finally {
+                        image.close()
+                    }
+                }, cameraHandler)
+            }
+            
             Log.d(TAG, "Opening camera: $cameraId")
             
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -226,7 +259,8 @@ class Camera2Controller(private val context: Context) {
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             }
             
-            val surfaces = listOf(surface, reader.surface)
+            val surfaces = mutableListOf(surface, reader.surface)
+            previewImageReader?.surface?.let { surfaces.add(it) }
 
             // Android 9+ 使用 SessionConfiguration
             val outputConfigs = surfaces.map { OutputConfiguration(it) }
@@ -257,6 +291,7 @@ class Camera2Controller(private val context: Context) {
         try {
             // 开始预览
             previewRequestBuilder?.let { builder ->
+                previewImageReader?.surface?.let { builder.addTarget(it) }
                 session.setRepeatingRequest(builder.build(), null, cameraHandler)
             }
             
@@ -776,6 +811,9 @@ class Camera2Controller(private val context: Context) {
             
             imageReader?.close()
             imageReader = null
+            
+            previewImageReader?.close()
+            previewImageReader = null
             
             previewSurface = null
             previewRequestBuilder = null
