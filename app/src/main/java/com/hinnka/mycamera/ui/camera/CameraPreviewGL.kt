@@ -138,35 +138,3 @@ fun CameraPreviewGL(
         }
     }
 }
-
-
-
-/**
- * 向后兼容的 CameraPreview（使用原有 TextureView 实现）
- * 保留原有实现以便切换
- */
-@Composable
-fun CameraPreviewLegacy(
-    aspectRatio: AspectRatio,
-    previewSize: Size,
-    focusPoint: Pair<Float, Float>?,
-    isFocusing: Boolean,
-    focusSuccess: Boolean?,
-    onSurfaceReady: (Surface) -> Unit,
-    onSurfaceDestroyed: () -> Unit,
-    onTap: (Float, Float, Int, Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    // 调用原有的 CameraPreview 实现
-    CameraPreview(
-        aspectRatio = aspectRatio,
-        previewSize = previewSize,
-        focusPoint = focusPoint,
-        isFocusing = isFocusing,
-        focusSuccess = focusSuccess,
-        onSurfaceReady = onSurfaceReady,
-        onSurfaceDestroyed = onSurfaceDestroyed,
-        onTap = onTap,
-        modifier = modifier
-    )
-}

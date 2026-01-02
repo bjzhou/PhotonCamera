@@ -15,6 +15,7 @@ import android.util.Size
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.utils.BitmapUtils
+import com.hinnka.mycamera.utils.BitmapUtils.toByteArray
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -140,14 +141,13 @@ class Camera2Controller(private val context: Context) {
                 captureSize.width,
                 captureSize.height,
                 ImageFormat.JPEG,
-                2
+                1
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     val image = reader.acquireLatestImage()
                     image?.let {
+                        _state.value = _state.value.copy(isCapturing = false)
                         val buffer = it.planes[0].buffer
-                        var width = it.width
-                        var height = it.height
                         val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
                         it.close()
 
@@ -159,20 +159,17 @@ class Camera2Controller(private val context: Context) {
                         }
 
                         // 0. 在源头归一化：物理旋转图片字节流
-                        val normalizedBytes = BitmapUtils.normalizeJpegOrientation(bytes, orientation)
+                        val finalBitmap = BitmapUtils.cropAndRotate(bytes, _state.value.aspectRatio, orientation)
 
-                        if (orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
-                            orientation == ExifInterface.ORIENTATION_ROTATE_270) {
-                            // 交换宽高
-                            val temp = width
-                            width = height
-                            height = temp
-                        }
+                        val finalWidth = finalBitmap.width
+                        val finalHeight = finalBitmap.height
+
+                        val normalizedBytes = finalBitmap.toByteArray()
+                        finalBitmap.recycle()
 
                         // 构建 CaptureInfo
-                        val captureInfo = buildCaptureInfo(lastCaptureResult, width, height)
-                        
-                        _state.value = _state.value.copy(isCapturing = false)
+                        val captureInfo = buildCaptureInfo(lastCaptureResult, finalWidth, finalHeight)
+
                         onImageCaptured?.invoke(normalizedBytes, captureInfo)
                     }
                 }, cameraHandler)

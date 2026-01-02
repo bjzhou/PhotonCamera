@@ -1,33 +1,26 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.content.ContentValues
+import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.camera.Camera2Controller
-import com.hinnka.mycamera.camera.CameraState
-import com.hinnka.mycamera.camera.CaptureInfo
-import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.frame.ExifMetadata
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
-import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
-import com.hinnka.mycamera.gallery.PhotoProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -35,10 +28,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.*
 
 /**
  * 相机 ViewModel
@@ -370,7 +359,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存当前 LUT 信息用于元数据
         val lutIdToSave = currentLutId
         val lutIntensityToSave = state.value.lutIntensity
-        val lutConfigToSave = currentLutConfig
         
         // 保存当前边框信息用于元数据
         val frameIdToSave = currentFrameId
@@ -387,10 +375,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             
             // 生成预览图/缩略图源（缩小比例以提高性能）
             val previewBitmap = withContext(Dispatchers.Default) {
-                val options = android.graphics.BitmapFactory.Options().apply {
+                val options = BitmapFactory.Options().apply {
                     inSampleSize = 4 // 缩小比例，减小内存占用和处理时间
                 }
-                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                 if (bitmap != null) {
                     val exifMetadata = ExifMetadata(
                         deviceModel = captureInfo.model,
