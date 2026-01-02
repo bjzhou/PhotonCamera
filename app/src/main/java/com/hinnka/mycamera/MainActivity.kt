@@ -3,17 +3,25 @@ package com.hinnka.mycamera
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.view.OrientationEventListener
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,6 +42,7 @@ import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
+import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
@@ -68,7 +77,7 @@ class MainActivity : ComponentActivity() {
         // 启用全屏模式
         enableEdgeToEdge()
         hideSystemUI()
-        orientationListen(cameraViewModel)
+        OrientationObserver.observe(this)
 
         // 检查相机权限
         hasCameraPermission = ContextCompat.checkSelfPermission(
@@ -102,16 +111,6 @@ class MainActivity : ComponentActivity() {
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
-    }
-
-    private fun orientationListen(viewModel: CameraViewModel) {
-        val orientationListener: OrientationEventListener = object : OrientationEventListener(this) {
-            override fun onOrientationChanged(orientation: Int) {
-                // 只在横竖屏切换时才更新状态，避免频繁重组
-                viewModel.updateOrientation(orientation)
-            }
-        }
-        orientationListener.enable()
     }
 }
 

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.camera
 
 import android.graphics.Rect
+import android.hardware.camera2.CameraMetadata
 import android.util.Range
 
 /**
@@ -93,12 +94,17 @@ data class CameraState(
     val isAutoExposure: Boolean = true,
     val iso: Int = 100,
     val shutterSpeed: Long = 1_000_000_000L / 60, // 1/60s in nanoseconds
+
+    val awbMode: Int = 1, // 自动白平衡模式
     
     // 对焦
     val isAutoFocus: Boolean = true,
     val focusPoint: Pair<Float, Float>? = null, // normalized coordinates (0-1)
     val isFocusing: Boolean = false,
     val focusSuccess: Boolean? = null,
+
+    //闪光灯
+    val flashMode: Int = 0, // 0: off, 1: auto, 2: torch
     
     // 变焦
     val zoomRatio: Float = 1.0f,
@@ -122,7 +128,7 @@ data class CameraState(
     val availableLuts: List<String> = emptyList(),
     
     // 直方图数据 (256个灰度值)
-    val histogram: IntArray? = null
+    val histogram: IntArray? = null,
 ) {
     /**
      * 获取当前相机信息

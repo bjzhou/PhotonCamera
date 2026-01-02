@@ -1,8 +1,8 @@
 package com.hinnka.mycamera.ui.camera
 
-import android.graphics.SurfaceTexture
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,28 +10,27 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
-import com.hinnka.mycamera.camera.LensType
-import com.hinnka.mycamera.ui.components.BackCameraSelector
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.EditControlPanel
 import com.hinnka.mycamera.ui.components.HistogramView
+import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
@@ -61,6 +60,9 @@ fun CameraScreen(
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
     
+    // UI State
+    var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    
     // 从后台返回时检查并恢复相机，刷新最新照片
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (cameraOpened) {
@@ -78,63 +80,104 @@ fun CameraScreen(
 
     val previewSize = CameraUtils.getFixedPreviewSize(context, state.currentCameraId)
     
-    Box(
+    Column(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // 相机预览
-        CameraPreviewGL(
-            aspectRatio = state.aspectRatio,
-            previewSize = previewSize,
-            currentLut = viewModel.currentLutConfig,
-            lutIntensity = state.lutIntensity,
-            focusPoint = state.focusPoint,
-            isFocusing = state.isFocusing,
-            focusSuccess = state.focusSuccess,
-            onSurfaceTextureReady = { surfaceTexture ->
-                viewModel.openCamera(surfaceTexture)
-                cameraOpened = true
+        // 顶部控制条
+        CameraTopBar(
+            flashMode = state.flashMode,
+            onFlashToggle = {
+                viewModel.toggleFlash()
             },
-            onSurfaceDestroyed = { 
-                viewModel.closeCamera()
-                cameraOpened = false
+            timerSeconds = 0, // TODO: State
+            onTimerToggle = { /* TODO */ },
+            showHistogram = viewModel.showHistogram,
+            onHistogramToggle = {
+                viewModel.saveShowHistogram(!viewModel.showHistogram)
             },
-            onTap = { x, y, w, h ->
-                viewModel.focusOnPoint(x, y, w, h)
-            },
-            modifier = Modifier.fillMaxSize()
+            showGrid = true, // TODO: State
+            onGridToggle = { /* TODO */ },
+            onSettingsClick = { /* TODO */ }
         )
-        
-        // 实时直方图
-        HistogramView(
-            histogram = state.histogram,
+
+        Box(
             modifier = Modifier
-                .padding(16.dp)
-                .padding(top = 120.dp)
-                .align(Alignment.TopStart)
-        )
-        
-        // 后置摄像头选择器（只有多个后置摄像头时显示）
-        val backCameras = viewModel.getBackCameras()
-        if (backCameras.size > 1 && state.currentLensType != LensType.FRONT) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = if (viewModel.isLandscape) 16.dp else 80.dp),
-                contentAlignment = Alignment.TopCenter
-            ) {
-                BackCameraSelector(
-                    backCameras = backCameras,
-                    currentLensType = state.currentLensType,
-                    onLensSelected = { lensType ->
-                        viewModel.switchToLens(lensType)
-                    }
+                .weight(1f)
+                .fillMaxWidth()
+        ) {
+            // 相机预览
+            CameraPreviewGL(
+                aspectRatio = state.aspectRatio,
+                previewSize = previewSize,
+                currentLut = viewModel.currentLutConfig,
+                lutIntensity = state.lutIntensity,
+                focusPoint = state.focusPoint,
+                isFocusing = state.isFocusing,
+                focusSuccess = state.focusSuccess,
+                onSurfaceTextureReady = { surfaceTexture ->
+                    viewModel.openCamera(surfaceTexture)
+                    cameraOpened = true
+                },
+                onSurfaceDestroyed = { 
+                    viewModel.closeCamera()
+                    cameraOpened = false
+                },
+                onTap = { x, y, w, h ->
+                    viewModel.focusOnPoint(x, y, w, h)
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            
+            // 实时直方图 (Overlaid on preview if enabled)
+            if (state.histogram != null && viewModel.showHistogram) {
+                HistogramView(
+                    histogram = state.histogram,
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .size(80.dp, 40.dp)
+                        .align(Alignment.TopStart)
+                        .autoRotate(dx = -20.dp, dy = 20.dp)
                 )
             }
+
+            if (activePanel == ActivePanel.FILTERS) {
+                EditControlPanel(
+                    availableLuts = viewModel.availableLutList,
+                    currentLutId = viewModel.currentLutId,
+                    lutIntensity = state.lutIntensity,
+                    onLutSelected = { viewModel.setLut(it) },
+                    onIntensityChange = { viewModel.setLutIntensity(it) },
+                    availableFrames = viewModel.availableFrameList,
+                    currentFrameId = viewModel.currentFrameId,
+                    showAppBranding = viewModel.currentShowAppBranding,
+                    onFrameSelected = { viewModel.setFrame(it) },
+                    onBrandingToggle = { viewModel.setShowAppBranding(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .background(Color.Black)
+                )
+            }
+            
+            // Zoom Control Bar (Overlay at bottom of preview)
+            ZoomControlBar(
+                zoomRatio = state.zoomRatio,
+                maxZoom = state.getMaxZoom(),
+                minZoom = state.getMinZoom(),
+                onZoomChange = { viewModel.setZoomRatio(it) },
+                onFilterClick = { 
+                     // Toggle Filter Panel
+                     activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
-        
-        // 控制层
+
+        CameraParameterBar(state = state)
+
+        // 底部控制层
         Controls(
             state = state,
             viewModel = viewModel,
@@ -156,389 +199,51 @@ fun Controls(
     latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
     onGalleryClick: () -> Unit
 ) {
-    var activePanel by remember { mutableStateOf(ActivePanel.SETTINGS) }
-
-    if (viewModel.isLandscape) {
-        // 旋转整个UI布局
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // 相册入口 (Left)
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .rotateWithLayout(360 - viewModel.rotationDegrees),
-            contentAlignment = Alignment.Center
+                .align(Alignment.CenterStart)
+                .padding(start = 32.dp)
+                .autoRotate()
         ) {
-            LandscapeControlsContent(
-                state = state,
-                viewModel = viewModel,
-                galleryViewModel = galleryViewModel,
-                activePanel = activePanel,
-                onActivePanelChange = { activePanel = it },
-                onCapture = { viewModel.capture() },
-                onSwitchCamera = { viewModel.switchCamera() },
-                onExposureCompensationChange = { viewModel.setExposureCompensation(it) },
-                onIsoChange = { viewModel.setIso(it) },
-                onShutterSpeedChange = { viewModel.setShutterSpeed(it) },
-                onZoomChange = { viewModel.setZoomRatio(it) },
-                onAspectRatioChange = { viewModel.setAspectRatio(it) },
-                onAutoExposureToggle = { viewModel.setAutoExposure(it) },
+            GalleryThumbnail(
                 latestPhoto = latestPhoto,
-                onGalleryClick = onGalleryClick
+                viewModel = galleryViewModel,
+                onClick = onGalleryClick
             )
         }
-    } else {
-        PortraitControls(
-            state = state,
-            viewModel = viewModel,
-            galleryViewModel = galleryViewModel,
-            activePanel = activePanel,
-            onActivePanelChange = { activePanel = it },
-            onCapture = { viewModel.capture() },
-            onSwitchCamera = { viewModel.switchCamera() },
-            onExposureCompensationChange = { viewModel.setExposureCompensation(it) },
-            onIsoChange = { viewModel.setIso(it) },
-            onShutterSpeedChange = { viewModel.setShutterSpeed(it) },
-            onZoomChange = { viewModel.setZoomRatio(it) },
-            onAspectRatioChange = { viewModel.setAspectRatio(it) },
-            onAutoExposureToggle = { viewModel.setAutoExposure(it) },
-            latestPhoto = latestPhoto,
-            onGalleryClick = onGalleryClick
+
+        // 拍照按钮 (Center)
+        CaptureButton(
+            isCapturing = state.isCapturing,
+            onClick = { viewModel.capture() }
         )
-    }
-}
 
-fun Modifier.rotateWithLayout(degrees: Float) = this.layout { measurable, constraints ->
-    // 1. 计算旋转后的外接矩形尺寸需求
-    val rad = Math.toRadians(degrees.toDouble())
-    val cos = abs(cos(rad))
-    val sin = abs(sin(rad))
-
-    // 2. 根据父约束和旋转角度，反推子组件应该有的尺寸
-    // 如果是 90 度，这里会自动交换宽高约束
-    val newWidth = (constraints.maxWidth * cos + constraints.maxHeight * sin).toInt()
-    val newHeight = (constraints.maxWidth * sin + constraints.maxHeight * cos).toInt()
-
-    // 3. 测量子组件
-    val placeable = measurable.measure(constraints.copy(
-        minWidth = 0,
-        minHeight = 0,
-        maxWidth = newWidth,
-        maxHeight = newHeight
-    ))
-
-    // 4. 这里的 layout 尺寸决定了它在父容器中占多大位子
-    layout(newWidth, newHeight) {
-        placeable.placeRelativeWithLayer(
-            (newWidth - placeable.width) / 2,
-            (newHeight - placeable.height) / 2
-        ) {
-            rotationZ = degrees
-        }
-    }
-}
-
-/**
- * 横屏控制布局内容（用于旋转显示）
- */
-@Composable
-fun LandscapeControlsContent(
-    state: CameraState,
-    viewModel: CameraViewModel,
-    activePanel: ActivePanel,
-    onActivePanelChange: (ActivePanel) -> Unit,
-    onCapture: () -> Unit,
-    onSwitchCamera: () -> Unit,
-    onExposureCompensationChange: (Int) -> Unit,
-    onIsoChange: (Int) -> Unit,
-    onShutterSpeedChange: (Long) -> Unit,
-    onZoomChange: (Float) -> Unit,
-    onAspectRatioChange: (com.hinnka.mycamera.camera.AspectRatio) -> Unit,
-    onAutoExposureToggle: (Boolean) -> Unit,
-    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
-    galleryViewModel: GalleryViewModel,
-    onGalleryClick: () -> Unit
-) {
-    // 横屏布局：左侧控制面板，右侧按钮
-    // 直接填充父容器，让旋转后的布局自动适应
-    Row(
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        // 左侧控制面板
-        if (activePanel != ActivePanel.NONE) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(260.dp) // 稍微加宽一点以适应滤镜
-            ) {
-                if (activePanel == ActivePanel.SETTINGS) {
-                    ControlPanel(
-                        state = state,
-                        onExposureCompensationChange = onExposureCompensationChange,
-                        onIsoChange = onIsoChange,
-                        onShutterSpeedChange = onShutterSpeedChange,
-                        onZoomChange = onZoomChange,
-                        onAspectRatioChange = onAspectRatioChange,
-                        onAutoExposureToggle = onAutoExposureToggle,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else if (activePanel == ActivePanel.FILTERS) {
-                    EditControlPanel(
-                        availableLuts = viewModel.availableLutList,
-                        currentLutId = viewModel.currentLutId,
-                        lutIntensity = state.lutIntensity,
-                        onLutSelected = { viewModel.setLut(it) },
-                        onIntensityChange = { viewModel.setLutIntensity(it) },
-                        availableFrames = viewModel.availableFrameList,
-                        currentFrameId = viewModel.currentFrameId,
-                        showAppBranding = viewModel.currentShowAppBranding,
-                        onFrameSelected = { viewModel.setFrame(it) },
-                        onBrandingToggle = { viewModel.setShowAppBranding(it) },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-        }
-
-        // 中间区域：镜头选择器
-        Box(
+        // 切换摄像头按钮 (Right)
+        IconButton(
+            onClick = { viewModel.switchCamera() },
             modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight(),
-            contentAlignment = Alignment.Center
+                .align(Alignment.CenterEnd)
+                .padding(end = 40.dp)
+                .size(48.dp)
+                .autoRotate()
         ) {
-            val backCameras = viewModel.getBackCameras()
-            if (backCameras.size > 1 && state.currentLensType != LensType.FRONT) {
-                BackCameraSelector(
-                    backCameras = backCameras,
-                    currentLensType = state.currentLensType,
-                    onLensSelected = { lensType ->
-                        viewModel.switchToLens(lensType)
-                    }
-                )
-            }
-        }
-
-        // 右侧按钮区
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceEvenly,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // 相册入口
-            GalleryThumbnail(
-                latestPhoto = latestPhoto,
-                viewModel = galleryViewModel,
-                onClick = onGalleryClick
+            Icon(
+                imageVector = Icons.Default.Cameraswitch,
+                contentDescription = "Switch Camera",
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
             )
-            
-            // 设置按钮
-            IconButton(
-                onClick = { 
-                    onActivePanelChange(
-                        if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
-                    )
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        if (activePanel == ActivePanel.SETTINGS) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.5f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    tint = Color.White
-                )
-            }
-            
-            // 滤镜按钮
-            IconButton(
-                onClick = { 
-                    onActivePanelChange(
-                        if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                    )
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        if (activePanel == ActivePanel.FILTERS) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.5f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = "Filters",
-                    tint = Color.White
-                )
-            }
-
-            // 拍照按钮
-            CaptureButton(
-                isCapturing = state.isCapturing,
-                onClick = onCapture
-            )
-
-            // 切换摄像头按钮
-            IconButton(
-                onClick = onSwitchCamera,
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        Color.Black.copy(alpha = 0.5f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Cameraswitch,
-                    contentDescription = "Switch Camera",
-                    tint = Color.White
-                )
-            }
         }
     }
 }
 
-/**
- * 竖屏控制布局
- */
-@Composable
-fun PortraitControls(
-    state: CameraState,
-    viewModel: CameraViewModel,
-    activePanel: ActivePanel,
-    onActivePanelChange: (ActivePanel) -> Unit,
-    onCapture: () -> Unit,
-    onSwitchCamera: () -> Unit,
-    onExposureCompensationChange: (Int) -> Unit,
-    onIsoChange: (Int) -> Unit,
-    onShutterSpeedChange: (Long) -> Unit,
-    onZoomChange: (Float) -> Unit,
-    onAspectRatioChange: (com.hinnka.mycamera.camera.AspectRatio) -> Unit,
-    onAutoExposureToggle: (Boolean) -> Unit,
-    galleryViewModel: GalleryViewModel,
-    latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
-    onGalleryClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        // 顶部控制面板
-        if (activePanel != ActivePanel.NONE) {
-            if (activePanel == ActivePanel.SETTINGS) {
-                ControlPanel(
-                    state = state,
-                    onExposureCompensationChange = onExposureCompensationChange,
-                    onIsoChange = onIsoChange,
-                    onShutterSpeedChange = onShutterSpeedChange,
-                    onZoomChange = onZoomChange,
-                    onAspectRatioChange = onAspectRatioChange,
-                    onAutoExposureToggle = onAutoExposureToggle
-                )
-            } else if (activePanel == ActivePanel.FILTERS) {
-                EditControlPanel(
-                    availableLuts = viewModel.availableLutList,
-                    currentLutId = viewModel.currentLutId,
-                    lutIntensity = state.lutIntensity,
-                    onLutSelected = { viewModel.setLut(it) },
-                    onIntensityChange = { viewModel.setLutIntensity(it) },
-                    availableFrames = viewModel.availableFrameList,
-                    currentFrameId = viewModel.currentFrameId,
-                    showAppBranding = viewModel.currentShowAppBranding,
-                    onFrameSelected = { viewModel.setFrame(it) },
-                    onBrandingToggle = { viewModel.setShowAppBranding(it) }
-                )
-            }
-        }
-        
-        Spacer(modifier = Modifier.weight(1f))
-        
-        // 底部按钮区
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.6f))
-                .padding(vertical = 24.dp, horizontal = 32.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 相册入口
-            GalleryThumbnail(
-                latestPhoto = latestPhoto,
-                viewModel = galleryViewModel,
-                onClick = onGalleryClick
-            )
-            
-            // 设置按钮
-            IconButton(
-                onClick = { 
-                    onActivePanelChange(
-                        if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
-                    )
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        if (activePanel == ActivePanel.SETTINGS) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.2f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    tint = Color.White
-                )
-            }
-            
-            // 滤镜按钮
-            IconButton(
-                onClick = { 
-                    onActivePanelChange(
-                        if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                    )
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        if (activePanel == ActivePanel.FILTERS) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.2f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = "Filters",
-                    tint = Color.White
-                )
-            }
-            
-            // 拍照按钮
-            CaptureButton(
-                isCapturing = state.isCapturing,
-                onClick = onCapture
-            )
-            
-            // 切换摄像头按钮
-            IconButton(
-                onClick = onSwitchCamera,
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        Color.White.copy(alpha = 0.2f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Cameraswitch,
-                    contentDescription = "Switch Camera",
-                    tint = Color.White
-                )
-            }
-        }
-    }
-}
 
 /**
  * 拍照按钮
@@ -557,22 +262,83 @@ fun CaptureButton(
     
     Box(
         modifier = modifier
-            .size(72.dp)
+            .size(80.dp)
             .scale(scale)
-            .clip(CircleShape)
-            .background(Color.White)
-            .border(4.dp, Color.White.copy(alpha = 0.5f), CircleShape)
-            .clickable(enabled = !isCapturing) { onClick() }
-            .padding(4.dp),
+            .clickable(enabled = !isCapturing) { onClick() },
         contentAlignment = Alignment.Center
     ) {
+        // Outer White Ring
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clip(CircleShape)
-                .background(
-                    if (isCapturing) Color.Gray else Color.White
-                )
+                .border(2.dp, Color.White, CircleShape)
         )
+        
+        // Inner Yellow Ring
+        Box(
+            modifier = Modifier
+                .padding(4.dp)
+                .fillMaxSize()
+                .border(4.dp, Color(0xFFFFD700), CircleShape)
+        )
+        
+        // Center Solid Button (When not capturing)
+        if (!isCapturing) {
+            Box(
+                modifier = Modifier
+                    .padding(12.dp)
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(Color.Black)
+            )
+        }
     }
 }
+
+
+fun Modifier.autoRotate(dx: Dp = 0.dp, dy: Dp = 0.dp): Modifier = composed {
+    val targetDegrees = if (OrientationObserver.rotationDegrees != 0f) OrientationObserver.rotationDegrees - 180 else 0f
+
+    // 2. 创建动画状态
+    // label 是为了调试方便，animationSpec 可以调整快慢和回弹
+    val animatedDegrees by animateFloatAsState(
+        targetValue = targetDegrees,
+        animationSpec = tween(durationMillis = 300),
+        label = "rotationAnimation"
+    )
+
+    // 3. 使用 layout 修改器
+    // 注意：这里我们使用 animatedDegrees (当前动画值) 而不是 targetDegrees (最终值)
+    layout { measurable, constraints ->
+        // --- 测量阶段 ---
+
+        // A. 测量子组件 (使用原始约束)
+        val placeable = measurable.measure(constraints)
+
+        // B. 使用【动画中的角度】计算弧度
+        val rad = Math.toRadians(animatedDegrees.toDouble())
+        val cos = abs(cos(rad))
+        val sin = abs(sin(rad))
+
+        // C. 动态计算当前动画帧所需的外接矩形大小
+        // 随着动画进行，这个 newWidth/newHeight 会每一帧都变化，产生平滑的形变效果
+        val newWidth = (placeable.width * cos + placeable.height * sin).toInt()
+        val newHeight = (placeable.width * sin + placeable.height * cos).toInt()
+
+        val nDx = dx.toPx() * sin
+        val nDy = dy.toPx() * sin
+
+        // --- 布局阶段 ---
+        layout(newWidth, newHeight) {
+            // D. 放置并旋转
+            placeable.placeRelativeWithLayer(
+                x = (newWidth - placeable.width) / 2 + nDx.toInt(),
+                y = (newHeight - placeable.height) / 2 + nDy.toInt()
+            ) {
+                // 这里也必须使用动画值
+                rotationZ = animatedDegrees
+            }
+        }
+    }
+}
+

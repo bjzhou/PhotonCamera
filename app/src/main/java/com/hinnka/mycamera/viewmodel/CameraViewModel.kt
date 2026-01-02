@@ -3,6 +3,7 @@ package com.hinnka.mycamera.viewmodel
 import android.app.Application
 import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraMetadata
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,49 +79,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var currentShowAppBranding by mutableStateOf(true)
         private set
 
+    var showHistogram by mutableStateOf(true)
+        private set
+
     var availableFrameList: List<FrameInfo> by mutableStateOf(emptyList())
-        private set
-
-    // 存储是否为横屏模式
-    var isLandscape by mutableStateOf(false)
-        private set
-
-    // 存储旋转角度，用于UI旋转
-    var rotationDegrees by mutableStateOf(0f)
         private set
     
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
-
-    // 更新方向，只在横竖屏切换时才更新状态
-    fun updateOrientation(orientation: Int) {
-        when {
-            // 右侧朝上（手机顺时针旋转90°）
-            orientation in 45..135 -> {
-                if (!isLandscape || rotationDegrees != 90f) {
-                    isLandscape = true
-                    rotationDegrees = 90f
-                    cameraController.setDeviceRotation(90)
-                }
-            }
-            // 左侧朝上（手机逆时针旋转90°）
-            orientation in 225..315 -> {
-                if (!isLandscape || rotationDegrees != 270f) {
-                    isLandscape = true
-                    rotationDegrees = 270f
-                    cameraController.setDeviceRotation(270)
-                }
-            }
-            // 竖屏
-            else -> {
-                if (isLandscape) {
-                    isLandscape = false
-                    rotationDegrees = 0f
-                    cameraController.setDeviceRotation(0)
-                }
-            }
-        }
-    }
     
     init {
         cameraController.initialize()
@@ -164,6 +130,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     currentFrameId = prefs.frameId
                 }
                 currentShowAppBranding = prefs.showAppBranding
+
+                showHistogram = prefs.showHistogram
             } else {
                 // 如果没有任何偏好设置，使用默认的 Photon LUT
                 setLut("Photon")
@@ -334,6 +302,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun focusOnPoint(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
         cameraController.focusOnPoint(x, y, viewWidth, viewHeight)
     }
+
+    fun toggleFlash() {
+        cameraController.setFlashMode(when (state.value.flashMode) {
+            0 -> 1
+            1 -> 2
+            2 -> 0
+            else -> 0
+        })
+    }
     
     // ==================== LUT 相关方法 ====================
     
@@ -404,6 +381,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveShowAppBranding(show)
+        }
+    }
+
+    /**
+     * 设置是否显示直方图
+     */
+    fun saveShowHistogram(show: Boolean) {
+        showHistogram = show
+        // 保存到用户偏好设置
+        viewModelScope.launch {
+            userPreferencesRepository.saveShowHistogram(show)
         }
     }
 

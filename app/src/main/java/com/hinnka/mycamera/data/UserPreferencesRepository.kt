@@ -24,7 +24,8 @@ data class UserPreferences(
     val lutId: String? = "Photon",
     val lutIntensity: Float = 1.0f,
     val frameId: String? = null,
-    val showAppBranding: Boolean = true
+    val showAppBranding: Boolean = true,
+    val showHistogram: Boolean = true
 )
 
 /**
@@ -40,6 +41,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val LUT_INTENSITY_KEY = floatPreferencesKey("lut_intensity")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
         private val SHOW_APP_BRANDING_KEY = booleanPreferencesKey("show_app_branding")
+        private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
     }
     
     /**
@@ -52,7 +54,8 @@ class UserPreferencesRepository(private val context: Context) {
                 lutId = preferences[LUT_ID_KEY] ?: "Photon",
                 lutIntensity = preferences[LUT_INTENSITY_KEY] ?: 1.0f,
                 frameId = preferences[FRAME_ID_KEY],
-                showAppBranding = preferences[SHOW_APP_BRANDING_KEY] ?: true
+                showAppBranding = preferences[SHOW_APP_BRANDING_KEY] ?: true,
+                showHistogram = preferences[SHOW_HISTOGRAM] ?: true
             )
         }
     
@@ -108,6 +111,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveShowAppBranding(show: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[SHOW_APP_BRANDING_KEY] = show
+        }
+    }
+
+    /**
+     * 保存是否显示直方图
+     */
+    suspend fun saveShowHistogram(show: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SHOW_HISTOGRAM] = show
         }
     }
 }

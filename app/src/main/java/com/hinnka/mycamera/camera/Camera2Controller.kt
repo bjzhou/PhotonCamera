@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
+import android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
@@ -16,6 +17,7 @@ import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.BitmapUtils.toByteArray
+import com.hinnka.mycamera.utils.OrientationObserver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,6 +66,37 @@ class Camera2Controller(private val context: Context) {
     
     // 图片拍摄回调（携带 CaptureInfo）
     var onImageCaptured: ((ByteArray, CaptureInfo) -> Unit)? = null
+
+    private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult
+        ) {
+            super.onCaptureCompleted(session, request, result)
+
+            // 1. 获取 ISO (Int)
+            val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+
+            // 2. 获取曝光时间 (Long, 单位: 纳秒)
+            val exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+
+            val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+            val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
+            val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
+            val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CONTROL_AWB_MODE_AUTO
+//            val flashMode = result.get(CaptureResult.FLASH_MODE) ?: CameraMetadata.FLASH_MODE_OFF
+
+            _state.value = _state.value.copy(
+                iso = iso ?: 100,
+                shutterSpeed = exposureTimeNs ?: (1_000_000_000L / 60),
+                exposureCompensation = exposureCompensation,
+                isAutoExposure = isAutoExposure,
+                awbMode = awbMode,
+//                flashMode = flashMode,
+            )
+        }
+    }
     
     // ==================== 初始化 ====================
     
@@ -292,7 +325,7 @@ class Camera2Controller(private val context: Context) {
             // 开始预览
             previewRequestBuilder?.let { builder ->
                 previewImageReader?.surface?.let { builder.addTarget(it) }
-                session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             }
             
             _state.value = _state.value.copy(isPreviewActive = true)
@@ -466,6 +499,32 @@ class Camera2Controller(private val context: Context) {
             updatePreview()
         }
     }
+
+    fun setFlashMode(value: Int) {
+        _state.value = _state.value.copy(flashMode = value)
+
+        previewRequestBuilder?.apply {
+            when (value) {
+                CameraMetadata.FLASH_MODE_OFF -> {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                }
+                CameraMetadata.FLASH_MODE_SINGLE -> {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                }
+                CameraMetadata.FLASH_MODE_TORCH -> {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
+                }
+                else -> {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                }
+            }
+            updatePreview()
+        }
+    }
     
     /**
      * 更新预览
@@ -473,7 +532,7 @@ class Camera2Controller(private val context: Context) {
     private fun updatePreview() {
         try {
             previewRequestBuilder?.let { builder ->
-                captureSession?.setRepeatingRequest(builder.build(), null, cameraHandler)
+                captureSession?.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             }
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Failed to update preview", e)
@@ -566,6 +625,10 @@ class Camera2Controller(private val context: Context) {
                 set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 updatePreview()
             }
+
+            cameraHandler?.postDelayed({
+                _state.value = _state.value.copy(focusSuccess = true)
+            }, 200)
             
             // 延迟恢复连续对焦
             cameraHandler?.postDelayed({
@@ -574,8 +637,8 @@ class Camera2Controller(private val context: Context) {
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                     updatePreview()
                 }
-                _state.value = _state.value.copy(isFocusing = false, focusSuccess = true)
-            }, 2000)
+                _state.value = _state.value.copy(isFocusing = false, focusSuccess = null)
+            }, 2500)
             
         } catch (e: Exception) {
             Log.e(TAG, "Failed to focus", e)
@@ -590,13 +653,6 @@ class Camera2Controller(private val context: Context) {
      */
     fun setAspectRatio(ratio: AspectRatio) {
         _state.value = _state.value.copy(aspectRatio = ratio)
-    }
-    
-    /**
-     * 设置设备旋转角度
-     */
-    fun setDeviceRotation(degrees: Int) {
-        deviceRotation = degrees
     }
     
     /**
@@ -679,7 +735,7 @@ class Camera2Controller(private val context: Context) {
             val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
             
             // 根据设备方向和传感器方向计算 JPEG 方向
-            val surfaceRotation = deviceRotation
+            val surfaceRotation = OrientationObserver.rotationDegrees.toInt()
             val jpegOrientation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
                 (sensorOrientation - surfaceRotation + 360) % 360
             } else {
