@@ -25,7 +25,8 @@ data class UserPreferences(
     val lutIntensity: Float = 1.0f,
     val frameId: String? = null,
     val showAppBranding: Boolean = true,
-    val showHistogram: Boolean = true
+    val showHistogram: Boolean = true,
+    val showGrid: Boolean = false  // 网格线显示
 )
 
 /**
@@ -42,6 +43,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
         private val SHOW_APP_BRANDING_KEY = booleanPreferencesKey("show_app_branding")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
+        private val SHOW_GRID = booleanPreferencesKey("show_grid")
     }
     
     /**
@@ -55,7 +57,8 @@ class UserPreferencesRepository(private val context: Context) {
                 lutIntensity = preferences[LUT_INTENSITY_KEY] ?: 1.0f,
                 frameId = preferences[FRAME_ID_KEY],
                 showAppBranding = preferences[SHOW_APP_BRANDING_KEY] ?: true,
-                showHistogram = preferences[SHOW_HISTOGRAM] ?: true
+                showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
+                showGrid = preferences[SHOW_GRID] ?: false
             )
         }
     
@@ -120,6 +123,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveShowHistogram(show: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[SHOW_HISTOGRAM] = show
+        }
+    }
+
+    /**
+     * 保存是否显示网格线
+     */
+    suspend fun saveShowGrid(show: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SHOW_GRID] = show
         }
     }
 }

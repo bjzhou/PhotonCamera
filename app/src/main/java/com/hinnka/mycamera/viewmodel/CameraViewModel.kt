@@ -141,6 +141,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 currentShowAppBranding = prefs.showAppBranding
 
                 showHistogram = prefs.showHistogram
+                
+                // 应用保存的网格线设置
+                cameraController.setShowGrid(prefs.showGrid)
             } else {
                 // 如果没有任何偏好设置，使用默认的 Photon LUT
                 setLut("Photon")
@@ -177,10 +180,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * 拍照
+     * 拍照（带延时拍摄支持）
      */
     fun capture() {
-        cameraController.capture()
+        val timerSeconds = state.value.timerSeconds
+        
+        if (timerSeconds > 0) {
+            // 延时拍摄：开始倒计时
+            viewModelScope.launch {
+                for (i in timerSeconds downTo 1) {
+                    cameraController.setCountdownValue(i)
+                    kotlinx.coroutines.delay(1000)
+                }
+                // 倒计时结束，拍照
+                cameraController.setCountdownValue(0)
+                cameraController.capture()
+            }
+        } else {
+            // 普通拍摄：直接拍照
+            cameraController.capture()
+        }
     }
     
     /**
@@ -375,6 +394,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveShowHistogram(show)
+        }
+    }
+    
+    // ==================== 延时拍摄和网格线相关方法 ====================
+    
+    /**
+     * 切换延时拍摄档位（0s → 3s → 5s → 10s → 0s）
+     */
+    fun toggleTimer() {
+        val currentTimer = state.value.timerSeconds
+        val nextTimer = when (currentTimer) {
+            0 -> 3
+            3 -> 5
+            5 -> 10
+            10 -> 0
+            else -> 0
+        }
+        cameraController.setTimerSeconds(nextTimer)
+    }
+    
+    /**
+     * 切换网格线显示
+     */
+    fun toggleGrid() {
+        val newShowGrid = !state.value.showGrid
+        cameraController.setShowGrid(newShowGrid)
+        // 保存到用户偏好设置
+        viewModelScope.launch {
+            userPreferencesRepository.saveShowGrid(newShowGrid)
         }
     }
 

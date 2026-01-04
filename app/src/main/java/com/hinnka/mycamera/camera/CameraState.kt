@@ -132,6 +132,13 @@ data class CameraState(
     
     // 直方图数据 (256个灰度值)
     val histogram: IntArray? = null,
+    
+    // 延时拍摄
+    val timerSeconds: Int = 0, // 延时拍摄秒数 (0/3/5/10)
+    val countdownValue: Int = 0, // 当前倒计时值
+    
+    // 网格线
+    val showGrid: Boolean = false, // 是否显示网格线
 ) {
     /**
      * 获取当前相机信息

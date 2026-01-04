@@ -103,21 +103,14 @@ fun CameraScreen(
             onFlashToggle = {
                 viewModel.toggleFlash()
             },
-            timerSeconds = 0, // TODO: State
-            onTimerToggle = { /* TODO */ },
+            timerSeconds = state.timerSeconds,
+            onTimerToggle = { viewModel.toggleTimer() },
             showHistogram = viewModel.showHistogram,
             onHistogramToggle = {
                 viewModel.saveShowHistogram(!viewModel.showHistogram)
             },
-            showGrid = true, // TODO: State
-            onGridToggle = {
-                viewModel.setAspectRatio(when (state.aspectRatio) {
-                    AspectRatio.RATIO_4_3 -> AspectRatio.RATIO_16_9
-                    AspectRatio.RATIO_16_9 -> AspectRatio.RATIO_1_1
-                    AspectRatio.RATIO_1_1 -> AspectRatio.RATIO_4_3
-                    else -> AspectRatio.RATIO_4_3
-                })
-            },
+            showGrid = state.showGrid,
+            onGridToggle = { viewModel.toggleGrid() },
             onSettingsClick = { /* TODO */ }
         )
 
@@ -188,6 +181,22 @@ fun CameraScreen(
                     },
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
+                
+                // 网格线覆盖
+                if (state.showGrid) {
+                    GridOverlay(
+                        aspectRatio = state.aspectRatio,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                
+                // 倒计时覆盖
+                if (state.countdownValue > 0) {
+                    CountdownOverlay(
+                        countdownValue = state.countdownValue,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
 
             Box(modifier = Modifier.align(Alignment.BottomCenter)) {

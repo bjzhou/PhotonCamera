@@ -959,6 +959,29 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(lutIntensity = intensity)
     }
     
+    // ==================== 延时拍摄和网格线 ====================
+    
+    /**
+     * 设置延时拍摄秒数
+     */
+    fun setTimerSeconds(seconds: Int) {
+        _state.value = _state.value.copy(timerSeconds = seconds)
+    }
+    
+    /**
+     * 设置倒计时值（用于UI显示）
+     */
+    fun setCountdownValue(value: Int) {
+        _state.value = _state.value.copy(countdownValue = value)
+    }
+    
+    /**
+     * 设置是否显示网格线
+     */
+    fun setShowGrid(show: Boolean) {
+        _state.value = _state.value.copy(showGrid = show)
+    }
+    
     // ==================== 拍照 ====================
     
     /**

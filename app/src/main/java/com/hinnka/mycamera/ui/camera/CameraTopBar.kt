@@ -9,7 +9,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @Composable
 fun CameraTopBar(
@@ -48,12 +50,23 @@ fun CameraTopBar(
 
         // Timer Button
         IconButton(onClick = onTimerToggle) {
-            Icon(
-                imageVector = Icons.Default.Timer,
-                contentDescription = "Timer",
-                modifier = Modifier.size(20.dp).autoRotate(),
-                tint = Color.White
-            )
+            if (timerSeconds > 0) {
+                // 显示定时器数字
+                androidx.compose.material3.Text(
+                    text = "${timerSeconds}s",
+                    color = Color.Yellow,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.autoRotate()
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = "Timer",
+                    modifier = Modifier.size(20.dp).autoRotate(),
+                    tint = Color.White
+                )
+            }
         }
 
         // Histogram Toggle
