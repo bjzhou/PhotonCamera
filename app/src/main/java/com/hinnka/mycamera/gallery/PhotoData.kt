@@ -14,8 +14,8 @@ data class PhotoData(
     val dateAdded: Long,
     val dateTaken: Long?,
     val size: Long,
-    val width: Int,
-    val height: Int,
+    val width: Int = 0,
+    val height: Int = 0,
     var metadata: PhotoMetadata? = null
 ) {
     /**

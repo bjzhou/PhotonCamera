@@ -90,9 +90,10 @@ object PhotoManager {
                     ExifWriter.writeExif(photoFile, info)
                 }
 
-                // 3. 保存编辑元数据（LUT/边框配置）
+                // 3. 保存编辑元数据（LUT/边框配置及尺寸信息）
                 val metadataFile = File(photoDir, METADATA_FILE)
-                metadataFile.writeText(metadata.toJson())
+                val metadataWithDimens = metadata.copy(width = bitmap.width, height = bitmap.height)
+                metadataFile.writeText(metadataWithDimens.toJson())
 
                 // 4. 生成并保存缩略图
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)

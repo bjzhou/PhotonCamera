@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.gallery
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -71,11 +70,6 @@ class GalleryRepository(private val context: Context) {
         photoIds.take(limit).forEach { id ->
             val photoFile = PhotoManager.getPhotoFile(context, id)
             if (photoFile.exists()) {
-                val options = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
-                }
-                BitmapFactory.decodeFile(photoFile.absolutePath, options)
-                
                 photos.add(
                     PhotoData(
                         id = id,
@@ -85,9 +79,7 @@ class GalleryRepository(private val context: Context) {
                         displayName = photoFile.name,
                         dateAdded = photoFile.lastModified() / 1000,
                         dateTaken = photoFile.lastModified(),
-                        size = photoFile.length(),
-                        width = options.outWidth,
-                        height = options.outHeight
+                        size = photoFile.length()
                     )
                 )
             }

@@ -13,7 +13,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -62,8 +62,9 @@ fun GalleryScreen(
     
     var showDeleteDialog by remember { mutableStateOf(false) }
     
-    // 刷新照片列表
+    // 延迟加载照片列表，避免与跳转动画冲突导致卡顿
     LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(500) // 等待跳转动画完成
         viewModel.loadPhotos()
     }
     
@@ -205,7 +206,11 @@ fun GalleryScreen(
                     contentPadding = PaddingValues(2.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(photos) { index, photo ->
+                    items(
+                        items = photos,
+                        key = { it.id }
+                    ) { photo ->
+                        val index = photos.indexOf(photo)
                         PhotoGridItem(
                             photo = photo,
                             viewModel = viewModel,

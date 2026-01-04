@@ -22,7 +22,9 @@ data class PhotoMetadata(
     val rotation: Float = 0f,
     // 边框水印配置
     val frameId: String? = null,
-    val showAppBranding: Boolean = true
+    val showAppBranding: Boolean = true,
+    val width: Int = 0,
+    val height: Int = 0
 ) {
     fun toJson(): String {
         return JSONObject().apply {
@@ -33,6 +35,8 @@ data class PhotoMetadata(
             put("rotation", rotation.toDouble())
             put("frameId", frameId ?: JSONObject.NULL)
             put("showAppBranding", showAppBranding)
+            put("width", width)
+            put("height", height)
         }.toString(2)
     }
     
@@ -47,7 +51,9 @@ data class PhotoMetadata(
                     brightness = obj.optDouble("brightness", 1.0).toFloat(),
                     rotation = obj.optDouble("rotation", 0.0).toFloat(),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
-                    showAppBranding = obj.optBoolean("showAppBranding", true)
+                    showAppBranding = obj.optBoolean("showAppBranding", true),
+                    width = obj.optInt("width", 0),
+                    height = obj.optInt("height", 0)
                 )
             } catch (e: Exception) {
                 Log.e("PhotoMetadata", "Failed to parse JSON", e)

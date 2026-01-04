@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Bitmap
@@ -21,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -117,21 +120,100 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun loadPhotos() {
         viewModelScope.launch {
-            _isLoading.value = true
+            if (_photos.value.isEmpty()) {
+                _isLoading.value = true
+            }
             try {
-                val photoList = repository.getPhotosSync()
-                val context = getApplication<Application>()
-                photoList.forEach { photo ->
-                    photo.metadata = PhotoManager.loadMetadata(context, photo.id)
+                // 1. Get basic list from repository (fast: file list only)
+                val newList = repository.getPhotosSync()
+                
+                // 2. Reuse existing objects to preserve metadata and avoid UI replacement
+                val currentPhotos = _photos.value.associateBy { it.id }
+                val mergedList = newList.map { photo ->
+                    currentPhotos[photo.id] ?: photo
                 }
-                _photos.value = photoList
-                _latestPhoto.value = _photos.value.firstOrNull()
+
+                val context = getApplication<Application>()
+                
+                // 3. Eagerly load metadata for the first ~30 items (visible area)
+                val topItemsToLoad = mergedList.take(30).filter { it.metadata == null }
+                val topItemsLoaded = if (topItemsToLoad.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        topItemsToLoad.map { photo ->
+                            async {
+                                loadSpecificPhotoMetadata(context, photo)
+                            }
+                        }.awaitAll()
+                    }
+                } else emptyList()
+                
+                val topMap = topItemsLoaded.associateBy { it.id }
+                val updatedWithTop = mergedList.map { photo ->
+                    topMap[photo.id] ?: photo
+                }
+                
+                // Update UI for the first time
+                _photos.value = updatedWithTop
+                _latestPhoto.value = updatedWithTop.firstOrNull()
+                _isLoading.value = false
+                
+                // 4. Load the rest of the metadata in background
+                val remainingToLoad = updatedWithTop.filter { it.metadata == null }
+                if (remainingToLoad.isNotEmpty()) {
+                    val fullyUpdatedList = withContext(Dispatchers.IO) {
+                        remainingToLoad.map { photo ->
+                            async { loadSpecificPhotoMetadata(context, photo) }
+                        }.awaitAll()
+                    }
+                    
+                    // Final update: merge background results back into the list
+                    val finalMap = fullyUpdatedList.associateBy { it.id }
+                    val finalPhotos = updatedWithTop.map { photo ->
+                        finalMap[photo.id] ?: photo
+                    }
+                    _photos.value = finalPhotos
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load photos", e)
-            } finally {
                 _isLoading.value = false
             }
         }
+    }
+
+    private suspend fun loadSpecificPhotoMetadata(context: Context, photo: PhotoData): PhotoData {
+        var metadata = PhotoManager.loadMetadata(context, photo.id)
+        var updatedPhoto = if (metadata != null) {
+            photo.copy(metadata = metadata)
+        } else {
+            photo
+        }
+        
+        // If dimensions are missing, load from file header
+        if (updatedPhoto.width == 0 || updatedPhoto.height == 0) {
+            try {
+                val photoFile = PhotoManager.getPhotoFile(context, photo.id)
+                if (photoFile.exists()) {
+                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(photoFile.absolutePath, options)
+                    updatedPhoto = updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
+                    
+                    // Cache dimensions back to metadata
+                    val currentMeta = metadata ?: PhotoMetadata()
+                    val newMetadata = currentMeta.copy(width = options.outWidth, height = options.outHeight)
+                    PhotoManager.saveMetadata(context, photo.id, newMetadata)
+                    updatedPhoto = updatedPhoto.copy(metadata = newMetadata)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load dimensions for ${photo.id}", e)
+            }
+        } else if (metadata != null) {
+            // Already has width/height from metadata
+            updatedPhoto = updatedPhoto.copy(width = metadata.width, height = metadata.height)
+        }
+        
+        // Update the metadata field of the photo object directly? No, copy it.
+        // The callers (async) will collect these.
+        return updatedPhoto
     }
     
     /**
@@ -142,9 +224,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val photo = repository.getLatestPhoto()
             photo?.let {
                 val context = getApplication<Application>()
-                it.metadata = PhotoManager.loadMetadata(context, it.id)
+                val metadata = PhotoManager.loadMetadata(context, it.id)
+                var updatedPhoto = if (metadata != null) {
+                    it.copy(
+                        metadata = metadata,
+                        width = if (metadata.width > 0) metadata.width else it.width,
+                        height = if (metadata.height > 0) metadata.height else it.height
+                    )
+                } else {
+                    it
+                }
+                
+                // If dimensions are missing, load from file (same as loadPhotos)
+                if (updatedPhoto.width == 0 || updatedPhoto.height == 0) {
+                    try {
+                        val photoFile = PhotoManager.getPhotoFile(context, it.id)
+                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(photoFile.absolutePath, options)
+                        updatedPhoto = updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
+                        
+                        metadata?.let { m ->
+                            val newMetadata = m.copy(width = options.outWidth, height = options.outHeight)
+                            PhotoManager.saveMetadata(context, it.id, newMetadata)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to load dimensions for latest photo", e)
+                    }
+                }
+                _latestPhoto.value = updatedPhoto
             }
-            _latestPhoto.value = photo
         }
     }
     
