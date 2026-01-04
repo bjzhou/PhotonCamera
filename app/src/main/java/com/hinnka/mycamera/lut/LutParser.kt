@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 import android.content.Context
 import android.util.Log
+import org.json.JSONObject
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -82,29 +83,48 @@ object LutParser {
     }
 
     /**
-     * 列出 Assets 中可用的 LUT 文件（优先展示 .plut）
+     * 列出 Assets 中可用的 LUT 文件（从 config.json 读取）
      */
     fun listAvailableLuts(context: Context, folder: String = "luts"): List<LutInfo> {
         return try {
-            val files = context.assets.list(folder) ?: emptyArray()
+            // 读取 config.json
+            val configPath = "$folder/config.json"
+            val configJson = context.assets.open(configPath).use { 
+                it.bufferedReader().readText()
+            }
             
-            // 获取所有不带后缀的文件名（基准 ID）
-            val baseNames = files.map { it.substringBeforeLast('.') }.distinct()
+            val jsonObject = JSONObject(configJson)
+            val lutsArray = jsonObject.getJSONArray("luts")
             
-            baseNames.map { baseName ->
-                // 优先检查是否有 .plut，没有则用 .cube
-                val hasPlut = files.contains("$baseName.plut")
-                val fileName = if (hasPlut) "$baseName.plut" else "$baseName.cube"
+            // 按配置文件中的顺序读取 LUT
+            val lutList = mutableListOf<LutInfo>()
+            for (i in 0 until lutsArray.length()) {
+                val lutObj = lutsArray.getJSONObject(i)
+                val id = lutObj.getString("id")
+                val path = lutObj.getString("path")
+                val nameObj = lutObj.getJSONObject("name")
                 
-                LutInfo(
-                    id = baseName,
-                    name = baseName.replace("_", " "),
-                    fileName = "$folder/$fileName",
-                    isBuiltIn = true
+                // 读取多语言名称
+                val nameMap = mutableMapOf<String, String>()
+                nameObj.keys().forEach { lang ->
+                    nameMap[lang] = nameObj.getString(lang)
+                }
+                
+                lutList.add(
+                    LutInfo(
+                        id = id,
+                        nameMap = nameMap,
+                        fileName = "$folder/$path",
+                        isBuiltIn = true,
+                        isDefault = (i == 0) // 第一个作为默认
+                    )
                 )
             }
+            
+            Log.d(TAG, "Loaded ${lutList.size} LUTs from config.json")
+            lutList
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to list LUT files", e)
+            Log.e(TAG, "Failed to load LUT config", e)
             emptyList()
         }
     }

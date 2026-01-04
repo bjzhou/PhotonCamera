@@ -1,0 +1,84 @@
+{
+  "luts": [
+    {
+      "id": "standard",
+      "name": {
+        "en": "Standard",
+        "zh": "标准"
+      },
+      "path": "standard.plut"
+    },
+    {
+      "id": "leica",
+      "name": {
+        "en": "Leica",
+        "zh": "徕卡影调"
+      },
+      "path": "leica.plut"
+    },
+    {
+      "id": "monochrome",
+      "name": {
+        "en": "Monochrome",
+        "zh": "徕卡黑白"
+      },
+      "path": "monochrome.plut"
+    },
+    {
+      "id": "cc",
+      "name": {
+        "en": "Fujifilm CC",
+        "zh": "富士CC"
+      },
+      "path": "cc.plut"
+    },
+    {
+      "id": "nc",
+      "name": {
+        "en": "Fujifilm NC",
+        "zh": "富士NC"
+      },
+      "path": "nc.plut"
+    },
+    {
+      "id": "ricoh_positive",
+      "name": {
+        "en": "RICOH Positive",
+        "zh": "理光正片"
+      },
+      "path": "ricoh_positive.plut"
+    },
+    {
+      "id": "ricoh_negative",
+      "name": {
+        "en": "RICOH Negative",
+        "zh": "理光负片"
+      },
+      "path": "ricoh_negative.plut"
+    },
+    {
+      "id": "fl3",
+      "name": {
+        "en": "Sony FL3",
+        "zh": "索尼FL3"
+      },
+      "path": "fl3.plut"
+    },
+    {
+      "id": "vv2",
+      "name": {
+        "en": "Sony VV2",
+        "zh": "索尼VV2"
+      },
+      "path": "vv2.plut"
+    },
+    {
+      "id": "pentax",
+      "name": {
+        "en": "Pentax",
+        "zh": "宾得鲜明"
+      },
+      "path": "pentax.plut"
+    }
+  ]
+}

@@ -115,7 +115,12 @@ enum class LutIntensity(val value: Float, val displayName: String) {
  */
 data class LutInfo(
     val id: String,
-    val name: String,
+    val nameMap: Map<String, String>, // 多语言名称映射
     val fileName: String,
-    val isBuiltIn: Boolean = true
-)
+    val isBuiltIn: Boolean = true,
+    val isDefault: Boolean = false // 是否为默认 LUT
+) {
+    // 获取显示名称（优先中文）
+    val name: String
+        get() = nameMap["zh"] ?: nameMap["en"] ?: id
+}

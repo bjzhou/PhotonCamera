@@ -21,7 +21,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
  */
 data class UserPreferences(
     val aspectRatio: String = "RATIO_4_3",
-    val lutId: String? = "Photon",
+    val lutId: String? = null,  // 默认为 null，由 CameraViewModel 根据配置文件设置
     val lutIntensity: Float = 1.0f,
     val frameId: String? = null,
     val showAppBranding: Boolean = true,
@@ -61,7 +61,7 @@ class UserPreferencesRepository(private val context: Context) {
         .map { preferences ->
             UserPreferences(
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
-                lutId = preferences[LUT_ID_KEY] ?: "Photon",
+                lutId = preferences[LUT_ID_KEY],  // 不提供默认值，由 CameraViewModel 处理
                 lutIntensity = preferences[LUT_INTENSITY_KEY] ?: 1.0f,
                 frameId = preferences[FRAME_ID_KEY],
                 showAppBranding = preferences[SHOW_APP_BRANDING_KEY] ?: true,

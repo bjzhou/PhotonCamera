@@ -149,8 +149,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (prefs.lutId != null) {
                     setLut(prefs.lutId)
                 } else {
-                    // 如果没有保存的 LUT，使用默认的 Photon LUT
-                    setLut("Photon")
+                    // 如果没有保存的 LUT，使用配置文件中的默认 LUT（第一个）
+                    val defaultLut = availableLutList.firstOrNull { it.isDefault }
+                    defaultLut?.let { setLut(it.id) }
                 }
                 setLutIntensity(prefs.lutIntensity)
                 
@@ -165,8 +166,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 应用保存的网格线设置
                 cameraController.setShowGrid(prefs.showGrid)
             } else {
-                // 如果没有任何偏好设置，使用默认的 Photon LUT
-                setLut("Photon")
+                // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
+                val defaultLut = availableLutList.firstOrNull { it.isDefault }
+                defaultLut?.let { setLut(it.id) }
             }
         }
     }

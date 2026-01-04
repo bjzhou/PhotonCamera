@@ -125,11 +125,14 @@ object CubeLutParser {
             val files = context.assets.list(folder) ?: emptyArray()
             files.filter { it.endsWith(".cube", ignoreCase = true) }
                 .map { fileName ->
+                    val id = fileName.substringBeforeLast(".")
+                    val name = id.replace("_", " ")
                     LutInfo(
-                        id = fileName.substringBeforeLast("."),
-                        name = fileName.substringBeforeLast(".").replace("_", " "),
+                        id = id,
+                        nameMap = mapOf("en" to name, "zh" to name),
                         fileName = "$folder/$fileName",
-                        isBuiltIn = true
+                        isBuiltIn = true,
+                        isDefault = false
                     )
                 }
         } catch (e: Exception) {

@@ -157,7 +157,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             
             // 更新编辑状态
             currentPhotoMetadata?.let { metadata ->
-                editLutId = metadata.lutId ?: "Photon"
+                editLutId = metadata.lutId
                 editLutIntensity = metadata.lutIntensity
                 editBrightness = metadata.brightness
                 editRotation = metadata.rotation
@@ -332,14 +332,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = true
         // 从当前元数据恢复编辑状态
         currentPhotoMetadata?.let { metadata ->
-            editLutId = metadata.lutId ?: "Photon"
+            editLutId = metadata.lutId
             editLutIntensity = metadata.lutIntensity
             editBrightness = metadata.brightness
             editRotation = metadata.rotation
             editFrameId = metadata.frameId
             editShowAppBranding = metadata.showAppBranding
         } ?: run {
-            editLutId = "Photon"
+            editLutId = null
             editLutIntensity = 1f
             editBrightness = 1f
             editRotation = 0f
@@ -364,7 +364,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = false
         editRotation = 0f
         editBrightness = 1f
-        editLutId = "Photon"
+        editLutId = null
         editLutIntensity = 1f
         editLutConfig = null
         editFrameId = null
