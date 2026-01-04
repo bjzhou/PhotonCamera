@@ -173,13 +173,13 @@ class Camera2Controller(private val context: Context) {
 //            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
 //            HighResolutionHelper.logResolutionCapabilities(characteristics)
             
-            // 创建 ImageReader 用于拍照
+            // 创建 ImageReader 用于拍照 (使用 YUV 格式)
             val captureSize = getBestCaptureSize(cameraId)
             imageReader = ImageReader.newInstance(
                 captureSize.width,
                 captureSize.height,
-                ImageFormat.JPEG,
-                1
+                ImageFormat.YUV_420_888,
+                2
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     val image = reader.acquireLatestImage()
@@ -372,13 +372,46 @@ class Camera2Controller(private val context: Context) {
         return try {
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(ImageFormat.JPEG) ?: arrayOf(Size(1920, 1080))
+            val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: arrayOf(Size(1920, 1080))
             
             // 选择最大的尺寸
             sizes.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get capture size", e)
             Size(1920, 1080)
+        }
+    }
+    
+    /**
+     * 获取传感器方向（供外部 YUV 处理使用）
+     */
+    fun getSensorOrientation(): Int {
+        val cameraId = _state.value.currentCameraId
+        if (cameraId.isEmpty()) return 0
+        
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get sensor orientation", e)
+            0
+        }
+    }
+    
+    /**
+     * 获取镜头朝向
+     */
+    fun getLensFacing(): Int {
+        val cameraId = _state.value.currentCameraId
+        if (cameraId.isEmpty()) return CameraCharacteristics.LENS_FACING_BACK
+        
+        return try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            characteristics.get(CameraCharacteristics.LENS_FACING) 
+                ?: CameraCharacteristics.LENS_FACING_BACK
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get lens facing", e)
+            CameraCharacteristics.LENS_FACING_BACK
         }
     }
     

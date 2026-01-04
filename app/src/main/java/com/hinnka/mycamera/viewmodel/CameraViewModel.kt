@@ -1,7 +1,10 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -26,12 +29,15 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
-import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.BitmapUtils.toByteArray
+import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * 相机 ViewModel
@@ -389,9 +395,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val showAppBrandingToSave = currentShowAppBranding
 
         try {
-            // Step 1: 将 Image 转换为 bitmap 字节数组（带方向纠正）
+            // 计算旋转角度
+            val sensorOrientation = cameraController.getSensorOrientation()
+            val lensFacing = cameraController.getLensFacing()
+            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+            
+            val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                (sensorOrientation - deviceRotation + 360) % 360
+            } else {
+                (sensorOrientation + deviceRotation) % 360
+            }
+            
+            // Step 1: 使用 YuvProcessor 处理 YUV 图像（旋转、裁切、转换为 Bitmap）
             val bitmap = withContext(Dispatchers.Default) {
-                BitmapUtils.imageToBitmapAndRotate(image = image, aspectRatio)
+                YuvProcessor.processAndToBitmap(image, aspectRatio, rotation)
             }
             
             // 关闭 Image 资源
@@ -407,9 +424,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             
             // 生成预览图/缩略图源（缩小比例以提高性能）
             val previewBitmap = withContext(Dispatchers.Default) {
-//                val options = BitmapFactory.Options().apply {
-//                    inSampleSize = (min(captureInfo.imageWidth, captureInfo.imageHeight) / 1080f).roundToInt()
-//                }
+                val inSampleSize = (min(bitmap.width, bitmap.height) / 1080f).roundToInt()
+                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width / inSampleSize, bitmap.height / inSampleSize, false)
                 val exifMetadata = ExifMetadata(
                     deviceModel = captureInfo.model,
                     brand = captureInfo.make.replaceFirstChar { it.uppercase() },
@@ -422,12 +438,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     width = captureInfo.imageWidth,
                     height = captureInfo.imageHeight
                 )
-
-                photoProcessor.process(context, bitmap, metadata, exifMetadata = exifMetadata)
+                photoProcessor.process(context, scaledBitmap, metadata, exifMetadata = exifMetadata)
             }
             
             // 使用 PhotoManager 统一管理保存，并写入 EXIF
-            val photoId = PhotoManager.savePhoto(context, bitmap.toByteArray(), metadata, previewBitmap, captureInfo)
+            val photoId = PhotoManager.savePhoto(context, bitmap, metadata, previewBitmap, captureInfo)
             
             previewBitmap.recycle()
             

@@ -69,7 +69,7 @@ object PhotoManager {
      */
     suspend fun savePhoto(
         context: Context, 
-        bytes: ByteArray, 
+        bitmap: Bitmap,
         metadata: PhotoMetadata,
         previewBitmap: Bitmap? = null,
         captureInfo: CaptureInfo? = null
@@ -81,7 +81,9 @@ object PhotoManager {
 
                 // 1. 保存原图
                 val photoFile = File(photoDir, PHOTO_FILE)
-                photoFile.writeBytes(bytes)
+                FileOutputStream(photoFile).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
                 
                 // 2. 写入 EXIF 元数据
                 captureInfo?.let { info ->
