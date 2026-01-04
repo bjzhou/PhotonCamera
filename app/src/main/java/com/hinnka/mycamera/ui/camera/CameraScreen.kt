@@ -31,10 +31,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
-import com.hinnka.mycamera.ui.components.EditControlPanel
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.ui.components.LutControlPanel
@@ -60,6 +58,7 @@ fun CameraScreen(
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     onGalleryClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -111,7 +110,7 @@ fun CameraScreen(
             },
             showGrid = state.showGrid,
             onGridToggle = { viewModel.toggleGrid() },
-            onSettingsClick = { /* TODO */ }
+            onSettingsClick = onSettingsClick
         )
 
         Box(

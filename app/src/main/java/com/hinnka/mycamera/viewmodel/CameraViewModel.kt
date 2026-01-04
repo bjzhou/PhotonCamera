@@ -94,6 +94,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var zoomRatioByMain by mutableFloatStateOf(1f)
     
+    // 新增设置项 StateFlow
+    val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
+    val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
+    val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
+    val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
+    
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
     
@@ -423,6 +429,44 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveShowGrid(newShowGrid)
+        }
+    }
+    
+    // ==================== 新增设置项方法 ====================
+    
+    /**
+     * 设置是否显示水平仪
+     */
+    fun setShowLevelIndicator(show: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveShowLevelIndicator(show)
+        }
+    }
+    
+    /**
+     * 设置是否启用快门声音
+     */
+    fun setShutterSoundEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveShutterSoundEnabled(enabled)
+        }
+    }
+    
+    /**
+     * 设置是否启用音量键拍摄
+     */
+    fun setVolumeKeyCapture(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveVolumeKeyCapture(enabled)
+        }
+    }
+    
+    /**
+     * 设置是否拍摄后自动保存
+     */
+    fun setAutoSaveAfterCapture(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveAutoSaveAfterCapture(enabled)
         }
     }
 

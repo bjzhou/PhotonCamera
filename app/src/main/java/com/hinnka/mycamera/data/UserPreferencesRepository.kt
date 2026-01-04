@@ -26,7 +26,11 @@ data class UserPreferences(
     val frameId: String? = null,
     val showAppBranding: Boolean = true,
     val showHistogram: Boolean = true,
-    val showGrid: Boolean = false  // 网格线显示
+    val showGrid: Boolean = false,  // 网格线显示
+    val showLevelIndicator: Boolean = false,  // 水平仪显示
+    val shutterSoundEnabled: Boolean = true,  // 快门声音
+    val volumeKeyCapture: Boolean = false,  // 音量键拍摄
+    val autoSaveAfterCapture: Boolean = true  // 自动保存
 )
 
 /**
@@ -44,6 +48,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val SHOW_APP_BRANDING_KEY = booleanPreferencesKey("show_app_branding")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
+        private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
+        private val SHUTTER_SOUND_ENABLED = booleanPreferencesKey("shutter_sound_enabled")
+        private val VOLUME_KEY_CAPTURE = booleanPreferencesKey("volume_key_capture")
+        private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
     }
     
     /**
@@ -58,7 +66,11 @@ class UserPreferencesRepository(private val context: Context) {
                 frameId = preferences[FRAME_ID_KEY],
                 showAppBranding = preferences[SHOW_APP_BRANDING_KEY] ?: true,
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
-                showGrid = preferences[SHOW_GRID] ?: false
+                showGrid = preferences[SHOW_GRID] ?: false,
+                showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
+                shutterSoundEnabled = preferences[SHUTTER_SOUND_ENABLED] ?: true,
+                volumeKeyCapture = preferences[VOLUME_KEY_CAPTURE] ?: false,
+                autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true
             )
         }
     
@@ -132,6 +144,42 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveShowGrid(show: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[SHOW_GRID] = show
+        }
+    }
+    
+    /**
+     * 保存是否显示水平仪
+     */
+    suspend fun saveShowLevelIndicator(show: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SHOW_LEVEL_INDICATOR] = show
+        }
+    }
+    
+    /**
+     * 保存是否启用快门声音
+     */
+    suspend fun saveShutterSoundEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SHUTTER_SOUND_ENABLED] = enabled
+        }
+    }
+    
+    /**
+     * 保存是否启用音量键拍摄
+     */
+    suspend fun saveVolumeKeyCapture(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[VOLUME_KEY_CAPTURE] = enabled
+        }
+    }
+    
+    /**
+     * 保存是否拍摄后自动保存
+     */
+    suspend fun saveAutoSaveAfterCapture(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[AUTO_SAVE_AFTER_CAPTURE] = enabled
         }
     }
 }

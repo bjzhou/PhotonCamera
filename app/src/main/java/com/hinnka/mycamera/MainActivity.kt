@@ -41,6 +41,7 @@ import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
+import com.hinnka.mycamera.ui.settings.SettingsScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -54,6 +55,7 @@ object Routes {
     const val GALLERY = "gallery"
     const val PHOTO_DETAIL = "photo_detail/{index}"
     const val PHOTO_EDIT = "photo_edit"
+    const val SETTINGS = "settings"
 
     fun photoDetail(index: Int) = "photo_detail/$index"
 }
@@ -143,6 +145,9 @@ fun NavigationHost(
                 galleryViewModel = galleryViewModel,
                 onGalleryClick = {
                     navController.navigate(Routes.GALLERY)
+                },
+                onSettingsClick = {
+                    navController.navigate(Routes.SETTINGS)
                 }
             )
         }
@@ -179,6 +184,15 @@ fun NavigationHost(
         composable(Routes.PHOTO_EDIT) {
             PhotoEditScreen(
                 viewModel = galleryViewModel,
+                onBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+        
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
+                viewModel = cameraViewModel,
                 onBack = {
                     navController.popBackStack()
                 }
