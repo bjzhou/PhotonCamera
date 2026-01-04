@@ -357,7 +357,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             lutTextureId = GlUtils.create3DTexture(lutConfig)
             lutSize = lutConfig.size.toFloat()
             lutEnabled = true
-            Log.d(TAG, "LUT set: ${lutConfig.title}, size: ${lutConfig.size}")
+//            Log.d(TAG, "LUT set: ${lutConfig.title}, size: ${lutConfig.size}")
         } else {
             lutEnabled = false
         }

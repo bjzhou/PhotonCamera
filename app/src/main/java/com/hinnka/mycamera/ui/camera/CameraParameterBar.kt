@@ -39,7 +39,7 @@ fun CameraParameterBar(
         )
         ParameterItem(
             label = "Tv",
-            value = "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}",
+            value = if (state.shutterSpeed >= 1_000_000_000.0) (state.shutterSpeed / 1_000_000_000.0).toInt().toString() else "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}",
             labelColor = yellow,
             isSelected = selectedParameter == CameraParameter.SHUTTER_SPEED,
             isEnabled = true,

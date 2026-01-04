@@ -57,8 +57,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processYuv(
         return nullptr;
     }
     
-    LOGI("Processing YUV: %dx%d, rotation=%d, targetRatio=%.2f", 
-         width, height, rotation, targetRatio);
+    //        LOGI("Processing YUV: %dx%d, rotation=%d, targetRatio=%.2f",
+    //             width, height, rotation, targetRatio);
     
     // === Step 1: 将 YUV_420_888 转换为 I420 ===
     int i420Size = width * height * 3 / 2;
@@ -185,8 +185,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processYuv(
     cropX = (cropX / 2) * 2;  // 确保偶数
     cropY = (cropY / 2) * 2;
     
-    LOGI("Crop: %dx%d at (%d, %d) from %dx%d", 
-         finalWidth, finalHeight, cropX, cropY, rotatedWidth, rotatedHeight);
+//    LOGI("Crop: %dx%d at (%d, %d) from %dx%d",
+//         finalWidth, finalHeight, cropX, cropY, rotatedWidth, rotatedHeight);
     
     // === Step 4: 裁切并转换为 ARGB ===
     int argbSize = finalWidth * finalHeight;
@@ -249,7 +249,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processYuv(
     free(argbData);
     free(pixels);
     
-    LOGI("YUV processing completed: output %dx%d", finalWidth, finalHeight);
+//    LOGI("YUV processing completed: output %dx%d", finalWidth, finalHeight);
     
     return result;
 }

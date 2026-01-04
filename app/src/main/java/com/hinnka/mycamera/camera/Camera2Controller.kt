@@ -39,6 +39,10 @@ class Camera2Controller(private val context: Context) {
     
     companion object {
         private const val TAG = "Camera2Controller"
+        
+        // 预览时的最大曝光时间（纳秒）：1/15秒 = 66ms
+        // 超过这个时间会导致预览帧率过低，画面卡顿
+        private const val MAX_PREVIEW_EXPOSURE_TIME = 66_000_000L // 66ms
     }
     
     private val cameraManager: CameraManager by lazy {
@@ -82,28 +86,24 @@ class Camera2Controller(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
 
-            // 1. 获取 ISO (Int)
-            val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
-
-            // 2. 获取曝光时间 (Long, 单位: 纳秒)
-            val exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-
+            // 获取相机实际使用的参数
+            val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+            val actualExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
             val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
             val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
             val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
-//            val flashMode = result.get(CaptureResult.FLASH_MODE) ?: CameraMetadata.FLASH_MODE_OFF
-
             val aperture = result.get(CaptureResult.LENS_APERTURE)
 
+            // 关键修复：只在自动曝光模式下更新 ISO 和快门速度
+            // 手动模式下保持用户设置不变（因为预览使用的是限制后的曝光时间，不是用户设置的值）
             _state.value = _state.value.copy(
-                iso = iso ?: 100,
-                shutterSpeed = exposureTimeNs ?: (1_000_000_000L / 60),
+                iso = if (isAutoExposure) actualIso ?: 100 else _state.value.iso,
+                shutterSpeed = if (isAutoExposure) actualExposureTimeNs ?: (1_000_000_000L / 60) else _state.value.shutterSpeed,
                 exposureCompensation = exposureCompensation,
                 isAutoExposure = isAutoExposure,
                 awbMode = awbMode,
                 aperture = aperture ?: 2f,
-//                flashMode = flashMode,
             )
         }
     }
@@ -231,22 +231,23 @@ class Camera2Controller(private val context: Context) {
                             }
                         }
                         _state.value = _state.value.copy(histogram = histogram)
-
-                        // 计算旋转角度
-                        val sensorOrientation = getSensorOrientation()
-                        val lensFacing = getLensFacing()
-                        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
-
-                        val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                            (sensorOrientation - deviceRotation + 360) % 360
-                        } else {
-                            (sensorOrientation + deviceRotation) % 360
-                        }
-
-                        val bitmap = YuvProcessor.processAndToBitmap(image, AspectRatio.RATIO_1_1, rotation)
                         
                         if (shouldCapturePreviewFrame) {
                             shouldCapturePreviewFrame = false
+
+                            // 计算旋转角度
+                            val sensorOrientation = getSensorOrientation()
+                            val lensFacing = getLensFacing()
+                            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+
+                            val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                                (sensorOrientation - deviceRotation + 360) % 360
+                            } else {
+                                (sensorOrientation + deviceRotation) % 360
+                            }
+
+                            val bitmap = YuvProcessor.processAndToBitmap(image, AspectRatio.RATIO_1_1, rotation)
+
                             onPreviewFrameCaptured?.invoke(bitmap)
                             return@setOnImageAvailableListener
                         }
@@ -312,7 +313,10 @@ class Camera2Controller(private val context: Context) {
                     // 手动曝光
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                     set(CaptureRequest.SENSOR_SENSITIVITY, state.value.iso)
-                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, state.value.shutterSpeed)
+                    
+                    // 预览时限制曝光时间，防止画面卡死
+                    val previewExposureTime = state.value.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
                 }
 
                 setupFlatProfileRequest(this)
@@ -550,12 +554,20 @@ class Camera2Controller(private val context: Context) {
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             set(CaptureRequest.SENSOR_SENSITIVITY, clampedValue)
+            
+            // 预览时限制曝光时间，防止画面卡死
+            val previewExposureTime = _state.value.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+            set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
+            
             updatePreview()
         }
     }
     
     /**
      * 设置快门速度
+     * 
+     * 注意：预览时会限制最大曝光时间为 1/15秒，防止画面卡死
+     * 拍摄时会使用完整的用户设置
      */
     fun setShutterSpeed(value: Long) {
         val range = _state.value.getShutterSpeedRange()
@@ -567,7 +579,14 @@ class Camera2Controller(private val context: Context) {
         
         previewRequestBuilder?.apply {
             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            set(CaptureRequest.SENSOR_EXPOSURE_TIME, clampedValue)
+            
+            // 预览时限制曝光时间，防止画面卡死
+            // 长曝光场景下，预览会比较暗，但这是正常的
+            // 拍摄时会使用完整的曝光时间
+            val previewExposureTime = clampedValue.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+            set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
+            // 保持 ISO 不变
+            set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
             updatePreview()
         }
     }
@@ -620,7 +639,10 @@ class Camera2Controller(private val context: Context) {
                 // 手动曝光
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                 set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, _state.value.shutterSpeed)
+                
+                // 预览时限制曝光时间
+                val previewExposureTime = _state.value.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+                set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
             }
             updatePreview()
         }
@@ -1028,16 +1050,36 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
                 
-                // 复制预览设置
-                previewRequestBuilder?.let { preview ->
-                    set(CaptureRequest.CONTROL_AE_MODE, preview.get(CaptureRequest.CONTROL_AE_MODE))
-                    set(CaptureRequest.SCALER_CROP_REGION, preview.get(CaptureRequest.SCALER_CROP_REGION))
+                // 明确设置曝光模式和参数
+                if (_state.value.isAutoExposure) {
+                    // 自动曝光
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, _state.value.exposureCompensation)
+                    Log.d(TAG, "Capture with auto exposure, EV: ${_state.value.exposureCompensation}")
+                } else {
+                    // 手动曝光 - 使用完整的用户设置（不限制曝光时间）
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                     
-                    if (_state.value.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, _state.value.exposureCompensation)
-                    } else {
-                        set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
-                        set(CaptureRequest.SENSOR_EXPOSURE_TIME, _state.value.shutterSpeed)
+                    // 关键修复：设置最低 FPS 范围以支持长曝光
+                    try {
+                        val characteristics = cameraManager.getCameraCharacteristics(_state.value.currentCameraId)
+                        val availableFpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                        val lowestFpsRange = availableFpsRanges?.minByOrNull { it.upper }
+                        lowestFpsRange?.let {
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to set FPS range", e)
+                    }
+                    
+                    set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
+                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, _state.value.shutterSpeed)
+                }
+                
+                // 从预览请求复制其他设置（变焦、对焦区域等）
+                previewRequestBuilder?.let { preview ->
+                    preview.get(CaptureRequest.SCALER_CROP_REGION)?.let { 
+                        set(CaptureRequest.SCALER_CROP_REGION, it)
                     }
                 }
                 

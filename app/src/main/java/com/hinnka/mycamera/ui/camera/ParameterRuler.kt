@@ -165,7 +165,7 @@ private fun RulerScale(
             verticalAlignment = Alignment.CenterVertically
         ) {
             scaleValues.forEachIndexed { index, value ->
-                val isCurrent = isAdjustable && (value * 10).roundToInt() == (currentValue * 10).roundToInt()
+                val isCurrent = isAdjustable && abs(value - currentValue) < 1e-4f
                 
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -277,6 +277,9 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
             }
         }
         CameraParameter.SHUTTER_SPEED -> {
+            if (value >= 1_000_000_000) {
+                return (value / 1_000_000_000).toInt().toString()
+            }
             val denom = (1_000_000_000.0 / value).roundToInt()
             "1/$denom"
         }

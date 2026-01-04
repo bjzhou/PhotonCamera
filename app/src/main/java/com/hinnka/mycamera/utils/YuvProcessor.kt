@@ -48,7 +48,7 @@ object YuvProcessor {
         // 获取目标宽高比（长边/短边）
         val targetRatio = aspectRatio.getValue(true)
         
-        Log.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
+//        Log.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
         
         // 调用 native 方法处理
         val result = processYuv(
@@ -68,7 +68,7 @@ object YuvProcessor {
         val outputHeight = result[1]
         val pixels = result.copyOfRange(2, result.size)
         
-        Log.d(TAG, "Creating bitmap: ${outputWidth}x${outputHeight}")
+//        Log.d(TAG, "Creating bitmap: ${outputWidth}x${outputHeight}")
         
         // 创建 Bitmap
         return Bitmap.createBitmap(pixels, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)

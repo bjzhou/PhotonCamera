@@ -125,7 +125,7 @@ object GlUtils {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
         
         checkGlError("create3DTexture")
-        Log.d(TAG, "Created 3D LUT texture: size=${lutConfig.size}, id=$textureId")
+//        Log.d(TAG, "Created 3D LUT texture: size=${lutConfig.size}, id=$textureId")
         
         return textureId
     }
