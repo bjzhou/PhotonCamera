@@ -114,6 +114,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     
+    private var isShutterSoundEnabled = true
+    
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
     
@@ -125,13 +127,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         
+        // 监听快门声音设置
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferences.collect {
+                isShutterSoundEnabled = it.shutterSoundEnabled
+            }
+        }
+        
         // 设置快门音效回调
         cameraController.onPlayShutterSound = {
-            viewModelScope.launch {
-                val enabled = shutterSoundEnabled.firstOrNull() ?: true
-                if (enabled) {
-                    shutterSoundPlayer.play()
-                }
+            if (isShutterSoundEnabled) {
+                shutterSoundPlayer.play()
             }
         }
         

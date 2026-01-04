@@ -1,7 +1,8 @@
 package com.hinnka.mycamera.utils
 
 import android.content.Context
-import android.media.MediaPlayer
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.util.Log
 import java.io.IOException
 
@@ -9,6 +10,7 @@ import java.io.IOException
  * 快门音效播放器
  * 
  * 负责播放拍照时的快门音效
+ * 使用 SoundPool 实现低延迟播放
  */
 class ShutterSoundPlayer(private val context: Context) {
     
@@ -17,29 +19,46 @@ class ShutterSoundPlayer(private val context: Context) {
         private const val SHUTTER_SOUND_PATH = "shutter.mp3"
     }
     
-    private var mediaPlayer: MediaPlayer? = null
-    private var isInitialized = false
+    private var soundPool: SoundPool? = null
+    private var soundId: Int = -1
+    private var isLoaded = false
     
     init {
         initializePlayer()
     }
     
     /**
-     * 初始化 MediaPlayer
+     * 初始化 SoundPool
      */
     private fun initializePlayer() {
         try {
-            mediaPlayer = MediaPlayer().apply {
-                val afd = context.assets.openFd(SHUTTER_SOUND_PATH)
-                setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                afd.close()
-                prepare()
-                isInitialized = true
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+                
+            soundPool = SoundPool.Builder()
+                .setMaxStreams(1)
+                .setAudioAttributes(audioAttributes)
+                .build()
+                
+            soundPool?.setOnLoadCompleteListener { _, _, status ->
+                if (status == 0) {
+                    isLoaded = true
+                    Log.d(TAG, "Shutter sound loaded successfully")
+                } else {
+                    Log.e(TAG, "Failed to load shutter sound, status: $status")
+                }
             }
-            Log.d(TAG, "Shutter sound player initialized")
-        } catch (e: IOException) {
+            
+            val afd = context.assets.openFd(SHUTTER_SOUND_PATH)
+            soundId = soundPool?.load(afd, 1) ?: -1
+            afd.close()
+            
+            Log.d(TAG, "Shutter sound player initialized with SoundPool")
+        } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize shutter sound player", e)
-            isInitialized = false
+            isLoaded = false
         }
     }
     
@@ -47,25 +66,20 @@ class ShutterSoundPlayer(private val context: Context) {
      * 播放快门音效
      */
     fun play() {
-        if (!isInitialized) {
-            Log.w(TAG, "Player not initialized, skipping playback")
+        if (soundPool == null || soundId == -1 || !isLoaded) {
+            Log.w(TAG, "SoundPool not ready: soundPool=$soundPool, soundId=$soundId, isLoaded=$isLoaded")
+            // 如果是因为未初始化或加载失败，尝试重新初始化
+            if (soundPool == null) {
+                initializePlayer()
+            }
             return
         }
         
         try {
-            mediaPlayer?.let { player ->
-                if (player.isPlaying) {
-                    // 如果正在播放，重新开始
-                    player.seekTo(0)
-                } else {
-                    player.start()
-                }
-            }
+            // 播放音效：左声道音量, 右声道音量, 优先级, 循环次数(0不循环), 播放速率(1.0正常)
+            soundPool?.play(soundId, 1.0f, 1.0f, 1, 0, 1.0f)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to play shutter sound", e)
-            // 尝试重新初始化
-            release()
-            initializePlayer()
         }
     }
     
@@ -74,9 +88,10 @@ class ShutterSoundPlayer(private val context: Context) {
      */
     fun release() {
         try {
-            mediaPlayer?.release()
-            mediaPlayer = null
-            isInitialized = false
+            soundPool?.release()
+            soundPool = null
+            soundId = -1
+            isLoaded = false
             Log.d(TAG, "Shutter sound player released")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to release shutter sound player", e)
