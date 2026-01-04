@@ -64,6 +64,7 @@ fun CameraScreen(
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
+    val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
 
     val backgroundColor = Color(0xFF434A5D)
     
@@ -184,6 +185,14 @@ fun CameraScreen(
                 // 网格线覆盖
                 if (state.showGrid) {
                     GridOverlay(
+                        aspectRatio = state.aspectRatio,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                
+                // 水平仪覆盖
+                if (showLevelIndicator) {
+                    LevelIndicatorOverlay(
                         aspectRatio = state.aspectRatio,
                         modifier = Modifier.fillMaxSize()
                     )
