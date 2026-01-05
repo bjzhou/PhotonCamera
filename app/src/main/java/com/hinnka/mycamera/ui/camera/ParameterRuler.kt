@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.ui.camera
 
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -20,9 +19,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
-import kotlin.math.*
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Parameter types that can be adjusted with the ruler
@@ -56,10 +54,11 @@ fun ParameterRuler(
 
     val currentValueState by rememberUpdatedState(currentValue)
     var selectedValue by remember(parameter) { mutableStateOf(currentValue) }
+    val isAdjustableState by rememberUpdatedState(isAdjustable)
     val scaleValues = remember(parameter, minValue, maxValue) {
         getScaleValues(parameter, minValue, maxValue)
     }
-    
+
     Box(
         modifier = modifier
             .padding(8.dp)
@@ -92,7 +91,7 @@ fun ParameterRuler(
                     )
                 }
             }
-            
+
             // Ruler scale area
             Box(
                 modifier = Modifier
@@ -101,7 +100,7 @@ fun ParameterRuler(
                     .padding(horizontal = 16.dp)
                     .pointerInput(minValue, maxValue) {
                         detectTapGestures {
-                            if (isAdjustable) {
+                            if (isAdjustableState) {
                                 val width = size.width
                                 val stepWidth = width / scaleValues.size
                                 val index = (it.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
@@ -114,7 +113,7 @@ fun ParameterRuler(
                     }
                     .pointerInput(minValue, maxValue) {
                         detectDragGestures { change, _ ->
-                            if (isAdjustable) {
+                            if (isAdjustableState) {
                                 change.consume()
                                 val width = size.width
                                 val stepWidth = width / scaleValues.size
@@ -153,10 +152,10 @@ private fun RulerScale(
 ) {
     val scaleValues = getScaleValues(parameter, minValue, maxValue)
     val yellow = Color(0xFFFFD700)
-    
+
     // Use BoxWithConstraints to get the width
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        
+
         Row(
             modifier = Modifier
                 .padding(vertical = 8.dp)
@@ -165,8 +164,11 @@ private fun RulerScale(
             verticalAlignment = Alignment.CenterVertically
         ) {
             scaleValues.forEachIndexed { index, value ->
-                val isCurrent = isAdjustable && abs(value - currentValue) < 1e-4f
-                
+                val isCurrent = if (parameter == CameraParameter.SHUTTER_SPEED) {
+                    abs(value - currentValue) < 1000
+                } else {
+                    abs(value - currentValue) < 1e-3f
+                }
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.SpaceBetween,
@@ -175,7 +177,10 @@ private fun RulerScale(
 
                     // Label
                     Text(
-                        text = if (isCurrent || index == 0 || index == scaleValues.size - 1 || value == 0f) formatParameterValue(parameter, value) else "",
+                        text = if (isCurrent || index == 0 || index == scaleValues.size - 1 || value == 0f) formatParameterValue(
+                            parameter,
+                            value
+                        ) else "",
                         fontSize = if (isCurrent) 12.sp else 10.sp,
                         fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                         color = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
@@ -214,6 +219,7 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
                 .filter { it in minValue..maxValue }
                 .toList()
         }
+
         CameraParameter.SHUTTER_SPEED -> {
             // Common shutter speeds in log scale
             // Values are in nanoseconds, show as fractions
@@ -222,28 +228,90 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
                 1_000_000_000L / 12000,  // 1/12000
                 1_000_000_000L / 8000,  // 1/8000
                 1_000_000_000L / 4000,
+                1_000_000_000L / 3200,
+                1_000_000_000L / 2500,
                 1_000_000_000L / 2000,
+                1_000_000_000L / 1600,
+                1_000_000_000L / 1250,
                 1_000_000_000L / 1000,
+                1_000_000_000L / 800,
+                1_000_000_000L / 640,
                 1_000_000_000L / 500,
+                1_000_000_000L / 400,
+                1_000_000_000L / 320,
                 1_000_000_000L / 250,
+                1_000_000_000L / 200,
+                1_000_000_000L / 160,
                 1_000_000_000L / 125,
+                1_000_000_000L / 100,
+                1_000_000_000L / 80,
                 1_000_000_000L / 60,
+                1_000_000_000L / 50,
+                1_000_000_000L / 40,
                 1_000_000_000L / 30,
+                1_000_000_000L / 25,
+                1_000_000_000L / 20,
                 1_000_000_000L / 15,
+                1_000_000_000L / 13,
+                1_000_000_000L / 10,
                 1_000_000_000L / 8,
+                1_000_000_000L / 6,
+                1_000_000_000L / 5,
+                1_000_000_000L / 4,
+                1_000_000_000L / 3,
+                1_000_000_000L / 2,
                 1_000_000_000L / 1,
                 1_000_000_000L * 2,
+                1_000_000_000L * 3,
+                1_000_000_000L * 4,
+                1_000_000_000L * 5,
+                1_000_000_000L * 6,
+                1_000_000_000L * 8,
+                1_000_000_000L * 10,
+                1_000_000_000L * 13,
                 1_000_000_000L * 15,
+                1_000_000_000L * 20,
+                1_000_000_000L * 25,
                 1_000_000_000L * 30,
                 maxValue
             ).toSet().map { it.toFloat() }.filter { it in minValue..maxValue }
         }
+
         CameraParameter.ISO -> {
             // Standard ISO values
-            listOf(minValue, 50f, 100f, 200f, 400f, 800f, 1600f, 3200f, 6400f, maxValue)
+            listOf(
+                minValue,
+                50,
+                64,
+                80,
+                100,
+                125,
+                160,
+                200,
+                250,
+                320,
+                400,
+                500,
+                640,
+                800,
+                1000,
+                1250,
+                1600,
+                2000,
+                2500,
+                3200,
+                4000,
+                5000,
+                6400,
+                8000,
+                12800,
+                maxValue
+            )
                 .toSet()
+                .map { it.toFloat() }
                 .filter { it in minValue..maxValue }
         }
+
         CameraParameter.WHITE_BALANCE -> {
             // Color temperature presets
             generateSequence(minValue) { it + 500f }
@@ -251,6 +319,7 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
                 .filter { it in minValue..maxValue }
                 .toList()
         }
+
         CameraParameter.APERTURE -> {
             // Aperture values (usually fixed on mobile)
             val step = 0.5f
@@ -276,6 +345,7 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
                 else -> String.format("%.1f", value)
             }
         }
+
         CameraParameter.SHUTTER_SPEED -> {
             if (value >= 1_000_000_000) {
                 return (value / 1_000_000_000).toInt().toString()
@@ -283,12 +353,15 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
             val denom = (1_000_000_000.0 / value).roundToInt()
             "1/$denom"
         }
+
         CameraParameter.ISO -> {
             value.toInt().toString()
         }
+
         CameraParameter.WHITE_BALANCE -> {
             "${value.toInt()}K"
         }
+
         CameraParameter.APERTURE -> {
             "f/${String.format("%.1f", value)}"
         }
