@@ -2,7 +2,7 @@ package com.hinnka.mycamera.ui.gallery
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -24,9 +24,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -53,6 +56,7 @@ fun PhotoDetailScreen(
     
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
+    var isZoomed by remember { mutableStateOf(false) }
     
     val pagerState = rememberPagerState(
         initialPage = initialIndex,
@@ -186,11 +190,18 @@ fun PhotoDetailScreen(
             } else {
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    userScrollEnabled = !isZoomed
                 ) { page ->
                     ZoomableImage(
                         photo = photos[page],
                         viewModel = viewModel,
+                        isZoomed = isZoomed && page == pagerState.currentPage,
+                        onZoomChange = { zoomed ->
+                            if (page == pagerState.currentPage) {
+                                isZoomed = zoomed
+                            }
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -277,54 +288,129 @@ private fun InfoRow(label: String, value: String) {
 
 /**
  * 可缩放的图片组件
+ * 支持双击缩放和双指缩放，未放大时允许 HorizontalPager 滑动
  */
 @Composable
 private fun ZoomableImage(
     photo: PhotoData,
     viewModel: GalleryViewModel,
+    isZoomed: Boolean,
+    onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
-    
-    val animatedScale by animateFloatAsState(targetValue = scale, label = "scale")
-    
-    Box(
-        modifier = modifier
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 5f)
-                    
-                    if (scale > 1f) {
-                        offsetX += pan.x
-                        offsetY += pan.y
-                    } else {
-                        offsetX = 0f
-                        offsetY = 0f
+    key(photo.id) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offsetX by remember { mutableFloatStateOf(0f) }
+        var offsetY by remember { mutableFloatStateOf(0f) }
+        
+        // 用于计算边界的容器和图片实际尺寸
+        var containerSize by remember { mutableStateOf(IntSize.Zero) }
+        
+        val animatedScale by animateFloatAsState(targetValue = scale, label = "scale")
+        
+        LaunchedEffect(scale) {
+            onZoomChange(scale > 1.01f)
+        }
+
+        // 计算当前缩放下的位移边界
+        fun updateOffset(panX: Float, panY: Float, currentScale: Float) {
+            if (photo.width <= 0 || photo.height <= 0 || containerSize.width <= 0 || containerSize.height <= 0) {
+                offsetX += panX
+                offsetY += panY
+                return
+            }
+
+            // 在 ContentScale.Fit 模式下，图片的显示尺寸
+            val contentAspectRatio = photo.width.toFloat() / photo.height
+            val containerAspectRatio = containerSize.width.toFloat() / containerSize.height
+            
+            val (displayW, displayH) = if (contentAspectRatio > containerAspectRatio) {
+                containerSize.width.toFloat() to (containerSize.width.toFloat() / contentAspectRatio)
+            } else {
+                (containerSize.height.toFloat() * contentAspectRatio) to containerSize.height.toFloat()
+            }
+
+            val zoomedW = displayW * currentScale
+            val zoomedH = displayH * currentScale
+
+            // 只有当放大后的尺寸大于容器尺寸时，才允许在该方向上位移
+            val maxOffsetX = if (zoomedW > containerSize.width) (zoomedW - containerSize.width) / 2f else 0f
+            val maxOffsetY = if (zoomedH > containerSize.height) (zoomedH - containerSize.height) / 2f else 0f
+
+            offsetX = (offsetX + panX).coerceIn(-maxOffsetX, maxOffsetX)
+            offsetY = (offsetY + panY).coerceIn(-maxOffsetY, maxOffsetY)
+        }
+        
+        Box(
+            modifier = modifier
+                .onSizeChanged { containerSize = it }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            if (scale > 1f) {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            } else {
+                                scale = 2.5f
+                            }
+                        }
+                    )
+                }
+                .pointerInput(photo.id) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        do {
+                            val event = awaitPointerEvent()
+                            val canceled = event.changes.any { it.isConsumed }
+                            if (!canceled) {
+                                val zoomChange = event.calculateZoom()
+                                val panChange = event.calculatePan()
+                                val pointerCount = event.changes.size
+
+                                // 决定是否消费并处理当前手势
+                                // 1. 如果是多指（正在缩放）
+                                // 2. 如果是单指但图片已经放大（正在平移）
+                                if (pointerCount > 1 || scale > 1f) {
+                                    val newScale = (scale * zoomChange).coerceIn(1f, 5f)
+                                    
+                                    if (newScale <= 1.01f && zoomChange < 1f) {
+                                        scale = 1f
+                                        offsetX = 0f
+                                        offsetY = 0f
+                                    } else {
+                                        scale = newScale
+                                        updateOffset(panChange.x, panChange.y, newScale)
+                                    }
+                                    
+                                    // 消费事件防止 Pager 滑动
+                                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
                     }
-                }
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(photo.uri)
-                .crossfade(true)
-                .transformations(viewModel.getPhotoTransformation(photo))
-                .build(),
-            contentDescription = photo.displayName,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = animatedScale
-                    scaleY = animatedScale
-                    translationX = offsetX
-                    translationY = offsetY
-                }
-        )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(photo.uri)
+                    .crossfade(true)
+                    .transformations(viewModel.getPhotoTransformation(photo))
+                    .build(),
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = animatedScale
+                        scaleY = animatedScale
+                        translationX = offsetX
+                        translationY = offsetY
+                    }
+            )
+        }
     }
 }
