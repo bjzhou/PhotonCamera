@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -12,9 +13,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -57,6 +65,12 @@ fun ParameterRuler(
     val isAdjustableState by rememberUpdatedState(isAdjustable)
     val scaleValues = remember(parameter, minValue, maxValue) {
         getScaleValues(parameter, minValue, maxValue)
+    }
+
+    LaunchedEffect(isAdjustable, currentValue) {
+        if (!isAdjustable) {
+            selectedValue = currentValueState
+        }
     }
 
     Box(
@@ -131,8 +145,7 @@ fun ParameterRuler(
                     parameter = parameter,
                     minValue = minValue,
                     maxValue = maxValue,
-                    currentValue = selectedValue,
-                    isAdjustable = isAdjustable
+                    currentValue = selectedValue
                 )
             }
         }
@@ -147,65 +160,178 @@ private fun RulerScale(
     parameter: CameraParameter,
     minValue: Float,
     maxValue: Float,
-    currentValue: Float,
-    isAdjustable: Boolean
+    currentValue: Float
 ) {
     val scaleValues = getScaleValues(parameter, minValue, maxValue)
     val yellow = Color(0xFFFFD700)
+    val textMeasurer = rememberTextMeasurer()
 
-    // Use BoxWithConstraints to get the width
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-
-        Row(
-            modifier = Modifier
-                .padding(vertical = 8.dp)
-                .fillMaxSize(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            scaleValues.forEachIndexed { index, value ->
-                val isCurrent = if (parameter == CameraParameter.SHUTTER_SPEED) {
-                    abs(value - currentValue) < 1000
-                } else {
-                    abs(value - currentValue) < 1e-3f
-                }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxHeight().weight(1f)
-                ) {
-
-                    // Label
-                    Text(
-                        text = if (isCurrent || index == 0 || index == scaleValues.size - 1 || value == 0f) formatParameterValue(
-                            parameter,
-                            value
-                        ) else "",
-                        fontSize = if (isCurrent) 12.sp else 10.sp,
-                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
-                        overflow = TextOverflow.Visible,
-                        softWrap = false,
-                        textAlign = TextAlign.Center,
-                        lineHeight = if (isCurrent) 12.sp else 10.sp,
-                    )
-
-                    // Tick mark
-                    Box(modifier = Modifier.height(13.dp), contentAlignment = Alignment.BottomCenter) {
-                        Spacer(
-                            modifier = Modifier
-                                .width(if (isCurrent) 2.dp else 1.dp)
-                                .height(if (isCurrent) 13.dp else 9.dp)
-                                .background(
-                                    if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
-                                    RoundedCornerShape(1.dp)
-                                )
-                        )
-                    }
-                }
+    Canvas(modifier = Modifier.fillMaxSize().padding(vertical = 8.dp)) {
+        val width = size.width
+        val height = size.height
+        val stepCount = scaleValues.size
+        
+        if (stepCount <= 1) return@Canvas
+        
+        // Calculate step width
+        val stepWidth = width / (stepCount - 1)
+        
+        // Find current value position
+        val currentPosition = findValuePosition(currentValue, scaleValues, stepWidth)
+        val currentIndex = findClosestIndex(currentValue, scaleValues, parameter)
+        
+        // Draw each scale value
+        scaleValues.forEachIndexed { index, value ->
+            val x = index * stepWidth
+            
+            val isCurrent = if (parameter == CameraParameter.SHUTTER_SPEED) {
+                abs(value - currentValue) < 1000
+            } else {
+                abs(value - currentValue) < 1e-3f
             }
+            
+            // Determine if we should show label
+            val shouldShowLabel = isCurrent || index == 0 || index == scaleValues.lastIndex || value == 0f
+            
+            // Draw label
+            if (shouldShowLabel) {
+                val text = formatParameterValue(parameter, value)
+                val textStyle = TextStyle(
+                    fontSize = if (isCurrent) 12.sp else 10.sp,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f),
+                    textAlign = TextAlign.Center
+                )
+                val textLayoutResult = textMeasurer.measure(
+                    text = text,
+                    style = textStyle,
+                    constraints = androidx.compose.ui.unit.Constraints(
+                        maxWidth = Int.MAX_VALUE,
+                        maxHeight = Int.MAX_VALUE
+                    ),
+                    overflow = TextOverflow.Visible,
+                    softWrap = false,
+                    maxLines = 1
+                )
+                
+                // Draw text centered on the tick mark
+                drawText(
+                    textLayoutResult = textLayoutResult,
+                    topLeft = Offset(
+                        x = x - textLayoutResult.size.width / 2f,
+                        y = 0f
+                    )
+                )
+            }
+            
+            // Draw tick mark
+            val tickHeight = if (isCurrent) 13.dp.toPx() else 9.dp.toPx()
+            val tickWidth = if (isCurrent) 2.dp.toPx() else 1.dp.toPx()
+            val tickColor = if (isCurrent) yellow else Color.White.copy(alpha = 0.6f)
+            
+            drawRect(
+                color = tickColor,
+                topLeft = Offset(x - tickWidth / 2f, height - tickHeight),
+                size = androidx.compose.ui.geometry.Size(tickWidth, tickHeight)
+            )
+        }
+        
+        // Draw indicator if current value is between two scale values
+        if (!isValueOnScale(currentValue, scaleValues, parameter)) {
+            drawCurrentValueIndicator(
+                currentPosition = currentPosition,
+                height = height,
+                yellow = yellow
+            )
         }
     }
+}
+
+/**
+ * Check if current value matches any scale value
+ */
+private fun isValueOnScale(
+    currentValue: Float,
+    scaleValues: List<Float>,
+    parameter: CameraParameter
+): Boolean {
+    val tolerance = if (parameter == CameraParameter.SHUTTER_SPEED) 1000f else 1e-3f
+    return scaleValues.any { abs(it - currentValue) < tolerance }
+}
+
+/**
+ * Find the position (x coordinate) of the current value
+ */
+private fun findValuePosition(
+    currentValue: Float,
+    scaleValues: List<Float>,
+    stepWidth: Float
+): Float {
+    if (scaleValues.isEmpty()) return 0f
+    if (scaleValues.size == 1) return 0f
+    
+    // Find the two scale values that bracket the current value
+    for (i in 0 until scaleValues.size - 1) {
+        val v1 = scaleValues[i]
+        val v2 = scaleValues[i + 1]
+        
+        if (currentValue in v1..v2 || currentValue in v2..v1) {
+            // Linear interpolation
+            val ratio = if (v2 != v1) {
+                (currentValue - v1) / (v2 - v1)
+            } else {
+                0f
+            }
+            return i * stepWidth + ratio * stepWidth
+        }
+    }
+    
+    // If not found, clamp to edges
+    return when {
+        currentValue < scaleValues.first() -> 0f
+        currentValue > scaleValues.last() -> (scaleValues.size - 1) * stepWidth
+        else -> 0f
+    }
+}
+
+/**
+ * Find closest scale index to current value
+ */
+private fun findClosestIndex(
+    currentValue: Float,
+    scaleValues: List<Float>,
+    parameter: CameraParameter
+): Int {
+    if (scaleValues.isEmpty()) return 0
+    
+    return scaleValues.indices.minByOrNull { index ->
+        abs(scaleValues[index] - currentValue)
+    } ?: 0
+}
+
+/**
+ * Draw a triangle indicator at the current value position
+ */
+private fun DrawScope.drawCurrentValueIndicator(
+    currentPosition: Float,
+    height: Float,
+    yellow: Color
+) {
+    val trianglePath = Path().apply {
+        val triangleHeight = 8.dp.toPx()
+        val triangleWidth = 6.dp.toPx()
+        val y = height - 13.dp.toPx() - 2.dp.toPx() // Position above the tallest tick
+        
+        moveTo(currentPosition, y)
+        lineTo(currentPosition - triangleWidth / 2f, y - triangleHeight)
+        lineTo(currentPosition + triangleWidth / 2f, y - triangleHeight)
+        close()
+    }
+    
+    drawPath(
+        path = trianglePath,
+        color = yellow
+    )
 }
 
 /**
