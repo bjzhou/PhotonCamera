@@ -91,7 +91,8 @@ data class CameraState(
     
     // 曝光控制
     val exposureCompensation: Int = 0,
-    val isAutoExposure: Boolean = true,
+    val isIsoAuto: Boolean = true,
+    val isShutterSpeedAuto: Boolean = true,
     val iso: Int = 100,
     val shutterSpeed: Long = 1_000_000_000L / 60, // 1/60s in nanoseconds
 
@@ -140,6 +141,12 @@ data class CameraState(
     // 网格线
     val showGrid: Boolean = false, // 是否显示网格线
 ) {
+    /**
+     * 是否全自动曝光
+     */
+    val isAutoExposure: Boolean
+        get() = isIsoAuto && isShutterSpeedAuto
+
     /**
      * 获取当前相机信息
      */

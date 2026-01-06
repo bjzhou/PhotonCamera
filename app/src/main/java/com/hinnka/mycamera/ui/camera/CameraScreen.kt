@@ -244,8 +244,8 @@ fun CameraScreen(
                         },
                         isAdjustable = when (param) {
                             CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
-                            CameraParameter.SHUTTER_SPEED -> !state.isAutoExposure
-                            CameraParameter.ISO -> !state.isAutoExposure
+                            CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
+                            CameraParameter.ISO -> !state.isIsoAuto
                             CameraParameter.APERTURE -> false
                             CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
                         },
@@ -264,8 +264,8 @@ fun CameraScreen(
                         },
                         onAutoModeToggle = {
                             when (param) {
-                                CameraParameter.SHUTTER_SPEED -> viewModel.setAutoExposure(!state.isAutoExposure)
-                                CameraParameter.ISO -> viewModel.setAutoExposure(!state.isAutoExposure)
+                                CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
+                                CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
                                 CameraParameter.WHITE_BALANCE -> {
                                     if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
                                         viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)

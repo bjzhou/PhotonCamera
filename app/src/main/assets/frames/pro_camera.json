@@ -13,12 +13,12 @@
             "type": "logo",
             "logoType": "BRAND",
             "alignment": "START",
-            "size": 20,
+            "size": 48,
             "tint": "#FF6600"
         },
         {
             "type": "text",
-            "textType": "BRAND",
+            "textType": "DEVICE_MODEL",
             "alignment": "START",
             "fontSize": 14,
             "color": "#FF6600",
@@ -35,7 +35,7 @@
         },
         {
             "type": "text",
-            "textType": "FOCAL_LENGTH",
+            "textType": "FOCAL_LENGTH_35MM",
             "alignment": "START",
             "fontSize": 11,
             "color": "#CCCCCC"

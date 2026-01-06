@@ -337,6 +337,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setAutoExposure(enabled: Boolean) {
         cameraController.setAutoExposure(enabled)
     }
+
+    /**
+     * 设置 ISO 自动模式
+     */
+    fun setIsoAuto(enabled: Boolean) {
+        cameraController.setIsoAuto(enabled)
+    }
+
+    /**
+     * 设置快门自动模式
+     */
+    fun setShutterSpeedAuto(enabled: Boolean) {
+        cameraController.setShutterSpeedAuto(enabled)
+    }
     
     /**
      * 设置白平衡模式

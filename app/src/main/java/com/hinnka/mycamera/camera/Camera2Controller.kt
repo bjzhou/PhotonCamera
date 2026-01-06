@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executors
+import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
 
@@ -58,6 +59,8 @@ class Camera2Controller(private val context: Context) {
     private var previewSurface: Surface? = null
     private var imageReader: ImageReader? = null
     private var previewImageReader: ImageReader? = null
+    
+    private var meteringSkipFrames = 0 // Frame skip counter for software metering stabilization
     
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
@@ -101,7 +104,6 @@ class Camera2Controller(private val context: Context) {
                 iso = if (isAutoExposure) actualIso ?: 100 else _state.value.iso,
                 shutterSpeed = if (isAutoExposure) actualExposureTimeNs ?: (1_000_000_000L / 60) else _state.value.shutterSpeed,
                 exposureCompensation = exposureCompensation,
-                isAutoExposure = isAutoExposure,
                 awbMode = awbMode,
                 aperture = aperture ?: 2f,
             )
@@ -222,14 +224,119 @@ class Camera2Controller(private val context: Context) {
                         val histogram = IntArray(256)
                         val rowBuffer = ByteArray(rowStride)
                         
-                        for (y in 0 until height) {
+                        var weightedSumLuminance = 0.0
+                        var totalWeight = 0.0
+                        
+                        // Default center (image center)
+                        var cx = width / 2
+                        var cy = height / 2
+
+                        _state.value.focusPoint?.let { (nx, ny) ->
+                            val sensorOrientation = getSensorOrientation()
+                            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+                            val lensFacing = getLensFacing()
+
+                            // 修正旋转角度计算
+                            val rotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                                (sensorOrientation + deviceRotation) % 360
+                            } else {
+                                (sensorOrientation - deviceRotation + 360) % 360
+                            }
+
+                            // 坐标映射 (UI 坐标 -> Buffer 坐标)
+                            // 注意：这里假设 nx, ny 已经处理了 Aspect Ratio (Crop) 问题。
+                            // 如果 nx, ny 是纯 View 坐标，这里其实需要一个 Matrix 变换来抵消 CenterCrop 的影响。
+                            var (tx, ty) = when (rotation) {
+                                90 -> Pair(ny, 1f - nx)      // 常见：竖屏后摄
+                                270 -> Pair(1f - ny, nx)     // 常见：反向横屏
+                                180 -> Pair(1f - nx, 1f - ny)
+                                else -> Pair(nx, ny)         // 0 度
+                            }
+
+                            // 修正前置摄像头的镜像问题 (通常 X 轴需要翻转)
+                            if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                                // 根据传感器安装方向，镜像轴可能不同，通常是 X 轴镜像
+                                tx = 1f - tx
+                            }
+
+                            cx = (tx * width).toInt().coerceIn(0, width - 1)
+                            cy = (ty * height).toInt().coerceIn(0, height - 1)
+                        }
+
+                        // --- 2. 准备高性能测光循环 ---
+
+                        // 测光区域大小：画面的 1/4 宽，1/4 高 (即面积是全图的 1/16)
+                        // 如果是点测光，可以把这个除数改大，比如 / 8
+                        val regionHalfWidth = width / 8
+                        val regionHalfHeight = height / 8
+
+                        // 计算区域边界 (Safe clamping)
+                        val startX = (cx - regionHalfWidth).coerceIn(0, width)
+                        val endX = (cx + regionHalfWidth).coerceIn(0, width)
+                        val startY = (cy - regionHalfHeight).coerceIn(0, height)
+                        val endY = (cy + regionHalfHeight).coerceIn(0, height)
+
+                        val sampleStep = 4
+
+                        val weightCenter = 4.0 // 中心区域权重 (加重)
+                        val weightEdge = 1.0   // 边缘区域权重
+
+                        // --- 3. 执行极速测光循环 (拆分优化版) ---
+                        for (y in 0 until height step sampleStep) {
                             buffer.position(y * rowStride)
                             buffer.get(rowBuffer, 0, rowStride)
-                            for (x in 0 until width) {
-                                val value = rowBuffer[x * pixelStride].toInt() and 0xFF
-                                histogram[value]++
+
+                            // 判断当前行 y 是否命中高亮区域的 Y 轴范围
+                            val isRowInFocus = y in startY until endY
+
+                            if (isRowInFocus) {
+                                // --- A. 这一行包含“高亮区域” ---
+                                // 我们把这一行拆成三段处理：左边(普通)、中间(高亮)、右边(普通)
+                                // 这样循环内部就没有任何 if 判断了，CPU 分支预测效率最高
+
+                                // 1. 左边 (Edge)
+                                // 确保循环边界对齐 sampleStep，防止越界
+                                val safeStartX = (startX / sampleStep) * sampleStep
+                                for (x in 0 until safeStartX step sampleStep) {
+                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
+                                    weightedSumLuminance += value * weightEdge
+                                    totalWeight += weightEdge
+                                    histogram[value]++
+                                }
+
+                                // 2. 中间 (Center/Focus) - 重点测光区
+                                val safeEndX = (endX / sampleStep) * sampleStep
+                                for (x in safeStartX until safeEndX step sampleStep) {
+                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
+                                    weightedSumLuminance += value * weightCenter
+                                    totalWeight += weightCenter
+                                    histogram[value]++
+                                }
+
+                                // 3. 右边 (Edge)
+                                for (x in safeEndX until width step sampleStep) {
+                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
+                                    weightedSumLuminance += value * weightEdge
+                                    totalWeight += weightEdge
+                                    histogram[value]++
+                                }
+
+                            } else {
+                                // --- B. 这一行完全是普通区域 ---
+                                for (x in 0 until width step sampleStep) {
+                                    val value = rowBuffer[x * pixelStride].toInt() and 0xFF
+                                    weightedSumLuminance += value * weightEdge
+                                    totalWeight += weightEdge
+                                    histogram[value]++
+                                }
                             }
                         }
+
+//                        Log.d(TAG, "avgLum: ${weightedSumLuminance / totalWeight}")
+                        
+                        // Calculate Software Auto Metering
+                        calculateAutoMetering(totalWeight, weightedSumLuminance)
+
                         _state.value = _state.value.copy(histogram = histogram)
                         
                         if (shouldCapturePreviewFrame) {
@@ -287,6 +394,103 @@ class Camera2Controller(private val context: Context) {
             Log.e(TAG, "Failed to open camera", e)
         } catch (e: SecurityException) {
             Log.e(TAG, "Camera permission denied", e)
+        }
+    }
+
+    private fun calculateAutoMetering(totalWeight: Double, weightedSumLuminance: Double) {
+        if (meteringSkipFrames > 0) {
+            meteringSkipFrames--
+            return
+        }
+        val currentState = _state.value
+        if (!currentState.isAutoExposure && (currentState.isIsoAuto || currentState.isShutterSpeedAuto)) {
+
+            // --- 1. 计算亮度 ---
+            val rawAvgLuminance = if (totalWeight > 0) weightedSumLuminance / totalWeight else 0.0
+
+            // 保护：如果画面全黑，避免除以0或Log错误
+            if (rawAvgLuminance < 1.0) return
+
+            // --- 2. 关键修复：预览流亮度补偿 ---
+            // 预览流的曝光时间被帧率限制了（比如最长只能 33ms）
+            // 但实际拍摄参数可能是 100ms。我们需要推算“如果预览流能曝光 100ms，亮度会是多少”
+            val currentShutter = currentState.shutterSpeed
+            val clampedPreviewTime = currentShutter.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+
+            // 补偿系数：如果当前设定快门是 66ms，预览限制是 33ms，那么真实亮度应该是预览亮度的 2 倍
+            val exposureRatio = currentShutter.toDouble() / clampedPreviewTime.toDouble()
+
+            // 【修正】使用补偿后的亮度来与目标值对比
+            val estimatedRealLuminance = rawAvgLuminance * exposureRatio
+
+            val targetLuminance = 128.0 // Target (Gamma Corrected 18% Gray)
+
+            // --- 3. 计算 EV 误差 ---
+            // 使用 Log2 计算差了多少档光圈 (Stops)
+            // 这是一个更符合人眼和相机光学的度量方式
+            val evErrorStops = ln(targetLuminance / estimatedRealLuminance) / ln(2.0)
+
+            // --- 4. 稳定性控制 (Deadband) ---
+            // 如果误差在 +/- 0.3 EV (约 1/3 档) 以内，认为曝光准确，不调整
+            // 这能极大减少画面“呼吸感”
+            if (abs(evErrorStops) < 0.3) {
+                return
+            }
+
+            // --- 5. 计算修正系数 (P控制 + 阻尼) ---
+            // 阻尼系数 0.2 ~ 0.5 比较合适，太小收敛慢，太大容易震荡
+            val damping = 0.3
+            // 限制单次最大调整幅度，防止突变 (例如限制在 +/- 1 EV 内)
+            val limitedEvError = evErrorStops.coerceIn(-1.0, 1.0)
+            val correctionFactor = 2.0.pow(limitedEvError * damping)
+
+            // --- 6. 应用调整 ---
+            var newIso = currentState.iso
+            var newShutter = currentState.shutterSpeed
+            var needsUpdate = false
+
+            if (currentState.isIsoAuto) {
+                // ISO 优先模式：快门固定，调 ISO
+                val calculatedIso = (currentState.iso * correctionFactor).toInt()
+                val range = currentState.getIsoRange()
+                val clampedIso = calculatedIso.coerceIn(range.lower, range.upper)
+
+                // 只有变化量超过一定阈值才应用（防止 ISO 在 100 和 101 之间跳动）
+                if (abs(clampedIso - currentState.iso) > currentState.iso * 0.05) {
+                    newIso = clampedIso
+                    needsUpdate = true
+                }
+            } else {
+                // 快门优先模式：ISO 固定，调快门
+                val calculatedShutter = (currentState.shutterSpeed * correctionFactor).toLong()
+                val range = currentState.getShutterSpeedRange()
+                val clampedShutter = calculatedShutter.coerceIn(range.lower, range.upper)
+
+                if (abs(clampedShutter - currentState.shutterSpeed) > currentState.shutterSpeed * 0.05) {
+                    newShutter = clampedShutter
+                    needsUpdate = true
+                }
+            }
+
+            // --- 7. 下发指令 ---
+            if (needsUpdate) {
+                // 更新状态
+                _state.value = currentState.copy(iso = newIso, shutterSpeed = newShutter)
+
+                try {
+                    previewRequestBuilder?.let { builder ->
+                        applyExposureSettings(builder, _state.value, false) // 封装好的设置函数
+                        captureSession?.setRepeatingRequest(
+                            builder.build(),
+                            previewCallback,
+                            cameraHandler
+                        )
+                    }
+                    meteringSkipFrames = 5
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to update exposure: ${e.message}")
+                }
+            }
         }
     }
     
@@ -418,12 +622,13 @@ class Camera2Controller(private val context: Context) {
      * 应用曝光设置
      */
     private fun applyExposureSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
-        if (state.isAutoExposure) {
-            // 自动曝光
+        if (state.isIsoAuto && state.isShutterSpeedAuto) {
+            // 全自动曝光 (Both Auto)
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, state.exposureCompensation)
         } else {
-            // 手动曝光
+            // 手动曝光 / 半自动曝光 (Software Metering)
+            // 只要有一项是手动，就必须将 AE_MODE 设为 OFF
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
             
@@ -671,17 +876,11 @@ class Camera2Controller(private val context: Context) {
         val clampedValue = value.coerceIn(range.lower, range.upper)
         _state.value = _state.value.copy(
             iso = clampedValue,
-            isAutoExposure = false
+            isIsoAuto = false
         )
         
         previewRequestBuilder?.apply {
-            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            set(CaptureRequest.SENSOR_SENSITIVITY, clampedValue)
-            
-            // 预览时限制曝光时间，防止画面卡死
-            val previewExposureTime = _state.value.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
-            set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
-            
+            applyExposureSettings(this, _state.value, false)
             updatePreview()
         }
     }
@@ -697,22 +896,16 @@ class Camera2Controller(private val context: Context) {
         val clampedValue = value.coerceIn(range.lower, range.upper)
         _state.value = _state.value.copy(
             shutterSpeed = clampedValue,
-            isAutoExposure = false
+            isShutterSpeedAuto = false
         )
         
         previewRequestBuilder?.apply {
-            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            
-            // 预览时限制曝光时间，防止画面卡死
-            // 长曝光场景下，预览会比较暗，但这是正常的
-            // 拍摄时会使用完整的曝光时间
-            val previewExposureTime = clampedValue.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
-            set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
-            // 保持 ISO 不变
-            set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
+            applyExposureSettings(this, _state.value, false)
             updatePreview()
         }
     }
+
+    /* ... flash mode ... */
 
     fun setFlashMode(value: Int) {
         _state.value = _state.value.copy(flashMode = value)
@@ -749,24 +942,38 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 设置自动曝光模式
+     * 设置自动曝光模式 (Legacy / Global)
      */
     fun setAutoExposure(enabled: Boolean) {
-        _state.value = _state.value.copy(isAutoExposure = enabled)
+        _state.value = _state.value.copy(
+            isIsoAuto = enabled,
+            isShutterSpeedAuto = enabled
+        )
 
         previewRequestBuilder?.apply {
-            if (enabled) {
-                // 恢复自动曝光
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            } else {
-                // 手动曝光
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
-                
-                // 预览时限制曝光时间
-                val previewExposureTime = _state.value.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
-            }
+            applyExposureSettings(this, _state.value, false)
+            updatePreview()
+        }
+    }
+
+    /**
+     * 设置 ISO 自动模式
+     */
+    fun setIsoAuto(enabled: Boolean) {
+        _state.value = _state.value.copy(isIsoAuto = enabled)
+        previewRequestBuilder?.apply {
+            applyExposureSettings(this, _state.value, false)
+            updatePreview()
+        }
+    }
+
+    /**
+     * 设置快门自动模式
+     */
+    fun setShutterSpeedAuto(enabled: Boolean) {
+        _state.value = _state.value.copy(isShutterSpeedAuto = enabled)
+        previewRequestBuilder?.apply {
+            applyExposureSettings(this, _state.value, false)
             updatePreview()
         }
     }
@@ -1070,8 +1277,14 @@ class Camera2Controller(private val context: Context) {
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
             
             // 计算对焦区域
-            val focusX = (x / viewWidth * activeRect.width()).toInt()
-            val focusY = (y / viewHeight * activeRect.height()).toInt()
+            val normX = x / viewWidth
+            val normY = y / viewHeight
+            
+            // Store normalized UI coordinates for metering
+            _state.value = _state.value.copy(focusPoint = Pair(normX, normY))
+
+            val focusX = (normX * activeRect.width()).toInt()
+            val focusY = (normY * activeRect.height()).toInt()
             val focusSize = (activeRect.width() * 0.1f).toInt()
             
             val focusRect = android.graphics.Rect(
