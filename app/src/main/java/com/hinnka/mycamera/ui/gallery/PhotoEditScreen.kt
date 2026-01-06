@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
@@ -273,16 +274,11 @@ fun PhotoEditScreen(
                             fontSize = 14.sp,
                             modifier = Modifier.width(60.dp)
                         )
-                        
-                        Slider(
+
+                        CustomSlider(
                             value = editLutIntensity,
                             onValueChange = { viewModel.updateEditLutIntensity(it) },
                             valueRange = 0f..1f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = AccentOrange,
-                                activeTrackColor = AccentOrange,
-                                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                            ),
                             modifier = Modifier.weight(1f)
                         )
                         
@@ -327,106 +323,6 @@ fun PhotoEditScreen(
                                 onClick = { viewModel.setEditFrame(frame.id) }
                             )
                         }
-                    }
-                    
-                    // App 品牌开关（仅当选择了边框时显示）
-                    if (editFrameId != null) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = stringResource(R.string.show_app_branding),
-                                color = Color.White,
-                                fontSize = 14.sp
-                            )
-                            
-                            Switch(
-                                checked = editShowAppBranding,
-                                onCheckedChange = { viewModel.setShowAppBranding(it) },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = AccentOrange,
-                                    checkedTrackColor = AccentOrange.copy(alpha = 0.5f),
-                                    uncheckedThumbColor = Color.Gray,
-                                    uncheckedTrackColor = Color.Gray.copy(alpha = 0.3f)
-                                )
-                            )
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // 旋转控制
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.rotate),
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            modifier = Modifier.width(80.dp)
-                        )
-                        
-                        Spacer(modifier = Modifier.weight(1f))
-                        
-                        IconButton(
-                            onClick = { viewModel.rotate90() },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .background(AccentOrange.copy(alpha = 0.2f), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Rotate90DegreesCw,
-                                contentDescription = "Rotate 90°",
-                                tint = AccentOrange
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.width(8.dp))
-                        
-                        Text(
-                            text = "${rotation.toInt()}°",
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 14.sp
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // 亮度控制
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.brightness),
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            modifier = Modifier.width(80.dp)
-                        )
-                        
-                        Slider(
-                            value = brightness,
-                            onValueChange = { viewModel.setBrightness(it) },
-                            valueRange = 0.5f..2f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = AccentOrange,
-                                activeTrackColor = AccentOrange,
-                                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-                        
-                        Text(
-                            text = String.format("%.1fx", brightness),
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 14.sp,
-                            modifier = Modifier.width(48.dp)
-                        )
                     }
                 }
             }

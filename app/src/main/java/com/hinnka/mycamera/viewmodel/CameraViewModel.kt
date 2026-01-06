@@ -208,7 +208,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 检查相机状态并在必要时恢复
      */
     fun checkAndRecoverCamera() {
-        cameraController.checkAndRecoverCamera()
         // 如果有保存的 SurfaceTexture，重新打开相机
         currentSurfaceTexture?.let { texture ->
             if (!state.value.isPreviewActive) {

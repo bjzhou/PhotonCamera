@@ -9,6 +9,14 @@
       "path": "standard.plut"
     },
     {
+      "id": "pentax",
+      "name": {
+        "en": "Pentax",
+        "zh": "鲜明"
+      },
+      "path": "pentax.plut"
+    },
+    {
       "id": "leica",
       "name": {
         "en": "Leica",
@@ -71,14 +79,6 @@
         "zh": "索尼VV2"
       },
       "path": "vv2.plut"
-    },
-    {
-      "id": "pentax",
-      "name": {
-        "en": "Pentax",
-        "zh": "宾得鲜明"
-      },
-      "path": "pentax.plut"
     }
   ]
 }

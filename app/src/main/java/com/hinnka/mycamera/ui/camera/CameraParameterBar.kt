@@ -41,6 +41,7 @@ fun CameraParameterBar(
             label = "Tv",
             value = if (state.shutterSpeed >= 1_000_000_000.0) (state.shutterSpeed / 1_000_000_000.0).toInt().toString() else "1/${(1_000_000_000.0 / state.shutterSpeed).toInt()}",
             labelColor = yellow,
+            valueColor = if (state.shutterSpeed > 1_000_000_000.0 / 15) Color.Red else null,
             isSelected = selectedParameter == CameraParameter.SHUTTER_SPEED,
             isEnabled = true,
             onClick = { onParameterClick(CameraParameter.SHUTTER_SPEED) }
@@ -81,6 +82,7 @@ private fun ParameterItem(
     label: String,
     value: String,
     labelColor: Color,
+    valueColor: Color? = null,
     isSelected: Boolean,
     isEnabled: Boolean,
     onClick: () -> Unit,
@@ -107,7 +109,7 @@ private fun ParameterItem(
         )
         Text(
             text = value,
-            color = if (isSelected) Color(0xFFFFD700) else Color.White.copy(alpha = if (isEnabled) 1f else 0.5f),
+            color = valueColor ?: if (isSelected) Color(0xFFFFD700) else Color.White.copy(alpha = if (isEnabled) 1f else 0.5f),
             fontSize = 11.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Bold
         )

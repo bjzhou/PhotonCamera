@@ -306,20 +306,8 @@ class Camera2Controller(private val context: Context) {
                 // 设置连续自动对焦
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
 
-                if (state.value.isAutoExposure) {
-                    // 设置自动曝光
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                } else {
-                    // 手动曝光
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                    set(CaptureRequest.SENSOR_SENSITIVITY, state.value.iso)
-                    
-                    // 预览时限制曝光时间，防止画面卡死
-                    val previewExposureTime = state.value.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
-                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExposureTime)
-                }
-
-                setupFlatProfileRequest(this)
+                // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
+                applyBaseCameraSettings(this, isCapture = false)
             }
             
             val surfaces = mutableListOf(surface, reader.surface)
@@ -395,6 +383,141 @@ class Camera2Controller(private val context: Context) {
 
         // 4. 关闭锐化
 //        builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+    }
+    
+    // ==================== 统一参数配置 ====================
+    
+    /**
+     * 将当前状态中的相机参数应用到 CaptureRequest.Builder
+     * 
+     * 这是确保预览与拍摄参数一致性的核心方法
+     * 
+     * @param builder 需要配置的 Builder
+     * @param isCapture 是否为拍摄请求（预览时某些参数有限制）
+     */
+    private fun applyBaseCameraSettings(builder: CaptureRequest.Builder, isCapture: Boolean = false) {
+        val currentState = _state.value
+        
+        // 1. 曝光设置
+        applyExposureSettings(builder, currentState, isCapture)
+        
+        // 2. 白平衡设置
+        applyWhiteBalanceSettings(builder, currentState)
+        
+        // 3. 闪光灯设置
+        applyFlashSettings(builder, currentState)
+        
+        // 4. 变焦设置
+        applyZoomSettings(builder, currentState)
+        
+        // 5. 色调映射（Flat Profile）
+        setupFlatProfileRequest(builder)
+    }
+    
+    /**
+     * 应用曝光设置
+     */
+    private fun applyExposureSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
+        if (state.isAutoExposure) {
+            // 自动曝光
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, state.exposureCompensation)
+        } else {
+            // 手动曝光
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
+            
+            // 预览时限制曝光时间，防止画面卡死；拍摄时使用完整的用户设置
+            val exposureTime = if (isCapture) {
+                state.shutterSpeed
+            } else {
+                state.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+            }
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
+            
+            // 拍摄时设置低帧率范围以支持长曝光
+            if (isCapture) {
+                try {
+                    val characteristics = cameraManager.getCameraCharacteristics(state.currentCameraId)
+                    val availableFpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    val lowestFpsRange = availableFpsRanges?.minByOrNull { it.upper }
+                    lowestFpsRange?.let {
+                        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to set FPS range", e)
+                }
+            }
+        }
+    }
+    
+    /**
+     * 应用白平衡设置
+     */
+    private fun applyWhiteBalanceSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        builder.set(CaptureRequest.CONTROL_AWB_MODE, state.awbMode)
+        
+        if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF && supportsManualWhiteBalance()) {
+            // 手动白平衡，应用当前色温
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            val gains = kelvinToRggbGains(state.awbTemperature)
+            builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
+        } else {
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+        }
+    }
+    
+    /**
+     * 应用闪光灯设置
+     */
+    private fun applyFlashSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        when (state.flashMode) {
+            CameraMetadata.FLASH_MODE_OFF -> {
+                // 注意：如果是自动曝光模式，这里不需要重新设置 AE_MODE
+                // 因为 applyExposureSettings 已经处理了
+                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+            }
+            CameraMetadata.FLASH_MODE_SINGLE -> {
+                if (state.isAutoExposure) {
+                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                }
+                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+            }
+            CameraMetadata.FLASH_MODE_TORCH -> {
+                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
+            }
+            else -> {
+                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+            }
+        }
+    }
+    
+    /**
+     * 应用变焦设置
+     */
+    private fun applyZoomSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        val cameraId = state.currentCameraId
+        if (cameraId.isEmpty() || state.zoomRatio <= 1f) return
+        
+        try {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+            
+            val centerX = activeRect.width() / 2
+            val centerY = activeRect.height() / 2
+            val deltaX = ((activeRect.width() / 2) / state.zoomRatio).toInt()
+            val deltaY = ((activeRect.height() / 2) / state.zoomRatio).toInt()
+            
+            val cropRect = android.graphics.Rect(
+                centerX - deltaX,
+                centerY - deltaY,
+                centerX + deltaX,
+                centerY + deltaY
+            )
+            builder.set(CaptureRequest.SCALER_CROP_REGION, cropRect)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to apply zoom settings", e)
+        }
     }
     
     /**
@@ -1050,43 +1173,24 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
                 
-                // 明确设置曝光模式和参数
-                if (_state.value.isAutoExposure) {
-                    // 自动曝光
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, _state.value.exposureCompensation)
-                    Log.d(TAG, "Capture with auto exposure, EV: ${_state.value.exposureCompensation}")
-                } else {
-                    // 手动曝光 - 使用完整的用户设置（不限制曝光时间）
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                    
-                    // 关键修复：设置最低 FPS 范围以支持长曝光
-                    try {
-                        val characteristics = cameraManager.getCameraCharacteristics(_state.value.currentCameraId)
-                        val availableFpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                        val lowestFpsRange = availableFpsRanges?.minByOrNull { it.upper }
-                        lowestFpsRange?.let {
-                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to set FPS range", e)
-                    }
-                    
-                    set(CaptureRequest.SENSOR_SENSITIVITY, _state.value.iso)
-                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, _state.value.shutterSpeed)
-                }
+                // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
+                // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
+                applyBaseCameraSettings(this, isCapture = true)
                 
-                // 从预览请求复制其他设置（变焦、对焦区域等）
+                // 从预览请求复制对焦相关设置
                 previewRequestBuilder?.let { preview ->
-                    preview.get(CaptureRequest.SCALER_CROP_REGION)?.let { 
-                        set(CaptureRequest.SCALER_CROP_REGION, it)
+                    preview.get(CaptureRequest.CONTROL_AF_MODE)?.let { 
+                        set(CaptureRequest.CONTROL_AF_MODE, it)
+                    }
+                    preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { 
+                        set(CaptureRequest.CONTROL_AF_REGIONS, it)
+                    }
+                    preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { 
+                        set(CaptureRequest.CONTROL_AE_REGIONS, it)
                     }
                 }
                 
-                // 设置 JPEG 方向
-                set(CaptureRequest.JPEG_ORIENTATION, getJpegOrientation())
-                set(CaptureRequest.JPEG_QUALITY, 95.toByte())
-                setupFlatProfileRequest(this)
+                Log.d(TAG, "Capture with ISO: ${_state.value.iso}, shutterSpeed: ${_state.value.shutterSpeed}, isAutoExposure: ${_state.value.isAutoExposure}")
             }
             
             captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
@@ -1245,15 +1349,6 @@ class Camera2Controller(private val context: Context) {
     }
     
     // ==================== 生命周期 ====================
-    
-    /**
-     * 检查相机状态并在必要时恢复
-     */
-    fun checkAndRecoverCamera() {
-        if (!_state.value.isPreviewActive && cameraDevice == null) {
-            Log.d(TAG, "Camera not active, may need to reopen")
-        }
-    }
     
     /**
      * 关闭相机
