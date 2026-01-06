@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.camera.CameraInfo
@@ -54,7 +55,8 @@ fun ZoomControlBar(
     val mainCamera = availableCameras.find { it.lensType == if (currentCamera?.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN }
     
     // 根据可用相机计算变焦档位
-    val zoomStops = calculateZoomStops(availableCameras, currentCamera)
+    val lensZoomStops = calculateLensZoomStops(availableCameras, currentCamera)
+    val zoomStops = (lensZoomStops + extraZoomStops(availableCameras, currentCamera)).sorted()
     
     Box(
         modifier = modifier
@@ -106,6 +108,7 @@ fun ZoomControlBar(
         // Zoom Ruler (Center)
         ZoomRuler(
             zoomRatio = zoomRatio,
+            lensStops = lensZoomStops,
             stops = zoomStops,
             mainCamera = mainCamera,
             displayMode = displayMode,
@@ -122,10 +125,11 @@ fun ZoomControlBar(
     }
 }
 
+
 /**
  * 计算变焦档位
  */
-private fun calculateZoomStops(
+private fun calculateLensZoomStops(
     cameras: List<CameraInfo>,
     currentCamera: CameraInfo?
 ): List<Float> {
@@ -138,24 +142,36 @@ private fun calculateZoomStops(
                 stops.add(camera.intrinsicZoomRatio)
             }
         }
-        stops.add(2f)
-        return stops.sorted()
+        return stops.toList()
     }
-    
     // 添加各个镜头的固有变焦比例
     cameras.filter { it.lensType != LensType.FRONT }.forEach { camera ->
         if (camera.intrinsicZoomRatio > 0) {
             stops.add(camera.intrinsicZoomRatio)
         }
     }
+    return stops.toList()
+}
 
-    val mainCamera = cameras.find { it.lensType == LensType.BACK_MAIN } ?: return stops.sorted()
+/**
+ * 计算变焦档位
+ */
+private fun extraZoomStops(
+    cameras: List<CameraInfo>,
+    currentCamera: CameraInfo?
+): List<Float> {
+    val stops = mutableSetOf<Float>()
+    if (currentCamera?.lensType == LensType.FRONT) {
+        stops.add(2f)
+        return stops.toList()
+    }
+    val mainCamera = cameras.find { it.lensType == LensType.BACK_MAIN } ?: return stops.toList()
 
     stops.add(35f / mainCamera.focalLength35mmEquivalent)
     stops.add(50f / mainCamera.focalLength35mmEquivalent)
     stops.add(85f / mainCamera.focalLength35mmEquivalent)
     stops.add(200f / mainCamera.focalLength35mmEquivalent)
-    return stops.sorted()
+    return stops.toList()
 }
 
 /**
@@ -175,6 +191,7 @@ private fun findOptimalLens(
 @Composable
 fun ZoomRuler(
     zoomRatio: Float,
+    lensStops: List<Float>,
     stops: List<Float>,
     mainCamera: CameraInfo?,
     displayMode: ZoomDisplayMode,
@@ -217,6 +234,7 @@ fun ZoomRuler(
                 fontSize = if (isSelected) 13.sp else 10.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                 color = if (isSelected) activeColor else inactiveColor,
+                textDecoration = if (lensStops.contains(stop)) TextDecoration.Underline else TextDecoration.None
             )
 
             Box(modifier = Modifier.size(32.dp).autoRotate(), contentAlignment = Alignment.Center) {
@@ -232,7 +250,7 @@ fun ZoomRuler(
 private fun formatZoomRatio(ratio: Float): String {
     val rounded = (ratio * 10).roundToInt() / 10f
     return if (rounded == rounded.toInt().toFloat()) {
-        "${ratio.toInt()}x"
+        "${rounded.toInt()}x"
     } else {
         String.format("%.1fx", rounded)
     }
