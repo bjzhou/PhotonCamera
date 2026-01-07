@@ -44,6 +44,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
@@ -321,6 +322,7 @@ private fun PhotoGridItem(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
+            .autoRotate()
     ) {
         // 照片缩略图
         AsyncImage(

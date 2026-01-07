@@ -150,7 +150,7 @@ fun PhotoEditScreen(
                     }
                     
                     // 导出（烘焙）按钮
-                    IconButton(
+                    /*IconButton(
                         onClick = { showExportDialog = true },
                         enabled = !isSaving
                     ) {
@@ -159,7 +159,7 @@ fun PhotoEditScreen(
                             contentDescription = "Export",
                             tint = Color.White
                         )
-                    }
+                    }*/
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Black
