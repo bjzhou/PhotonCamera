@@ -4,6 +4,7 @@ import android.content.Context
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraMetadata
 import android.os.Build
 import android.util.Log
 import android.util.Range
@@ -65,12 +66,15 @@ class CameraDiscovery(private val context: Context) {
                 
                 // 计算 intrinsicZoomRatio
                 val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
+
+                // 检测是否为微距镜头
+                val isMacro = isMacroLens(characteristics)
                 
                 val info = createCameraInfo(cameraId, characteristics, lensFacing, intrinsicZoomRatio)
                 
                 when (lensFacing) {
                     CameraCharacteristics.LENS_FACING_BACK -> {
-                        backCameras.add(CameraInfoWithZoom(info, intrinsicZoomRatio))
+                        backCameras.add(CameraInfoWithZoom(info, intrinsicZoomRatio, isMacro))
                     }
                     CameraCharacteristics.LENS_FACING_FRONT -> {
                         if (frontCamera == null) {
@@ -280,30 +284,81 @@ class CameraDiscovery(private val context: Context) {
         
         return focalLength * filmDiagonal / sensorDiagonal
     }
+
+    /**
+     * 检测是否为微距镜头
+     */
+    private fun isMacroLens(characteristics: CameraCharacteristics): Boolean {
+        // 1. 通过最小对焦距离判断
+        // 微距镜头通常支持极近距离对焦。
+        // LENS_INFO_MINIMUM_FOCUS_DISTANCE 的单位是 1/米 (diopters)。
+        // 10 对应 0.1米 (10cm)，20 对应 0.05米 (5cm)。
+        val minFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+        val focusCalibration = characteristics.get(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION)
+        
+        // 专用微距镜头的典型特征：
+        // (1) 最小对焦距离很大 (>= 10 diopters)
+        // (2) 通常是廉价传感器，对焦未经过精细标定 (UNCALIBRATED)
+        if (minFocusDistance >= 10f) {
+            if (focusCalibration == CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED) {
+                return true
+            }
+            // 如果对焦距离极近 (<= 5cm)，即使标定过，也认为是微距镜头（或者是具备强微距能力的长焦/广角）
+            if (minFocusDistance >= 20f) {
+                return true
+            }
+        }
+
+        // 2. 检查是否有特定的能力（有些设备可能支持微距能力）
+        val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+        if (capabilities != null && capabilities.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE).not()) {
+             // 某些特殊用途的摄像头可能不包含向后兼容能力
+        }
+        
+        return false
+    }
     
     /**
      * 根据 intrinsicZoomRatio 分类后置摄像头
      */
     private fun classifyBackCameras(cameras: List<CameraInfoWithZoom>): List<CameraInfo> {
         if (cameras.isEmpty()) return emptyList()
-        if (cameras.size == 1) {
-            return listOf(cameras.first().info.copy(lensType = LensType.BACK_MAIN))
+        
+        // 分离微距镜头和普通镜头
+        val macroCameras = cameras.filter { it.isMacro }
+        val normalCameras = cameras.filter { !it.isMacro }
+        
+        if (normalCameras.isEmpty()) {
+            // 如果全部被识别为微距（不常见），则按 intrinsicZoomRatio 排序并返回
+            return cameras.sortedBy { it.intrinsicZoomRatio }.map { it.info.copy(lensType = LensType.BACK_MACRO) }
+        }
+
+        val result = mutableListOf<CameraInfo>()
+        
+        // 分类普通镜头
+        if (normalCameras.size == 1) {
+            result.add(normalCameras.first().info.copy(lensType = LensType.BACK_MAIN))
+        } else {
+            // 按 intrinsicZoomRatio 排序
+            val sorted = normalCameras.sortedBy { it.intrinsicZoomRatio }
+            
+            // 找到最接近 1.0 的作为主摄
+            val mainCameraIndex = sorted.indices.minByOrNull { kotlin.math.abs(sorted[it].intrinsicZoomRatio - 1f) } ?: 0
+            
+            result.addAll(sorted.mapIndexed { index, camera ->
+                val lensType = when {
+                    index < mainCameraIndex -> LensType.BACK_ULTRA_WIDE
+                    index > mainCameraIndex -> LensType.BACK_TELEPHOTO
+                    else -> LensType.BACK_MAIN
+                }
+                camera.info.copy(lensType = lensType)
+            })
         }
         
-        // 按 intrinsicZoomRatio 排序
-        val sorted = cameras.sortedBy { it.intrinsicZoomRatio }
+        // 添加微距镜头
+        result.addAll(macroCameras.map { it.info.copy(lensType = LensType.BACK_MACRO) })
         
-        // 找到最接近 1.0 的作为主摄
-        val mainCameraIndex = sorted.indices.minByOrNull { kotlin.math.abs(sorted[it].intrinsicZoomRatio - 1f) } ?: 0
-        
-        return sorted.mapIndexed { index, camera ->
-            val lensType = when {
-                index < mainCameraIndex -> LensType.BACK_ULTRA_WIDE  // 小于主摄的是广角
-                index > mainCameraIndex -> LensType.BACK_TELEPHOTO   // 大于主摄的是长焦
-                else -> LensType.BACK_MAIN
-            }
-            camera.info.copy(lensType = lensType)
-        }
+        return result
     }
     
     /**
@@ -381,6 +436,7 @@ class CameraDiscovery(private val context: Context) {
     
     private data class CameraInfoWithZoom(
         val info: CameraInfo,
-        val intrinsicZoomRatio: Float
+        val intrinsicZoomRatio: Float,
+        val isMacro: Boolean
     )
 }

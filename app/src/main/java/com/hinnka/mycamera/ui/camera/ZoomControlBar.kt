@@ -145,7 +145,7 @@ private fun calculateLensZoomStops(
         return stops.toList()
     }
     // 添加各个镜头的固有变焦比例
-    cameras.filter { it.lensType != LensType.FRONT }.forEach { camera ->
+    cameras.filter { it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO }.forEach { camera ->
         if (camera.intrinsicZoomRatio > 0) {
             stops.add(camera.intrinsicZoomRatio)
         }
@@ -191,7 +191,7 @@ private fun findOptimalLens(
     currentCameraId: String
 ): CameraInfo? {
     val currentLensType = cameras.find { it.cameraId == currentCameraId }?.lensType
-    val zoomableCameras = cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else it.lensType != LensType.FRONT }
+    val zoomableCameras = cameras.filter { if (currentLensType == LensType.FRONT) it.lensType == LensType.FRONT else (it.lensType != LensType.FRONT && it.lensType != LensType.BACK_MACRO) }
     if (zoomableCameras.isEmpty()) return null
     return zoomableCameras.filter { it.intrinsicZoomRatio <= targetZoom }.sortedByDescending { it.intrinsicZoomRatio }.getOrNull(0)
 }

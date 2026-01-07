@@ -33,7 +33,8 @@ enum class LensType {
     FRONT,
     BACK_MAIN,
     BACK_ULTRA_WIDE,
-    BACK_TELEPHOTO
+    BACK_TELEPHOTO,
+    BACK_MACRO
 }
 
 /**
@@ -66,6 +67,7 @@ data class CameraInfo(
             LensType.BACK_MAIN -> "主摄 (1x)"
             LensType.BACK_ULTRA_WIDE -> "广角 (0.5x)"
             LensType.BACK_TELEPHOTO -> "长焦 (${String.format("%.1f", focalLength35mmEquivalent / 24f)}x)"
+            LensType.BACK_MACRO -> "微距"
         }
     }
     
