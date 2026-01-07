@@ -301,10 +301,12 @@ class CameraDiscovery(private val context: Context) {
         // (2) 通常是廉价传感器，对焦未经过精细标定 (UNCALIBRATED)
         if (minFocusDistance >= 10f) {
             if (focusCalibration == CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED) {
+//                Log.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
                 return true
             }
-            // 如果对焦距离极近 (<= 5cm)，即使标定过，也认为是微距镜头（或者是具备强微距能力的长焦/广角）
-            if (minFocusDistance >= 20f) {
+            // 如果对焦距离极近，即使标定过，也认为是微距镜头（或者是具备强微距能力的长焦/广角）
+            if (minFocusDistance >= 30f) {
+//                Log.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
                 return true
             }
         }
