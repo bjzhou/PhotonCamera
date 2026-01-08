@@ -188,6 +188,7 @@ object FrameTemplateParser {
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
             sizeDp = obj.optInt("size", 24),
             tint = obj.optString("tint").takeIf { it.isNotEmpty() }?.let { parseColor(it) },
+            marginDp = obj.optInt("margin", 8),
             line = obj.optInt("line", 0)
         )
     }

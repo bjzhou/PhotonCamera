@@ -9,14 +9,6 @@
       "path": "standard.plut"
     },
     {
-      "id": "pentax",
-      "name": {
-        "en": "Pentax",
-        "zh": "鲜明"
-      },
-      "path": "pentax.plut"
-    },
-    {
       "id": "leica",
       "name": {
         "en": "Leica",
@@ -47,6 +39,14 @@
         "zh": "富士NC"
       },
       "path": "nc.plut"
+    },
+    {
+      "id": "pentax",
+      "name": {
+        "en": "Pentax",
+        "zh": "宾得鲜明"
+      },
+      "path": "pentax.plut"
     },
     {
       "id": "ricoh_positive",

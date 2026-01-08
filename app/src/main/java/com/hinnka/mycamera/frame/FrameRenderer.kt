@@ -231,26 +231,33 @@ class FrameRenderer(private val context: Context) {
 
         val height = bottom - top
 
+        val logoLineSet = elements.filterIsInstance<FrameElement.Logo>().map { it.line }.toSet()
+        val lineWeights = allLines.map { if (logoLineSet.contains(it)) 3f else 1.0f }
+        val totalWeight = lineWeights.sum()
+
         /**
          * 计算指定行号的垂直中心位置
          */
         fun getLineCenterY(line: Int): Float {
-            return when {
-                line == -1 -> top + height / 2f
-                lineCount <= 1 -> top + height / 2f
-                lineCount == 2 -> when (line) {
-                    0 -> top + height * 0.35f
-                    1 -> top + height * 0.65f
-                    else -> top + height / 2f
-                }
-                lineCount >= 3 -> when (line) {
-                    0 -> top + height * 0.22f
-                    1 -> top + height * 0.50f
-                    2 -> top + height * 0.78f
-                    else -> top + height / 2f
-                }
-                else -> top + height / 2f
+            if (line == -1 || lineCount <= 1) return top + height / 2f
+            
+            val lineIndex = allLines.indexOf(line)
+            if (lineIndex == -1) return top + height / 2f
+
+            // 根据行数决定内容区域的占比和边距
+            val contentRatio = when (lineCount) {
+                2 -> 0.6f
+                else -> 0.84f
             }
+            val startOffset = (1f - contentRatio) / 2f
+            
+            var currentYOffset = 0f
+            for (i in 0 until lineIndex) {
+                currentYOffset += (lineWeights[i] / totalWeight) * contentRatio
+            }
+            val currentLineWeightRatio = (lineWeights[lineIndex] / totalWeight) * contentRatio
+            
+            return top + (startOffset + currentYOffset + currentLineWeightRatio / 2f) * height
         }
 
         /**
@@ -389,7 +396,8 @@ class FrameRenderer(private val context: Context) {
                 textPaint.measureText(text) + dpToPx(8) * scale
             }
             is FrameElement.Logo -> {
-                (dpToPx(element.sizeDp) + dpToPx(8)) * scale + dpToPx(element.marginDp) * scale * 2
+                val (bmpW, _) = measureLogoSize(element, metadata, scale)
+                bmpW + dpToPx(element.marginDp) * scale * 2 + dpToPx(8) * scale
             }
             is FrameElement.Divider -> {
                 if (element.orientation == DividerOrientation.VERTICAL) {
@@ -492,6 +500,38 @@ class FrameRenderer(private val context: Context) {
         val suffix = element.suffix ?: ""
         return "$prefix$content$suffix"
     }
+
+    private fun measureLogoSize(element: FrameElement.Logo, metadata: PhotoMetadata?, scale: Float = 1f): Pair<Int, Int> {
+        val size = (dpToPx(element.sizeDp) * scale).toInt()
+
+        // 获取对应的 drawable
+        val drawableRes = when (element.logoType) {
+            LogoType.APP -> R.mipmap.ic_launcher_round
+            LogoType.BRAND -> getBrandLogoDrawable(metadata?.brand)
+        }
+
+        try {
+            val drawable = context.getDrawable(drawableRes) ?: return 0 to 0
+            val intrinsicW = drawable.intrinsicWidth
+            val intrinsicH = drawable.intrinsicHeight
+            return if (intrinsicW > 0 && intrinsicH > 0) {
+                val ratio = intrinsicW.toFloat() / intrinsicH.toFloat()
+                if (ratio >= 1f) {
+                    // 宽大于高，以目标 size 为高，按比例计算宽
+                    (size * ratio).toInt() to size
+                } else {
+                    // 高大于宽，以目标 size 为宽，按比例计算高
+                    size to (size / ratio).toInt()
+                }
+            } else {
+                // 无内在尺寸，退回到方形
+                size to size
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to draw logo", e)
+            return 0 to 0
+        }
+    }
     
     /**
      * 绘制 Logo 元素
@@ -522,21 +562,7 @@ class FrameRenderer(private val context: Context) {
         
         try {
             val drawable = context.getDrawable(drawableRes) ?: return x
-            val intrinsicW = drawable.intrinsicWidth
-            val intrinsicH = drawable.intrinsicHeight
-            val (bmpW, bmpH) = if (intrinsicW > 0 && intrinsicH > 0) {
-                val ratio = intrinsicW.toFloat() / intrinsicH.toFloat()
-                if (ratio >= 1f) {
-                    // 宽大于高，以目标 size 为宽，按比例计算高
-                    size to (size / ratio).toInt()
-                } else {
-                    // 高大于宽，以目标 size 为高，按比例计算宽
-                    (size * ratio).toInt() to size
-                }
-            } else {
-                // 无内在尺寸，退回到方形
-                size to size
-            }
+            val (bmpW, bmpH) = measureLogoSize(element, metadata, scale)
             val bitmap = drawable.toBitmap(bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1))
             
             // 应用 tint 颜色
@@ -557,8 +583,7 @@ class FrameRenderer(private val context: Context) {
             
             canvas.drawBitmap(tintedBitmap, drawX, drawY, null)
             
-            val spacing = dpToPx(8) * scale
-            return size + spacing + margin * 2
+            return bmpW + margin * 2
         } catch (e: Exception) {
             Log.e(TAG, "Failed to draw logo", e)
             return 0f
