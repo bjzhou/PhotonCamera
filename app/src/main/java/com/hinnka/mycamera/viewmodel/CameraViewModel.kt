@@ -60,6 +60,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val lutManager = LutManager(application)
     private val lutImageProcessor = LutImageProcessor()
     
+    // 计费管理器
+    private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
+    val isPurchased = billingManager.isPurchased
+    
     // 边框管理器
     private val frameManager = FrameManager(application)
     private val frameRenderer = FrameRenderer(application)
@@ -108,6 +112,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     var zoomRatioByMain by mutableFloatStateOf(1f)
+
+    // 付费弹窗状态
+    var showPaymentDialog by mutableStateOf(false)
     
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
@@ -223,6 +230,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun capture() {
         val timerSeconds = state.value.timerSeconds
         
+        // 检查 VIP 权限
+        val currentLut = getLutInfo(currentLutId ?: "")
+        if (currentLut?.isVip == true && !isPurchased.value) {
+            showPaymentDialog = true
+            return
+        }
+
         if (timerSeconds > 0) {
             // 延时拍摄：开始倒计时
             viewModelScope.launch {
@@ -366,6 +380,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setAwbTemperature(kelvin)
     }
     
+    // ==================== 计费相关方法 ====================
+    
+    /**
+     * 发起购买
+     */
+    fun purchase(activity: android.app.Activity) {
+        billingManager.purchase(activity)
+    }
+
     // ==================== LUT 相关方法 ====================
     
     /**

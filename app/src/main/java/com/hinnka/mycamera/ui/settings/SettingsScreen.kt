@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.settings
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -42,6 +43,9 @@ fun SettingsScreen(
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
+    val isPurchased by viewModel.isPurchased.collectAsState()
+    
+    val context = androidx.compose.ui.platform.LocalContext.current
     
     val backgroundColor = Color(0xFF434A5D)
 
@@ -86,6 +90,18 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(modifier = Modifier.height(8.dp))
+
+            if (!isPurchased) {
+                PremiumCard(
+                    onClick = {
+                        val activity = context.findActivity()
+                        if (activity != null) {
+                            viewModel.purchase(activity)
+                        }
+                    }
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+            }
 
             // 画面比例设置
             SettingsSection(title = stringResource(R.string.settings_section_capture)) {
@@ -481,4 +497,67 @@ private fun FrameItem(
             modifier = Modifier.fillMaxWidth()
         )
     }
+}
+@Composable
+private fun PremiumCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(Color(0xFFFFD700), Color(0xFFFFA000))
+                    )
+                )
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.settings_premium_title),
+                        color = Color.Black,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.settings_premium_description),
+                        color = Color.Black.copy(alpha = 0.7f),
+                        fontSize = 13.sp
+                    )
+                }
+                
+                Icon(
+                    imageVector = Icons.Default.Check, // Reuse an icon or add Star
+                    contentDescription = null,
+                    tint = Color.Black,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(Color.Black.copy(alpha = 0.1f), CircleShape)
+                        .padding(8.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun android.content.Context.findActivity(): android.app.Activity? {
+    var context = this
+    while (context is android.content.ContextWrapper) {
+        if (context is android.app.Activity) return context
+        context = context.baseContext
+    }
+    return null
 }

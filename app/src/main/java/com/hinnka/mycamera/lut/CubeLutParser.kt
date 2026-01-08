@@ -132,7 +132,8 @@ object CubeLutParser {
                         nameMap = mapOf("en" to name, "zh" to name),
                         fileName = "$folder/$fileName",
                         isBuiltIn = true,
-                        isDefault = false
+                        isDefault = false,
+                        isVip = id != "standard"
                     )
                 }
         } catch (e: Exception) {

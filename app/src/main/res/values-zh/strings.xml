@@ -102,4 +102,17 @@
     <string name="lut_intensity_high">高</string>
     <string name="filters_panel">滤镜面板</string>
     <string name="toggle_display_mode">切换显示模式</string>
+
+    <!-- Billing & Premium -->
+    <string name="billing_vip_tag">VIP</string>
+    <string name="billing_premium_unlock_title">解锁全部 VIP 滤镜</string>
+    <string name="billing_premium_unlock_description">一次支付，永久使用目前及未来增加的所有高级 LUT 滤镜和 Pro 功能。</string>
+    <string name="billing_feature_all_luts">访问所有专业级 LUT</string>
+    <string name="billing_feature_support_dev">支持独立软件开发</string>
+    <string name="billing_feature_lifetime">一次购买，永久使用</string>
+    <string name="billing_premium_get_access">获取 Pro 权益</string>
+    <string name="billing_price_region_notice">具体价格以所在地区为准</string>
+    <string name="settings_premium_title">PhotonCamera Pro</string>
+    <string name="settings_premium_description">解锁全部高级滤镜并支持我们的开发工作</string>
 </resources>
+

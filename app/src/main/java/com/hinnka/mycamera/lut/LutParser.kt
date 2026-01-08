@@ -116,7 +116,8 @@ object LutParser {
                         nameMap = nameMap,
                         fileName = "$folder/$path",
                         isBuiltIn = true,
-                        isDefault = (i == 0) // 第一个作为默认
+                        isDefault = (i == 0), // 第一个作为默认
+                        isVip = id != "standard"
                     )
                 )
             }

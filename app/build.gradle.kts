@@ -47,11 +47,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-    kotlinOptions {
-        jvmTarget = "11"
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         compose = true
@@ -96,6 +93,10 @@ dependencies {
 
     // Bugly for china flavor
     "chinaImplementation"("com.tencent.bugly:crashreport:latest.release")
+
+    // Billing for google flavor
+    "googleImplementation"(libs.google.billing)
+    "googleImplementation"(libs.google.billing.ktx)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

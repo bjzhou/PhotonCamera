@@ -51,6 +51,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val frameRenderer = FrameRenderer(application)
     private val photoProcessor = PhotoProcessor(lutManager, lutImageProcessor, frameManager, frameRenderer)
     
+    // 计费管理器
+    private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
+    val isPurchased = billingManager.isPurchased
+
+    // 付费弹窗状态
+    var showPaymentDialog by mutableStateOf(false)
+    
     // 照片列表
     private val _photos = MutableStateFlow<List<PhotoData>>(emptyList())
     val photos: StateFlow<List<PhotoData>> = _photos.asStateFlow()
@@ -636,6 +643,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 保存编辑（只更新元数据，不修改原图）
      */
     fun saveEditMetadata(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+        // 检查 VIP 权限
+        val currentLut = availableLuts.find { it.id == editLutId }
+        if (currentLut?.isVip == true && !isPurchased.value) {
+            showPaymentDialog = true
+            onComplete(false)
+            return
+        }
+
         viewModelScope.launch {
             try {
                 val context = getApplication<Application>()
@@ -681,6 +696,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 保存编辑（导出烘焙后的图片）
      */
     fun saveEdit(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+        // 检查 VIP 权限
+        val currentLut = availableLuts.find { it.id == editLutId }
+        if (currentLut?.isVip == true && !isPurchased.value) {
+            showPaymentDialog = true
+            return
+        }
+
         val metadata = (photo.metadata ?: PhotoMetadata()).copy(
             lutId = editLutId,
             lutIntensity = editLutIntensity,
@@ -826,5 +848,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         super.onCleared()
         lutImageProcessor.release()
         lutManager.clearCache()
+    }
+
+    /**
+     * 发起购买
+     */
+    fun purchase(activity: android.app.Activity) {
+        billingManager.purchase(activity)
+    }
+
+    /**
+     * 刷新购买状态
+     */
+    fun refreshPurchases() {
+        billingManager.refresh()
     }
 }

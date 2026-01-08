@@ -1,21 +1,24 @@
 [versions]
-agp = "8.12.0"
-kotlin = "2.0.21"
+agp = "8.12.3"
+kotlin = "2.3.0"
 coreKtx = "1.17.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 lifecycleRuntimeKtx = "2.10.0"
-activityCompose = "1.11.0"
-composeBom = "2024.09.00"
+activityCompose = "1.12.2"
+composeBom = "2025.12.01"
 lifecycleViewmodelCompose = "2.10.0"
-materialIconsExtended = "1.7.0"
-coil = "2.5.0"
-navigationCompose = "2.8.5"
-exifinterface = "1.4.1"
-
+materialIconsExtended = "1.7.8"
+coil = "2.7.0"
+navigationCompose = "2.9.6"
+exifinterface = "1.4.2"
+billing = "8.3.0"
 
 [libraries]
+google-billing = { group = "com.android.billingclient", name = "billing", version.ref = "billing" }
+google-billing-ktx = { group = "com.android.billingclient", name = "billing-ktx", version.ref = "billing" }
+
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

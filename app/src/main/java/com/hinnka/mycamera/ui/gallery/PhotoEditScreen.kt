@@ -40,6 +40,11 @@ import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.hinnka.mycamera.ui.components.PaymentDialog
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.compose.ui.text.font.FontWeight
 
 /**
  * 照片编辑界面
@@ -59,6 +64,7 @@ fun PhotoEditScreen(
     val editLutIntensity = viewModel.editLutIntensity
     val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.availableLuts
+    val showPaymentDialog = viewModel.showPaymentDialog
     
     var isSaving by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -258,6 +264,7 @@ fun PhotoEditScreen(
                                 name = lut.getName(),
                                 previewBitmap = lutPreviews.getOrNull(index),
                                 isSelected = editLutId == lut.id,
+                                isVip = lut.isVip,
                                 onClick = { viewModel.setEditLut(lut.id) }
                             )
                         }
@@ -365,6 +372,28 @@ fun PhotoEditScreen(
             textContentColor = Color.White
         )
     }
+
+    if (showPaymentDialog) {
+        val activity = context.findActivity()
+        PaymentDialog(
+            onDismiss = { viewModel.showPaymentDialog = false },
+            onPurchase = {
+                if (activity != null) {
+                    viewModel.purchase(activity)
+                }
+                viewModel.showPaymentDialog = false
+            }
+        )
+    }
+}
+
+private fun Context.findActivity(): Activity? {
+    var context = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return null
 }
 
 /**
@@ -375,6 +404,7 @@ private fun LutOption(
     name: String,
     previewBitmap: Bitmap? = null,
     isSelected: Boolean,
+    isVip: Boolean = false,
     onClick: () -> Unit
 ) {
     Column(
@@ -410,6 +440,26 @@ private fun LutOption(
                     color = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.7f),
                     fontSize = 16.sp
                 )
+            }
+
+            if (isVip) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .background(
+                            color = Color(0xFFFFD700),
+                            shape = RoundedCornerShape(bottomStart = 4.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.billing_vip_tag),
+                        color = Color.Black,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 8.sp
+                    )
+                }
             }
         }
         

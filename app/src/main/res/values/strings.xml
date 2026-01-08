@@ -102,4 +102,16 @@
     <string name="lut_intensity_high">High</string>
     <string name="filters_panel">Filters</string>
     <string name="toggle_display_mode">Toggle Display Mode</string>
+
+    <!-- Billing & Premium -->
+    <string name="billing_vip_tag">VIP</string>
+    <string name="billing_premium_unlock_title">Unlock All VIP Filters</string>
+    <string name="billing_premium_unlock_description">One-time payment for lifetime access to all premium LUT filters and future pro features.</string>
+    <string name="billing_feature_all_luts">Access all specialized LUTs</string>
+    <string name="billing_feature_support_dev">Support independent development</string>
+    <string name="billing_feature_lifetime">One-time purchase, lifetime use</string>
+    <string name="billing_premium_get_access">Get Premium Access</string>
+    <string name="billing_price_region_notice">Price varies by region</string>
+    <string name="settings_premium_title">PhotonCamera Pro</string>
+    <string name="settings_premium_description">Unlock all premium filters and support us.</string>
 </resources>

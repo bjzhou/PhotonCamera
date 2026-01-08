@@ -52,6 +52,7 @@ fun LutSelector(
                 name = lut.getName(),
                 previewBitmap = lutPreviewBitmaps[lut.id],
                 isSelected = currentLutId == lut.id,
+                isVip = lut.isVip,
                 onClick = { onLutSelected(lut.id) }
             )
         }
@@ -66,6 +67,7 @@ private fun LutItem(
     name: String,
     previewBitmap: Bitmap?,
     isSelected: Boolean,
+    isVip: Boolean,
     onClick: () -> Unit,
     isNone: Boolean = false,
     modifier: Modifier = Modifier
@@ -150,9 +152,29 @@ private fun LutItem(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Check,
-                        contentDescription = "Selected",
+                        contentDescription = stringResource(R.string.selected),
                         tint = Color.White,
                         modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            if (isVip) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .background(
+                            color = Color(0xFFFFD700),
+                            shape = RoundedCornerShape(bottomStart = 4.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.billing_vip_tag),
+                        color = Color.Black,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 8.sp
                     )
                 }
             }

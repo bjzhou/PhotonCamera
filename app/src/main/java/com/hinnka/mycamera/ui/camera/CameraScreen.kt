@@ -38,6 +38,7 @@ import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.ui.components.LutControlPanel
+import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -100,6 +101,19 @@ fun CameraScreen(
     }
 
     val previewSize by remember(state) { mutableStateOf(CameraUtils.getFixedPreviewSize(context, state.currentCameraId, state.aspectRatio)) }
+
+    if (viewModel.showPaymentDialog) {
+        val activity = context.findActivity()
+        PaymentDialog(
+            onDismiss = { viewModel.showPaymentDialog = false },
+            onPurchase = {
+                if (activity != null) {
+                    viewModel.purchase(activity)
+                }
+                viewModel.showPaymentDialog = false
+            }
+        )
+    }
     
     Column(
         modifier = modifier
@@ -492,4 +506,13 @@ fun CornerOverlay(
         }
         drawPath(path, color)
     }
+}
+
+private fun android.content.Context.findActivity(): android.app.Activity? {
+    var context = this
+    while (context is android.content.ContextWrapper) {
+        if (context is android.app.Activity) return context
+        context = context.baseContext
+    }
+    return null
 }

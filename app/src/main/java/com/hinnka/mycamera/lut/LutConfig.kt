@@ -118,7 +118,8 @@ data class LutInfo(
     val nameMap: Map<String, String>, // 多语言名称映射
     val fileName: String,
     val isBuiltIn: Boolean = true,
-    val isDefault: Boolean = false // 是否为默认 LUT
+    val isDefault: Boolean = false, // 是否为默认 LUT
+    val isVip: Boolean = false // 是否为 VIP LUT
 ) {
     /**
      * 获取显示名称（优先当前系统语言）
