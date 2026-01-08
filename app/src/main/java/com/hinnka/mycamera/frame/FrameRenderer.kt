@@ -602,25 +602,25 @@ class FrameRenderer(private val context: Context) {
         
         // 尝试获取品牌特定的 Logo
         val brandLower = brand.lowercase()
-        val resourceName = when (brandLower) {
-            "samsung" -> "ic_brand_samsung"
-            "xiaomi", "redmi", "poco" -> "ic_brand_xiaomi"
-            "huawei" -> "ic_brand_huawei"
-            "honor" -> "ic_brand_honor"
-            "oppo", "realme", "oneplus" -> "ic_brand_oppo"
-            "vivo", "iqoo" -> "ic_brand_vivo"
-            "apple" -> "ic_brand_apple"
-            "sony" -> "ic_brand_sony"
-            "canon" -> "ic_brand_canon"
-            "dji" -> "ic_brand_dji"
-            "fujifilm" -> "ic_brand_fujifilm"
-            "hasselblad" -> "ic_brand_hasselblad"
-            "leica" -> "ic_brand_leica"
-            "nikon" -> "ic_brand_nikon"
-            "panasonic" -> "ic_brand_panasonic"
-            "olympus" -> "ic_brand_olympus"
-            "pentax" -> "ic_brand_pentax"
-            "ricoh" -> "ic_brand_ricoh"
+        val resourceName = when {
+            brandLower.contains("samsung") -> "ic_brand_samsung"
+            brandLower.contains("xiaomi") || brandLower.contains("redmi") || brandLower.contains("poco") -> "ic_brand_xiaomi"
+            brandLower.contains("huawei") -> "ic_brand_huawei"
+            brandLower.contains("honor") -> "ic_brand_honor"
+            brandLower.contains("oppo") || brandLower.contains("realme") || brandLower.contains("oneplus") -> "ic_brand_oppo"
+            brandLower.contains("vivo") || brandLower.contains("iqoo") -> "ic_brand_vivo"
+            brandLower.contains("apple") -> "ic_brand_apple"
+            brandLower.contains("sony") -> "ic_brand_sony"
+            brandLower.contains("canon") -> "ic_brand_canon"
+            brandLower.contains("dji") -> "ic_brand_dji"
+            brandLower.contains("fujifilm") -> "ic_brand_fujifilm"
+            brandLower.contains("hasselblad") -> "ic_brand_hasselblad"
+            brandLower.contains("leica") -> "ic_brand_leica"
+            brandLower.contains("nikon") -> "ic_brand_nikon"
+            brandLower.contains("panasonic") -> "ic_brand_panasonic"
+            brandLower.contains("olympus") -> "ic_brand_olympus"
+            brandLower.contains("pentax") -> "ic_brand_pentax"
+            brandLower.contains("ricoh") -> "ic_brand_ricoh"
             else -> null
         }
         
