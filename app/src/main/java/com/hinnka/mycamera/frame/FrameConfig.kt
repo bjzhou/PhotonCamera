@@ -47,7 +47,8 @@ data class FrameLayout(
     val position: FramePosition = FramePosition.BOTTOM,
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
-    val paddingDp: Int = 16
+    val paddingDp: Int = 16,
+    val borderWidthDp: Int = 0  // 四周边框宽度（仅 BORDER 模式使用）
 )
 
 /**
@@ -56,7 +57,9 @@ data class FrameLayout(
 enum class FramePosition {
     TOP,
     BOTTOM,
-    BOTH
+    BOTH,
+    OVERLAY,  // 叠加在图片上，不增加额外边框区域
+    BORDER    // 四周边框 + 底部信息区
 }
 
 /**
@@ -86,7 +89,7 @@ sealed class FrameElement {
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
         val tint: Int? = null,
-        val marginDp: Int = 8,
+        val marginDp: Int = 0,
         val line: Int = 0
     ) : FrameElement()
     

@@ -1,0 +1,65 @@
+{
+    "id": "no_frame",
+    "name": "无框水印",
+    "version": 1,
+    "layout": {
+        "position": "OVERLAY",
+        "height": 150,
+        "backgroundColor": "#EE000000",
+        "padding": 20
+    },
+    "elements": [
+        {
+            "type": "logo",
+            "logoType": "BRAND",
+            "alignment": "CENTER",
+            "size": 44,
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "DEVICE_MODEL",
+            "alignment": "CENTER",
+            "fontSize": 16,
+            "color": "#FFFFFF",
+            "fontWeight": "MEDIUM",
+            "line": 1
+        },
+        {
+            "type": "text",
+            "textType": "FOCAL_LENGTH_35MM",
+            "alignment": "CENTER",
+            "fontSize": 14,
+            "color": "#AAAAAA",
+            "fontWeight": "NORMAL",
+            "line": 2
+        },
+        {
+            "type": "text",
+            "textType": "APERTURE",
+            "alignment": "CENTER",
+            "fontSize": 14,
+            "color": "#AAAAAA",
+            "fontWeight": "NORMAL",
+            "line": 2
+        },
+        {
+            "type": "text",
+            "textType": "SHUTTER_SPEED",
+            "alignment": "CENTER",
+            "fontSize": 14,
+            "color": "#AAAAAA",
+            "fontWeight": "NORMAL",
+            "line": 2
+        },
+        {
+            "type": "text",
+            "textType": "ISO",
+            "alignment": "CENTER",
+            "fontSize": 14,
+            "color": "#AAAAAA",
+            "fontWeight": "NORMAL",
+            "line": 2
+        }
+    ]
+}

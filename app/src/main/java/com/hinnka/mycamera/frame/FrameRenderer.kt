@@ -10,8 +10,6 @@ import com.hinnka.mycamera.gallery.PhotoMetadata
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.graphics.createBitmap
-import kotlin.math.max
-import kotlin.math.min
 
 
 /**
@@ -58,30 +56,73 @@ class FrameRenderer(private val context: Context) {
         
         val frameHeight = (dpToPx(layout.heightDp) * scale).toInt()
         val padding = (dpToPx(layout.paddingDp) * scale).toInt()
+        val borderWidth = (dpToPx(layout.borderWidthDp) * scale).toInt()
         
         // 计算输出尺寸
-        val outputWidth = originalBitmap.width
-        val outputHeight = when (layout.position) {
-            FramePosition.BOTTOM -> originalBitmap.height + frameHeight
-            FramePosition.TOP -> originalBitmap.height + frameHeight
-            FramePosition.BOTH -> originalBitmap.height + frameHeight * 2
+        val outputWidth: Int
+        val outputHeight: Int
+        
+        when (layout.position) {
+            FramePosition.BOTTOM -> {
+                outputWidth = originalBitmap.width
+                outputHeight = originalBitmap.height + frameHeight
+            }
+            FramePosition.TOP -> {
+                outputWidth = originalBitmap.width
+                outputHeight = originalBitmap.height + frameHeight
+            }
+            FramePosition.BOTH -> {
+                outputWidth = originalBitmap.width
+                outputHeight = originalBitmap.height + frameHeight * 2
+            }
+            FramePosition.OVERLAY -> {
+                outputWidth = originalBitmap.width
+                outputHeight = originalBitmap.height
+            }
+            FramePosition.BORDER -> {
+                // 四周边框 + 底部信息区
+                outputWidth = originalBitmap.width + borderWidth * 2
+                outputHeight = originalBitmap.height + borderWidth * 2 + frameHeight
+            }
         }
         
         // 创建输出 Bitmap
         val output = createBitmap(outputWidth, outputHeight)
         val canvas = Canvas(output)
         
-        // 绘制背景
-        backgroundPaint.color = layout.backgroundColor
-        canvas.drawRect(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat(), backgroundPaint)
+        // OVERLAY 模式不需要绘制整体背景
+        if (layout.position != FramePosition.OVERLAY) {
+            backgroundPaint.color = layout.backgroundColor
+            canvas.drawRect(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat(), backgroundPaint)
+        }
         
         // 绘制原图
-        val photoTop = when (layout.position) {
-            FramePosition.BOTTOM -> 0f
-            FramePosition.TOP -> frameHeight.toFloat()
-            FramePosition.BOTH -> frameHeight.toFloat()
+        val photoLeft: Float
+        val photoTop: Float
+        
+        when (layout.position) {
+            FramePosition.BOTTOM -> {
+                photoLeft = 0f
+                photoTop = 0f
+            }
+            FramePosition.TOP -> {
+                photoLeft = 0f
+                photoTop = frameHeight.toFloat()
+            }
+            FramePosition.BOTH -> {
+                photoLeft = 0f
+                photoTop = frameHeight.toFloat()
+            }
+            FramePosition.OVERLAY -> {
+                photoLeft = 0f
+                photoTop = 0f
+            }
+            FramePosition.BORDER -> {
+                photoLeft = borderWidth.toFloat()
+                photoTop = borderWidth.toFloat()
+            }
         }
-        canvas.drawBitmap(originalBitmap, 0f, photoTop, null)
+        canvas.drawBitmap(originalBitmap, photoLeft, photoTop, null)
         
         // 绘制边框内容
         when (layout.position) {
@@ -92,7 +133,6 @@ class FrameRenderer(private val context: Context) {
                     top = originalBitmap.height.toFloat(),
                     right = (outputWidth - padding).toFloat(),
                     bottom = outputHeight.toFloat(),
-                    frameHeight = frameHeight,
                     scale = scale
                 )
             }
@@ -103,7 +143,6 @@ class FrameRenderer(private val context: Context) {
                     top = 0f,
                     right = (outputWidth - padding).toFloat(),
                     bottom = frameHeight.toFloat(),
-                    frameHeight = frameHeight,
                     scale = scale
                 )
             }
@@ -115,7 +154,6 @@ class FrameRenderer(private val context: Context) {
                     top = 0f,
                     right = (outputWidth - padding).toFloat(),
                     bottom = frameHeight.toFloat(),
-                    frameHeight = frameHeight,
                     scale = scale
                 )
                 // 底部
@@ -125,7 +163,44 @@ class FrameRenderer(private val context: Context) {
                     top = (originalBitmap.height + frameHeight).toFloat(),
                     right = (outputWidth - padding).toFloat(),
                     bottom = outputHeight.toFloat(),
-                    frameHeight = frameHeight,
+                    scale = scale
+                )
+            }
+            FramePosition.OVERLAY -> {
+                // 叠加模式：绘制从全透明到半透明的渐变背景
+                val overlayTop = (originalBitmap.height - frameHeight).toFloat()
+                
+                // 创建线性渐变：从顶部全透明到底部半透明
+                val gradientShader = LinearGradient(
+                    0f, overlayTop,
+                    0f, outputHeight.toFloat(),
+                    Color.TRANSPARENT,
+                    layout.backgroundColor,
+                    Shader.TileMode.CLAMP
+                )
+                backgroundPaint.shader = gradientShader
+                canvas.drawRect(0f, overlayTop, outputWidth.toFloat(), outputHeight.toFloat(), backgroundPaint)
+                backgroundPaint.shader = null  // 重置 shader
+                
+                // 绘制水印内容
+                drawFrameContent(
+                    canvas, template.elements, metadata, showAppBranding,
+                    left = padding.toFloat(),
+                    top = overlayTop + padding.toFloat(),
+                    right = (outputWidth - padding).toFloat(),
+                    bottom = outputHeight.toFloat() - padding.toFloat(),
+                    scale = scale
+                )
+            }
+            FramePosition.BORDER -> {
+                // 四周边框模式：底部信息区
+                val infoTop = (originalBitmap.height + borderWidth * 2).toFloat()
+                drawFrameContent(
+                    canvas, template.elements, metadata, showAppBranding,
+                    left = padding.toFloat(),
+                    top = infoTop,
+                    right = (outputWidth - padding).toFloat(),
+                    bottom = outputHeight.toFloat() - padding.toFloat(),
                     scale = scale
                 )
             }
@@ -143,7 +218,6 @@ class FrameRenderer(private val context: Context) {
         top: Float,
         right: Float,
         bottom: Float,
-        frameHeight: Int,
         scale: Float = 1f
     ) {
         // 将元素按对齐方式分组
@@ -151,25 +225,43 @@ class FrameRenderer(private val context: Context) {
         val centerElements = elements.filter { getAlignment(it) == ElementAlignment.CENTER }
         val endElements = elements.filter { getAlignment(it) == ElementAlignment.END }
 
+        // 获取所有行号以计算行数
+        val allLines = elements.map { getLine(it) }.filter { it >= 0 }.distinct().sorted()
+        val lineCount = allLines.size
+
+        val height = bottom - top
+
         /**
-         * 绘制元素组
+         * 计算指定行号的垂直中心位置
          */
-        fun drawGroup(groupElements: List<FrameElement>, initialX: Float, leftToRight: Boolean) {
-            val lines = groupElements.map { getLine(it) }.filter { it >= 0 }.distinct()
-            val hasMultipleLines = lines.size > 1
-            
+        fun getLineCenterY(line: Int): Float {
+            return when {
+                line == -1 -> top + height / 2f
+                lineCount <= 1 -> top + height / 2f
+                lineCount == 2 -> when (line) {
+                    0 -> top + height * 0.35f
+                    1 -> top + height * 0.65f
+                    else -> top + height / 2f
+                }
+                lineCount >= 3 -> when (line) {
+                    0 -> top + height * 0.22f
+                    1 -> top + height * 0.50f
+                    2 -> top + height * 0.78f
+                    else -> top + height / 2f
+                }
+                else -> top + height / 2f
+            }
+        }
+
+        /**
+         * 绘制左对齐或右对齐的元素组
+         */
+        fun drawAlignedGroup(groupElements: List<FrameElement>, initialX: Float, leftToRight: Boolean) {
             val currentXPerLine = mutableMapOf<Int, Float>()
             
             for (element in if (leftToRight) groupElements else groupElements.reversed()) {
                 val line = getLine(element)
-                
-                val centerY = when {
-                    line == -1 -> top + frameHeight / 2f
-                    !hasMultipleLines -> top + frameHeight / 2f
-                    line == 0 -> top + frameHeight * 0.35f
-                    line == 1 -> top + frameHeight * 0.65f
-                    else -> top + frameHeight / 2f
-                }
+                val centerY = getLineCenterY(line)
                 
                 val x = currentXPerLine.getOrDefault(line, initialX)
                 val width = drawElement(canvas, element, metadata, showAppBranding, x, centerY, leftToRight, scale)
@@ -177,25 +269,55 @@ class FrameRenderer(private val context: Context) {
                 val nextX = if (leftToRight) x + width else x - width
                 
                 if (line == -1) {
-                    // 全局居中元素，推进所有行的 X 坐标
+                    // 全局元素，推进所有行的 X 坐标
                     currentXPerLine[-1] = nextX
                     currentXPerLine[0] = nextX
                     currentXPerLine[1] = nextX
+                    currentXPerLine[2] = nextX
                 } else {
                     currentXPerLine[line] = nextX
                 }
             }
         }
 
+        /**
+         * 绘制居中对齐的元素组（每行独立居中）
+         */
+        fun drawCenteredGroup(groupElements: List<FrameElement>) {
+            // 按行分组
+            val elementsByLine = groupElements.groupBy { getLine(it) }
+            val availableWidth = right - left
+            val elementSpacing = dpToPx(8) * scale  // 元素间距
+            
+            for ((line, lineElements) in elementsByLine) {
+                // 计算该行的总宽度（扣除最后一个元素的间距）
+                val lineWidth = lineElements.sumOf { 
+                    measureElementWidth(it, metadata, showAppBranding, scale).toDouble() 
+                }.toFloat() - elementSpacing  // 减去最后一个元素多余的间距
+                
+                // 计算该行的起始 X 位置（居中）
+                val startX = left + (availableWidth - lineWidth) / 2f
+                val centerY = getLineCenterY(line)
+                
+                // 绘制该行的所有元素
+                var currentX = startX
+                for ((index, element) in lineElements.withIndex()) {
+                    val isLast = index == lineElements.size - 1
+                    val width = drawElement(canvas, element, metadata, showAppBranding, currentX, centerY, true, scale)
+                    // 最后一个元素不加间距
+                    currentX += if (isLast) (width - elementSpacing) else width
+                }
+            }
+        }
+
         // 绘制左侧元素
-        drawGroup(startElements, left, true)
+        drawAlignedGroup(startElements, left, true)
         
         // 绘制右侧元素
-        drawGroup(endElements, right, false)
+        drawAlignedGroup(endElements, right, false)
         
-        // 绘制中间元素
-        val centerWidth = measureElementsWidth(centerElements, metadata, showAppBranding, scale)
-        drawGroup(centerElements, left + (right - left - centerWidth) / 2f, true)
+        // 绘制中间元素（每行独立居中）
+        drawCenteredGroup(centerElements)
     }
     
     /**
@@ -241,6 +363,7 @@ class FrameRenderer(private val context: Context) {
                 xPerLine[-1] = max
                 xPerLine[0] = max
                 xPerLine[1] = max
+                xPerLine[2] = max
             } else {
                 val current = xPerLine.getOrDefault(line, 0f)
                 xPerLine[line] = current + width
@@ -266,7 +389,7 @@ class FrameRenderer(private val context: Context) {
                 textPaint.measureText(text) + dpToPx(8) * scale
             }
             is FrameElement.Logo -> {
-                (dpToPx(element.sizeDp) + dpToPx(8)) * scale
+                (dpToPx(element.sizeDp) + dpToPx(8)) * scale + dpToPx(element.marginDp) * scale * 2
             }
             is FrameElement.Divider -> {
                 if (element.orientation == DividerOrientation.VERTICAL) {

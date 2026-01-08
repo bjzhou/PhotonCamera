@@ -3,8 +3,9 @@
     "name": "复古胶片",
     "version": 1,
     "layout": {
-        "position": "BOTTOM",
+        "position": "BORDER",
         "height": 64,
+        "borderWidth": 16,
         "backgroundColor": "#2C2416",
         "padding": 16
     },

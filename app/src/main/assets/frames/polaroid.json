@@ -3,8 +3,9 @@
     "name": "拍立得",
     "version": 1,
     "layout": {
-        "position": "BOTTOM",
+        "position": "BORDER",
         "height": 120,
+        "borderWidth": 24,
         "backgroundColor": "#FFFEF8",
         "padding": 24
     },

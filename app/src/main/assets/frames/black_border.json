@@ -1,0 +1,66 @@
+{
+    "id": "black_border",
+    "name": "品质黑框",
+    "version": 1,
+    "layout": {
+        "position": "BORDER",
+        "height": 200,
+        "backgroundColor": "#1E1E1E",
+        "padding": 60,
+        "borderWidth": 60
+    },
+    "elements": [
+        {
+            "type": "logo",
+            "logoType": "BRAND",
+            "alignment": "CENTER",
+            "size": 72,
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "DEVICE_MODEL",
+            "alignment": "CENTER",
+            "fontSize": 24,
+            "color": "#C6AE7A",
+            "fontWeight": "BOLD",
+            "line": 1
+        },
+        {
+            "type": "text",
+            "textType": "FOCAL_LENGTH_35MM",
+            "alignment": "CENTER",
+            "fontSize": 16,
+            "color": "#C6AE7A",
+            "fontWeight": "NORMAL",
+            "line": 2
+        },
+        {
+            "type": "text",
+            "textType": "APERTURE",
+            "alignment": "CENTER",
+            "fontSize": 16,
+            "color": "#C6AE7A",
+            "fontWeight": "NORMAL",
+            "line": 2
+        },
+        {
+            "type": "text",
+            "textType": "SHUTTER_SPEED",
+            "alignment": "CENTER",
+            "fontSize": 16,
+            "color": "#C6AE7A",
+            "fontWeight": "NORMAL",
+            "line": 2
+        },
+        {
+            "type": "text",
+            "textType": "ISO",
+            "alignment": "CENTER",
+            "fontSize": 16,
+            "color": "#C6AE7A",
+            "fontWeight": "NORMAL",
+            "line": 2
+        }
+    ]
+}

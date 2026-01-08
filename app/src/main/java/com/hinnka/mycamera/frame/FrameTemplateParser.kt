@@ -107,7 +107,8 @@ object FrameTemplateParser {
             position = FramePosition.valueOf(obj.optString("position", "BOTTOM")),
             heightDp = obj.optInt("height", 80),
             backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF")),
-            paddingDp = obj.optInt("padding", 16)
+            paddingDp = obj.optInt("padding", 16),
+            borderWidthDp = obj.optInt("borderWidth", 0)
         )
     }
     
