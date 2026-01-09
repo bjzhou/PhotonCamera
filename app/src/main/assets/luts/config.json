@@ -6,7 +6,9 @@
         "en": "Standard",
         "zh": "标准"
       },
-      "path": "standard.plut"
+      "path": "standard.plut",
+      "isDefault": true,
+      "isVip": false
     },
     {
       "id": "leica",
@@ -14,7 +16,8 @@
         "en": "Leica",
         "zh": "徕卡影调"
       },
-      "path": "leica.plut"
+      "path": "leica.plut",
+      "isVip": false
     },
     {
       "id": "monochrome",
@@ -22,7 +25,8 @@
         "en": "Monochrome",
         "zh": "徕卡黑白"
       },
-      "path": "monochrome.plut"
+      "path": "monochrome.plut",
+      "isVip": false
     },
     {
       "id": "cc",
@@ -30,7 +34,8 @@
         "en": "CC",
         "zh": "富士CC"
       },
-      "path": "cc.plut"
+      "path": "cc.plut",
+      "isVip": true
     },
     {
       "id": "nc",
@@ -38,7 +43,8 @@
         "en": "NC",
         "zh": "富士NC"
       },
-      "path": "nc.plut"
+      "path": "nc.plut",
+      "isVip": true
     },
     {
       "id": "pentax",
@@ -46,7 +52,8 @@
         "en": "Pentax",
         "zh": "宾得鲜明"
       },
-      "path": "pentax.plut"
+      "path": "pentax.plut",
+      "isVip": true
     },
     {
       "id": "ricoh_positive",
@@ -54,7 +61,8 @@
         "en": "Positive",
         "zh": "理光正片"
       },
-      "path": "ricoh_positive.plut"
+      "path": "ricoh_positive.plut",
+      "isVip": true
     },
     {
       "id": "ricoh_negative",
@@ -62,7 +70,8 @@
         "en": "Negative",
         "zh": "理光负片"
       },
-      "path": "ricoh_negative.plut"
+      "path": "ricoh_negative.plut",
+      "isVip": true
     },
     {
       "id": "fl3",
@@ -70,7 +79,8 @@
         "en": "Sony FL3",
         "zh": "索尼FL3"
       },
-      "path": "fl3.plut"
+      "path": "fl3.plut",
+      "isVip": true
     },
     {
       "id": "vv2",
@@ -78,7 +88,8 @@
         "en": "Sony VV2",
         "zh": "索尼VV2"
       },
-      "path": "vv2.plut"
+      "path": "vv2.plut",
+      "isVip": true
     }
   ]
 }

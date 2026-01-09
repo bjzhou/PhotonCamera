@@ -103,6 +103,8 @@ object LutParser {
                 val id = lutObj.getString("id")
                 val path = lutObj.getString("path")
                 val nameObj = lutObj.getJSONObject("name")
+                val isDefault = lutObj.optBoolean("isDefault", false)
+                val isVip = lutObj.getBoolean("isVip")
                 
                 // 读取多语言名称
                 val nameMap = mutableMapOf<String, String>()
@@ -116,8 +118,8 @@ object LutParser {
                         nameMap = nameMap,
                         fileName = "$folder/$path",
                         isBuiltIn = true,
-                        isDefault = (i == 0), // 第一个作为默认
-                        isVip = id != "standard"
+                        isDefault = isDefault,
+                        isVip = isVip
                     )
                 )
             }
