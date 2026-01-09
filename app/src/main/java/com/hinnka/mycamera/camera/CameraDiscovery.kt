@@ -297,26 +297,11 @@ class CameraDiscovery(private val context: Context) {
         val focusCalibration = characteristics.get(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION)
         
         // 专用微距镜头的典型特征：
-        // (1) 最小对焦距离很大 (>= 10 diopters)
-        // (2) 通常是廉价传感器，对焦未经过精细标定 (UNCALIBRATED)
-        if (minFocusDistance >= 10f) {
-            if (focusCalibration == CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_UNCALIBRATED) {
-//                Log.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
-                return true
-            }
-            // 如果对焦距离极近，即使标定过，也认为是微距镜头（或者是具备强微距能力的长焦/广角）
-            if (minFocusDistance >= 30f) {
-//                Log.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
-                return true
-            }
+        // (1) 最小对焦距离很大
+        if (minFocusDistance >= 30f) {
+            Log.d(TAG, "isMacroLens: minFocusDistance=$minFocusDistance, focusCalibration=$focusCalibration")
+            return true
         }
-
-        // 2. 检查是否有特定的能力（有些设备可能支持微距能力）
-        val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-        if (capabilities != null && capabilities.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE).not()) {
-             // 某些特殊用途的摄像头可能不包含向后兼容能力
-        }
-        
         return false
     }
     
