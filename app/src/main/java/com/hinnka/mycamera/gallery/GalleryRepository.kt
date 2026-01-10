@@ -78,8 +78,7 @@ class GalleryRepository(private val context: Context) {
                         thumbnailUri = Uri.fromFile(PhotoManager.getThumbnailFile(context, id)),
                         previewUri = Uri.fromFile(if (previewFile.exists()) previewFile else photoFile),
                         displayName = photoFile.name,
-                        dateAdded = photoFile.lastModified() / 1000,
-                        dateTaken = photoFile.lastModified(),
+                        dateAdded = photoFile.lastModified(),
                         size = photoFile.length()
                     )
                 )

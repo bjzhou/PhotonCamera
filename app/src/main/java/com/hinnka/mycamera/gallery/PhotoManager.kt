@@ -98,20 +98,21 @@ object PhotoManager {
 
                 // 并行执行所有 IO 操作
                 coroutineScope {
-                    // 任务 1: 保存原图 + 写入 EXIF
+                    // 任务 1: 保存原图
                     val saveOriginalJob = async {
                         FileOutputStream(photoFile).use { out ->
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
                     }
 
-                    // 任务 2: 保存元数据 JSON
+                    // 任务 2: 保存元数据 JSON（独立任务，可并行）
                     launch {
                         metadataFile.writeText(metadataJson)
                     }
 
-                    // 任务 3: EXIF 必须在原图保存后写入
-                    launch {
+                    // 任务 3: EXIF 写入，必须在原图保存后进行
+                    // 这个任务完成后，photoFile 才能被其他任务读取
+                    val exifJob = async {
                         saveOriginalJob.await()
                         captureInfo?.copy(
                             imageWidth = bitmap.width,
@@ -122,19 +123,21 @@ object PhotoManager {
                     }
 
                     // 任务 4: 生成并保存预览图
+                    // 必须等待 EXIF 写入完成，避免读取到不完整的文件
                     launch {
-                        saveOriginalJob.await()
+                        exifJob.await()
                         savePreviewFileIfNeed(photoFile, previewFile)
                     }
 
                     // 任务 5: 生成并保存缩略图
+                    // 必须等待 EXIF 写入完成，避免读取到不完整的文件
                     val thumbnailJob = async {
-                        saveOriginalJob.await()
+                        exifJob.await()
                         generateThumbnail(photoFile, thumbnailFile)
                     }
 
                     // 等待所有任务完成
-                    saveOriginalJob.await()
+                    exifJob.await()
                     thumbnailJob.await()
                 }
 

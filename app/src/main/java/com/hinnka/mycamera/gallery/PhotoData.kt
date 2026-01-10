@@ -12,7 +12,6 @@ data class PhotoData(
     val previewUri: Uri,
     val displayName: String,
     val dateAdded: Long,
-    val dateTaken: Long?,
     val size: Long,
     val width: Int = 0,
     val height: Int = 0,
@@ -22,7 +21,7 @@ data class PhotoData(
      * 格式化的拍摄时间
      */
     fun getFormattedDate(): String {
-        val date = dateTaken ?: (dateAdded * 1000)
+        val date = dateAdded
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
         return sdf.format(java.util.Date(date))
     }
