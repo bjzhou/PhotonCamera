@@ -14,6 +14,7 @@ coil = "2.7.0"
 navigationCompose = "2.9.6"
 exifinterface = "1.4.2"
 billing = "8.3.0"
+fragment = "1.8.9"
 
 [libraries]
 google-billing = { group = "com.android.billingclient", name = "billing", version.ref = "billing" }
@@ -38,7 +39,7 @@ androidx-material-icons-extended = { group = "androidx.compose.material", name =
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
-
+androidx-fragment-ktx = { group = "androidx.fragment", name = "fragment-ktx", version.ref = "fragment" }
 
 
 [plugins]
