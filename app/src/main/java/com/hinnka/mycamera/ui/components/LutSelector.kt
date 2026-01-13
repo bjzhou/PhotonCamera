@@ -78,6 +78,7 @@ fun LutSelector(
                 previewBitmap = lutPreviewBitmaps[lut.id],
                 isSelected = currentLutId == lut.id,
                 isVip = lut.isVip,
+                isCustom = !lut.isBuiltIn,  // 添加自定义标识
                 onClick = { onLutSelected(lut.id) }
             )
         }
@@ -95,6 +96,7 @@ private fun LutItem(
     isVip: Boolean,
     onClick: () -> Unit,
     isNone: Boolean = false,
+    isCustom: Boolean = false,  // 添加自定义标识参数
     modifier: Modifier = Modifier
 ) {
     val backgroundColor = if (isSelected) {
@@ -197,6 +199,27 @@ private fun LutItem(
                     Text(
                         text = stringResource(R.string.billing_vip_tag),
                         color = Color.Black,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 8.sp
+                    )
+                }
+            }
+
+            // 自定义标识
+            if (isCustom) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .background(
+                            color = Color(0xFF4CAF50),  // 绿色表示自定义
+                            shape = RoundedCornerShape(bottomEnd = 4.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.custom_tag),
+                        color = Color.White,
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold,
                         lineHeight = 8.sp

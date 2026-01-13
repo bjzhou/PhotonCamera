@@ -14,8 +14,8 @@ import androidx.compose.runtime.*
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.*
 import com.hinnka.mycamera.lut.*
@@ -39,18 +39,24 @@ import kotlin.math.max
  * 管理照片列表、选择状态和各种操作
  */
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
-    
+
     companion object {
         private const val TAG = "GalleryViewModel"
     }
-    
+
     private val repository = GalleryRepository(application)
-    private val lutManager = LutManager(application)
+
+    // 内容仓库（单例，与 CameraViewModel 共享）
+    private val contentRepository = ContentRepository.getInstance(application)
     private val lutImageProcessor = LutImageProcessor()
-    private val frameManager = FrameManager(application)
     private val frameRenderer = FrameRenderer(application)
-    private val photoProcessor = PhotoProcessor(lutManager, lutImageProcessor, frameManager, frameRenderer)
-    
+    private val photoProcessor = PhotoProcessor(
+        contentRepository.lutManager,
+        lutImageProcessor,
+        contentRepository.frameManager,
+        frameRenderer
+    )
+
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased
@@ -123,10 +129,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     
     init {
         loadPhotos()
-        lutManager.initialize()
-        availableLuts = lutManager.getAvailableLuts()
-        frameManager.initialize()
-        availableFrames = frameManager.getAvailableFrames()
+        contentRepository.initialize()
+
+        // 订阅 ContentRepository 的 StateFlow，实现自动更新
+        viewModelScope.launch {
+            contentRepository.availableLuts.collect { luts ->
+                availableLuts = luts
+                Log.d(TAG, "GalleryViewModel: availableLuts updated to ${luts.size} items")
+            }
+        }
+
+        viewModelScope.launch {
+            contentRepository.availableFrames.collect { frames ->
+                availableFrames = frames
+                Log.d(TAG, "GalleryViewModel: availableFrames updated to ${frames.size} items")
+            }
+        }
     }
     
     /**
@@ -297,7 +315,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 // 加载 LUT 配置
                 editLutId?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
-                        lutManager.loadLut(id)
+                        contentRepository.lutManager.loadLut(id)
                     }
                 }
             }
@@ -317,7 +335,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         return availableLuts.map { lutInfo ->
             val lutConfig = withContext(Dispatchers.IO) {
-                lutManager.loadLut(lutInfo.id)
+                contentRepository.lutManager.loadLut(lutInfo.id)
             }
 
             if (lutConfig != null) {
@@ -525,7 +543,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editLutId?.let { id ->
             viewModelScope.launch {
                 editLutConfig = withContext(Dispatchers.IO) {
-                    lutManager.loadLut(id)
+                    contentRepository.lutManager.loadLut(id)
                 }
             }
         }
@@ -571,7 +589,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         
         viewModelScope.launch {
             editLutConfig = withContext(Dispatchers.IO) {
-                lutManager.loadLut(lutId)
+                contentRepository.lutManager.loadLut(lutId)
             }
         }
     }
@@ -847,7 +865,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     override fun onCleared() {
         super.onCleared()
         lutImageProcessor.release()
-        lutManager.clearCache()
+        contentRepository.lutManager.clearCache()
     }
 
     /**
@@ -862,5 +880,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun refreshPurchases() {
         billingManager.refresh()
+    }
+
+    /**
+     * 获取自定义导入管理器
+     */
+    fun getCustomImportManager() = contentRepository.getCustomImportManager()
+
+    /**
+     * 刷新自定义内容（在导入新的LUT或边框后调用）
+     * StateFlow 会自动通知订阅者更新
+     */
+    fun refreshCustomContent() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                // 重新初始化内容仓库
+                // StateFlow 会自动更新 availableLuts 和 availableFrames
+                contentRepository.refreshCustomContent()
+            }
+            Log.d(TAG, "Custom content refreshed via ContentRepository")
+        }
     }
 }

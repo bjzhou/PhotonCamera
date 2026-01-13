@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name">Photon Camera</string>
-    
+
     <!-- Camera Controls -->
     <string name="capture">拍摄</string>
     <string name="switch_camera">切换摄像头</string>
@@ -10,31 +10,31 @@
     <string name="histogram">直方图</string>
     <string name="grid">网格</string>
     <string name="back">返回</string>
-    
+
     <!-- Exposure Controls -->
     <string name="exposure_compensation">EV</string>
     <string name="iso">ISO</string>
     <string name="shutter_speed">快门</string>
     <string name="auto">自动</string>
-    
+
     <!-- Focus -->
     <string name="focus">对焦</string>
     <string name="tap_to_focus">点击对焦</string>
-    
+
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">画面比例</string>
     <string name="ratio_3_2">3:2</string>
     <string name="ratio_4_3">4:3</string>
     <string name="ratio_16_9">16:9</string>
     <string name="ratio_1_1">1:1</string>
-    
+
     <!-- Permissions -->
     <string name="camera_permission_required">需要相机权限</string>
     <string name="grant_permission">授予权限</string>
-    
+
     <!-- Zoom -->
     <string name="zoom">变焦</string>
-    
+
     <!-- Gallery -->
     <string name="gallery">相册</string>
     <string name="photo_detail">照片详情</string>
@@ -67,14 +67,14 @@
     <string name="photo_info_aperture">光圈</string>
     <string name="photo_info_iso">ISO</string>
     <string name="photo_info_shutter_speed">快门速度</string>
-    
+
     <!-- Frame Watermark -->
     <string name="frame">边框</string>
     <string name="none">无</string>
     <string name="show_app_branding">显示 App 品牌</string>
     <string name="export_with_frame_confirm">导出带有边框水印的照片吗？</string>
     <string name="import_photo">导入</string>
-    
+
     <!-- Settings -->
     <string name="settings_title">设置</string>
     <string name="settings_section_capture">拍摄设置</string>
@@ -93,7 +93,7 @@
     <string name="settings_volume_key_description">使用音量键进行拍摄</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
     <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
-    
+
     <!-- LUT -->
     <string name="filter_intensity">滤镜强度</string>
     <string name="lut_intensity_none">关闭</string>
@@ -114,5 +114,18 @@
     <string name="billing_price_region_notice">具体价格以所在地区为准</string>
     <string name="settings_premium_title">PhotonCamera Pro</string>
     <string name="settings_premium_description">解锁全部高级滤镜并支持我们的开发工作</string>
-</resources>
 
+    <!-- Custom Import -->
+    <string name="custom_tag">自定义</string>
+    <string name="settings_section_custom">自定义导入</string>
+    <string name="settings_custom_import">导入自定义内容</string>
+    <string name="import_lut">导入 LUT</string>
+    <string name="import_frame">导入边框</string>
+    <string name="settings_import_description">导入自定义 LUT 滤镜文件 (.cube) 或边框模板文件 (.json)</string>
+    <string name="custom_content_management">已导入内容</string>
+    <string name="lut_type">LUT 滤镜</string>
+    <string name="frame_type">边框模板</string>
+    <string name="delete_confirm_title">删除确认</string>
+    <string name="delete_custom_content_confirm">删除 "%s" 吗？</string>
+    <string name="importing">导入中...</string>
+</resources>

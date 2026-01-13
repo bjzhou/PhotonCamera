@@ -16,9 +16,9 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.Camera2Controller
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
@@ -26,7 +26,6 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
-import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
 import com.hinnka.mycamera.utils.YuvProcessor
@@ -48,18 +47,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 用户偏好设置仓库
     private val userPreferencesRepository = UserPreferencesRepository(application)
 
-    // LUT 管理器
-    private val lutManager = LutManager(application)
+    // 内容仓库（单例，与 GalleryViewModel 共享）
+    private val contentRepository = ContentRepository.getInstance(application)
     private val lutImageProcessor = LutImageProcessor()
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased
 
-    // 边框管理器
-    private val frameManager = FrameManager(application)
+    // 边框渲染器
     private val frameRenderer = FrameRenderer(application)
-    private val photoProcessor = PhotoProcessor(lutManager, lutImageProcessor, frameManager, frameRenderer)
+    private val photoProcessor = PhotoProcessor(
+        contentRepository.lutManager,
+        lutImageProcessor,
+        contentRepository.frameManager,
+        frameRenderer
+    )
 
     // 快门音效播放器
     private val shutterSoundPlayer = ShutterSoundPlayer(application)
@@ -141,13 +144,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // 初始化 LUT 管理器
-        lutManager.initialize()
-        availableLutList = lutManager.getAvailableLuts()
+        // 初始化内容仓库
+        contentRepository.initialize()
 
-        // 初始化边框管理器
-        frameManager.initialize()
-        availableFrameList = frameManager.getAvailableFrames()
+        // 订阅 ContentRepository 的 StateFlow，实现自动更新
+        viewModelScope.launch {
+            contentRepository.availableLuts.collect { luts ->
+                availableLutList = luts
+                Log.d(TAG, "CameraViewModel: availableLutList updated to ${luts.size} items")
+            }
+        }
+
+        viewModelScope.launch {
+            contentRepository.availableFrames.collect { frames ->
+                availableFrameList = frames
+                Log.d(TAG, "CameraViewModel: availableFrameList updated to ${frames.size} items")
+            }
+        }
 
         // 加载用户偏好设置
         viewModelScope.launch {
@@ -383,6 +396,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         billingManager.purchase(activity)
     }
 
+    // ==================== 自定义导入相关方法 ====================
+
+    /**
+     * 获取自定义导入管理器
+     */
+    fun getCustomImportManager() = contentRepository.getCustomImportManager()
+
+    /**
+     * 刷新自定义内容（在导入新的LUT或边框后调用）
+     * StateFlow 会自动通知订阅者更新
+     */
+    fun refreshCustomContent() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                // 重新初始化内容仓库
+                // StateFlow 会自动更新 availableLutList 和 availableFrameList
+                contentRepository.refreshCustomContent()
+            }
+            Log.d(TAG, "Custom content refreshed via ContentRepository")
+        }
+    }
+
     // ==================== LUT 相关方法 ====================
 
     /**
@@ -395,7 +430,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             viewModelScope.launch {
                 currentLutConfig = withContext(Dispatchers.IO) {
-                    lutManager.loadLut(lutId)
+                    contentRepository.lutManager.loadLut(lutId)
                 }
             }
         }
@@ -421,14 +456,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 获取 LUT 信息
      */
     fun getLutInfo(id: String): LutInfo? {
-        return lutManager.getLutInfo(id)
+        return contentRepository.lutManager.getLutInfo(id)
     }
 
     /**
      * 预加载 LUT
      */
     fun preloadLut(id: String) {
-        lutManager.preloadLut(id)
+        contentRepository.lutManager.preloadLut(id)
     }
 
     /**
@@ -455,7 +490,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                     availableLutList.forEach { lutInfo ->
                         val lutConfig = withContext(Dispatchers.IO) {
-                            lutManager.loadLut(lutInfo.id)
+                            contentRepository.lutManager.loadLut(lutInfo.id)
                         }
 
                         if (lutConfig != null) {
@@ -765,9 +800,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     override fun onCleared() {
         super.onCleared()
         cameraController.release()
-        lutManager.clearCache()
+        contentRepository.lutManager.clearCache()
         lutImageProcessor.release()
-        frameManager.clearCache()
+        contentRepository.frameManager.clearCache()
         shutterSoundPlayer.release()
 
         // 清理 LUT 预览图

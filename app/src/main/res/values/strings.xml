@@ -114,4 +114,18 @@
     <string name="billing_price_region_notice">Price varies by region</string>
     <string name="settings_premium_title">PhotonCamera Pro</string>
     <string name="settings_premium_description">Unlock all premium filters and support us.</string>
+
+    <!-- Custom Import -->
+    <string name="custom_tag">CUSTOM</string>
+    <string name="settings_section_custom">Custom Import</string>
+    <string name="settings_custom_import">Import Custom Content</string>
+    <string name="import_lut">Import LUT</string>
+    <string name="import_frame">Import Frame</string>
+    <string name="settings_import_description">Import custom LUT filters (.cube) or frame templates (.json)</string>
+    <string name="custom_content_management">Imported Content</string>
+    <string name="lut_type">LUT Filter</string>
+    <string name="frame_type">Frame Template</string>
+    <string name="delete_confirm_title">Delete Confirmation</string>
+    <string name="delete_custom_content_confirm">Delete "%s"?</string>
+    <string name="importing">Importing...</string>
 </resources>

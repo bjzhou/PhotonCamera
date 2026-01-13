@@ -140,6 +140,16 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // 自定义导入设置
+            SettingsSection(title = stringResource(R.string.settings_section_custom)) {
+                CustomImportSection(
+                    customImportManager = viewModel.getCustomImportManager(),
+                    onImportSuccess = { viewModel.refreshCustomContent() }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             // 边框水印设置
             SettingsSection(title = stringResource(R.string.settings_section_frame)) {
                 FrameWatermarkSetting(

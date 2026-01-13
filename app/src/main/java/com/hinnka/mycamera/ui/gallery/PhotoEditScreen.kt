@@ -283,6 +283,7 @@ fun PhotoEditScreen(
                                 previewBitmap = lutPreviews.getOrNull(index),
                                 isSelected = editLutId == lut.id,
                                 isVip = lut.isVip,
+                                isCustom = !lut.isBuiltIn,  // 添加自定义标识
                                 onClick = { viewModel.setEditLut(lut.id) }
                             )
                         }
@@ -338,15 +339,17 @@ fun PhotoEditScreen(
                             LutOption(
                                 name = stringResource(R.string.none),
                                 isSelected = editFrameId == null,
+                                isCustom = false,  // 无边框不是自定义
                                 onClick = { viewModel.setEditFrame(null) }
                             )
                         }
-                        
+
                         // 边框选项
                         items(availableFrames) { frame ->
                             LutOption(
                                 name = frame.name,
                                 isSelected = editFrameId == frame.id,
+                                isCustom = !frame.isBuiltIn,  // 添加自定义标识
                                 onClick = { viewModel.setEditFrame(frame.id) }
                             )
                         }
@@ -423,6 +426,7 @@ private fun LutOption(
     previewBitmap: Bitmap? = null,
     isSelected: Boolean,
     isVip: Boolean = false,
+    isCustom: Boolean = false,  // 添加自定义标识参数
     onClick: () -> Unit
 ) {
     Column(
@@ -473,6 +477,27 @@ private fun LutOption(
                     Text(
                         text = stringResource(R.string.billing_vip_tag),
                         color = Color.Black,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 8.sp
+                    )
+                }
+            }
+
+            // 自定义标识
+            if (isCustom) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .background(
+                            color = Color(0xFF4CAF50),  // 绿色表示自定义
+                            shape = RoundedCornerShape(bottomEnd = 4.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.custom_tag),
+                        color = Color.White,
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold,
                         lineHeight = 8.sp
