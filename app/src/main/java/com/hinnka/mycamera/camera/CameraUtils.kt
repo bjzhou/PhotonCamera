@@ -5,6 +5,7 @@ import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.util.Log
 import android.util.Size
 import kotlin.math.abs
 
@@ -23,30 +24,35 @@ object CameraUtils {
         cameraId: String,
         aspectRatio: AspectRatio
     ): Size {
-        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?: return Size(1920, 1080)
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?: return Size(1440, 1080)
 
-        // 首先获取最大的拍照尺寸，以此作为传感器的原生比例
-        val sensorRatio = aspectRatio.getValue(true)
+            // 首先获取最大的拍照尺寸，以此作为传感器的原生比例
+            val sensorRatio = aspectRatio.getValue(true)
 
-        val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList()
+            val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList()
 
-        // 寻找比例最匹配传感器原生比例且高度不超过 1080 的预览尺寸
-        val matchingSizes = previewSizes.filter {
-            val ratio = it.width.toFloat() / it.height
-            kotlin.math.abs(ratio - sensorRatio) < 0.01
+            // 寻找比例最匹配传感器原生比例且高度不超过 1080 的预览尺寸
+            val matchingSizes = previewSizes.filter {
+                val ratio = it.width.toFloat() / it.height
+                abs(ratio - sensorRatio) < 0.01
+            }
+
+            // 优先选择匹配比例中，高度最接近 1080 的尺寸
+            val bestMatching = matchingSizes.filter { it.height <= 1080 }.maxByOrNull { it.width * it.height }
+                ?: matchingSizes.minByOrNull { it.width * it.height }
+
+            if (bestMatching != null) return bestMatching
+
+            // 如果没有比例完全匹配的，则选择高度 >= 1080 中最小的一个（之前的逻辑）
+            return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1440, 1080)
+        } catch (e: Exception) {
+            Log.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
+            return Size(1440, 1080)
         }
-
-        // 优先选择匹配比例中，高度最接近 1080 的尺寸
-        val bestMatching = matchingSizes.filter { it.height <= 1080 }.maxByOrNull { it.width * it.height }
-            ?: matchingSizes.minByOrNull { it.width * it.height }
-
-        if (bestMatching != null) return bestMatching
-
-        // 如果没有比例完全匹配的，则选择高度 >= 1080 中最小的一个（之前的逻辑）
-        return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1920, 1080)
     }
 
     /**
