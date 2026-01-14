@@ -482,16 +482,28 @@ class Camera2Controller(private val context: Context) {
                 // 更新状态
                 _state.value = currentState.copy(iso = newIso, shutterSpeed = newShutter)
 
+                // 关键修复：检查相机和会话是否仍然有效
+                val device = cameraDevice
+                val session = captureSession
+                val builder = previewRequestBuilder
+
+                if (device == null || session == null || builder == null) {
+                    Log.v(TAG, "calculateAutoMetering: camera not ready, skipping update")
+                    return
+                }
+
                 try {
-                    previewRequestBuilder?.let { builder ->
-                        applyExposureSettings(builder, _state.value, false) // 封装好的设置函数
-                        captureSession?.setRepeatingRequest(
-                            builder.build(),
-                            previewCallback,
-                            cameraHandler
-                        )
-                    }
+                    applyExposureSettings(builder, _state.value, false)
+                    session.setRepeatingRequest(
+                        builder.build(),
+                        previewCallback,
+                        cameraHandler
+                    )
                     meteringSkipFrames = 5
+                } catch (e: CameraAccessException) {
+                    Log.e(TAG, "Failed to update exposure: ${e.message}")
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Failed to update exposure - camera closed: ${e.message}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to update exposure: ${e.message}")
                 }
@@ -511,14 +523,17 @@ class Camera2Controller(private val context: Context) {
             // 创建预览请求
             previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
-                
+                // 关键修复: 在创建 builder 时就添加 previewImageReader 的 surface
+                // 而不是在 onSessionConfigured 中动态添加
+                previewImageReader?.surface?.let { addTarget(it) }
+
                 // 设置连续自动对焦
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 applyBaseCameraSettings(this, isCapture = false)
             }
-            
+
             val surfaces = mutableListOf(surface, reader.surface)
             previewImageReader?.surface?.let { surfaces.add(it) }
 
@@ -547,21 +562,23 @@ class Camera2Controller(private val context: Context) {
     
     private fun onSessionConfigured(session: CameraCaptureSession) {
         captureSession = session
-        
+
         try {
             // 开始预览
+            // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
             previewRequestBuilder?.let { builder ->
-                previewImageReader?.surface?.let { builder.addTarget(it) }
                 session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             }
-            
+
             _state.value = _state.value.copy(isPreviewActive = true)
             Log.d(TAG, "Preview started")
-            
+
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Failed to start preview", e)
         } catch (e: IllegalStateException) {
             Log.e(TAG, "Failed to start preview - illegal state", e)
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "Failed to start preview - unconfigured surface", e)
         }
     }
 
@@ -1221,12 +1238,24 @@ class Camera2Controller(private val context: Context) {
      * 更新预览
      */
     private fun updatePreview() {
+        // 关键修复：检查相机和会话是否仍然有效
+        // 避免在相机关闭后的回调中调用 setRepeatingRequest
+        val device = cameraDevice
+        val session = captureSession
+        val builder = previewRequestBuilder
+
+        if (device == null || session == null || builder == null) {
+            Log.v(TAG, "updatePreview: camera not ready (device=$device, session=$session, builder=$builder)")
+            return
+        }
+
         try {
-            previewRequestBuilder?.let { builder ->
-                captureSession?.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
-            }
+            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Failed to update preview", e)
+        } catch (e: IllegalStateException) {
+            // 相机已关闭或处于错误状态
+            Log.w(TAG, "Failed to update preview - camera closed or in error state", e)
         }
     }
     
@@ -1542,20 +1571,32 @@ class Camera2Controller(private val context: Context) {
      * 重置预闪触发器，确保后续预览正常工作
      */
     private fun resetPreviewAfterCapture() {
+        // 关键修复：检查相机和会话是否仍然有效
+        val device = cameraDevice
+        val session = captureSession
+        val builder = previewRequestBuilder
+
+        if (device == null || session == null || builder == null) {
+            Log.v(TAG, "resetPreviewAfterCapture: camera not ready, skipping")
+            return
+        }
+
         try {
-            previewRequestBuilder?.let { builder ->
-                // 关键修复：使用 CANCEL 而不是 IDLE 来完全清除预闪状态
-                // CANCEL 会立即终止预闪序列，而 IDLE 只是不触发新的预闪
-                builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL)
+            // 关键修复：使用 CANCEL 而不是 IDLE 来完全清除预闪状态
+            // CANCEL 会立即终止预闪序列，而 IDLE 只是不触发新的预闪
+            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL)
 
-                // 重新应用所有设置（确保使用正确的预览参数）
-                applyBaseCameraSettings(builder, isCapture = false)
+            // 重新应用所有设置（确保使用正确的预览参数）
+            applyBaseCameraSettings(builder, isCapture = false)
 
-                // 发送重置后的预览请求
-                captureSession?.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            // 发送重置后的预览请求
+            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
 
-                Log.d(TAG, "Preview reset after capture")
-            }
+            Log.d(TAG, "Preview reset after capture")
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Failed to reset preview after capture", e)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Failed to reset preview - camera closed", e)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to reset preview after capture", e)
         }

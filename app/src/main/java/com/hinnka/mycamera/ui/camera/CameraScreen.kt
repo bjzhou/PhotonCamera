@@ -100,7 +100,16 @@ fun CameraScreen(
         }
     }
 
-    val previewSize by remember(state) { mutableStateOf(CameraUtils.getFixedPreviewSize(context, state.currentCameraId, state.aspectRatio)) }
+    val previewSize by remember(state.currentCameraId, state.aspectRatio) {
+        val cameraId = state.currentCameraId
+        val size = if (cameraId.isNotEmpty()) {
+            CameraUtils.getFixedPreviewSize(context, cameraId, state.aspectRatio)
+        } else {
+            // 相机未初始化时使用默认尺寸（4:3 = 1440x1080）
+            android.util.Size(1440, 1080)
+        }
+        mutableStateOf(size)
+    }
 
     if (viewModel.showPaymentDialog) {
         val activity = context.findActivity()

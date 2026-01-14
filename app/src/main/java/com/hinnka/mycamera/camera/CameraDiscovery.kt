@@ -111,11 +111,14 @@ class CameraDiscovery(private val context: Context) {
     private fun getAllCameraIds(): List<String> {
         // 使用缓存
         cachedCameraIds?.let { return it }
-        
+
         val systemCameraIds = try {
             cameraManager.cameraIdList.toList()
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to get camera ID list", e)
+            Log.e(TAG, "Failed to get camera ID list (CameraAccessException)", e)
+            emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get camera ID list (${e.javaClass.simpleName}): ${e.message}", e)
             emptyList()
         }
         
