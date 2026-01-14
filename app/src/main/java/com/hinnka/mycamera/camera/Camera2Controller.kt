@@ -94,7 +94,10 @@ class Camera2Controller(private val context: Context) {
             val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val actualExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
-            val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
+            // 判断是否为自动曝光模式（包括所有 AE_MODE_ON 的变体）
+            val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON
+                                 || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
+                                 || aeMode == CaptureResult.CONTROL_AE_MODE_ON_ALWAYS_FLASH
             val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
             val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
             val aperture = result.get(CaptureResult.LENS_APERTURE)
@@ -595,45 +598,60 @@ class Camera2Controller(private val context: Context) {
     
     /**
      * 将当前状态中的相机参数应用到 CaptureRequest.Builder
-     * 
+     *
      * 这是确保预览与拍摄参数一致性的核心方法
-     * 
+     *
      * @param builder 需要配置的 Builder
      * @param isCapture 是否为拍摄请求（预览时某些参数有限制）
      */
     private fun applyBaseCameraSettings(builder: CaptureRequest.Builder, isCapture: Boolean = false) {
         val currentState = _state.value
-        
+
         // 1. 曝光设置
         applyExposureSettings(builder, currentState, isCapture)
-        
+
         // 2. 白平衡设置
         applyWhiteBalanceSettings(builder, currentState)
-        
-        // 3. 闪光灯设置
-        applyFlashSettings(builder, currentState)
-        
+
+        // 3. 闪光灯设置（传递 isCapture 参数）
+        applyFlashSettings(builder, currentState, isCapture)
+
         // 4. 变焦设置
         applyZoomSettings(builder, currentState)
-        
+
         // 5. 色调映射（Flat Profile）
         setupFlatProfileRequest(builder)
     }
     
     /**
      * 应用曝光设置
+     *
+     * 统一管理 CONTROL_AE_MODE，确保与闪光灯模式正确配合
      */
     private fun applyExposureSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
+        // 根据曝光模式和闪光灯模式联合决定 AE_MODE
+        val aeMode = when {
+            // 1. 全自动曝光：根据闪光灯模式选择对应的 AE_MODE
+            state.isIsoAuto && state.isShutterSpeedAuto -> {
+                when (state.flashMode) {
+                    CameraMetadata.FLASH_MODE_SINGLE -> CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                    CameraMetadata.FLASH_MODE_TORCH -> CaptureRequest.CONTROL_AE_MODE_ON
+                    else -> CaptureRequest.CONTROL_AE_MODE_ON
+                }
+            }
+            // 2. 手动曝光或半自动曝光：使用 OFF 模式，手动控制所有参数
+            else -> CaptureRequest.CONTROL_AE_MODE_OFF
+        }
+
+        builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
+
+        // 如果是全自动曝光，设置曝光补偿
         if (state.isIsoAuto && state.isShutterSpeedAuto) {
-            // 全自动曝光 (Both Auto)
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, state.exposureCompensation)
         } else {
-            // 手动曝光 / 半自动曝光 (Software Metering)
-            // 只要有一项是手动，就必须将 AE_MODE 设为 OFF
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            // 手动曝光 / 半自动曝光：手动设置 ISO 和快门
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
-            
+
             // 预览时限制曝光时间，防止画面卡死；拍摄时使用完整的用户设置
             val exposureTime = if (isCapture) {
                 state.shutterSpeed
@@ -641,7 +659,7 @@ class Camera2Controller(private val context: Context) {
                 state.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
             }
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
-            
+
             // 拍摄时设置低帧率范围以支持长曝光
             if (isCapture) {
                 try {
@@ -676,25 +694,56 @@ class Camera2Controller(private val context: Context) {
     
     /**
      * 应用闪光灯设置
+     *
+     * 注意：只设置 FLASH_MODE，AE_MODE 由 applyExposureSettings 统一管理
+     *
+     * @param isCapture 是否为拍摄请求（预览时某些闪光模式需要特殊处理）
      */
-    private fun applyFlashSettings(builder: CaptureRequest.Builder, state: CameraState) {
-        when (state.flashMode) {
-            CameraMetadata.FLASH_MODE_OFF -> {
-                // 注意：如果是自动曝光模式，这里不需要重新设置 AE_MODE
-                // 因为 applyExposureSettings 已经处理了
-                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
-            }
-            CameraMetadata.FLASH_MODE_SINGLE -> {
-                if (state.isAutoExposure) {
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+    private fun applyFlashSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
+        // 手动曝光模式下的特殊处理
+        if (!state.isIsoAuto || !state.isShutterSpeedAuto) {
+            // 手动曝光模式（AE_MODE = OFF）
+            when (state.flashMode) {
+                CameraMetadata.FLASH_MODE_SINGLE -> {
+                    // 关键修复：预览时不使用闪光灯，只在拍摄时才触发
+                    // 避免在预览流中误触发闪光灯
+                    if (isCapture) {
+                        builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                    } else {
+                        builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                    }
                 }
-                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                CameraMetadata.FLASH_MODE_TORCH -> {
+                    // 手电筒模式在预览和拍摄时都应该保持常亮
+                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
+
+                    // 关键修复：拍摄时明确禁用 AE 的闪光灯控制，防止闪烁
+                    // TEMPLATE_STILL_CAPTURE 可能会尝试控制闪光灯，需要明确覆盖
+                    if (isCapture) {
+                        // 确保 AE 不会尝试触发闪光灯
+                        builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                    }
+                }
+                else -> {
+                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                }
             }
-            CameraMetadata.FLASH_MODE_TORCH -> {
-                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
-            }
-            else -> {
-                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+        } else {
+            // 自动曝光模式
+            when (state.flashMode) {
+                CameraMetadata.FLASH_MODE_TORCH -> {
+                    // 手电筒模式：预览和拍摄时都保持常亮
+                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
+
+                    // 自动曝光 + 手电筒模式拍摄时也需要防止闪烁
+                    if (isCapture) {
+                        builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                    }
+                }
+                else -> {
+                    // 其他模式（单次闪光、关闭）
+                    builder.set(CaptureRequest.FLASH_MODE, state.flashMode)
+                }
             }
         }
     }
@@ -847,10 +896,10 @@ class Camera2Controller(private val context: Context) {
         val range = _state.value.getExposureCompensationRange()
         val clampedValue = value.coerceIn(range.lower, range.upper)
         _state.value = _state.value.copy(exposureCompensation = clampedValue)
-        
+
         previewRequestBuilder?.apply {
-            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clampedValue)
+            // 使用统一的曝光设置方法，确保与闪光灯模式正确配合
+            applyExposureSettings(this, _state.value, false)
             updatePreview()
         }
     }
@@ -898,32 +947,12 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(flashMode = value)
 
         previewRequestBuilder?.apply {
-            when (value) {
-                CameraMetadata.FLASH_MODE_OFF -> {
-                    if (state.value.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    }
-                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
-                }
-                CameraMetadata.FLASH_MODE_SINGLE -> {
-                    if (state.value.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
-                    }
-                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
-                }
-                CameraMetadata.FLASH_MODE_TORCH -> {
-                    if (state.value.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    }
-                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
-                }
-                else -> {
-                    if (state.value.isAutoExposure) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    }
-                    set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
-                }
-            }
+            // 关键修复：切换闪光灯模式时重置预闪触发器
+            // 避免单次闪光的预闪状态影响手电筒模式
+            set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL)
+
+            // 重新应用完整的相机设置，确保 AE_MODE 和 FLASH_MODE 正确配合
+            applyBaseCameraSettings(this, isCapture = false)
             updatePreview()
         }
     }
@@ -1363,36 +1392,116 @@ class Camera2Controller(private val context: Context) {
     fun capture() {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
-        
+
         // 播放快门音效
         onPlayShutterSound?.invoke()
-        
+
         _state.value = _state.value.copy(isCapturing = true)
-        
+
+        try {
+            // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
+            // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
+            val currentState = _state.value
+            val needsPrecapture = currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE
+                                  && currentState.isIsoAuto
+                                  && currentState.isShutterSpeedAuto
+
+            if (needsPrecapture) {
+                // 自动曝光 + 单次闪光：需要先触发预闪流程
+                triggerPrecaptureAndCapture(device, reader)
+            } else {
+                // 其他情况（手动曝光、手电筒模式、不使用闪光灯）：直接拍照
+                performCapture(device, reader)
+            }
+
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Failed to capture", e)
+            _state.value = _state.value.copy(isCapturing = false)
+        }
+    }
+
+    /**
+     * 触发闪光灯预闪流程，然后拍照
+     */
+    private fun triggerPrecaptureAndCapture(device: CameraDevice, reader: ImageReader) {
+        try {
+            // 1. 触发预闪
+            previewRequestBuilder?.let { builder ->
+                builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+
+                captureSession?.capture(builder.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                        Log.d(TAG, "Precapture AE state: $aeState")
+
+                        // 等待 AE 收敛完成
+                        // AE_STATE_CONVERGED (2) 或 AE_STATE_FLASH_REQUIRED (4) 表示可以拍照了
+                        if (aeState == null ||
+                            aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+                            aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED ||
+                            aeState == CaptureResult.CONTROL_AE_STATE_LOCKED) {
+
+                            // AE 已收敛，进行拍照
+                            // 注意：预闪触发器的重置在 performCapture 完成后统一处理
+                            performCapture(device, reader)
+                        } else {
+                            // AE 未收敛，延迟后再拍照（最多等待 200ms）
+                            cameraHandler?.postDelayed({
+                                performCapture(device, reader)
+                            }, 200)
+                        }
+                    }
+
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        Log.e(TAG, "Precapture failed: ${failure.reason}")
+                        // 即使预闪失败，也尝试拍照
+                        performCapture(device, reader)
+                    }
+                }, cameraHandler)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to trigger precapture", e)
+            // 出错时直接拍照
+            performCapture(device, reader)
+        }
+    }
+
+    /**
+     * 执行实际的拍照操作
+     */
+    private fun performCapture(device: CameraDevice, reader: ImageReader) {
         try {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
-                
+
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
                 applyBaseCameraSettings(this, isCapture = true)
-                
+
                 // 从预览请求复制对焦相关设置
                 previewRequestBuilder?.let { preview ->
-                    preview.get(CaptureRequest.CONTROL_AF_MODE)?.let { 
+                    preview.get(CaptureRequest.CONTROL_AF_MODE)?.let {
                         set(CaptureRequest.CONTROL_AF_MODE, it)
                     }
-                    preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let { 
+                    preview.get(CaptureRequest.CONTROL_AF_REGIONS)?.let {
                         set(CaptureRequest.CONTROL_AF_REGIONS, it)
                     }
-                    preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let { 
+                    preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let {
                         set(CaptureRequest.CONTROL_AE_REGIONS, it)
                     }
                 }
-                
+
                 Log.d(TAG, "Capture with ISO: ${_state.value.iso}, shutterSpeed: ${_state.value.shutterSpeed}, isAutoExposure: ${_state.value.isAutoExposure}")
             }
-            
+
             captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession,
@@ -1402,8 +1511,12 @@ class Camera2Controller(private val context: Context) {
                     // 保存拍摄结果用于提取 EXIF
                     lastCaptureResult = result
                     Log.d(TAG, "Capture completed")
+
+                    // 关键修复：拍照完成后重置预览流的预闪触发器
+                    // 这样可以避免预闪状态影响后续的预览（例如手电筒模式变暗）
+                    resetPreviewAfterCapture()
                 }
-                
+
                 override fun onCaptureFailed(
                     session: CameraCaptureSession,
                     request: CaptureRequest,
@@ -1411,38 +1524,40 @@ class Camera2Controller(private val context: Context) {
                 ) {
                     Log.e(TAG, "Capture failed: ${failure.reason}")
                     _state.value = _state.value.copy(isCapturing = false)
+
+                    // 即使拍照失败，也要重置预览
+                    resetPreviewAfterCapture()
                 }
             }, cameraHandler)
-            
+
         } catch (e: CameraAccessException) {
-            Log.e(TAG, "Failed to capture", e)
+            Log.e(TAG, "Failed to perform capture", e)
             _state.value = _state.value.copy(isCapturing = false)
         }
     }
-    
+
     /**
-     * 获取 JPEG 方向
+     * 拍照完成后重置预览流
+     *
+     * 重置预闪触发器，确保后续预览正常工作
      */
-    private fun getJpegOrientation(): Int {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return 0
-        
-        return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-            val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
-            
-            // 根据设备方向和传感器方向计算 JPEG 方向
-            val surfaceRotation = OrientationObserver.rotationDegrees.toInt()
-            val jpegOrientation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-                (sensorOrientation - surfaceRotation + 360) % 360
-            } else {
-                (sensorOrientation + surfaceRotation) % 360
+    private fun resetPreviewAfterCapture() {
+        try {
+            previewRequestBuilder?.let { builder ->
+                // 关键修复：使用 CANCEL 而不是 IDLE 来完全清除预闪状态
+                // CANCEL 会立即终止预闪序列，而 IDLE 只是不触发新的预闪
+                builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL)
+
+                // 重新应用所有设置（确保使用正确的预览参数）
+                applyBaseCameraSettings(builder, isCapture = false)
+
+                // 发送重置后的预览请求
+                captureSession?.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+
+                Log.d(TAG, "Preview reset after capture")
             }
-            
-            jpegOrientation
         } catch (e: Exception) {
-            0
+            Log.e(TAG, "Failed to reset preview after capture", e)
         }
     }
     
