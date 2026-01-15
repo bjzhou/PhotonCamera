@@ -436,11 +436,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 请求删除照片
      *
      * 这个方法会：
-     * 1. 在 Android 11+ 上检查是否有导出的照片需要删除
-     * 2. 如果有，设置 deletePendingIntent 和 pendingDeletePhoto，UI 层需要监听这些状态并启动删除确认对话框
-     * 3. 如果没有导出的照片，或者在 Android 10 及以下，直接删除照片
+     * 1. 如果 deleteExported == false，直接删除应用内部照片，不触发系统删除对话框
+     * 2. 如果 deleteExported == true 且在 Android 11+ 上，检查是否有导出的照片需要删除
+     * 3. 如果有导出的照片，设置 deletePendingIntent 和 pendingDeletePhoto，UI 层需要监听这些状态并启动删除确认对话框
+     * 4. 如果没有导出的照片，或者在 Android 10 及以下，直接删除照片
      */
-    fun requestDeletePhoto(photo: PhotoData) {
+    fun requestDeletePhoto(photo: PhotoData, deleteExported: Boolean = true) {
+        if (!deleteExported) {
+            // 不删除系统相册照片，直接删除应用内部照片
+            deletePhotoOnlyInternal(photo)
+            return
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+: 检查是否有导出的照片
             val pendingIntent = getDeleteRequest(photo)
@@ -452,11 +459,31 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 PLog.d(TAG, "Set delete pending intent for photo ${photo.id}")
             } else {
                 // 没有导出的照片，直接删除应用内照片
-                deletePhotoDirectly(photo)
+                deletePhotoOnlyInternal(photo)
             }
         } else {
             // Android 10 及以下: 直接删除所有照片
             deletePhotoDirectly(photo)
+        }
+    }
+
+    /**
+     * 仅删除应用内部照片（不删除系统相册）
+     */
+    private fun deletePhotoOnlyInternal(photo: PhotoData) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val success = PhotoManager.deletePhotoOnly(context, photo.id)
+            if (success) {
+                loadPhotos()
+                // 如果删除的是当前照片，调整索引
+                if (photo == getCurrentPhoto() && currentPhotoIndex >= _photos.value.size) {
+                    currentPhotoIndex = (_photos.value.size - 1).coerceAtLeast(0)
+                }
+                PLog.d(TAG, "Photo deleted (app only): ${photo.id}")
+            } else {
+                PLog.e(TAG, "Failed to delete photo: ${photo.id}")
+            }
         }
     }
 
@@ -526,12 +553,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 批量删除选中的照片
      *
-     * Android 11+: 会使用 MediaStore.createDeleteRequest 弹出系统确认对话框
-     * Android 10-: 直接删除所有照片
+     * @param deleteExported 是否同时删除系统相册中的导出图片
+     * - true: Android 11+ 会使用 MediaStore.createDeleteRequest 弹出系统确认对话框
+     * - false: 只删除应用内部照片，不删除系统相册
      */
-    fun deleteSelectedPhotos() {
+    fun deleteSelectedPhotos(deleteExported: Boolean = true) {
         val toDelete = selectedPhotos.toList()
         if (toDelete.isEmpty()) return
+
+        if (!deleteExported) {
+            // 不删除系统相册照片，直接删除应用内部照片
+            deleteBatchPhotosOnlyInternal(toDelete)
+            return
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+: 收集所有导出的 URIs
@@ -565,16 +599,39 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     } catch (e: Exception) {
                         PLog.e(TAG, "Failed to create batch delete request", e)
                         // 创建请求失败，直接删除应用内照片
-                        deleteBatchPhotosDirectly(toDelete)
+                        deleteBatchPhotosOnlyInternal(toDelete)
                     }
                 } else {
                     // 没有导出的照片，直接删除应用内照片
-                    deleteBatchPhotosDirectly(toDelete)
+                    deleteBatchPhotosOnlyInternal(toDelete)
                 }
             }
         } else {
             // Android 10 及以下: 直接删除
             deleteBatchPhotosDirectly(toDelete)
+        }
+    }
+
+    /**
+     * 仅删除应用内部照片（批量，不删除系统相册）
+     */
+    private fun deleteBatchPhotosOnlyInternal(photos: List<PhotoData>) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            var deletedCount = 0
+
+            withContext(Dispatchers.IO) {
+                photos.forEach { photo ->
+                    val success = PhotoManager.deletePhotoOnly(context, photo.id)
+                    if (success) {
+                        deletedCount++
+                    }
+                }
+            }
+
+            exitSelectionMode()
+            loadPhotos()
+            PLog.d(TAG, "Batch deleted $deletedCount photos (app only)")
         }
     }
 

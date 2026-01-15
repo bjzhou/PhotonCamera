@@ -50,6 +50,7 @@
     <string name="brightness">Brightness</string>
     <string name="delete_confirm">Delete this photo?</string>
     <string name="delete_multiple_confirm">Delete %d photos?</string>
+    <string name="delete_exported_photos">Also delete from system gallery</string>
     <string name="no_photos">No photos yet</string>
     <string name="photo_info">Photo Info</string>
     <string name="filter">Filter</string>

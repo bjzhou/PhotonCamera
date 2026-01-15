@@ -46,6 +46,7 @@
     <string name="brightness">亮度</string>
     <string name="delete_confirm">删除这张照片？</string>
     <string name="delete_multiple_confirm">删除 %d 张照片？</string>
+    <string name="delete_exported_photos">同时删除系统相册中的导出图</string>
     <string name="no_photos">还没有照片</string>
     <string name="photo_info">照片信息</string>
     <string name="filter">滤镜</string>

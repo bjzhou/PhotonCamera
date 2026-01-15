@@ -6,6 +6,7 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -267,17 +268,45 @@ fun PhotoDetailScreen(
             }
         }
     }
-    
+
     // 删除确认对话框
     if (showDeleteDialog) {
+        var deleteExported by remember { mutableStateOf(false) }
+
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text(stringResource(R.string.delete)) },
-            text = { Text(stringResource(R.string.delete_confirm)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.delete_confirm))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { deleteExported = !deleteExported }
+                    ) {
+                        Checkbox(
+                            checked = deleteExported,
+                            onCheckedChange = { deleteExported = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = Color(0xFFFF6B35),
+                                uncheckedColor = Color.White.copy(alpha = 0.6f)
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.delete_exported_photos),
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteCurrentPhoto()
+                        currentPhoto?.let { photo ->
+                            viewModel.requestDeletePhoto(photo, deleteExported)
+                        }
                         showDeleteDialog = false
                     }
                 ) {

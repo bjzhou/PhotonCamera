@@ -293,21 +293,45 @@ fun GalleryScreen(
             }
         }
     }
-    
+
     // 删除确认对话框
     if (showDeleteDialog) {
+        var deleteExported by remember { mutableStateOf(false) }
+
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text(stringResource(R.string.delete)) },
             text = {
-                Text(
-                    text = stringResource(R.string.delete_multiple_confirm, selectedPhotos.size)
-                )
+                Column {
+                    Text(
+                        text = stringResource(R.string.delete_multiple_confirm, selectedPhotos.size)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { deleteExported = !deleteExported }
+                    ) {
+                        Checkbox(
+                            checked = deleteExported,
+                            onCheckedChange = { deleteExported = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = Color(0xFFFF6B35),
+                                uncheckedColor = Color.White.copy(alpha = 0.6f)
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.delete_exported_photos),
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 14.sp
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteSelectedPhotos()
+                        viewModel.deleteSelectedPhotos(deleteExported)
                         showDeleteDialog = false
                     }
                 ) {
