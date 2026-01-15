@@ -74,6 +74,15 @@
     <string name="show_app_branding">显示 App 品牌</string>
     <string name="export_with_frame_confirm">导出带有边框水印的照片吗？</string>
     <string name="import_photo">导入</string>
+    <string name="adjust_watermark">调整水印</string>
+    <string name="watermark_adjustment">水印调整</string>
+    <string name="logo">LOGO</string>
+    <string name="text_content">文字内容</string>
+    <string name="device_model">设备型号</string>
+    <string name="brand_name">品牌名称</string>
+    <string name="date_label">日期 (DATE)</string>
+    <string name="time_label">时间 (TIME)</string>
+    <string name="datetime_label">日期时间 (DATETIME)</string>
 
     <!-- Settings -->
     <string name="settings_title">设置</string>

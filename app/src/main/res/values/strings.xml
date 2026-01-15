@@ -75,6 +75,15 @@
     <string name="show_app_branding">Show App Branding</string>
     <string name="export_with_frame_confirm">Export photo with frame watermark?</string>
     <string name="import_photo">Import</string>
+    <string name="adjust_watermark">Adjust Watermark</string>
+    <string name="watermark_adjustment">Watermark Adjustment</string>
+    <string name="logo">LOGO</string>
+    <string name="text_content">Text Content</string>
+    <string name="device_model">Device Model</string>
+    <string name="brand_name">Brand Name</string>
+    <string name="date_label">Date (DATE)</string>
+    <string name="time_label">Time (TIME)</string>
+    <string name="datetime_label">Date/Time (DATETIME)</string>
     
     <!-- Settings -->
     <string name="settings_title">Settings</string>

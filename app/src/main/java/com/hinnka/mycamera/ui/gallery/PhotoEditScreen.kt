@@ -381,7 +381,7 @@ fun PhotoEditScreen(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(text = "调整水印", color = Color.White)
+                            Text(text = stringResource(R.string.adjust_watermark), color = Color.White)
                         }
                     }
                 }
@@ -578,7 +578,7 @@ private fun WatermarkEditSheet(
                 .padding(bottom = 32.dp)
         ) {
             Text(
-                text = "水印调整",
+                text = stringResource(R.string.watermark_adjustment),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -586,14 +586,14 @@ private fun WatermarkEditSheet(
 
             // Logo 选择
             Text(
-                text = "LOGO",
+                text = stringResource(R.string.logo),
                 fontSize = 14.sp,
                 color = Color.White.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
             val logos = listOf(
-                "none" to "无",
+                "none" to stringResource(R.string.none),
                 "apple" to "Apple",
                 "leica" to "Leica",
                 "hasselblad" to "Hasselblad",
@@ -637,18 +637,18 @@ private fun WatermarkEditSheet(
 
             // 文字编辑
             Text(
-                text = "文字内容",
+                text = stringResource(R.string.text_content),
                 fontSize = 14.sp,
                 color = Color.White.copy(alpha = 0.6f),
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
             val textTypes = listOf(
-                TextType.DEVICE_MODEL to "设备型号",
-                TextType.BRAND to "品牌名称",
-                TextType.DATE to "日期 (DATE)",
-                TextType.TIME to "时间 (TIME)",
-                TextType.DATETIME to "日期时间 (DATETIME)"
+                TextType.DEVICE_MODEL to stringResource(R.string.device_model),
+                TextType.BRAND to stringResource(R.string.brand_name),
+                TextType.DATE to stringResource(R.string.date_label),
+                TextType.TIME to stringResource(R.string.time_label),
+                TextType.DATETIME to stringResource(R.string.datetime_label)
             )
 
             textTypes.forEach { (type, label) ->
