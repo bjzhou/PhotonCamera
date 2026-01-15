@@ -41,10 +41,13 @@ class Camera2Controller(private val context: Context) {
     
     companion object {
         private const val TAG = "Camera2Controller"
-        
+
         // 预览时的最大曝光时间（纳秒）：1/15秒 = 66ms
         // 超过这个时间会导致预览帧率过低，画面卡顿
         private const val MAX_PREVIEW_EXPOSURE_TIME = 66_000_000L // 66ms
+
+        // 自定义错误代码
+        const val ERROR_CAMERA_DISCONNECTED = 1000
     }
     
     private val cameraManager: CameraManager by lazy {
@@ -82,10 +85,15 @@ class Camera2Controller(private val context: Context) {
     
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
-    
+
     // 预览帧捕获回调（用于 LUT 预览生成）
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
     private var shouldCapturePreviewFrame = false
+
+    // 相机错误回调（供上层处理错误恢复）
+    // errorCode: CameraDevice 的错误代码或自定义错误码
+    // canRetry: 是否可以重试打开相机
+    var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -429,19 +437,53 @@ class Camera2Controller(private val context: Context) {
                     cameraDevice = camera
                     createPreviewSession()
                 }
-                
+
                 override fun onDisconnected(camera: CameraDevice) {
-                    PLog.w(TAG, "Camera disconnected: ${camera.id}")
+                    PLog.w(TAG, "Camera disconnected: ${camera.id} - 相机被其他应用或系统接管")
                     camera.close()
                     cameraDevice = null
                     _state.value = _state.value.copy(isPreviewActive = false)
+
+                    // 通知上层：相机断开连接，可以在 onResume 时重试
+                    onCameraError?.invoke(
+                        ERROR_CAMERA_DISCONNECTED,
+                        "相机已被其他应用或系统接管",
+                        true  // canRetry = true
+                    )
                 }
-                
+
                 override fun onError(camera: CameraDevice, error: Int) {
-                    PLog.e(TAG, "Camera error: ${camera.id}, error=$error")
+                    val errorMessage = when (error) {
+                        ERROR_CAMERA_IN_USE ->
+                            "相机正在被其他应用使用"
+                        ERROR_MAX_CAMERAS_IN_USE ->
+                            "已达到相机最大打开数量"
+                        ERROR_CAMERA_DISABLED ->
+                            "相机被系统策略禁用"
+                        ERROR_CAMERA_DEVICE ->
+                            "相机设备遇到严重错误"
+                        ERROR_CAMERA_SERVICE ->
+                            "相机服务遇到严重错误"
+                        else -> "未知相机错误 ($error)"
+                    }
+
+                    PLog.e(TAG, "Camera error: ${camera.id}, error=$error - $errorMessage")
                     camera.close()
                     cameraDevice = null
                     _state.value = _state.value.copy(isPreviewActive = false)
+
+                    // 判断是否可以重试
+                    val canRetry = when (error) {
+                        ERROR_CAMERA_IN_USE,
+                        ERROR_MAX_CAMERAS_IN_USE -> true
+                        ERROR_CAMERA_DISABLED,
+                        ERROR_CAMERA_DEVICE,
+                        ERROR_CAMERA_SERVICE -> false
+                        else -> false
+                    }
+
+                    // 通知上层
+                    onCameraError?.invoke(error, errorMessage, canRetry)
                 }
             }, cameraHandler)
             
@@ -1237,7 +1279,7 @@ class Camera2Controller(private val context: Context) {
         
         for ((presetKelvin, mode) in presetModes) {
             if (mode in supportedModes) {
-                val distance = kotlin.math.abs(kelvin - presetKelvin)
+                val distance = abs(kelvin - presetKelvin)
                 if (distance < closestDistance) {
                     closestDistance = distance
                     closestMode = mode
@@ -1667,7 +1709,7 @@ class Camera2Controller(private val context: Context) {
                 }
             }, cameraHandler)
 
-        } catch (e: CameraAccessException) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to perform capture", e)
             _state.value = _state.value.copy(isCapturing = false)
         }

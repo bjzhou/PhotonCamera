@@ -131,6 +131,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        cameraController.onCameraError = { code, message, canRetry ->
+            if (canRetry) {
+                checkAndRecoverCamera()
+            }
+        }
+
         // 监听快门声音设置
         viewModelScope.launch {
             userPreferencesRepository.userPreferences.collect {
