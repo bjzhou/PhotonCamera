@@ -103,6 +103,21 @@ class Camera2Controller(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
 
+            // 监听对焦状态
+            val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+            if (_state.value.isFocusing) {
+                when (afState) {
+                    CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
+                        // 对焦成功并锁定
+                        _state.value = _state.value.copy(focusSuccess = true)
+                    }
+                    CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
+                        // 对焦失败但已锁定
+                        _state.value = _state.value.copy(focusSuccess = false)
+                    }
+                }
+            }
+
             // 获取相机实际使用的参数
             val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val actualExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
@@ -1439,40 +1454,60 @@ class Camera2Controller(private val context: Context) {
     fun focusOnPoint(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
         val cameraId = _state.value.currentCameraId
         if (cameraId.isEmpty()) return
-        
-        _state.value = _state.value.copy(
-            focusPoint = Pair(x / viewWidth, y / viewHeight),
-            isFocusing = true,
-            focusSuccess = null
-        )
 
         try {
             val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-            
-            // 计算对焦区域
+            val sensorOrientation = getSensorOrientation()
+            val lensFacing = getLensFacing()
+
+            // 计算归一化坐标（0-1）
             val normX = x / viewWidth
             val normY = y / viewHeight
-            
-            // Store normalized UI coordinates for metering
-            _state.value = _state.value.copy(focusPoint = Pair(normX, normY))
 
-            val focusX = (normX * activeRect.width()).toInt()
-            val focusY = (normY * activeRect.height()).toInt()
-            val focusSize = (activeRect.width() * 0.1f).toInt()
-            
+            // 存储UI坐标用于显示对焦框
+            _state.value = _state.value.copy(
+                focusPoint = Pair(normX, normY),
+                isFocusing = true,
+                focusSuccess = null
+            )
+
+            // 根据传感器方向转换坐标
+            // 传感器坐标系与UI坐标系可能不同，需要旋转
+            val (sensorX, sensorY) = when (sensorOrientation) {
+                0 -> Pair(normX, normY)
+                90 -> Pair(normY, 1 - normX)  // 顺时针90度
+                180 -> Pair(1 - normX, 1 - normY)  // 180度
+                270 -> Pair(1 - normY, normX)  // 顺时针270度
+                else -> Pair(normX, normY)
+            }
+
+            // 如果是前置摄像头，需要水平翻转
+            val (finalX, finalY) = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                Pair(1 - sensorX, sensorY)
+            } else {
+                Pair(sensorX, sensorY)
+            }
+
+            // 映射到传感器坐标
+            val focusX = (finalX * activeRect.width()).toInt()
+            val focusY = (finalY * activeRect.height()).toInt()
+            val focusSize = (activeRect.width() * 0.1f).toInt()  // 对焦区域大小为传感器宽度的10%
+
             val focusRect = android.graphics.Rect(
                 (focusX - focusSize).coerceAtLeast(0),
                 (focusY - focusSize).coerceAtLeast(0),
                 (focusX + focusSize).coerceAtMost(activeRect.width()),
                 (focusY + focusSize).coerceAtMost(activeRect.height())
             )
-            
+
             val meteringRectangle = android.hardware.camera2.params.MeteringRectangle(
                 focusRect,
                 android.hardware.camera2.params.MeteringRectangle.METERING_WEIGHT_MAX
             )
-            
+
+            PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY) -> Rect($focusX, $focusY)")
+
             previewRequestBuilder?.apply {
                 set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
                 set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
@@ -1481,10 +1516,6 @@ class Camera2Controller(private val context: Context) {
                 updatePreview()
             }
 
-            cameraHandler?.postDelayed({
-                _state.value = _state.value.copy(focusSuccess = true)
-            }, 200)
-            
             // 延迟恢复连续对焦
             cameraHandler?.postDelayed({
                 previewRequestBuilder?.apply {
@@ -1493,8 +1524,8 @@ class Camera2Controller(private val context: Context) {
                     updatePreview()
                 }
                 _state.value = _state.value.copy(isFocusing = false, focusSuccess = null)
-            }, 2500)
-            
+            }, 3000)
+
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to focus", e)
             _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
