@@ -129,4 +129,10 @@
     <string name="delete_confirm_title">Delete Confirmation</string>
     <string name="delete_custom_content_confirm">Delete "%s"?</string>
     <string name="importing">Importing...</string>
+
+    <!-- Developer Options -->
+    <string name="settings_section_developer">Developer Options</string>
+    <string name="settings_log_viewer">Log Viewer</string>
+    <string name="settings_log_viewer_description">View and export app logs for diagnostics</string>
+    <string name="logs">Logs</string>
 </resources>

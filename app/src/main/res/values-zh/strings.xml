@@ -128,4 +128,10 @@
     <string name="delete_confirm_title">删除确认</string>
     <string name="delete_custom_content_confirm">删除 "%s" 吗？</string>
     <string name="importing">导入中...</string>
+
+    <!-- Developer Options -->
+    <string name="settings_section_developer">开发者选项</string>
+    <string name="settings_log_viewer">日志收集</string>
+    <string name="settings_log_viewer_description">查看和导出应用日志，用于问题诊断</string>
+    <string name="logs">日志</string>
 </resources>

@@ -206,7 +206,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             // 开发者选项
-            SettingsSection(title = "开发者选项") {
+            SettingsSection(title = stringResource(R.string.settings_section_developer)) {
                 // 日志收集按钮
                 Row(
                     modifier = Modifier
@@ -218,14 +218,14 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "日志收集",
+                            text = stringResource(R.string.settings_log_viewer),
                             color = Color.White,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Normal
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "查看和导出应用日志，用于问题诊断",
+                            text = stringResource(R.string.settings_log_viewer_description),
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 13.sp,
                             lineHeight = 18.sp
@@ -236,7 +236,7 @@ fun SettingsScreen(
 
                     Icon(
                         imageVector = Icons.Default.Article,
-                        contentDescription = "日志",
+                        contentDescription = stringResource(R.string.logs),
                         tint = Color.White.copy(alpha = 0.6f)
                     )
                 }

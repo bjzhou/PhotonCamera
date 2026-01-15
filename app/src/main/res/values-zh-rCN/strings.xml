@@ -58,5 +58,11 @@
     <string name="frame">边框</string>
     <string name="none">无</string>
     <string name="show_app_branding">显示 App 品牌</string>
-    <string name="export_with_frame_confirm">导出带边框水印的照片？</string>
+    <string name="export_with_frame_confirm">导出带边框水印的照片?</string>
+
+    <!-- Developer Options -->
+    <string name="settings_section_developer">开发者选项</string>
+    <string name="settings_log_viewer">日志收集</string>
+    <string name="settings_log_viewer_description">查看和导出应用日志，用于问题诊断</string>
+    <string name="logs">日志</string>
 </resources>
