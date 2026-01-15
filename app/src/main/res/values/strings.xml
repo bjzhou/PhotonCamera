@@ -90,6 +90,8 @@
     <string name="settings_section_operation">Operations</string>
     <string name="settings_shutter_sound">Shutter Sound</string>
     <string name="settings_shutter_sound_description">Play sound when taking a photo</string>
+    <string name="settings_vibration">Vibration</string>
+    <string name="settings_vibration_description">Vibrate when taking a photo</string>
     <string name="settings_volume_key">Volume Key Capture</string>
     <string name="settings_volume_key_description">Use volume keys to take photos</string>
     <string name="settings_auto_save">Auto Save</string>

@@ -29,6 +29,7 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
+import com.hinnka.mycamera.utils.VibrationHelper
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -67,6 +68,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 快门音效播放器
     private val shutterSoundPlayer = ShutterSoundPlayer(application)
+
+    // 震动辅助类
+    private val vibrationHelper = VibrationHelper(application)
 
     val state: StateFlow<CameraState> = cameraController.state
 
@@ -115,10 +119,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
+    val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
 
     private var isShutterSoundEnabled = true
+    private var isVibrationEnabled = true
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
@@ -137,17 +143,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // 监听快门声音设置
+        // 监听快门声音和震动设置
         viewModelScope.launch {
             userPreferencesRepository.userPreferences.collect {
                 isShutterSoundEnabled = it.shutterSoundEnabled
+                isVibrationEnabled = it.vibrationEnabled
             }
         }
 
-        // 设置快门音效回调
+        // 设置快门音效和震动回调
         cameraController.onPlayShutterSound = {
             if (isShutterSoundEnabled) {
                 shutterSoundPlayer.play()
+            }
+            if (isVibrationEnabled) {
+                vibrationHelper.vibrate()
             }
         }
 
@@ -674,6 +684,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setShutterSoundEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveShutterSoundEnabled(enabled)
+        }
+    }
+
+    /**
+     * 设置是否启用拍摄震动
+     */
+    fun setVibrationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveVibrationEnabled(enabled)
         }
     }
 

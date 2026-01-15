@@ -50,6 +50,7 @@ fun SettingsScreen(
     val state by viewModel.state.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
+    val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
     val isPurchased by viewModel.isPurchased.collectAsState()
@@ -176,6 +177,18 @@ fun SettingsScreen(
                     description = stringResource(R.string.settings_shutter_sound_description),
                     checked = shutterSoundEnabled,
                     onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_vibration),
+                    description = stringResource(R.string.settings_vibration_description),
+                    checked = vibrationEnabled,
+                    onCheckedChange = { viewModel.setVibrationEnabled(it) }
                 )
 
                 HorizontalDivider(

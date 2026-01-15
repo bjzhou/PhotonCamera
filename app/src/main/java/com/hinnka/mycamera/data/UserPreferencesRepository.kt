@@ -29,6 +29,7 @@ data class UserPreferences(
     val showGrid: Boolean = false,  // 网格线显示
     val showLevelIndicator: Boolean = false,  // 水平仪显示
     val shutterSoundEnabled: Boolean = true,  // 快门声音
+    val vibrationEnabled: Boolean = true,  // 拍摄震动
     val volumeKeyCapture: Boolean = false,  // 音量键拍摄
     val autoSaveAfterCapture: Boolean = true  // 自动保存
 )
@@ -50,6 +51,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
         private val SHUTTER_SOUND_ENABLED = booleanPreferencesKey("shutter_sound_enabled")
+        private val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
         private val VOLUME_KEY_CAPTURE = booleanPreferencesKey("volume_key_capture")
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
     }
@@ -69,6 +71,7 @@ class UserPreferencesRepository(private val context: Context) {
                 showGrid = preferences[SHOW_GRID] ?: false,
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
                 shutterSoundEnabled = preferences[SHUTTER_SOUND_ENABLED] ?: true,
+                vibrationEnabled = preferences[VIBRATION_ENABLED] ?: true,
                 volumeKeyCapture = preferences[VOLUME_KEY_CAPTURE] ?: false,
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true
             )
@@ -164,7 +167,16 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[SHUTTER_SOUND_ENABLED] = enabled
         }
     }
-    
+
+    /**
+     * 保存是否启用拍摄震动
+     */
+    suspend fun saveVibrationEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[VIBRATION_ENABLED] = enabled
+        }
+    }
+
     /**
      * 保存是否启用音量键拍摄
      */

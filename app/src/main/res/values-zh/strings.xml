@@ -89,6 +89,8 @@
     <string name="settings_section_operation">拍摄操作</string>
     <string name="settings_shutter_sound">快门声音</string>
     <string name="settings_shutter_sound_description">拍照时播放快门声音</string>
+    <string name="settings_vibration">拍摄震动</string>
+    <string name="settings_vibration_description">拍照时产生震动反馈</string>
     <string name="settings_volume_key">音量键拍摄</string>
     <string name="settings_volume_key_description">使用音量键进行拍摄</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
