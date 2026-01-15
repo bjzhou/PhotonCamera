@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import com.hinnka.mycamera.camera.AspectRatio
@@ -76,6 +77,10 @@ fun CameraPreviewGL(
                 .width(with(LocalDensity.current) { displayWidth.toDp() })
                 .height(with(LocalDensity.current) { displayHeight.toDp() })
                 .clipToBounds()
+                .onSizeChanged { size ->
+                    viewWidth = size.width
+                    viewHeight = size.height
+                }
                 .pointerInput(Unit) {
                     detectTapGestures { offset ->
                         onTap(offset.x, offset.y, viewWidth, viewHeight)
