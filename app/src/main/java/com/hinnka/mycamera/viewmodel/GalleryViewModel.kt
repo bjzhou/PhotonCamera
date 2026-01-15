@@ -1097,6 +1097,39 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             _isLoading.value = false
         }
     }
+
+    /**
+     * 批量导入照片
+     */
+    fun importPhotos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val context = getApplication<Application>()
+                var successCount = 0
+
+                withContext(Dispatchers.IO) {
+                    uris.forEach { uri ->
+                        val photoId = PhotoManager.importPhoto(context, uri)
+                        if (photoId != null) {
+                            successCount++
+                        }
+                    }
+                }
+
+                if (successCount > 0) {
+                    loadPhotos()
+                }
+                PLog.d(TAG, "Imported $successCount of ${uris.size} photos")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to import photos", e)
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
     
     override fun onCleared() {
         super.onCleared()

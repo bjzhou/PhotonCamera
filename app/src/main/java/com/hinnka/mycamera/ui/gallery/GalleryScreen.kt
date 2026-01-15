@@ -68,9 +68,11 @@ fun GalleryScreen(
     val selectedPhotos = viewModel.selectedPhotos
 
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let { viewModel.importPhoto(it) }
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.importPhotos(uris)
+        }
     }
 
     // Activity Result Launcher for batch delete confirmation
