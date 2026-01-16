@@ -171,6 +171,11 @@ object Shaders {
         uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
         uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
 
+        // 色彩配方参数（阶段3：质感效果）
+        uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
+        uniform float uVignette;      // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
+        uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
+
         void main() {
             // 从相机纹理采样原始颜色
             vec4 color = texture(uCameraTexture, vTexCoord);
@@ -224,6 +229,63 @@ object Shaders {
                     float fadeAmount = uFade * 0.3;
                     color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
                     color.rgb += fadeAmount * 0.1;
+                }
+
+                // 8. 留银冲洗（Bleach Bypass - 胶片银盐保留效果）
+                if (uBleachBypass > 0.0) {
+                    // 保留部分银盐：降低饱和度
+                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
+                    
+                    // 增强对比度
+                    desaturated = (desaturated - 0.5) * 1.3 + 0.5;
+                    
+                    // 色调偏移到冷色调（青绿色）
+                    desaturated.r *= 0.95;
+                    desaturated.g *= 1.02;
+                    desaturated.b *= 1.05;
+                    
+                    // 根据强度混合
+                    color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                }
+
+                // 9. 晕影（Vignette - 边缘光线衰减/增强）
+                if (abs(uVignette) > 0.0) {
+                    // 计算从中心到边缘的距离
+                    vec2 center = vec2(0.5, 0.5);
+                    float dist = distance(vTexCoord, center);
+                    
+                    // 使用 smoothstep 创建平滑过渡
+                    // 调整衰减曲线：从0.3到0.8的范围
+                    float vignetteMask = smoothstep(0.8, 0.3, dist);
+                    
+                    // 根据 uVignette 符号决定是暗角还是亮角
+                    if (uVignette < 0.0) {
+                        // 暗角：边缘变暗（更强的效果：从0.1到1.0）
+                        color.rgb *= mix(0.1, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
+                    } else {
+                        // 亮角：边缘变亮（增强效果）
+                        color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette * 0.7);
+                    }
+                }
+
+                // 10. 颗粒（Film Grain - 胶片颗粒感）
+                if (uFilmGrain > 0.0) {
+                    // 使用纹理坐标生成伪随机噪声
+                    // 基于片段位置的简单哈希函数
+                    float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
+                    
+                    // 将噪声从 [0,1] 映射到 [-1,1]
+                    noise = (noise - 0.5) * 2.0;
+                    
+                    // 根据亮度自适应调整颗粒强度（高光和阴影更明显）
+                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    float grainMask = 1.0 - abs(luma - 0.5) * 2.0; // 中间调弱，高光阴影强
+                    grainMask = grainMask * 0.5 + 0.5; // 调整到 [0.5, 1.0] 范围
+                    
+                    // 应用颗粒（增强强度）
+                    float grainStrength = uFilmGrain * 0.1 * grainMask;
+                    color.rgb += noise * grainStrength;
                 }
 
                 // Clamp 到合法范围

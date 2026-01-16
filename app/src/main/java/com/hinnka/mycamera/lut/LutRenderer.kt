@@ -66,6 +66,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uVibranceLocation: Int = 0
     private var uHighlightsLocation: Int = 0
     private var uShadowsLocation: Int = 0
+    private var uFilmGrainLocation: Int = 0
+    private var uVignetteLocation: Int = 0
+    private var uBleachBypassLocation: Int = 0
     
     // Attribute 位置
     private var aPositionLocation: Int = 0
@@ -115,6 +118,12 @@ class LutRenderer : GLSurfaceView.Renderer {
     var highlights: Float = 0f // -1.0 ~ +1.0
     @Volatile
     var shadows: Float = 0f // -1.0 ~ +1.0
+    @Volatile
+    var filmGrain: Float = 0f // 0.0 ~ 1.0
+    @Volatile
+    var vignette: Float = 0f // -1.0 ~ +1.0
+    @Volatile
+    var bleachBypass: Float = 0f // 0.0 ~ 1.0
 
     // 渲染尺寸
     private var viewportWidth: Int = 0
@@ -248,6 +257,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uVibranceLocation, vibrance)
             GLES30.glUniform1f(uHighlightsLocation, highlights)
             GLES30.glUniform1f(uShadowsLocation, shadows)
+            GLES30.glUniform1f(uFilmGrainLocation, filmGrain)
+            GLES30.glUniform1f(uVignetteLocation, vignette)
+            GLES30.glUniform1f(uBleachBypassLocation, bleachBypass)
         }
 
         // 绑定顶点缓冲
@@ -341,6 +353,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         uVibranceLocation = GLES30.glGetUniformLocation(programId, "uVibrance")
         uHighlightsLocation = GLES30.glGetUniformLocation(programId, "uHighlights")
         uShadowsLocation = GLES30.glGetUniformLocation(programId, "uShadows")
+        uFilmGrainLocation = GLES30.glGetUniformLocation(programId, "uFilmGrain")
+        uVignetteLocation = GLES30.glGetUniformLocation(programId, "uVignette")
+        uBleachBypassLocation = GLES30.glGetUniformLocation(programId, "uBleachBypass")
 
         // 获取 Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")

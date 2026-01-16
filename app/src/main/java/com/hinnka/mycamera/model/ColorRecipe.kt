@@ -15,6 +15,9 @@ data class ColorRecipeParams(
     val vibrance: Float = 1f,       // 0.0 ~ 2.0 (蓝色增强/自然饱和度，1为无调整)
     val highlights: Float = 0f,     // -1.0 ~ +1.0 (高光调整，0为无调整)
     val shadows: Float = 0f,        // -1.0 ~ +1.0 (阴影调整，0为无调整)
+    val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
+    val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
+    val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
     val lutIntensity: Float = 1f    // 0.0 ~ 1.0 (LUT强度，1为完全应用)
 ) {
     /**
@@ -30,6 +33,9 @@ data class ColorRecipeParams(
                 vibrance == 1f &&
                 highlights == 0f &&
                 shadows == 0f &&
+                filmGrain == 0f &&
+                vignette == 0f &&
+                bleachBypass == 0f &&
                 lutIntensity == 1f
     }
 
@@ -46,6 +52,9 @@ data class ColorRecipeParams(
                 vibrance == other.vibrance &&
                 highlights == other.highlights &&
                 shadows == other.shadows &&
+                filmGrain == other.filmGrain &&
+                vignette == other.vignette &&
+                bleachBypass == other.bleachBypass &&
                 lutIntensity == other.lutIntensity
     }
 
@@ -91,6 +100,9 @@ enum class RecipeParam(
     VIBRANCE("蓝色增强", 0.0f, 2.0f, 1f),
     HIGHLIGHTS("高光", -1.0f, 1.0f, 0f),
     SHADOWS("阴影", -1.0f, 1.0f, 0f),
+    FILM_GRAIN("颗粒", 0.0f, 1.0f, 0f),
+    VIGNETTE("晕影", -1.0f, 1.0f, 0f),
+    BLEACH_BYPASS("留银冲洗", 0.0f, 1.0f, 0f),
     LUT_INTENSITY("滤镜强度", 0.0f, 1.0f, 1f);
 
     /**
@@ -114,6 +126,9 @@ enum class RecipeParam(
             VIBRANCE -> params.vibrance
             HIGHLIGHTS -> params.highlights
             SHADOWS -> params.shadows
+            FILM_GRAIN -> params.filmGrain
+            VIGNETTE -> params.vignette
+            BLEACH_BYPASS -> params.bleachBypass
             LUT_INTENSITY -> params.lutIntensity
         }
     }
@@ -133,6 +148,9 @@ enum class RecipeParam(
             VIBRANCE -> params.copy(vibrance = clampedValue)
             HIGHLIGHTS -> params.copy(highlights = clampedValue)
             SHADOWS -> params.copy(shadows = clampedValue)
+            FILM_GRAIN -> params.copy(filmGrain = clampedValue)
+            VIGNETTE -> params.copy(vignette = clampedValue)
+            BLEACH_BYPASS -> params.copy(bleachBypass = clampedValue)
             LUT_INTENSITY -> params.copy(lutIntensity = clampedValue)
         }
     }

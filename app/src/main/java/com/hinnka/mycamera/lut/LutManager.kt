@@ -45,6 +45,9 @@ class LutManager(private val context: Context) {
         private fun vibranceKey(lutId: String) = floatPreferencesKey("${lutId}_vibrance")
         private fun highlightsKey(lutId: String) = floatPreferencesKey("${lutId}_highlights")
         private fun shadowsKey(lutId: String) = floatPreferencesKey("${lutId}_shadows")
+        private fun filmGrainKey(lutId: String) = floatPreferencesKey("${lutId}_filmGrain")
+        private fun vignetteKey(lutId: String) = floatPreferencesKey("${lutId}_vignette")
+        private fun bleachBypassKey(lutId: String) = floatPreferencesKey("${lutId}_bleachBypass")
         private fun lutIntensityKey(lutId: String) = floatPreferencesKey("${lutId}_lutIntensity")
     }
 
@@ -72,6 +75,9 @@ class LutManager(private val context: Context) {
                 vibrance = preferences[vibranceKey(lutId)] ?: 1f,
                 highlights = preferences[highlightsKey(lutId)] ?: 0f,
                 shadows = preferences[shadowsKey(lutId)] ?: 0f,
+                filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
+                vignette = preferences[vignetteKey(lutId)] ?: 0f,
+                bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f
             )
         }
@@ -210,6 +216,9 @@ class LutManager(private val context: Context) {
             preferences[vibranceKey(lutId)] = params.vibrance
             preferences[highlightsKey(lutId)] = params.highlights
             preferences[shadowsKey(lutId)] = params.shadows
+            preferences[filmGrainKey(lutId)] = params.filmGrain
+            preferences[vignetteKey(lutId)] = params.vignette
+            preferences[bleachBypassKey(lutId)] = params.bleachBypass
             preferences[lutIntensityKey(lutId)] = params.lutIntensity
         }
         PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
@@ -233,6 +242,9 @@ class LutManager(private val context: Context) {
                 vibrance = preferences[vibranceKey(lutId)] ?: 1f,
                 highlights = preferences[highlightsKey(lutId)] ?: 0f,
                 shadows = preferences[shadowsKey(lutId)] ?: 0f,
+                filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
+                vignette = preferences[vignetteKey(lutId)] ?: 0f,
+                bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f
             )
         }.firstOrNull() ?: ColorRecipeParams.DEFAULT
@@ -264,6 +276,9 @@ class LutManager(private val context: Context) {
             preferences.remove(vibranceKey(lutId))
             preferences.remove(highlightsKey(lutId))
             preferences.remove(shadowsKey(lutId))
+            preferences.remove(filmGrainKey(lutId))
+            preferences.remove(vignetteKey(lutId))
+            preferences.remove(bleachBypassKey(lutId))
             preferences.remove(lutIntensityKey(lutId))
         }
         PLog.d(TAG, "Color recipe params deleted for LUT [$lutId]")

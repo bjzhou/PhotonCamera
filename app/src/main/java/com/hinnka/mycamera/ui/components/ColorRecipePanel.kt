@@ -35,7 +35,7 @@ fun ColorRecipePanel(
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
 
-    val tabs = listOf("基础", "色彩", "高级")
+    val tabs = listOf("基础", "色温", "光影", "质感")
     val parameterGroups = listOf(
         listOf(
             RecipeParam.EXPOSURE,
@@ -50,7 +50,12 @@ fun ColorRecipePanel(
         listOf(
             RecipeParam.HIGHLIGHTS,
             RecipeParam.SHADOWS,
-            RecipeParam.FADE
+            RecipeParam.VIGNETTE
+        ),
+        listOf(
+            RecipeParam.FILM_GRAIN,
+            RecipeParam.FADE,
+            RecipeParam.BLEACH_BYPASS
         )
     )
 
@@ -193,13 +198,17 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.TINT,
         RecipeParam.HIGHLIGHTS,
         RecipeParam.SHADOWS,
-        RecipeParam.FADE -> {
+        RecipeParam.VIGNETTE -> {
             if (value >= 0) {
                 String.format("+%.2f", value)
             } else {
                 String.format("%.2f", value)
             }
         }
+
+        RecipeParam.FADE,
+        RecipeParam.FILM_GRAIN,
+        RecipeParam.BLEACH_BYPASS -> String.format("%.2f", value)
 
         RecipeParam.LUT_INTENSITY -> String.format("%.2f", value)
     }
@@ -219,6 +228,9 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.VIBRANCE -> Color(0xFF2196F3) // 蓝色
         RecipeParam.HIGHLIGHTS -> Color(0xFFF44336) // 红色
         RecipeParam.SHADOWS -> Color(0xFF3F51B5) // 深蓝色
+        RecipeParam.FILM_GRAIN -> Color(0xFF9E9E9E) // 灰色
+        RecipeParam.VIGNETTE -> Color(0xFF795548) // 棕色
+        RecipeParam.BLEACH_BYPASS -> Color(0xFF00BCD4) // 青色
         RecipeParam.LUT_INTENSITY -> Color(0xFF9E9E9E) // 灰色
     }
 }
