@@ -554,14 +554,13 @@ class LutImageProcessor {
                     float baseBlue = color.b - (color.r + color.g) * 0.5;
                     float blueMask = smoothstep(0.0, 0.2, baseBlue); 
                     float strength = (uVibrance - 1.0) * 0.5;
-                    if (strength > 0.0 && blueMask > 0.0) {
+                    if (blueMask > 0.0) {
                         vec3 densityCheck = vec3(0.3, 0.3, 0.0) * blueMask * strength;
                         color.r -= densityCheck.r * color.r;
                         color.g -= densityCheck.g * color.g;
                         color.b -= 0.05 * blueMask * strength;
                         color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), blueMask * strength * 0.2);
                     }
-                    color.rgb = max(vec3(0.0), color.rgb);
 
                     // 7. 褪色效果
                     if (uFade > 0.0) {
