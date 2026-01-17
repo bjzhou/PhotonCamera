@@ -22,19 +22,25 @@ class PhotoProcessor(
     private val frameRenderer: FrameRenderer
 ) {
     /**
-     * 处理照片并应用所有元数据中的效果
-     * 
      * @param context 上下文
      * @param input 输入 Bitmap
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
      * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
+     * @param useSoftwareProcessing 是否使用软件降噪/锐化（默认 true）
+     * @param sharpening 锐化强度（仅 useSoftwareProcessing=true 时生效）
+     * @param noiseReduction 降噪强度（仅 useSoftwareProcessing=true 时生效）
+     * @param chromaNoiseReduction 减少杂色强度（仅 useSoftwareProcessing=true 时生效）
      * @return 处理后的 Bitmap
      */
     suspend fun process(
         context: Context,
         input: Bitmap,
         metadata: PhotoMetadata,
-        uri: Uri? = null
+        uri: Uri? = null,
+        useSoftwareProcessing: Boolean = true,
+        sharpening: Float = 0.3f,
+        noiseReduction: Float = 0.25f,
+        chromaNoiseReduction: Float = 0.25f
     ): Bitmap = withContext(Dispatchers.Default) {
         var result = input
         
@@ -43,7 +49,15 @@ class PhotoProcessor(
             val lutConfig = lutManager.loadLut(metadata.lutId)
             val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
             if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
-                val lutResult = lutImageProcessor.applyLut(result, lutConfig, colorRecipeParams)
+                val lutResult = lutImageProcessor.applyLut(
+                    result, 
+                    lutConfig, 
+                    colorRecipeParams,
+                    useSoftwareProcessing,
+                    sharpening,
+                    noiseReduction,
+                    chromaNoiseReduction
+                )
                 result = lutResult
             }
         }

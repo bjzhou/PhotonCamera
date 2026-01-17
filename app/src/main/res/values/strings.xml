@@ -107,6 +107,14 @@
     <string name="settings_volume_key_description">Use volume keys to take photos</string>
     <string name="settings_auto_save">Auto Save</string>
     <string name="settings_auto_save_description">Automatically save photos after capture</string>
+    <string name="settings_software_processing">Software Denoising/Sharpening</string>
+    <string name="settings_software_processing_description">Use software algorithms for noise reduction and sharpening. Disable to use system hardware processing.</string>
+    <string name="settings_sharpening">Sharpening</string>
+    <string name="settings_sharpening_description">Enhance image sharpness and edge definition</string>
+    <string name="settings_noise_reduction">Noise Reduction</string>
+    <string name="settings_noise_reduction_description">Reduce image noise while preserving detail</string>
+    <string name="settings_chroma_noise_reduction">Chroma Noise Reduction</string>
+    <string name="settings_chroma_noise_reduction_description">Reduce color noise and artifacts</string>
     
     <!-- LUT -->
     <string name="filter_intensity">Filter Intensity</string>
@@ -156,7 +164,7 @@
     <string name="recipe_param_temperature">Temp</string>
     <string name="recipe_param_tint">Tint</string>
     <string name="recipe_param_fade">Fade</string>
-    <string name="recipe_param_vibrance">Vibrance</string>
+    <string name="recipe_param_blue">Vibrance</string>
     <string name="recipe_param_highlights">Highlights</string>
     <string name="recipe_param_shadows">Shadows</string>
     <string name="recipe_param_film_grain">Grain</string>
@@ -169,6 +177,12 @@
     <string name="recipe_tab_temp">Color Temp</string>
     <string name="recipe_tab_light">Light</string>
     <string name="recipe_tab_texture">Texture</string>
+    <string name="recipe_tab_post">Post</string>
+
+    <!-- Post-Processing Parameters (Capture/Edit only) -->
+    <string name="recipe_param_sharpening">Sharpening</string>
+    <string name="recipe_param_noise_reduction">Noise Red.</string>
+    <string name="recipe_param_chroma_noise_reduction">Chroma NR</string>
 
     <!-- Developer Options -->
     <string name="settings_section_developer">Developer Options</string>

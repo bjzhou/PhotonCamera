@@ -1,10 +1,8 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -41,7 +38,7 @@ fun ColorRecipePanel(
         R.string.recipe_tab_basic,
         R.string.recipe_tab_temp,
         R.string.recipe_tab_light,
-        R.string.recipe_tab_texture
+        R.string.recipe_tab_texture,
     )
     val parameterGroups = listOf(
         listOf(
@@ -52,7 +49,7 @@ fun ColorRecipePanel(
         listOf(
             RecipeParam.TEMPERATURE,
             RecipeParam.TINT,
-            RecipeParam.VIBRANCE
+            RecipeParam.BLUE
         ),
         listOf(
             RecipeParam.HIGHLIGHTS,
@@ -199,7 +196,7 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.EXPOSURE -> String.format("%.1f EV", value)
         RecipeParam.CONTRAST,
         RecipeParam.SATURATION,
-        RecipeParam.VIBRANCE -> String.format("%.2f", value)
+        RecipeParam.BLUE -> String.format("%.2f", value)
 
         RecipeParam.TEMPERATURE,
         RecipeParam.TINT,
@@ -232,7 +229,7 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.TEMPERATURE -> Color(0xFFFF9800) // 橙色
         RecipeParam.TINT -> Color(0xFF4CAF50) // 绿色
         RecipeParam.FADE -> Color(0xFF607D8B) // 灰蓝色
-        RecipeParam.VIBRANCE -> Color(0xFF2196F3) // 蓝色
+        RecipeParam.BLUE -> Color(0xFF2196F3) // 蓝色
         RecipeParam.HIGHLIGHTS -> Color(0xFFF44336) // 红色
         RecipeParam.SHADOWS -> Color(0xFF3F51B5) // 深蓝色
         RecipeParam.FILM_GRAIN -> Color(0xFF9E9E9E) // 灰色

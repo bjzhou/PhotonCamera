@@ -106,6 +106,14 @@
     <string name="settings_volume_key_description">使用音量键进行拍摄</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
     <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
+    <string name="settings_software_processing">软件降噪/锐化</string>
+    <string name="settings_software_processing_description">使用软件算法进行降噪和锐化处理。关闭后将使用系统硬件处理。</string>
+    <string name="settings_sharpening">锐化</string>
+    <string name="settings_sharpening_description">增强图像锐度和边缘清晰度</string>
+    <string name="settings_noise_reduction">降噪</string>
+    <string name="settings_noise_reduction_description">减少图像噪点，同时保留细节</string>
+    <string name="settings_chroma_noise_reduction">减少杂色</string>
+    <string name="settings_chroma_noise_reduction_description">减少彩色噪点和伪影</string>
 
     <!-- LUT -->
     <string name="filter_intensity">滤镜强度</string>
@@ -155,7 +163,7 @@
     <string name="recipe_param_temperature">色温</string>
     <string name="recipe_param_tint">色调</string>
     <string name="recipe_param_fade">褪色</string>
-    <string name="recipe_param_vibrance">蓝色增强</string>
+    <string name="recipe_param_blue">蓝色增强</string>
     <string name="recipe_param_highlights">高光</string>
     <string name="recipe_param_shadows">阴影</string>
     <string name="recipe_param_film_grain">颗粒</string>
@@ -168,6 +176,12 @@
     <string name="recipe_tab_temp">色温</string>
     <string name="recipe_tab_light">光影</string>
     <string name="recipe_tab_texture">质感</string>
+    <string name="recipe_tab_post">后期</string>
+
+    <!-- Post-Processing Parameters (Capture/Edit only) -->
+    <string name="recipe_param_sharpening">锐化</string>
+    <string name="recipe_param_noise_reduction">降噪</string>
+    <string name="recipe_param_chroma_noise_reduction">减少杂色</string>
 
     <!-- Developer Options -->
     <string name="settings_section_developer">开发者选项</string>

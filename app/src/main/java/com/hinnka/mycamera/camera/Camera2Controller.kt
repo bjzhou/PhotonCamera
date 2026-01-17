@@ -80,6 +80,9 @@ class Camera2Controller(private val context: Context) {
     
     private var meteringSkipFrames = 0 // Frame skip counter for software metering stabilization
     
+    // 软件降噪/锐化设置（true=使用软件算法，false=使用系统算法）
+    private var useSoftwareProcessing = true
+    
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
 
@@ -87,6 +90,14 @@ class Camera2Controller(private val context: Context) {
     private var cachedSensorOrientation: Int = 0
     private var cachedLensFacing: Int = CameraCharacteristics.LENS_FACING_BACK
     private var cachedHardwareLevel: Int = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
+    private var isManualSensorSupported = false
+    private var isManualPostProcessingSupported = false
+    private var isFlashSupported = false
+    private var maxAfRegions = 0
+    private var maxAeRegions = 0
+    private var availableEdgeModes: IntArray = intArrayOf()
+    private var availableNoiseReductionModes: IntArray = intArrayOf()
+    private var availableTonemapModes: IntArray = intArrayOf()
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
@@ -150,11 +161,11 @@ class Camera2Controller(private val context: Context) {
             // 关键修复：只在自动曝光模式下更新 ISO 和快门速度
             // 手动模式下保持用户设置不变（因为预览使用的是限制后的曝光时间，不是用户设置的值）
             _state.value = _state.value.copy(
-                iso = if (isAutoExposure) actualIso ?: 100 else _state.value.iso,
-                shutterSpeed = if (isAutoExposure) actualExposureTimeNs ?: (1_000_000_000L / 60) else _state.value.shutterSpeed,
+                iso = if (isAutoExposure) actualIso ?: _state.value.iso else _state.value.iso,
+                shutterSpeed = if (isAutoExposure) actualExposureTimeNs ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
                 exposureCompensation = exposureCompensation,
                 awbMode = awbMode,
-                aperture = aperture ?: 2f,
+                aperture = aperture ?: _state.value.aperture,
             )
         }
     }
@@ -343,7 +354,19 @@ class Camera2Controller(private val context: Context) {
                     else -> "UNKNOWN($cachedHardwareLevel)"
                 }
 
-                PLog.i(TAG, "Camera characteristics cached - ID: $cameraId, Hardware Level: $hardwareLevelName")
+                // 更新硬件能力缓存
+                val capabilities = cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+                isManualSensorSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+                isManualPostProcessingSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)
+                isFlashSupported = cachedCharacteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+                maxAfRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+                maxAeRegions = cachedCharacteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+                availableEdgeModes = cachedCharacteristics?.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
+                availableNoiseReductionModes = cachedCharacteristics?.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()
+                availableTonemapModes = cachedCharacteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
+
+                PLog.i(TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
+                        "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported")
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
                 cachedCharacteristics = null
@@ -723,8 +746,11 @@ class Camera2Controller(private val context: Context) {
         val reader = imageReader ?: return
         
         try {
-            // 创建预览请求
-            previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            // 使用 TEMPLATE_STILL_CAPTURE 而不是 TEMPLATE_PREVIEW
+            // 原因：TEMPLATE_STILL_CAPTURE 的 AE 策略优先画质（更长快门 + 更低 ISO）
+            // 而 TEMPLATE_PREVIEW 优先帧率（更短快门 + 更高 ISO）
+            // 对于专注静态摄影的相机 app，这样的预览更接近实际拍摄效果
+            previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(surface)
                 // 关键修复: 在创建 builder 时就添加 previewImageReader 的 surface
                 // 而不是在 onSessionConfigured 中动态添加
@@ -815,10 +841,7 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        val availableTonemapModes = cachedCharacteristics?.get(
-            CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES
-        )
-        if (availableTonemapModes?.contains(CaptureRequest.TONEMAP_MODE_PRESET_CURVE) != true) {
+        if (availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_PRESET_CURVE) != true) {
             // 不支持，跳过设置
             PLog.d(TAG, "LUT 已启用，但硬件不支持 TONEMAP_MODE_PRESET_CURVE")
             return
@@ -898,15 +921,18 @@ class Camera2Controller(private val context: Context) {
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, state.exposureCompensation)
         } else {
             // 手动曝光 / 半自动曝光：手动设置 ISO 和快门
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
+            // 只有在支持 MANUAL_SENSOR 的设备上才设置，否则保持自动
+            if (isManualSensorSupported) {
+                builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
 
-            // 预览时限制曝光时间，防止画面卡死；拍摄时使用完整的用户设置
-            val exposureTime = if (isCapture) {
-                state.shutterSpeed
-            } else {
-                state.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+                // 预览时限制曝光时间，防止画面卡死；拍摄时使用完整的用户设置
+                val exposureTime = if (isCapture) {
+                    state.shutterSpeed
+                } else {
+                    state.shutterSpeed.coerceAtMost(MAX_PREVIEW_EXPOSURE_TIME)
+                }
+                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
             }
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
 
             // 拍摄时设置低帧率范围以支持长曝光
             if (isCapture) {
@@ -936,8 +962,10 @@ class Camera2Controller(private val context: Context) {
             val gains = kelvinToRggbGains(state.awbTemperature)
             builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
         } else {
-            // 自动白平衡：使用高质量色彩校正模式以获得更好的色彩准确性
-            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+            // 自动白平衡：尝试使用高质量色彩校正模式，如不支持则不设置（保持模式默认值）
+            if (isManualPostProcessingSupported) {
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+            }
         }
     }
     
@@ -949,7 +977,11 @@ class Camera2Controller(private val context: Context) {
      * @param isCapture 是否为拍摄请求（预览时某些闪光模式需要特殊处理）
      */
     private fun applyFlashSettings(builder: CaptureRequest.Builder, state: CameraState, isCapture: Boolean) {
-        // 手动曝光模式下的特殊处理
+        if (!isFlashSupported) {
+            builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+            return
+        }
+
         if (!state.isIsoAuto || !state.isShutterSpeedAuto) {
             // 手动曝光模式（AE_MODE = OFF）
             when (state.flashMode) {
@@ -990,8 +1022,9 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
                 else -> {
-                    // 其他模式（单次闪光、关闭）
-                    builder.set(CaptureRequest.FLASH_MODE, state.flashMode)
+                    // 自动曝光模式下，单次闪光和关闭都应当将 FLASH_MODE 设为 OFF
+                    // 闪光灯的行为由 AE_MODE 控制 (例如 CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                    builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
                 }
             }
         }
@@ -1035,28 +1068,58 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
-            // 锐化模式：拍摄时使用高质量，预览时使用快速模式
-            val edgeMode = if (isCapture) {
-                CaptureRequest.EDGE_MODE_HIGH_QUALITY
-            } else {
-                CaptureRequest.EDGE_MODE_FAST
-            }
-            builder.set(CaptureRequest.EDGE_MODE, edgeMode)
+            if (useSoftwareProcessing) {
+                // 软件处理模式：关闭系统降噪/锐化，由 LutImageProcessor 软件算法处理
+                val edgeMode = if (isCapture) {
+                    if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_OFF)) CaptureRequest.EDGE_MODE_OFF else CaptureRequest.EDGE_MODE_FAST
+                } else {
+                    CaptureRequest.EDGE_MODE_FAST
+                }
+                if (availableEdgeModes.contains(edgeMode)) builder.set(CaptureRequest.EDGE_MODE, edgeMode)
 
-            // 降噪模式：拍摄时使用高质量，预览时使用快速模式
-            val noiseReductionMode = if (isCapture) {
-                CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-            } else {
-                CaptureRequest.NOISE_REDUCTION_MODE_FAST
-            }
-            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
+                val noiseReductionMode = if (isCapture) {
+                    if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)) CaptureRequest.NOISE_REDUCTION_MODE_OFF else CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                } else {
+                    CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                }
+                if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
 
-            if (isCapture) {
-                PLog.d(TAG, "图像质量设置: 锐化=HIGH_QUALITY, 降噪=HIGH_QUALITY")
+                if (isCapture) {
+                    PLog.d(TAG, "图像质量设置: 软件处理模式, 锐化=$edgeMode, 降噪=$noiseReductionMode")
+                }
+            } else {
+                // 系统处理模式：使用系统的降噪/锐化算法
+                val edgeMode = if (isCapture) {
+                     if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_HIGH_QUALITY)) CaptureRequest.EDGE_MODE_HIGH_QUALITY else CaptureRequest.EDGE_MODE_FAST
+                } else {
+                    CaptureRequest.EDGE_MODE_FAST
+                }
+                if (availableEdgeModes.contains(edgeMode)) builder.set(CaptureRequest.EDGE_MODE, edgeMode)
+
+                val noiseReductionMode = if (isCapture) {
+                    if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)) CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY else CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                } else {
+                    CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                }
+                if (availableNoiseReductionModes.contains(noiseReductionMode)) builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
+
+                if (isCapture) {
+                    PLog.d(TAG, "图像质量设置: 系统处理模式, 锐化=$edgeMode, 降噪=$noiseReductionMode")
+                }
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply image quality settings", e)
         }
+    }
+
+    /**
+     * 设置是否使用软件降噪/锐化
+     *
+     * @param enabled true=使用软件算法（关闭系统处理），false=使用系统算法
+     */
+    fun setUseSoftwareProcessing(enabled: Boolean) {
+        useSoftwareProcessing = enabled
+        PLog.d(TAG, "软件处理模式: $enabled")
     }
 
 
@@ -1271,10 +1334,10 @@ class Camera2Controller(private val context: Context) {
             val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
             val hardwareLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
             
-            val isSupported = hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
-                    hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+            val isSupported = isManualPostProcessingSupported && (hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                    hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3)
             
-            PLog.d(TAG, "Hardware level: $hardwareLevel, Manual WB supported: $isSupported")
+            PLog.d(TAG, "Hardware level: $hardwareLevel, ManualPost: $isManualPostProcessingSupported, Manual WB supported: $isSupported")
             isSupported
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to check hardware level", e)
@@ -1314,8 +1377,10 @@ class Camera2Controller(private val context: Context) {
                 set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
                 PLog.d(TAG, "Manual AWB enabled with temperature: ${_state.value.awbTemperature}K")
             } else {
-                // 自动白平衡：使用高质量色彩校正模式
-                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                // 自动白平衡：尝试使用高质量色彩校正模式，如不支持则不设置（保持模式默认值）
+                if (isManualPostProcessingSupported) {
+                    set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                }
             }
             updatePreview()
         }
@@ -1614,8 +1679,12 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Focus: UI($normX, $normY) -> Sensor($finalX, $finalY) -> Rect($focusX, $focusY)")
 
             previewRequestBuilder?.apply {
-                set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
-                set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
+                if (maxAfRegions > 0) {
+                    set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
+                }
+                if (maxAeRegions > 0) {
+                    set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
+                }
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 updatePreview()
@@ -1742,6 +1811,11 @@ class Camera2Controller(private val context: Context) {
         try {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
+                
+                // 关键修复：拍照请求中也加入预览 Surface
+                // 许多设备要求在拍照时保持预览流活跃，否则会导致相机内部流重构失败，
+                // 从而抛出 ERROR_CAMERA_DEVICE (4) 错误。
+                previewSurface?.let { addTarget(it) }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）

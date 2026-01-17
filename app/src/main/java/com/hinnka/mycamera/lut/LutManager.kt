@@ -42,7 +42,7 @@ class LutManager(private val context: Context) {
         private fun temperatureKey(lutId: String) = floatPreferencesKey("${lutId}_temperature")
         private fun tintKey(lutId: String) = floatPreferencesKey("${lutId}_tint")
         private fun fadeKey(lutId: String) = floatPreferencesKey("${lutId}_fade")
-        private fun vibranceKey(lutId: String) = floatPreferencesKey("${lutId}_vibrance")
+        private fun blueKey(lutId: String) = floatPreferencesKey("${lutId}_blue")
         private fun highlightsKey(lutId: String) = floatPreferencesKey("${lutId}_highlights")
         private fun shadowsKey(lutId: String) = floatPreferencesKey("${lutId}_shadows")
         private fun filmGrainKey(lutId: String) = floatPreferencesKey("${lutId}_filmGrain")
@@ -72,7 +72,7 @@ class LutManager(private val context: Context) {
                 temperature = preferences[temperatureKey(lutId)] ?: 0f,
                 tint = preferences[tintKey(lutId)] ?: 0f,
                 fade = preferences[fadeKey(lutId)] ?: 0f,
-                vibrance = preferences[vibranceKey(lutId)] ?: 1f,
+                blue = preferences[blueKey(lutId)] ?: 0f,
                 highlights = preferences[highlightsKey(lutId)] ?: 0f,
                 shadows = preferences[shadowsKey(lutId)] ?: 0f,
                 filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
@@ -213,7 +213,7 @@ class LutManager(private val context: Context) {
             preferences[temperatureKey(lutId)] = params.temperature
             preferences[tintKey(lutId)] = params.tint
             preferences[fadeKey(lutId)] = params.fade
-            preferences[vibranceKey(lutId)] = params.vibrance
+            preferences[blueKey(lutId)] = params.blue
             preferences[highlightsKey(lutId)] = params.highlights
             preferences[shadowsKey(lutId)] = params.shadows
             preferences[filmGrainKey(lutId)] = params.filmGrain
@@ -239,7 +239,7 @@ class LutManager(private val context: Context) {
                 temperature = preferences[temperatureKey(lutId)] ?: 0f,
                 tint = preferences[tintKey(lutId)] ?: 0f,
                 fade = preferences[fadeKey(lutId)] ?: 0f,
-                vibrance = preferences[vibranceKey(lutId)] ?: 1f,
+                blue = preferences[blueKey(lutId)] ?: 0f,
                 highlights = preferences[highlightsKey(lutId)] ?: 0f,
                 shadows = preferences[shadowsKey(lutId)] ?: 0f,
                 filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
@@ -273,7 +273,7 @@ class LutManager(private val context: Context) {
             preferences.remove(temperatureKey(lutId))
             preferences.remove(tintKey(lutId))
             preferences.remove(fadeKey(lutId))
-            preferences.remove(vibranceKey(lutId))
+            preferences.remove(blueKey(lutId))
             preferences.remove(highlightsKey(lutId))
             preferences.remove(shadowsKey(lutId))
             preferences.remove(filmGrainKey(lutId))

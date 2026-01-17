@@ -107,8 +107,8 @@ object PhotoManager {
                     // 任务 1: 保存原图
                     val saveOriginalJob = async {
                         FileOutputStream(photoFile).use { out ->
-                            // 使用 98 质量以获得更高的图像清晰度
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+                            // 使用 95 质量以获得更高的图像清晰度
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
                     }
 
@@ -382,7 +382,7 @@ object PhotoManager {
                         val rotatedBitmap = rotateImageIfRequired(bitmap, orientation)
                         // 保存已旋转的图片，并设置 EXIF 方向为 NORMAL
                         FileOutputStream(photoFile).use { out ->
-                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+                            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         }
 
                         // 设置正确的 EXIF 方向

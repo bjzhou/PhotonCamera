@@ -13,23 +13,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ImportExport
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.IosShare
-import androidx.compose.material.icons.filled.Output
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -526,11 +516,13 @@ private fun ZoomableImage(
                 },
             contentAlignment = Alignment.Center
         ) {
+            val transformation = viewModel.getPhotoTransformation(photo)
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(photo.previewUri)
+                    .memoryCacheKey(transformation.cacheKey)
                     .crossfade(true)
-                    .transformations(viewModel.getPhotoTransformation(photo))
+                    .transformations(transformation)
                     .build(),
                 contentDescription = photo.displayName,
                 contentScale = ContentScale.Fit,

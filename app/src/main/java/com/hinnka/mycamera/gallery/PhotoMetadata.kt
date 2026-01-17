@@ -3,14 +3,12 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.net.Uri
 import android.os.Build
-import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.text.toInt
 
 /**
  * 照片元数据
@@ -63,9 +61,12 @@ data class PhotoMetadata(
                     put("temperature", colorRecipeParams.temperature.toDouble())
                     put("tint", colorRecipeParams.tint.toDouble())
                     put("fade", colorRecipeParams.fade.toDouble())
-                    put("vibrance", colorRecipeParams.vibrance.toDouble())
+                    put("vibrance", colorRecipeParams.blue.toDouble())
                     put("highlights", colorRecipeParams.highlights.toDouble())
                     put("shadows", colorRecipeParams.shadows.toDouble())
+                    put("filmGrain", colorRecipeParams.filmGrain.toDouble())
+                    put("vignette", colorRecipeParams.vignette.toDouble())
+                    put("bleachBypass", colorRecipeParams.bleachBypass.toDouble())
                     put("lutIntensity", colorRecipeParams.lutIntensity.toDouble())
                 })
             } else {
@@ -120,9 +121,12 @@ data class PhotoMetadata(
                         temperature = colorRecipeParamsObj.optDouble("temperature", 0.0).toFloat(),
                         tint = colorRecipeParamsObj.optDouble("tint", 0.0).toFloat(),
                         fade = colorRecipeParamsObj.optDouble("fade", 0.0).toFloat(),
-                        vibrance = colorRecipeParamsObj.optDouble("vibrance", 1.0).toFloat(),
+                        blue = colorRecipeParamsObj.optDouble("vibrance", 0.0).toFloat(),
                         highlights = colorRecipeParamsObj.optDouble("highlights", 0.0).toFloat(),
                         shadows = colorRecipeParamsObj.optDouble("shadows", 0.0).toFloat(),
+                        filmGrain = colorRecipeParamsObj.optDouble("filmGrain", 0.0).toFloat(),
+                        vignette = colorRecipeParamsObj.optDouble("vignette", 0.0).toFloat(),
+                        bleachBypass = colorRecipeParamsObj.optDouble("bleachBypass", 0.0).toFloat(),
                         lutIntensity = colorRecipeParamsObj.optDouble("lutIntensity", 1.0).toFloat()
                     )
                 } else {

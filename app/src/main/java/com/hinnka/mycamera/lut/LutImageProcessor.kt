@@ -69,6 +69,12 @@ class LutImageProcessor {
     private var uVignetteLoc = 0
     private var uBleachBypassLoc = 0
     
+    // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
+    private var uSharpeningLoc = 0
+    private var uNoiseReductionLoc = 0
+    private var uChromaNoiseReductionLoc = 0
+    private var uTexelSizeLoc = 0  // 用于卷积计算
+    
     /**
      * 初始化 EGL 环境
      */
@@ -155,11 +161,25 @@ class LutImageProcessor {
     
     /**
      * 应用 LUT 到 Bitmap
+     * 
+     * @param bitmap 输入图片
+     * @param lutConfig LUT 配置
+     * @param colorRecipeParams 色彩配方参数
+     * @param useSoftwareProcessing 是否使用软件处理模式
+     *        - true: 使用软件降噪/锐化算法
+     *        - false: 不应用软件降噪/锐化（因为系统已处理）
+     * @param sharpeningValue 锐化强度（仅 useSoftwareProcessing=true 时生效）
+     * @param noiseReductionValue 降噪强度（仅 useSoftwareProcessing=true 时生效）
+     * @param chromaNoiseReductionValue 减少杂色强度（仅 useSoftwareProcessing=true 时生效）
      */
     suspend fun applyLut(
         bitmap: Bitmap,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
+        useSoftwareProcessing: Boolean = true,
+        sharpeningValue: Float = 0.3f,
+        noiseReductionValue: Float = 0.25f,
+        chromaNoiseReductionValue: Float = 0.25f,
     ): Bitmap = withContext(glDispatcher) {
         if (!isInitialized) {
             if (!initialize()) {
@@ -175,13 +195,30 @@ class LutImageProcessor {
         val temperature = colorRecipeParams?.temperature ?: 0f
         val tint = colorRecipeParams?.tint ?: 0f
         val fade = colorRecipeParams?.fade ?: 0f
-        val vibrance = colorRecipeParams?.vibrance ?: 1f
+        val vibrance = colorRecipeParams?.blue ?: 0f
         val highlights = colorRecipeParams?.highlights ?: 0f
         val shadows = colorRecipeParams?.shadows ?: 0f
         val filmGrain = colorRecipeParams?.filmGrain ?: 0f
         val vignette = colorRecipeParams?.vignette ?: 0f
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
+        
+        // 后期处理参数（仅在软件处理模式下生效）
+        val sharpening: Float
+        val noiseReduction: Float
+        val chromaNoiseReduction: Float
+        
+        if (useSoftwareProcessing) {
+            // 软件处理模式：使用传入的参数值
+            sharpening = sharpeningValue
+            noiseReduction = noiseReductionValue
+            chromaNoiseReduction = chromaNoiseReductionValue
+        } else {
+            // 系统处理模式：不应用软件降噪/锐化（系统已经处理了）
+            sharpening = 0f
+            noiseReduction = 0f
+            chromaNoiseReduction = 0f
+        }
         
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -238,6 +275,12 @@ class LutImageProcessor {
             GLES30.glUniform1f(uVignetteLoc, vignette)
             GLES30.glUniform1f(uBleachBypassLoc, bleachBypass)
         }
+        
+        // 设置后期处理参数（仅拍摄和后期编辑时生效）
+        GLES30.glUniform1f(uSharpeningLoc, sharpening)
+        GLES30.glUniform1f(uNoiseReductionLoc, noiseReduction)
+        GLES30.glUniform1f(uChromaNoiseReductionLoc, chromaNoiseReduction)
+        GLES30.glUniform2f(uTexelSizeLoc, 1.0f / width, 1.0f / height)
 
         // 设置 MVP 矩阵（单位矩阵）
         val mvpMatrix = FloatArray(16)
@@ -396,6 +439,12 @@ class LutImageProcessor {
         uFilmGrainLoc = GLES30.glGetUniformLocation(shaderProgram, "uFilmGrain")
         uVignetteLoc = GLES30.glGetUniformLocation(shaderProgram, "uVignette")
         uBleachBypassLoc = GLES30.glGetUniformLocation(shaderProgram, "uBleachBypass")
+        
+        // 获取后期处理参数 uniform 位置
+        uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
+        uNoiseReductionLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoiseReduction")
+        uChromaNoiseReductionLoc = GLES30.glGetUniformLocation(shaderProgram, "uChromaNoiseReduction")
+        uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
     }
     
     private fun compileShader(type: Int, source: String): Int {
@@ -530,15 +579,182 @@ class LutImageProcessor {
             uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
+            
+            // 后期处理参数（仅拍摄和后期编辑时生效，预览时不生效）
+            uniform float uSharpening;           // 0.0 ~ 1.0 (锐化强度)
+            uniform float uNoiseReduction;       // 0.0 ~ 1.0 (降噪强度)
+            uniform float uChromaNoiseReduction; // 0.0 ~ 1.0 (减少杂色强度)
+            uniform vec2 uTexelSize;             // 像素尺寸（用于卷积计算）
+            
+            // 辅助函数：亮度计算
+            float getLuma(vec3 color) {
+                return dot(color, vec3(0.299, 0.587, 0.114));
+            }
+            
+            // 辅助函数：高斯权重 (预计算 sigma^2 的倒数以提升性能)
+            float gaussian(float x, float invSigmaSq2) {
+                return exp(-x * invSigmaSq2);
+            }
+            
+            // RGB 转 YCbCr
+            vec3 rgb2ycbcr(vec3 rgb) {
+                float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+                float cb = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b + 0.5;
+                float cr =  0.500 * rgb.r - 0.419 * rgb.g - 0.081 * rgb.b + 0.5;
+                return vec3(y, cb, cr);
+            }
+            
+            // YCbCr 转 RGB
+            vec3 ycbcr2rgb(vec3 ycbcr) {
+                float y  = ycbcr.x;
+                float cb = ycbcr.y - 0.5;
+                float cr = ycbcr.z - 0.5;
+                float r = y + 1.402 * cr;
+                float g = y - 0.344 * cb - 0.714 * cr;
+                float b = y + 1.772 * cb;
+                return vec3(r, g, b);
+            }
 
             void main() {
                 // 从图片纹理采样原始颜色
                 vec4 color = texture(uImageTexture, vTexCoord);
-
-                // Early exit 优化：无任何调整时直接输出
-                if (!uColorRecipeEnabled && !uLutEnabled) {
-                    fragColor = color;
-                    return;
+                
+                // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
+                
+                // ============================================================
+                // 引导滤波降噪 (Guided Filter Denoising)
+                // 原理：假设输出 q 与引导图 I 在局部窗口内满足 q = a*I + b
+                // 当 σ² >> ε 时，a≈1，保持原值（边缘保持）
+                // 当 σ² << ε 时，a≈0，输出均值（平滑降噪）
+                // ============================================================
+                
+                if (uNoiseReduction > 0.0) {
+                    // 转换到 YCbCr 色彩空间处理
+                    vec3 centerYCbCr = rgb2ycbcr(color.rgb);
+                    float I = centerYCbCr.x;  // 引导图 = 输入亮度
+                    vec2 Ic = centerYCbCr.yz; // 色度引导
+                    
+                    // === Step 1: 计算局部统计量 ===
+                    const int RADIUS = 4;  // 9x9 窗口
+                    float radiusSq = float(RADIUS * RADIUS);
+                    
+                    // 累加器
+                    float sumI = 0.0;      // Σ I
+                    float sumII = 0.0;     // Σ I²
+                    vec2 sumIc = vec2(0.0);
+                    vec2 sumIcIc = vec2(0.0);
+                    float count = 0.0;
+                    
+                    for (int x = -RADIUS; x <= RADIUS; x++) {
+                        for (int y = -RADIUS; y <= RADIUS; y++) {
+                            float distSq = float(x*x + y*y);
+                            if (distSq > radiusSq) continue;
+                            
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
+                            vec3 sampleYCbCr = rgb2ycbcr(sampleRgb);
+                            
+                            float sI = sampleYCbCr.x;
+                            vec2 sIc = sampleYCbCr.yz;
+                            
+                            sumI += sI;
+                            sumII += sI * sI;
+                            sumIc += sIc;
+                            sumIcIc += sIc * sIc;
+                            count += 1.0;
+                        }
+                    }
+                    
+                    // 局部均值
+                    float meanI = sumI / count;
+                    vec2 meanIc = sumIc / count;
+                    
+                    // 局部方差 = E[I²] - E[I]²
+                    float varI = sumII / count - meanI * meanI;
+                    vec2 varIc = sumIcIc / count - meanIc * meanIc;
+                    
+                    // === Step 2: 计算引导滤波系数 a 和 b ===
+                    // ε 是正则化参数，控制平滑程度
+                    // ε 越大 → 更多区域被判定为"需要平滑" → 降噪更强
+                    
+                    // 暗部噪点更多，ε 更大
+                    float darkFactor = 1.0 + (1.0 - I) * 1.5;
+                    
+                    // Y 通道的 ε：0.0001 ~ 0.005（降噪强度控制）
+                    float epsilonY = (0.0001 + uNoiseReduction * 0.005) * darkFactor;
+                    // CbCr 通道的 ε：略大一些
+                    float epsilonC = (0.0002 + uNoiseReduction * 0.008) * darkFactor;
+                    
+                    // a = var / (var + ε)
+                    // 当 var >> ε 时，a ≈ 1（保持原值）
+                    // 当 var << ε 时，a ≈ 0（输出均值）
+                    float aY = varI / (varI + epsilonY);
+                    vec2 aC = varIc / (varIc + vec2(epsilonC));
+                    
+                    // b = mean * (1 - a)
+                    float bY = meanI * (1.0 - aY);
+                    vec2 bC = meanIc * (1.0 - aC);
+                    
+                    // === Step 3: 输出 q = a*I + b ===
+                    float finalY = aY * I + bY;
+                    vec2 finalCbCr = aC * Ic + bC;
+                    
+                    // 转回 RGB
+                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+            
+                // --- 2. 强力色度降噪 (Chroma Denoise) ---
+                if (uChromaNoiseReduction > 0.0) {
+                    vec3 yuv = rgb2ycbcr(color.rgb);
+                    
+                    vec2 sumUV = vec2(0.0);
+                    float sumWeight = 0.0;
+            
+                    // 基础半径 2.0，滑块拉满时步长极大
+                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0; 
+            
+                    // 阈值越大，越容易模糊(保护越弱)
+                    float colorThreshold = 0.15;
+            
+                    // 采用 5x5 循环
+                    const int RADIUS_UV = 2; 
+                    
+                    for (int x = -RADIUS_UV; x <= RADIUS_UV; x++) {
+                        for (int y = -RADIUS_UV; y <= RADIUS_UV; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize * maxStride;
+                            
+                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
+                            // 注意：这里必须用 sampleRgb，不要用 color.rgb
+                            vec3 sampleYuv = rgb2ycbcr(sampleRgb);
+                            
+                            // 1. 距离权重
+                            float distSq = float(x*x + y*y);
+                            float wDist = exp(-distSq / 4.0);
+                            
+                            // 2. 颜色相似度权重
+                            float uvDiff = distance(sampleYuv.yz, yuv.yz);
+                            
+                            float wColor = 1.0 - smoothstep(colorThreshold, colorThreshold + 0.1, uvDiff);
+                            
+                            float weight = wDist * wColor;
+                            
+                            sumUV += sampleYuv.yz * weight;
+                            sumWeight += weight;
+                        }
+                    }
+            
+                    // 防止除以 0 的保护
+                    if (sumWeight > 0.001) {
+                        vec2 cleanUV = sumUV / sumWeight;
+            
+                        // Saturation 曲线混合
+                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
+            
+                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
+                    }
+            
+                    color.rgb = ycbcr2rgb(yuv);
                 }
 
                 // === 色彩配方处理（按专业后期流程顺序） ===
@@ -568,7 +784,7 @@ class LutImageProcessor {
                     // 6. 蓝色增强（Vibrance）
                     float baseBlue = color.b - (color.r + color.g) * 0.5;
                     float blueMask = smoothstep(0.0, 0.2, baseBlue); 
-                    float strength = (uVibrance - 1.0) * 0.5;
+                    float strength = uVibrance * 0.5;
                     if (blueMask > 0.0) {
                         vec3 densityCheck = vec3(0.3, 0.3, 0.0) * blueMask * strength;
                         color.r -= densityCheck.r * color.r;
@@ -657,6 +873,28 @@ class LutImageProcessor {
 
                     // 根据强度混合色彩配方处理后的颜色和 LUT 颜色
                     color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+                }
+                
+                // === 后期处理：锐化（在 LUT 之后，作为最后步骤） ===
+                if (uSharpening > 0.0) {
+                    // 使用 Unsharp Mask 算法
+                    // 采样相邻像素
+                    vec3 neighbors = vec3(0.0);
+                    neighbors += texture(uImageTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb;
+                    neighbors += texture(uImageTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb;
+                    neighbors += texture(uImageTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb;
+                    neighbors += texture(uImageTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb;
+                    vec3 blur = neighbors * 0.25;
+                    
+                    // 计算锐化增量（高频分量）
+                    vec3 sharpenDelta = color.rgb - blur;
+                    
+                    // 应用锐化（强度可调）
+                    float sharpenAmount = uSharpening * 1.5; // 调整系数以获得合适的效果
+                    color.rgb = color.rgb + sharpenDelta * sharpenAmount;
+                    
+                    // Clamp 防止过曝
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
                 }
 
                 fragColor = color;

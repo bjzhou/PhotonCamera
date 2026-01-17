@@ -215,7 +215,7 @@ object Shaders {
                 // 6. 蓝色增强（Vibrance - 选择性增强蓝色）
                 float baseBlue = color.b - (color.r + color.g) * 0.5;
                 float blueMask = smoothstep(0.0, 0.2, baseBlue); 
-                float strength = (uVibrance - 1.0) * 0.5;
+                float strength = uVibrance * 0.5;
                 if (blueMask > 0.0) {
                     vec3 densityCheck = vec3(0.3, 0.3, 0.0) * blueMask * strength;
                     color.r -= densityCheck.r * color.r;

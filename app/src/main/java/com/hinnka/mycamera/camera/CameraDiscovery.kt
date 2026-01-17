@@ -410,8 +410,23 @@ class CameraDiscovery(private val context: Context) {
             focalLength35mmEquivalent = focalLength35mm,
             zoomSteps = listOf(1f),
             intrinsicZoomRatio = intrinsicZoomRatio,
-            hardwareLevel = hardwareLevel
+            hardwareLevel = hardwareLevel,
+            supportsManualProcessing = checkManualProcessingSupport(characteristics)
         )
+    }
+
+    /**
+     * 检查是否支持手动处理模式
+     * 要求设备支持 EDGE_MODE_OFF 和 NOISE_REDUCTION_MODE_OFF
+     */
+    private fun checkManualProcessingSupport(characteristics: CameraCharacteristics): Boolean {
+        val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
+        val nrModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()
+        
+        val supportsEdgeOff = edgeModes.contains(CameraMetadata.EDGE_MODE_OFF)
+        val supportsNrOff = nrModes.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF)
+        
+        return supportsEdgeOff && supportsNrOff
     }
     
     /**

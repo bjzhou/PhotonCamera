@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
  */
 object PLog {
     private const val TAG = "LogManager"
-    private const val MAX_LOG_SIZE = 1000 // 最多保存1000条日志
+    private const val MAX_LOG_SIZE = 500 // 最多保存500条日志
 
     // 使用线程安全的队列存储日志
     private val logQueue = ConcurrentLinkedQueue<LogEntry>()
@@ -121,7 +121,7 @@ object PLog {
      * 获取所有日志
      */
     fun getAllLogs(): List<LogEntry> {
-        return logQueue.toList()
+        return logQueue.reversed()
     }
 
     /**
@@ -142,7 +142,7 @@ object PLog {
             appendLine("=".repeat(50))
             appendLine()
 
-            logQueue.forEach { entry ->
+            getAllLogs().forEach { entry ->
                 appendLine(entry.getFormattedLog())
             }
         }

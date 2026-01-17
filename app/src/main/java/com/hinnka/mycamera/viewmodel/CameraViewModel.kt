@@ -6,7 +6,6 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 import android.util.Log
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -113,9 +112,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var currentFrameId: String? by mutableStateOf(null)
         private set
 
-    var currentShowAppBranding by mutableStateOf(true)
-        private set
-
     var showHistogram by mutableStateOf(true)
         private set
 
@@ -127,19 +123,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 付费弹窗状态
     var showPaymentDialog by mutableStateOf(false)
 
-    // LUT编辑底部弹窗状态
-    var showLutEditSheet by mutableStateOf(false)
-        private set
-
-    var editingLutInfo: LutInfo? by mutableStateOf(null)
-        private set
-
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
+    val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useSoftwareProcessing }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+    // 软件处理参数 Flow
+    val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.sharpening }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.3f)
+    val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.noiseReduction }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
+    val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.chromaNoiseReduction }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
@@ -156,16 +158,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         cameraController.onCameraError = { code, message, canRetry ->
-            if (canRetry) {
-                checkAndRecoverCamera()
-            }
+            // 只记录错误日志，不在这里重试打开相机
+            // 相机恢复应该由 CameraScreen 的 ON_RESUME 生命周期事件处理
+            // 这样可以避免在相机被其他应用占用时的无限重试循环
+            Log.d(TAG, "onCameraError: code=$code, message=$message, canRetry=$canRetry")
         }
 
-        // 监听快门声音和震动设置
+        // 监听快门声音、震动和软件处理设置
         viewModelScope.launch {
             userPreferencesRepository.userPreferences.collect {
                 isShutterSoundEnabled = it.shutterSoundEnabled
                 isVibrationEnabled = it.vibrationEnabled
+                // 同步软件处理设置到相机控制器
+                cameraController.setUseSoftwareProcessing(it.useSoftwareProcessing)
             }
         }
 
@@ -219,7 +224,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (prefs.frameId != null) {
                     currentFrameId = prefs.frameId
                 }
-                currentShowAppBranding = prefs.showAppBranding
 
                 showHistogram = prefs.showHistogram
 
@@ -524,11 +528,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                         if (lutConfig != null) {
                             val colorRecipeParams = contentRepository.lutManager.loadColorRecipeParams(lutInfo.id)
-                            // 直接使用原始 bitmap，不创建副本以避免内存溢出
+                            // LUT 预览生成：禁用软件处理（预览图小，不需要降噪/锐化）
                             val previewBitmap = lutImageProcessor.applyLut(
                                 bitmap = bitmap,
                                 lutConfig = lutConfig,
-                                colorRecipeParams = colorRecipeParams
+                                colorRecipeParams = colorRecipeParams,
+                                useSoftwareProcessing = false  // 预览不需要软件处理
                             )
                             newPreviews[lutInfo.id] = previewBitmap
                         }
@@ -620,18 +625,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         currentFrameId = frameId
         // 保存到用户偏好设置
         viewModelScope.launch {
-            userPreferencesRepository.saveFrameConfig(frameId, currentShowAppBranding)
-        }
-    }
-
-    /**
-     * 设置是否显示 App 品牌
-     */
-    fun setShowAppBranding(show: Boolean) {
-        currentShowAppBranding = show
-        // 保存到用户偏好设置
-        viewModelScope.launch {
-            userPreferencesRepository.saveShowAppBranding(show)
+            userPreferencesRepository.saveFrameConfig(frameId)
         }
     }
 
@@ -723,6 +717,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置是否使用软件降噪/锐化
+     */
+    fun setUseSoftwareProcessing(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseSoftwareProcessing(enabled)
+        }
+    }
+
+    /**
+     * 设置锐化强度
+     */
+    fun setSharpening(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveSharpening(value)
+        }
+    }
+
+    /**
+     * 设置降噪强度
+     */
+    fun setNoiseReduction(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveNoiseReduction(value)
+        }
+    }
+
+    /**
+     * 设置减少杂色强度
+     */
+    fun setChromaNoiseReduction(value: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveChromaNoiseReduction(value)
+        }
+    }
+
+    /**
      * 保存图片
      */
     private suspend fun saveImage(image: Image, captureInfo: CaptureInfo) {
@@ -735,10 +765,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 保存当前边框信息用于元数据
         val frameIdToSave = currentFrameId
-        val showAppBrandingToSave = currentShowAppBranding
 
-        // 获取是否自动保存设置
+        // 获取是否自动保存和软件处理设置
         val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+        val shouldUseSoftwareProcessing = useSoftwareProcessing.value
+        // 获取软件处理参数
+        val sharpeningValue = sharpening.value
+        val noiseReductionValue = noiseReduction.value
+        val chromaNoiseReductionValue = chromaNoiseReduction.value
 
         try {
             // 计算旋转角度
@@ -765,6 +799,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 编辑配置
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
+                colorRecipeParams = currentRecipeParams.value,
                 // 拍摄信息 (来自 captureInfo)
                 deviceModel = captureInfo.model,
                 brand = captureInfo.make.replaceFirstChar { it.uppercase() },
@@ -794,7 +829,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (shouldAutoSave) {
                         launch {
                             val processedBitmap = withContext(Dispatchers.Default) {
-                                photoProcessor.process(context, bitmap, metadata)
+                                // 使用用户设置的软件处理模式和参数
+                                photoProcessor.process(
+                                    context = context, 
+                                    input = bitmap, 
+                                    metadata = metadata,
+                                    useSoftwareProcessing = shouldUseSoftwareProcessing,
+                                    sharpening = sharpeningValue,
+                                    noiseReduction = noiseReductionValue,
+                                    chromaNoiseReduction = chromaNoiseReductionValue
+                                )
                             }
 
                             val filename = "PhotonCamera_${
@@ -816,8 +860,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                             uri?.let {
                                 context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                                    // 使用 98 质量以获得更高的图像清晰度
-                                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, outputStream)
+                                    // 使用 95 质量以获得更高的图像清晰度
+                                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                                 }
 
                                 // 保存导出的 URI 到元数据

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -24,7 +25,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.foundation.gestures.*
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -216,25 +223,12 @@ fun PhotoEditScreen(
                 contentAlignment = Alignment.Center
             ) {
                 // 显示预览
-                if (previewBitmap != null) {
-                    Image(
-                        bitmap = previewBitmap!!.asImageBitmap(),
-                        contentDescription = stringResource(R.string.edit),
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    // 加载中或尚无预览时显示原图
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(currentPhoto.previewUri)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = stringResource(R.string.original),
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                ZoomableEditImage(
+                    previewBitmap = previewBitmap,
+                    fallbackUri = currentPhoto.previewUri,
+                    contentDescription = stringResource(R.string.edit),
+                    modifier = Modifier.fillMaxSize()
+                )
 
                 // 加载指示器
                 if (isLoadingPreview) {
@@ -623,6 +617,151 @@ private fun WatermarkEditSheet(
                     singleLine = true
                 )
             }
+        }
+    }
+}
+
+/**
+ * 用于编辑界面的可缩放图片组件
+ * 支持双击缩放和双指缩放
+ */
+@Composable
+private fun ZoomableEditImage(
+    previewBitmap: Bitmap?,
+    fallbackUri: android.net.Uri,
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+    
+    // 用于计算边界的容器尺寸
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    
+    val animatedScale by animateFloatAsState(targetValue = scale, label = "scale")
+    
+    // 计算当前缩放下的位移边界
+    fun updateOffset(panX: Float, panY: Float, currentScale: Float, imageWidth: Int, imageHeight: Int) {
+        if (imageWidth <= 0 || imageHeight <= 0 || containerSize.width <= 0 || containerSize.height <= 0) {
+            offsetX += panX
+            offsetY += panY
+            return
+        }
+
+        // 在 ContentScale.Fit 模式下，图片的显示尺寸
+        val contentAspectRatio = imageWidth.toFloat() / imageHeight
+        val containerAspectRatio = containerSize.width.toFloat() / containerSize.height
+        
+        val (displayW, displayH) = if (contentAspectRatio > containerAspectRatio) {
+            containerSize.width.toFloat() to (containerSize.width.toFloat() / contentAspectRatio)
+        } else {
+            (containerSize.height.toFloat() * contentAspectRatio) to containerSize.height.toFloat()
+        }
+
+        val zoomedW = displayW * currentScale
+        val zoomedH = displayH * currentScale
+
+        // 只有当放大后的尺寸大于容器尺寸时，才允许在该方向上位移
+        val maxOffsetX = if (zoomedW > containerSize.width) (zoomedW - containerSize.width) / 2f else 0f
+        val maxOffsetY = if (zoomedH > containerSize.height) (zoomedH - containerSize.height) / 2f else 0f
+
+        offsetX = (offsetX + panX).coerceIn(-maxOffsetX, maxOffsetX)
+        offsetY = (offsetY + panY).coerceIn(-maxOffsetY, maxOffsetY)
+    }
+    
+    // 获取图片尺寸
+    val imageWidth = previewBitmap?.width ?: 1920
+    val imageHeight = previewBitmap?.height ?: 1080
+    
+    Box(
+        modifier = modifier
+            .onSizeChanged { containerSize = it }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        if (scale > 1f) {
+                            scale = 1f
+                            offsetX = 0f
+                            offsetY = 0f
+                        } else {
+                            scale = 2.5f
+                        }
+                    }
+                )
+            }
+            .pointerInput(previewBitmap) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val canceled = event.changes.any { it.isConsumed }
+                        if (!canceled) {
+                            val zoomChange = event.calculateZoom()
+                            val panChange = event.calculatePan()
+                            val pointerCount = event.changes.size
+
+                            // 决定是否消费并处理当前手势
+                            // 1. 如果是多指（正在缩放）
+                            // 2. 如果是单指但图片已经放大（正在平移）
+                            if (pointerCount > 1 || scale > 1f) {
+                                val newScale = (scale * zoomChange).coerceIn(1f, 5f)
+                                
+                                if (newScale <= 1.01f && zoomChange < 1f) {
+                                    scale = 1f
+                                    offsetX = 0f
+                                    offsetY = 0f
+                                } else {
+                                    scale = newScale
+                                    updateOffset(panChange.x, panChange.y, newScale, imageWidth, imageHeight)
+                                }
+                                
+                                // 消费事件
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        if (previewBitmap != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(previewBitmap)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = animatedScale
+                        scaleY = animatedScale
+                        translationX = offsetX
+                        translationY = offsetY
+                    }
+            )
+        } else {
+            // 加载中或尚无预览时显示原图
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(fallbackUri)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = animatedScale
+                        scaleY = animatedScale
+                        translationX = offsetX
+                        translationY = offsetY
+                    }
+            )
         }
     }
 }

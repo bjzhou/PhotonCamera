@@ -1,8 +1,8 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.content.Context
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
 import androidx.compose.runtime.*
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -19,30 +18,20 @@ import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.*
-import com.hinnka.mycamera.lut.*
-import com.hinnka.mycamera.model.ColorRecipe
+import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutImageProcessor
+import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.utils.PLog
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.collections.set
 import kotlin.math.max
+import com.hinnka.mycamera.data.UserPreferencesRepository
 
 /**
  * 相册 ViewModel
@@ -66,6 +55,27 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         contentRepository.frameManager,
         frameRenderer
     )
+
+    // 用户偏好设置仓库
+    private val userPreferencesRepository = UserPreferencesRepository(application)
+    
+    // 软件处理模式设置
+    val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useSoftwareProcessing }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    // 软件处理参数
+    val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.sharpening }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.3f)
+
+    val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.noiseReduction }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
+
+    val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.chromaNoiseReduction }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -376,7 +386,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 lutImageProcessor.applyLut(
                     bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
                     lutConfig = lutConfig,
-                    colorRecipeParams = colorRecipeParams
+                    colorRecipeParams = colorRecipeParams,
+                    useSoftwareProcessing = false  // 预览不需要软件处理
                 ).let { preview ->
                     previews[lutInfo.id] = preview
                 }
@@ -844,7 +855,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             context = context,
             uri = photo.uri,
             metadata = photo.metadata ?: PhotoMetadata(),
-            photoProcessor = photoProcessor
+            photoProcessor = photoProcessor,
+            useSoftwareProcessing = useSoftwareProcessing.value,
+            sharpening = sharpening.value,
+            noiseReduction = noiseReduction.value,
+            chromaNoiseReduction = chromaNoiseReduction.value
         )
     }
 
@@ -864,10 +879,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val metadata = (photo.metadata ?: PhotoMetadata()).copy(
                     lutId = editLutId.value,
                     frameId = editFrameId,
+                    colorRecipeParams = editLutRecipeParams.value,
                     customProperties = editCustomProperties.toMap()
                 )
 
-                photoProcessor.process(context, bitmap, metadata, photo.previewUri)
+                // 预览生成：跟随用户设置
+                photoProcessor.process(
+                    context, bitmap, metadata, photo.previewUri, 
+                    useSoftwareProcessing.value, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)
                 null
@@ -893,6 +913,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val metadata = (currentPhotoMetadata ?: PhotoMetadata()).copy(
                     lutId = editLutId.value,
                     frameId = editFrameId,
+                    colorRecipeParams = editLutRecipeParams.value,
                     customProperties = editCustomProperties.toMap()
                 )
                 val success = PhotoManager.saveMetadata(context, photo.id, metadata)
@@ -939,6 +960,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val metadata = (photo.metadata ?: PhotoMetadata()).copy(
             lutId = editLutId.value,
             frameId = editFrameId,
+            colorRecipeParams = editLutRecipeParams.value,
             customProperties = editCustomProperties.toMap()
         )
         exportPhotoInternal(
@@ -982,8 +1004,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             if (bitmap == null) return@withContext null
 
-            // 处理照片
-            val processedBitmap = photoProcessor.process(context, bitmap, metadata, photo.uri)
+            // 处理照片：跟随用户设置
+            val processedBitmap = photoProcessor.process(
+                context, bitmap, metadata, photo.uri, 
+                useSoftwareProcessing.value, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+            )
 
             // 保存到缓存目录
             val sharedDir = File(context.cacheDir, "shared")
@@ -991,8 +1016,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             val sharedFile = File(sharedDir, "share_${photo.id}.jpg")
             FileOutputStream(sharedFile).use { out ->
-                // 使用 98 质量以获得更高的图像清晰度
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+                // 使用 95 质量以获得更高的图像清晰度
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
             }
 
             processedBitmap.recycle()
@@ -1029,8 +1054,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                // 处理照片
-                val processedBitmap = photoProcessor.process(context, bitmap, metadata, photo.uri)
+                // 处理照片：跟随用户设置
+                val processedBitmap = photoProcessor.process(
+                    context, bitmap, metadata, photo.uri, 
+                    useSoftwareProcessing.value, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                )
 
                 // 保存到指定目录
                 val filename =
@@ -1048,8 +1076,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 uri?.let {
                     context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        // 使用 98 质量以获得更高的图像清晰度
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, outputStream)
+                        // 使用 95 质量以获得更高的图像清晰度
+                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                     }
 
                     // 保存导出的 URI 到元数据

@@ -14,13 +14,13 @@ data class ColorRecipeParams(
     val temperature: Float = 0f,    // -1.0 ~ +1.0 (色温，负值偏冷，正值偏暖)
     val tint: Float = 0f,           // -1.0 ~ +1.0 (色调，负值偏绿，正值偏品红)
     val fade: Float = 0f,           // 0.0 ~ 1.0 (褪色效果，0为无褪色)
-    val vibrance: Float = 1f,       // 0.0 ~ 2.0 (蓝色增强/自然饱和度，1为无调整)
+    val blue: Float = 0f,       // -1.0 ~ 1.0 (蓝色增强，0为无调整)
     val highlights: Float = 0f,     // -1.0 ~ +1.0 (高光调整，0为无调整)
     val shadows: Float = 0f,        // -1.0 ~ +1.0 (阴影调整，0为无调整)
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
-    val lutIntensity: Float = 1f    // 0.0 ~ 1.0 (LUT强度，1为完全应用)
+    val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
 ) {
     /**
      * 检查参数是否为默认值（无任何调整）
@@ -32,7 +32,7 @@ data class ColorRecipeParams(
                 temperature == 0f &&
                 tint == 0f &&
                 fade == 0f &&
-                vibrance == 1f &&
+                blue == 0f &&
                 highlights == 0f &&
                 shadows == 0f &&
                 filmGrain == 0f &&
@@ -51,7 +51,7 @@ data class ColorRecipeParams(
                 temperature == other.temperature &&
                 tint == other.tint &&
                 fade == other.fade &&
-                vibrance == other.vibrance &&
+                blue == other.blue &&
                 highlights == other.highlights &&
                 shadows == other.shadows &&
                 filmGrain == other.filmGrain &&
@@ -67,20 +67,6 @@ data class ColorRecipeParams(
         val DEFAULT = ColorRecipeParams()
     }
 }
-
-/**
- * 色彩配方预设
- *
- * 包含命名的预设配方，可以快速应用到照片
- */
-data class ColorRecipe(
-    val id: String,                     // 配方唯一ID
-    val name: String,                   // 配方名称（用户可见）
-    val description: String = "",       // 配方描述
-    val params: ColorRecipeParams,      // 配方参数
-    val thumbnailRes: Int? = null,      // 缩略图资源ID（可选）
-    val isVip: Boolean = false          // 是否为VIP专享配方
-)
 
 /**
  * 色彩配方参数枚举
@@ -99,7 +85,7 @@ enum class RecipeParam(
     TEMPERATURE(R.string.recipe_param_temperature, -1.0f, 1.0f, 0f),
     TINT(R.string.recipe_param_tint, -1.0f, 1.0f, 0f),
     FADE(R.string.recipe_param_fade, 0.0f, 1.0f, 0f),
-    VIBRANCE(R.string.recipe_param_vibrance, 0.0f, 2.0f, 1f),
+    BLUE(R.string.recipe_param_blue, -1.0f, 1.0f, 0f),
     HIGHLIGHTS(R.string.recipe_param_highlights, -1.0f, 1.0f, 0f),
     SHADOWS(R.string.recipe_param_shadows, -1.0f, 1.0f, 0f),
     FILM_GRAIN(R.string.recipe_param_film_grain, 0.0f, 1.0f, 0f),
@@ -125,7 +111,7 @@ enum class RecipeParam(
             TEMPERATURE -> params.temperature
             TINT -> params.tint
             FADE -> params.fade
-            VIBRANCE -> params.vibrance
+            BLUE -> params.blue
             HIGHLIGHTS -> params.highlights
             SHADOWS -> params.shadows
             FILM_GRAIN -> params.filmGrain
@@ -147,7 +133,7 @@ enum class RecipeParam(
             TEMPERATURE -> params.copy(temperature = clampedValue)
             TINT -> params.copy(tint = clampedValue)
             FADE -> params.copy(fade = clampedValue)
-            VIBRANCE -> params.copy(vibrance = clampedValue)
+            BLUE -> params.copy(blue = clampedValue)
             HIGHLIGHTS -> params.copy(highlights = clampedValue)
             SHADOWS -> params.copy(shadows = clampedValue)
             FILM_GRAIN -> params.copy(filmGrain = clampedValue)

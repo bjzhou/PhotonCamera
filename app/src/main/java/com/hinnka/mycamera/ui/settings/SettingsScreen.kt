@@ -34,6 +34,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 
@@ -53,6 +54,11 @@ fun SettingsScreen(
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
+    val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState(initial = true)
+    // 软件处理参数
+    val sharpening by viewModel.sharpening.collectAsState(initial = 0.3f)
+    val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0.25f)
+    val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0.25f)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -214,6 +220,59 @@ fun SettingsScreen(
                     checked = autoSaveAfterCapture,
                     onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
                 )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                val currentCameraInfo = state.getCurrentCameraInfo()
+                val supportsManualProcessing = currentCameraInfo?.supportsManualProcessing ?: false
+
+                if (supportsManualProcessing) {
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_software_processing),
+                        description = stringResource(R.string.settings_software_processing_description),
+                        checked = useSoftwareProcessing,
+                        onCheckedChange = { viewModel.setUseSoftwareProcessing(it) }
+                    )
+
+                    // 软件处理参数（仅在软件处理模式开启时显示）
+                    if (useSoftwareProcessing) {
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_sharpening),
+                            description = stringResource(R.string.settings_sharpening_description),
+                            value = sharpening,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setSharpening(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_noise_reduction),
+                            description = stringResource(R.string.settings_noise_reduction_description),
+                            value = noiseReduction,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setNoiseReduction(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_chroma_noise_reduction),
+                            description = stringResource(R.string.settings_chroma_noise_reduction_description),
+                            value = chromaNoiseReduction,
+                            valueRange = 0f..1f,
+                            onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -343,6 +402,64 @@ fun SwitchSettingItem(
                 uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
                 uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
             )
+        )
+    }
+}
+
+/**
+ * 滑块设置项
+ */
+@Composable
+fun SliderSettingItem(
+    title: String,
+    description: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            Text(
+                text = String.format("%.2f", value),
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(4.dp))
+        
+        Text(
+            text = description,
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+        
+        Spacer(modifier = Modifier.height(8.dp))
+
+        CustomSliderThinThumb(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            thumbColor = Color.White,
+            activeTrackColor = Color(0xFFFF6B35),
+            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
         )
     }
 }
