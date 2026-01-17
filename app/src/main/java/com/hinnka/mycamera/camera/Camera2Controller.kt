@@ -48,6 +48,13 @@ class Camera2Controller(private val context: Context) {
 
         // 自定义错误代码
         const val ERROR_CAMERA_DISCONNECTED = 1000
+
+        // 拍照状态机常量
+        private const val STATE_PREVIEW = 0 // Showing camera preview.
+        private const val STATE_WAITING_LOCK = 1 // Waiting for the focus to be locked.
+        private const val STATE_WAITING_PRECAPTURE = 2 // Waiting for the exposure to be precapture state.
+        private const val STATE_WAITING_NON_PRECAPTURE = 3 // Waiting for the exposure state to be something other than precapture.
+        private const val STATE_PICTURE_TAKEN = 4 // Picture is already taken.
     }
     
     private val cameraManager: CameraManager by lazy {
@@ -55,6 +62,13 @@ class Camera2Controller(private val context: Context) {
     }
     
     private val cameraDiscovery = CameraDiscovery(context)
+    
+    // --- 拍照状态机相关 ---
+    private var internalCaptureState = STATE_PREVIEW
+    // 缓存拍照所需的设备和 Reader，供状态机回调使用
+    private var pendingCaptureDevice: CameraDevice? = null
+    private var pendingCaptureReader: ImageReader? = null
+    // ---------------------
     
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
@@ -103,6 +117,9 @@ class Camera2Controller(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
 
+            // 处理拍照状态机
+            processCaptureState(result)
+
             // 监听对焦状态
             val afState = result.get(CaptureResult.CONTROL_AF_STATE)
             if (_state.value.isFocusing) {
@@ -139,6 +156,85 @@ class Camera2Controller(private val context: Context) {
                 awbMode = awbMode,
                 aperture = aperture ?: 2f,
             )
+        }
+    }
+
+    /**
+     * 处理拍照状态机的核心逻辑
+     */
+    private fun processCaptureState(result: CaptureResult) {
+        when (internalCaptureState) {
+            STATE_PREVIEW -> {
+                // 正常预览状态，不做处理
+            }
+            STATE_WAITING_LOCK -> {
+                // 如果需要 AF 锁定，在这里处理
+                val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+                if (afState == null) {
+                    runCaptureSequence()
+                } else if (CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED == afState ||
+                    CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED == afState) {
+                    // AE 状态检查
+                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                    if (aeState == null || aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
+                        internalCaptureState = STATE_PICTURE_TAKEN
+                        runCaptureSequence()
+                    } else {
+                        runPrecaptureSequence()
+                    }
+                }
+            }
+            STATE_WAITING_PRECAPTURE -> {
+                // 等待 AE 预取（预闪）完成
+                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                if (aeState == null ||
+                    aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
+                    aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED ||
+                    aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
+                    internalCaptureState = STATE_WAITING_NON_PRECAPTURE
+                }
+            }
+            STATE_WAITING_NON_PRECAPTURE -> {
+                // 等待 AE 退出预取状态
+                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                if (aeState == null || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                    internalCaptureState = STATE_PICTURE_TAKEN
+                    runCaptureSequence()
+                }
+            }
+        }
+    }
+
+    /**
+     * 运行最终的拍照序列
+     */
+    private fun runCaptureSequence() {
+        val device = pendingCaptureDevice
+        val reader = pendingCaptureReader
+        if (device != null && reader != null) {
+            performCapture(device, reader)
+        }
+        // 清理缓存的数据
+        pendingCaptureDevice = null
+        pendingCaptureReader = null
+    }
+
+    /**
+     * 运行预取序列（预闪）
+     */
+    private fun runPrecaptureSequence() {
+        try {
+            previewRequestBuilder?.let { builder ->
+                // 触发预闪
+                builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+                internalCaptureState = STATE_WAITING_PRECAPTURE
+                captureSession?.capture(builder.build(), null, cameraHandler)
+                // 设置回 IDLE，避免重复触发
+                builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to run precapture sequence", e)
+            runCaptureSequence()
         }
     }
     
@@ -1616,9 +1712,16 @@ class Camera2Controller(private val context: Context) {
                                   && currentState.isShutterSpeedAuto
 
             if (needsPrecapture) {
+                // 缓存拍照所需的参数，供状态机使用
+                pendingCaptureDevice = device
+                pendingCaptureReader = reader
+                
                 // 自动曝光 + 单次闪光：需要先触发预闪流程
-                PLog.d(TAG, "使用预闪流程")
-                triggerPrecaptureAndCapture(device, reader)
+                PLog.d(TAG, "启动状态机拍照流程")
+                // 如果当前 AF 模式是自动或连续，可以先锁定 AF，这里为了简单直接走 AE 流程
+                // 如果需要 AF 锁定，可以设置 internalCaptureState = STATE_WAITING_LOCK
+                // 这里我们直接走 AE 预闪
+                runPrecaptureSequence()
             } else {
                 // 其他情况（手动曝光、手电筒模式、不使用闪光灯）：直接拍照
                 PLog.d(TAG, "直接拍照")
@@ -1629,60 +1732,6 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to capture", e)
             PLog.e(TAG, "拍照失败", e)
             _state.value = _state.value.copy(isCapturing = false)
-        }
-    }
-
-    /**
-     * 触发闪光灯预闪流程，然后拍照
-     */
-    private fun triggerPrecaptureAndCapture(device: CameraDevice, reader: ImageReader) {
-        try {
-            // 1. 触发预闪
-            previewRequestBuilder?.let { builder ->
-                builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
-
-                captureSession?.capture(builder.build(), object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureCompleted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        result: TotalCaptureResult
-                    ) {
-                        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                        PLog.d(TAG, "Precapture AE state: $aeState")
-
-                        // 等待 AE 收敛完成
-                        // AE_STATE_CONVERGED (2) 或 AE_STATE_FLASH_REQUIRED (4) 表示可以拍照了
-                        if (aeState == null ||
-                            aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
-                            aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED ||
-                            aeState == CaptureResult.CONTROL_AE_STATE_LOCKED) {
-
-                            // AE 已收敛，进行拍照
-                            // 注意：预闪触发器的重置在 performCapture 完成后统一处理
-                            performCapture(device, reader)
-                        } else {
-                            // AE 未收敛，延迟后再拍照（最多等待 200ms）
-                            cameraHandler?.postDelayed({
-                                performCapture(device, reader)
-                            }, 200)
-                        }
-                    }
-
-                    override fun onCaptureFailed(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        failure: CaptureFailure
-                    ) {
-                        PLog.e(TAG, "Precapture failed: ${failure.reason}")
-                        // 即使预闪失败，也尝试拍照
-                        performCapture(device, reader)
-                    }
-                }, cameraHandler)
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to trigger precapture", e)
-            // 出错时直接拍照
-            performCapture(device, reader)
         }
     }
 
@@ -1748,12 +1797,12 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    /**
-     * 拍照完成后重置预览流
-     *
-     * 重置预闪触发器，确保后续预览正常工作
-     */
     private fun resetPreviewAfterCapture() {
+        // 重置拍照状态机
+        internalCaptureState = STATE_PREVIEW
+        pendingCaptureDevice = null
+        pendingCaptureReader = null
+
         // 关键修复：检查相机和会话是否仍然有效
         val device = cameraDevice
         val session = captureSession
@@ -1765,17 +1814,23 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
-            // 关键修复：使用 CANCEL 而不是 IDLE 来完全清除预闪状态
-            // CANCEL 会立即终止预闪序列，而 IDLE 只是不触发新的预闪
+            // 关键修复：使用单次 capture 调用来发送 CANCEL 信号，
+            // 而不是直接在 setRepeatingRequest 中设置。
+            // 如果在重复请求中设置 CANCEL，某些设备会导致 AE 状态不断重置，从而产生屏幕闪烁。
             builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL)
+            // 发送单次取消请求
+            session.capture(builder.build(), null, cameraHandler)
+
+            // 关键修复：发送完 CANCEL 后立即将触发器重置为 IDLE，用于后续的重复预览请求
+            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
 
             // 重新应用所有设置（确保使用正确的预览参数）
             applyBaseCameraSettings(builder, isCapture = false)
 
-            // 发送重置后的预览请求
+            // 发送重置后的预览请求（此时触发器是 IDLE）
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
 
-            PLog.d(TAG, "Preview reset after capture")
+            PLog.d(TAG, "Preview reset after capture (CANCEL sent and IDLE restored)")
         } catch (e: CameraAccessException) {
             PLog.e(TAG, "Failed to reset preview after capture", e)
         } catch (e: IllegalStateException) {

@@ -39,8 +39,8 @@ fun CameraTopBar(
             Icon(
                 imageVector = when (flashMode) {
                     0 -> Icons.Default.FlashOff
-                    1 -> Icons.Default.FlashAuto
-                    2 -> Icons.Default.FlashOn
+                    1 -> Icons.Default.FlashOn
+                    2 -> Icons.Default.FlashlightOn
                     else -> Icons.Default.FlashOff
                 },
                 modifier = Modifier.size(20.dp).autoRotate(),
