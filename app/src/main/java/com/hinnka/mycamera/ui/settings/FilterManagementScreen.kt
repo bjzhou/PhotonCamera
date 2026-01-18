@@ -54,11 +54,16 @@ fun FilterManagementScreen(
     val scope = rememberCoroutineScope()
     
     // 本地可变列表用于拖拽排序
-    var localLutList by remember(availableLuts) { mutableStateOf(availableLuts) }
+    var localLutList by remember { mutableStateOf(availableLuts) }
     
-    // 当 availableLuts 更新时同步本地列表
+    // 当 availableLuts 更新时同步本地列表（保留现有顺序，将新项目添加到末尾）
     LaunchedEffect(availableLuts) {
-        localLutList = availableLuts
+        val existingIds = localLutList.map { it.id }.toSet()
+        val newItems = availableLuts.filter { it.id !in existingIds }
+        val updatedExisting = localLutList.mapNotNull { local ->
+            availableLuts.find { it.id == local.id }
+        }
+        localLutList = newItems + updatedExisting
     }
 
     // 重命名对话框状态
@@ -72,23 +77,46 @@ fun FilterManagementScreen(
 
     // 导入状态
     var isImporting by remember { mutableStateOf(false) }
+    var importProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }  // 当前进度和总数
+    var importResult by remember { mutableStateOf<String?>(null) }
 
     // 色彩配方编辑状态
     var showColorRecipeSheet by remember { mutableStateOf(false) }
     var editingLutId by remember { mutableStateOf<String?>(null) }
 
-    // 文件选择器
+    // 批量文件选择器
     val lutFilePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let {
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
             isImporting = true
+            importProgress = Pair(0, uris.size)
             scope.launch {
-                withContext(Dispatchers.IO) {
-                    customImportManager.importLut(it)
+                var successCount = 0
+                var failCount = 0
+
+                uris.forEachIndexed { index, uri ->
+                    importProgress = Pair(index + 1, uris.size)
+                    val result = withContext(Dispatchers.IO) {
+                        customImportManager.importLut(uri)
+                    }
+                    if (result != null) {
+                        successCount++
+                    } else {
+                        failCount++
+                    }
                 }
+
                 viewModel.refreshCustomContent()
                 isImporting = false
+                importProgress = null
+
+                importResult = when {
+                    failCount == 0 && successCount == 1 -> null  // 单个成功时不显示消息
+                    failCount == 0 -> "成功导入 $successCount 个 LUT"
+                    successCount == 0 -> "导入失败，共 $failCount 个文件"
+                    else -> "成功导入 $successCount 个，失败 $failCount 个"
+                }
             }
         }
     }
@@ -136,10 +164,19 @@ fun FilterManagementScreen(
                 }
             },
             actions = {
+                // 导入进度提示
+                if (isImporting && importProgress != null) {
+                    Text(
+                        text = "${importProgress!!.first}/${importProgress!!.second}",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
                 // 导入按钮
                 IconButton(
                     onClick = {
-                        lutFilePicker.launch(arrayOf("*/*"))
+                        lutFilePicker.launch("*/*")
                     },
                     enabled = !isImporting
                 ) {
@@ -172,6 +209,29 @@ fun FilterManagementScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
+            // 导入结果提示
+            importResult?.let { result ->
+                item(key = "import_result") {
+                    Text(
+                        text = result,
+                        color = if (result.contains("成功")) Color(0xFF4CAF50) else Color(0xFFFF5252),
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (result.contains("成功")) Color(0xFF4CAF50).copy(alpha = 0.1f)
+                                else Color(0xFFFF5252).copy(alpha = 0.1f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                    
+                    LaunchedEffect(result) {
+                        kotlinx.coroutines.delay(3000)
+                        importResult = null
+                    }
+                }
+            }
             itemsIndexed(localLutList, key = { _, it -> it.id }) { index, lutInfo ->
                 ReorderableItem(reorderableLazyListState, key = lutInfo.id) { isDragging ->
                     FilterManagementItem(
@@ -198,7 +258,7 @@ fun FilterManagementScreen(
                                 showDeleteDialog = true
                             }
                         } else null,
-                        modifier = Modifier.draggableHandle()
+                        dragModifier = Modifier.draggableHandle()
                     )
                 }
             }
@@ -317,6 +377,7 @@ private fun FilterManagementItem(
     onRename: (() -> Unit)?,
     onEditColorRecipe: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
     val borderColor = if (isDefault) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f)
@@ -340,12 +401,12 @@ private fun FilterManagementItem(
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 拖拽图标
+        // 拖拽图标 - 仅在此图标上应用拖拽手势
         Icon(
             imageVector = Icons.Default.DragHandle,
             contentDescription = "Drag to reorder",
             tint = Color.White.copy(alpha = 0.5f),
-            modifier = Modifier.size(24.dp)
+            modifier = dragModifier.size(24.dp)
         )
         
         Spacer(modifier = Modifier.width(12.dp))

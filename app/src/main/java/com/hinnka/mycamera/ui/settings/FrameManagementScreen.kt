@@ -58,11 +58,16 @@ fun FrameManagementScreen(
     val scope = rememberCoroutineScope()
 
     // 本地可变列表用于拖拽排序
-    var localFrameList by remember(availableFrames) { mutableStateOf(availableFrames) }
+    var localFrameList by remember { mutableStateOf(availableFrames) }
     
-    // 当 availableFrames 更新时同步本地列表
+    // 当 availableFrames 更新时同步本地列表（保留现有顺序，将新项目添加到末尾）
     LaunchedEffect(availableFrames) {
-        localFrameList = availableFrames
+        val existingIds = localFrameList.map { it.id }.toSet()
+        val newItems = availableFrames.filter { it.id !in existingIds }
+        val updatedExisting = localFrameList.mapNotNull { local ->
+            availableFrames.find { it.id == local.id }
+        }
+        localFrameList = newItems + updatedExisting
     }
 
     // 重命名对话框状态
@@ -260,7 +265,7 @@ fun FrameManagementScreen(
                                 showDeleteDialog = true
                             }
                         } else null,
-                        modifier = Modifier.draggableHandle()
+                        dragModifier = Modifier.draggableHandle()
                     )
                 }
             }
@@ -400,6 +405,7 @@ private fun FrameManagementItem(
     onRename: (() -> Unit)?,
     onEditProperties: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
     val borderColor = if (isDefault) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f)
@@ -423,13 +429,13 @@ private fun FrameManagementItem(
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 拖拽图标
+        // 拖拽图标 - 仅在此图标上应用拖拽手势
         if (canDrag) {
             Icon(
                 imageVector = Icons.Default.DragHandle,
                 contentDescription = "Drag to reorder",
                 tint = Color.White.copy(alpha = 0.5f),
-                modifier = Modifier.size(24.dp)
+                modifier = dragModifier.size(24.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
         } else {
