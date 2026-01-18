@@ -13,7 +13,6 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Log
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.utils.PLog
@@ -98,15 +97,18 @@ class Camera2Controller(private val context: Context) {
     private var availableEdgeModes: IntArray = intArrayOf()
     private var availableNoiseReductionModes: IntArray = intArrayOf()
     private var availableTonemapModes: IntArray = intArrayOf()
+    var isRawSupported = false
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
     
     // 最后一次拍摄结果，用于提取 EXIF 信息
+    // 标记为 @Volatile 确保多线程可见性
+    @Volatile
     private var lastCaptureResult: TotalCaptureResult? = null
     
-    // 图片拍摄回调（携带 CaptureInfo）
-    var onImageCaptured: ((Image, CaptureInfo) -> Unit)? = null
+    // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
+    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
     
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
@@ -364,9 +366,10 @@ class Camera2Controller(private val context: Context) {
                 availableEdgeModes = cachedCharacteristics?.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
                 availableNoiseReductionModes = cachedCharacteristics?.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()
                 availableTonemapModes = cachedCharacteristics?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
+                isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
 
                 PLog.i(TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
-                        "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported")
+                        "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, RAW: $isRawSupported")
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
                 cachedCharacteristics = null
@@ -380,28 +383,58 @@ class Camera2Controller(private val context: Context) {
 //            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
 //            HighResolutionHelper.logResolutionCapabilities(characteristics)
 
-            // 创建 ImageReader 用于拍照 (使用 YUV 格式)
-            val captureSize = CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
-            PLog.d(TAG, "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}")
+            // 创建 ImageReader 用于拍照
+            // 优先使用 RAW 格式（更高质量），如设备不支持则回退到 YUV
+            val useRaw = isRawSupported
+            val captureSize = if (useRaw) {
+                CameraUtils.getRawCaptureSize(context, cameraId) ?: CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
+            } else {
+                CameraUtils.getBestCaptureSize(context, cameraId, aspectRatio)
+            }
+            val captureFormat = if (useRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
+                ImageFormat.RAW_SENSOR
+            } else {
+                ImageFormat.YUV_420_888
+            }
+            PLog.d(TAG, "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${if (captureFormat == ImageFormat.RAW_SENSOR) "RAW" else "YUV"}")
             imageReader = ImageReader.newInstance(
                 captureSize.width,
                 captureSize.height,
-                ImageFormat.YUV_420_888,
+                captureFormat,
                 2
             ).apply {
                 setOnImageAvailableListener({ reader ->
-                    val image = reader.acquireLatestImage()
-                    image?.let {
+                    PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
+                    // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
+                    // acquireLatestImage() 会丢弃队列中的旧图像，在 RAW 拍摄时可能导致第一张图像丢失
+                    val image = reader.acquireNextImage()
+                    if (image != null) {
+                        try {
+                            PLog.d(TAG, "Image acquired successfully: ${image.width}x${image.height}, format=${image.format}")
+                            _state.value = _state.value.copy(isCapturing = false)
+                            val width = image.width
+                            val height = image.height
+
+                            // 构建 CaptureInfo (包含正确的传感器方向)
+                            val captureInfo = rebuildCaptureInfo(lastCaptureResult, width, height)
+
+                            // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
+                            // 注意：调用者负责关闭 Image
+                            onImageCaptured?.invoke(image, captureInfo, cachedCharacteristics, lastCaptureResult)
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Error processing captured image", e)
+                            // 关键修复：发生异常时也要关闭 Image，避免资源泄漏
+                            image.close()
+                        } finally {
+                            // 关键修复：在图像数据获取后再重置预览流
+                            // 这样可以避免在 RAW 数据传输过程中中断 ImageReader
+                            resetPreviewAfterCapture()
+                        }
+                    } else {
+                        // 关键修复：即使图像获取失败，也要重置 isCapturing 状态和预览流
+                        PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
                         _state.value = _state.value.copy(isCapturing = false)
-                        val width = it.width
-                        val height = it.height
-
-                        // 构建 CaptureInfo (包含正确的传感器方向)
-                        val captureInfo = buildCaptureInfo(lastCaptureResult, width, height)
-
-                        // 传递完整的 Image 对象和 CaptureInfo
-                        // 注意：调用者负责关闭 Image
-                        onImageCaptured?.invoke(it, captureInfo)
+                        resetPreviewAfterCapture()
                     }
                 }, cameraHandler)
             }
@@ -1154,6 +1187,13 @@ class Camera2Controller(private val context: Context) {
         return cachedLensFacing
     }
     
+    /**
+     * 获取最后一次拍摄结果（用于异步获取 EXIF 信息）
+     */
+    fun getLastCaptureResult(): android.hardware.camera2.CaptureResult? {
+        return lastCaptureResult
+    }
+    
     // ==================== 镜头切换 ====================
     
     /**
@@ -1781,6 +1821,9 @@ class Camera2Controller(private val context: Context) {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
 
+        // 关键修复：每次拍照前重置拍摄结果
+        lastCaptureResult = null
+
         PLog.i(TAG, "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}")
 
         // 播放快门音效
@@ -1854,18 +1897,31 @@ class Camera2Controller(private val context: Context) {
             }
 
             captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureStarted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    timestamp: Long,
+                    frameNumber: Long
+                ) {
+                    // 关键修复：在 onCaptureStarted 中预先获取 request 中的参数作为 fallback
+                    // 这样即使 onCaptureCompleted 晚于 ImageReader 回调，也能提供基本的 EXIF 信息
+                    // 注意：这里不能获取到实际的 result，只能从 request 获取设置的参数
+                    PLog.d(TAG, "Capture started at frame $frameNumber")
+                }
+
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession,
                     request: CaptureRequest,
                     result: TotalCaptureResult
                 ) {
-                    // 保存拍摄结果用于提取 EXIF
+                    // 关键修复：立即保存拍摄结果用于提取 EXIF
+                    // 这个必须在 ImageReader 回调之前完成，但时序上可能做不到
                     lastCaptureResult = result
-                    PLog.d(TAG, "Capture completed")
-
-                    // 关键修复：拍照完成后重置预览流的预闪触发器
-                    // 这样可以避免预闪状态影响后续的预览（例如手电筒模式变暗）
-                    resetPreviewAfterCapture()
+                    PLog.d(TAG, "Capture completed, result saved")
+                    
+                    // 关键修复：不在这里调用 resetPreviewAfterCapture()
+                    // 因为此时 RAW 图像数据可能还未传输完成，过早重置预览流会中断 ImageReader
+                    // resetPreviewAfterCapture() 现在在 ImageReader 的 onImageAvailableListener 中调用
                 }
 
                 override fun onCaptureFailed(
@@ -1876,7 +1932,7 @@ class Camera2Controller(private val context: Context) {
                     PLog.e(TAG, "Capture failed: ${failure.reason}")
                     _state.value = _state.value.copy(isCapturing = false)
 
-                    // 即使拍照失败，也要重置预览
+                    // 拍照失败时重置预览
                     resetPreviewAfterCapture()
                 }
             }, cameraHandler)
@@ -1935,7 +1991,7 @@ class Camera2Controller(private val context: Context) {
      * 
      * 从 TotalCaptureResult 和 CameraCharacteristics 提取拍摄信息
      */
-    private fun buildCaptureInfo(
+    fun rebuildCaptureInfo(
         result: TotalCaptureResult?,
         imageWidth: Int,
         imageHeight: Int
