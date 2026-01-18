@@ -85,6 +85,12 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var frameAvailable = false
     private val frameSyncObject = Object()
     
+    // 标记 Surface 是否已创建（GL 上下文是否可用）
+    private var surfaceReady = false
+    
+    // 待处理的 LUT 配置（Surface 创建前设置的 LUT）
+    private var pendingLutConfig: LutConfig? = null
+    
     // LUT 配置
     private var currentLutConfig: LutConfig? = null
     private var lutSize: Float = 32f
@@ -175,6 +181,15 @@ class LutRenderer : GLSurfaceView.Renderer {
         
         // 初始化变换矩阵
         Matrix.setIdentityM(stMatrix, 0)
+        
+        // 标记 Surface 已创建
+        surfaceReady = true
+        
+        // 如果有待处理的 LUT 配置，现在处理它
+        pendingLutConfig?.let { config ->
+            pendingLutConfig = null
+            setLutInternal(config)
+        }
         
         // 通知调用者 SurfaceTexture 已准备好
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
@@ -421,6 +436,20 @@ class LutRenderer : GLSurfaceView.Renderer {
      * 注意：需要在 GL 线程中调用
      */
     fun setLut(lutConfig: LutConfig?) {
+        // 如果 Surface 尚未创建，保存配置稍后处理
+        if (!surfaceReady) {
+            pendingLutConfig = lutConfig
+            return
+        }
+        
+        setLutInternal(lutConfig)
+    }
+    
+    /**
+     * 内部方法：实际设置 LUT
+     * 仅在 Surface 已创建后调用
+     */
+    private fun setLutInternal(lutConfig: LutConfig?) {
         // 删除旧的 LUT 纹理
         if (lutTextureId != 0) {
             GlUtils.deleteTexture(lutTextureId)
@@ -584,5 +613,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 释放 SurfaceTexture
         surfaceTexture?.release()
         surfaceTexture = null
+        
+        // 重置状态
+        surfaceReady = false
+        pendingLutConfig = null
     }
 }

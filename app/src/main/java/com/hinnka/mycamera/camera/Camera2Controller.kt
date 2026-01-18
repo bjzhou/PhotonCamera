@@ -746,15 +746,31 @@ class Camera2Controller(private val context: Context) {
         val reader = imageReader ?: return
         
         try {
-            // 使用 TEMPLATE_STILL_CAPTURE 而不是 TEMPLATE_PREVIEW
-            // 原因：TEMPLATE_STILL_CAPTURE 的 AE 策略优先画质（更长快门 + 更低 ISO）
-            // 而 TEMPLATE_PREVIEW 优先帧率（更短快门 + 更高 ISO）
-            // 对于专注静态摄影的相机 app，这样的预览更接近实际拍摄效果
-            previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            // 使用 TEMPLATE_PREVIEW 进行预览
+            // 为解决用户反馈的预览卡顿和 AE 失效问题，我们从 TEMPLATE_STILL_CAPTURE 切换回 TEMPLATE_PREVIEW
+            // 虽然 TEMPLATE_STILL_CAPTURE 优先画画质，但在设备兼容性和预览流畅度上存在问题
+            previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 // 关键修复: 在创建 builder 时就添加 previewImageReader 的 surface
                 // 而不是在 onSessionConfigured 中动态添加
                 previewImageReader?.surface?.let { addTarget(it) }
+
+                // 优化预览 AE：允许 15-30fps 的帧率范围
+                // 这允许在低光线下快门时间最长可达 1/15s (66ms)，从而在保持预览流畅的同时获得接近拍照的画质
+                try {
+                    val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(device.id)
+                    val availableFpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    // 寻找包含 30fps 且下限尽可能低的范围（如 [15, 30] 或 [10, 30]）
+                    val targetFpsRange = availableFpsRanges?.find { it.upper >= 30 && it.lower <= 15 }
+                        ?: availableFpsRanges?.find { it.upper >= 30 }
+                    
+                    targetFpsRange?.let {
+                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                        PLog.d(TAG, "Set preview AE target FPS range: $it")
+                    }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to set preview FPS range", e)
+                }
 
                 // 设置连续自动对焦
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
