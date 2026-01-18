@@ -98,9 +98,9 @@ fun PhotoEditScreen(
 
     // 软件处理状态
     val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState()
-    val sharpening by viewModel.sharpening.collectAsState()
-    val noiseReduction by viewModel.noiseReduction.collectAsState()
-    val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState()
+    val sharpening by viewModel.editSharpening.collectAsState()
+    val noiseReduction by viewModel.editNoiseReduction.collectAsState()
+    val chromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
 
     // 编辑标签页状态
     var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理

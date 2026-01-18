@@ -800,6 +800,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue,
                 // 拍摄信息 (来自 captureInfo)
                 deviceModel = captureInfo.model,
                 brand = captureInfo.make.replaceFirstChar { it.uppercase() },

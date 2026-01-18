@@ -16,11 +16,15 @@ import java.util.*
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 5,  // 升级版本以支持色彩配方
+    val version: Int = 6,  // 升级版本以支持细节处理参数
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
     val colorRecipeParams: ColorRecipeParams? = null,
+    // 软件处理参数（降噪/锐化）
+    val sharpening: Float? = null,
+    val noiseReduction: Float? = null,
+    val chromaNoiseReduction: Float? = null,
     // 边框水印配置
     val frameId: String? = null,
     // 图片尺寸
@@ -72,6 +76,11 @@ data class PhotoMetadata(
             } else {
                 put("colorRecipeParams", JSONObject.NULL)
             }
+            // 软件处理参数
+            put("sharpening", sharpening?.toDouble() ?: JSONObject.NULL)
+            put("noiseReduction", noiseReduction?.toDouble() ?: JSONObject.NULL)
+            put("chromaNoiseReduction", chromaNoiseReduction?.toDouble() ?: JSONObject.NULL)
+
             put("frameId", frameId ?: JSONObject.NULL)
             put("width", width)
             put("height", height)
@@ -137,6 +146,9 @@ data class PhotoMetadata(
                     version = obj.optInt("version", 1),
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
                     colorRecipeParams = colorRecipeParams,
+                    sharpening = if (obj.isNull("sharpening")) null else obj.optDouble("sharpening").toFloat(),
+                    noiseReduction = if (obj.isNull("noiseReduction")) null else obj.optDouble("noiseReduction").toFloat(),
+                    chromaNoiseReduction = if (obj.isNull("chromaNoiseReduction")) null else obj.optDouble("chromaNoiseReduction").toFloat(),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),

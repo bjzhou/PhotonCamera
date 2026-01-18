@@ -164,6 +164,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         initialValue = emptyMap()
     )
 
+    // 细节处理编辑状态 (Sharpening, Noise Reduction, Chroma Noise Reduction)
+    var editSharpening = MutableStateFlow(0.3f)
+        private set
+    var editNoiseReduction = MutableStateFlow(0.25f)
+        private set
+    var editChromaNoiseReduction = MutableStateFlow(0.25f)
+        private set
+
     // 最新照片（用于相机界面显示入口）
     private val _latestPhoto = MutableStateFlow<PhotoData?>(null)
     val latestPhoto: StateFlow<PhotoData?> = _latestPhoto.asStateFlow()
@@ -357,11 +365,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             currentPhotoMetadata = PhotoManager.loadMetadata(context, photo.id)
 
             // 更新编辑状态
-            currentPhotoMetadata?.let { metadata ->
-                editLutId.value = metadata.lutId
-                editFrameId.value = metadata.frameId
+        currentPhotoMetadata?.let { metadata ->
+            editLutId.value = metadata.lutId
+            editFrameId.value = metadata.frameId
+            
+            // 智能初始化：导入的照片默认值为 0，App 拍摄的默认跟随全局设置
+            val defaultVal = if (metadata.isImported) 0f else 1f // 辅助判定是否需要使用全局
+            editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+            editNoiseReduction.value = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+            editChromaNoiseReduction.value = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
 
-                // 加载 LUT 配置
+            // 加载 LUT 配置
                 editLutId.value?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
                         contentRepository.lutManager.loadLut(id)
@@ -793,13 +807,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun enterEditMode() {
         isEditing = true
         // 从当前元数据恢复编辑状态
-        currentPhotoMetadata?.let { metadata ->
-            editLutId.value = metadata.lutId
-            editFrameId.value = metadata.frameId
-        } ?: run {
-            editLutId.value = null
-            editFrameId.value = null
-        }
+    currentPhotoMetadata?.let { metadata ->
+        editLutId.value = metadata.lutId
+        editFrameId.value = metadata.frameId
+        // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
+        editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+        editNoiseReduction.value = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+        editChromaNoiseReduction.value = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+    } ?: run {
+        editLutId.value = null
+        editFrameId.value = null
+        // 这里一般是本 App 预览或拍摄进入，保持跟随全局
+        editSharpening.value = sharpening.value
+        editNoiseReduction.value = noiseReduction.value
+        editChromaNoiseReduction.value = chromaNoiseReduction.value
+    }
 
         // 加载当前编辑的 LUT 配置
         editLutId.value?.let { id ->
@@ -858,27 +880,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置锐化强度
      */
     fun setSharpening(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveSharpening(value)
-        }
+        editSharpening.value = value
     }
 
     /**
      * 设置降噪强度
      */
     fun setNoiseReduction(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveNoiseReduction(value)
-        }
+        editNoiseReduction.value = value
     }
 
     /**
      * 设置减少杂色强度
      */
     fun setChromaNoiseReduction(value: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveChromaNoiseReduction(value)
-        }
+        editChromaNoiseReduction.value = value
     }
 
     /**
@@ -915,13 +931,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
-                    customProperties = editFrameCustomProperties.value
+                    customProperties = editFrameCustomProperties.value,
+                    sharpening = editSharpening.value,
+                    noiseReduction = editNoiseReduction.value,
+                    chromaNoiseReduction = editChromaNoiseReduction.value
                 )
 
-                // 预览生成：跟随用户设置
+                // 预览生成：跟随当前编辑状态
                 photoProcessor.process(
                     context, bitmap, metadata, photo.previewUri, 
-                    useSoftwareProcessing.value, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                    useSoftwareProcessing.value, editSharpening.value, editNoiseReduction.value, editChromaNoiseReduction.value
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)
@@ -949,7 +968,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
-                    customProperties = editFrameCustomProperties.value
+                    customProperties = editFrameCustomProperties.value,
+                    sharpening = editSharpening.value,
+                    noiseReduction = editNoiseReduction.value,
+                    chromaNoiseReduction = editChromaNoiseReduction.value
                 )
                 val success = PhotoManager.saveMetadata(context, photo.id, metadata)
 
@@ -996,7 +1018,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             lutId = editLutId.value,
             frameId = editFrameId.value,
             colorRecipeParams = editLutRecipeParams.value,
-            customProperties = editFrameCustomProperties.value
+            customProperties = editFrameCustomProperties.value,
+            sharpening = editSharpening.value,
+            noiseReduction = editNoiseReduction.value,
+            chromaNoiseReduction = editChromaNoiseReduction.value
         )
         exportPhotoInternal(
             photo = photo,
