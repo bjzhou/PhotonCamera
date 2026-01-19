@@ -605,85 +605,101 @@ class LutImageProcessor {
                 
                 // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
                 
-                // ============================================================
-                // 引导滤波降噪 (Guided Filter Denoising)
-                // 原理：假设输出 q 与引导图 I 在局部窗口内满足 q = a*I + b
-                // 当 σ² >> ε 时，a≈1，保持原值（边缘保持）
-                // 当 σ² << ε 时，a≈0，输出均值（平滑降噪）
-                // ============================================================
-                
                 if (uNoiseReduction > 0.0) {
-                    // 转换到 YCbCr 色彩空间处理
-                    vec3 centerYCbCr = rgb2ycbcr(color.rgb);
-                    float I = centerYCbCr.x;  // 引导图 = 输入亮度
-                    vec2 Ic = centerYCbCr.yz; // 色度引导
+                    // 转换到 YCbCr
+                    vec3 centerRGB = texture(uImageTexture, vTexCoord).rgb;
+                    vec3 centerYCbCr = rgb2ycbcr(centerRGB);
                     
-                    // === Step 1: 计算局部统计量 ===
-                    const int RADIUS = 4;  // 9x9 窗口
-                    float radiusSq = float(RADIUS * RADIUS);
+                    float centerY = centerYCbCr.x;
+                    vec2 centerCbCr = centerYCbCr.yz;
                     
-                    // 累加器
-                    float sumI = 0.0;      // Σ I
-                    float sumII = 0.0;     // Σ I²
-                    vec2 sumIc = vec2(0.0);
-                    vec2 sumIcIc = vec2(0.0);
-                    float count = 0.0;
+                    // =======================================================
+                    // 🎨 Part 1: 色度降噪 (Chroma Denoise) - 简单粗暴的平滑
+                    // =======================================================
+                    // 色度噪点（红绿斑）最影响观感，且人眼对色度分辨率不敏感。
+                    // 我们使用一个较大的高斯核来彻底抹平色噪。
                     
-                    for (int x = -RADIUS; x <= RADIUS; x++) {
-                        for (int y = -RADIUS; y <= RADIUS; y++) {
-                            float distSq = float(x*x + y*y);
-                            if (distSq > radiusSq) continue;
-                            
+                    vec2 sumCbCr = vec2(0.0);
+                    float sumWeightChroma = 0.0;
+                    
+                    // 半径可以大一点 (比如 3~5)，步长可以大一点以节省性能
+                    int cRadius = 4; 
+                    
+                    for (int x = -cRadius; x <= cRadius; x+=2) { // 步长2优化性能
+                        for (int y = -cRadius; y <= cRadius; y+=2) {
                             vec2 offset = vec2(float(x), float(y)) * uTexelSize;
                             vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
-                            vec3 sampleYCbCr = rgb2ycbcr(sampleRgb);
+                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
                             
-                            float sI = sampleYCbCr.x;
-                            vec2 sIc = sampleYCbCr.yz;
+                            // 简单的空间高斯权重
+                            float distSq = float(x*x + y*y);
+                            float weight = exp(-distSq / (2.0 * 4.0)); // Sigma ~ 2.0
                             
-                            sumI += sI;
-                            sumII += sI * sI;
-                            sumIc += sIc;
-                            sumIcIc += sIc * sIc;
-                            count += 1.0;
+                            sumCbCr += sampleCbCr * weight;
+                            sumWeightChroma += weight;
                         }
                     }
                     
-                    // 局部均值
-                    float meanI = sumI / count;
-                    vec2 meanIc = sumIc / count;
+                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
                     
-                    // 局部方差 = E[I²] - E[I]²
-                    float varI = sumII / count - meanI * meanI;
-                    vec2 varIc = sumIcIc / count - meanIc * meanIc;
+                    // 根据降噪强度混合：强度低时保留一点原色，强度高时完全使用模糊色
+                    // uNoiseReduction: 0.0 ~ 1.0
+                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
+                
+                
+                    // =======================================================
+                    // 💡 Part 2: 亮度降噪 (Luma Denoise) - 双边滤波 (Bilateral)
+                    // =======================================================
+                    // 亮度必须保边！不能用 Box Blur。
+                    // 双边滤波同时考虑“距离”和“亮度差”，只模糊相似的像素。
                     
-                    // === Step 2: 计算引导滤波系数 a 和 b ===
-                    // ε 是正则化参数，控制平滑程度
-                    // ε 越大 → 更多区域被判定为"需要平滑" → 降噪更强
+                    float sumY = 0.0;
+                    float sumWeightLuma = 0.0;
                     
-                    // 暗部噪点更多，ε 更大
-                    float darkFactor = 1.0 + (1.0 - I) * 1.5;
+                    // 亮度降噪半径小一点 (2~3)，保持精细
+                    int lRadius = 3;
                     
-                    // Y 通道的 ε：0.0001 ~ 0.005（降噪强度控制）
-                    float epsilonY = (0.0001 + uNoiseReduction * 0.005) * darkFactor;
-                    // CbCr 通道的 ε：略大一些
-                    float epsilonC = (0.0002 + uNoiseReduction * 0.008) * darkFactor;
+                    // 动态调整 Sigma (根据降噪强度)
+                    // sigmaSpatial: 空间范围
+                    float sigmaSpatial = 2.0; 
+                    // sigmaRange: 亮度差异容忍度 (越小越保边，越大越糊)
+                    // 关键：根据 uNoiseReduction 动态调整。范围建议 0.05 ~ 0.2
+                    float sigmaRange = 0.05 + uNoiseReduction * 0.15; 
                     
-                    // a = var / (var + ε)
-                    // 当 var >> ε 时，a ≈ 1（保持原值）
-                    // 当 var << ε 时，a ≈ 0（输出均值）
-                    float aY = varI / (varI + epsilonY);
-                    vec2 aC = varIc / (varIc + vec2(epsilonC));
+                    for (int x = -lRadius; x <= lRadius; x++) {
+                        for (int y = -lRadius; y <= lRadius; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                            
+                            // 采样 (这里只取 Y 即可，甚至可以直接取 RGB 的 G 通道近似，省一次转换)
+                            float sampleY = rgb2ycbcr(texture(uImageTexture, vTexCoord + offset).rgb).x;
+                            
+                            // 1. 空间权重 (Spatial Weight) - 高斯
+                            float distSq = float(x*x + y*y);
+                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
+                            
+                            // 2. 范围权重 (Range Weight) - 核心保边逻辑！
+                            // 如果 sampleY 和 centerY 差异很大（边缘），diff 大，exp 趋近 0，权重忽略
+                            float diff = sampleY - centerY;
+                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
+                            
+                            // 综合权重
+                            float weight = wSpatial * wRange;
+                            
+                            sumY += sampleY * weight;
+                            sumWeightLuma += weight;
+                        }
+                    }
                     
-                    // b = mean * (1 - a)
-                    float bY = meanI * (1.0 - aY);
-                    vec2 bC = meanIc * (1.0 - aC);
+                    float finalY = sumY / sumWeightLuma;
                     
-                    // === Step 3: 输出 q = a*I + b ===
-                    float finalY = aY * I + bY;
-                    vec2 finalCbCr = aC * Ic + bC;
+                    // 细节回掺 (Detail Recovery) - 可选
+                    // 双边滤波有时候会有“塑料感”，可以稍微掺回一点点原始噪点增加质感
+                    // mix(Blur, Original, 0.1)
+                    finalY = mix(finalY, centerY, 0.1); 
                     
-                    // 转回 RGB
+                    // =======================================================
+                    // 🔄 合成输出
+                    // =======================================================
                     color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
                     color.rgb = clamp(color.rgb, 0.0, 1.0);
                 }

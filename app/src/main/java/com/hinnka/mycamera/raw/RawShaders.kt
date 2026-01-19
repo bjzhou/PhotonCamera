@@ -129,9 +129,9 @@ object RawShaders {
             float lscGain = dot(lscVal, mask);
 
             // 计算最终像素值
+            // 不再应用 uPostRawBoost，避免与 uExposureGain 重复增益导致过曝
             float pixel = max(0.0, (raw - black) * wbGain / (uWhiteLevel - black));
             pixel *= lscGain;
-            pixel *= uPostRawBoost;
 
             return pixel;
         }
@@ -148,37 +148,45 @@ object RawShaders {
 
         // ========== 步骤 3: Richardson-Lucy Deconvolution ==========
         // 模拟光学低通滤镜的点扩散函数 (Gaussian PSF, radius ~0.6 pixel)
-        // 使用简化的单次迭代 Richardson-Lucy 算法
         float applyDeconvolution(ivec2 coord, float center) {
             if (uDeconvStrength <= 0.0) return center;
-
-            // 3x3 高斯核估计模糊 (sigma ~0.6)
+        
             float blurred = 0.0;
             float sum = 0.0;
-
+        
+            // 保持高斯核权重不变
             const float kernel[9] = float[9](
                 0.077847, 0.123317, 0.077847,
                 0.123317, 0.195346, 0.123317,
                 0.077847, 0.123317, 0.077847
             );
-
+        
             int idx = 0;
             for (int dy = -1; dy <= 1; dy++) {
                 for (int dx = -1; dx <= 1; dx++) {
-                    blurred += getRawPixel(coord + ivec2(dx, dy)) * kernel[idx];
+                    blurred += getRawPixel(coord + ivec2(dx * 2, dy * 2)) * kernel[idx];
                     sum += kernel[idx];
                     idx++;
                 }
             }
-            blurred /= sum;
-
-            // Richardson-Lucy 迭代公式简化版:
-            // deconvolved = center * (center / blurred)
-            float ratio = blurred > 0.001 ? center / blurred : 1.0;
+            
+            // 防止除以 0
+            if (sum > 0.001) blurred /= sum;
+            else blurred = center;
+        
+            // Richardson-Lucy 简易版
+            // 增加一个极小值 epsilon 防止噪点爆炸
+            float epsilon = 0.0001;
+            float ratio = center / max(blurred, epsilon);
+            
+            // 限制比率，防止白点/热噪点产生黑圈 (Ringing Artifacts)
+            // 限制在 [0.5, 2.0] 之间能有效减少伪影
+            ratio = clamp(ratio, 0.5, 2.0);
+        
             float deconvolved = center * ratio;
-
-            // 混合原始值和去卷积结果
-            return mix(center, deconvolved, uDeconvStrength * 0.3); // 轻微强度
+        
+            // 混合
+            return mix(center, deconvolved, uDeconvStrength * 0.5); 
         }
 
         // ========== 步骤 4: RCD (Ratio Corrected Demosaicing) ==========
@@ -222,8 +230,8 @@ object RawShaders {
                      g = gPredV;
                 }
                 
-                // 防止过冲
-                g = clamp(g, 0.0, 1.0); 
+                // 之前这里有一个 g = clamp(g, 0.0, 1.0); 这会导致高光在 roll-off 前就被截断
+                // 现在允许 g 超过 1.0，以便后续的 applyHighlightRollOff 能处理高增益下的细节
             }
         
             // ========== 第二步：修正后的 R/B 插值 (色差法 R-G) ==========
@@ -356,41 +364,85 @@ object RawShaders {
         }
 
         // ========== 步骤 8: 输出锐化 (Unsharp Mask) ==========
-        // USM参数: radius 0.8, threshold 1.0
-        // 注意: 由于shader中访问相邻像素困难，这里做简化实现
         vec3 applyOutputSharpening(vec3 rgb, ivec2 coord) {
             if (uOutputSharpAmount <= 0.0) return rgb;
-
-            // 简化的锐化: 使用原始RAW数据的边缘信息
-            float centerLuma = dot(rgb, vec3(0.299, 0.587, 0.114));
-
-            // 估计模糊后的亮度（使用RAW层的近似）
-            float blurLuma = 0.0;
-            float sumWeight = 0.0;
-
-            // 简单的3x3平均
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if (dx == 0 && dy == 0) continue;
-                    float weight = 1.0;
-                    blurLuma += getRawPixel(coord + ivec2(dx, dy)) * weight;
-                    sumWeight += weight;
-                }
+        
+            // 1. 获取当前 RGB 的亮度 (Luma)
+            float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
+        
+            // 2. 寻找最近的绿色像素作为 RAW 亮度参考
+            // 我们需要构建一个 "Raw Luma" 的高通滤波器
+            float rawCenterG = 0.0;
+            float rawBlurG = 0.0;
+            float weightSum = 0.0;
+        
+            // 技巧：在 5x5 范围内，只采样绿色像素 (G)
+            // 绿色像素在 Bayer 阵列中呈五点状分布 (Quincunx)
+            
+            // 获取中心点附近的 Raw 值
+            // 如果当前是 G 点，直接用；如果当前是 R/B，取周围 G 的平均
+            int type = getChannelType(coord); // 0=R, 1=G, 2=B
+            
+            if (type == 1) {
+                rawCenterG = getRawPixel(coord);
+            } else {
+                // R/B 点：取上下左右 4 个 G 的平均
+                rawCenterG = (getRawPixel(coord + ivec2(1, 0)) + 
+                              getRawPixel(coord + ivec2(-1, 0)) + 
+                              getRawPixel(coord + ivec2(0, 1)) + 
+                              getRawPixel(coord + ivec2(0, -1))) * 0.25;
             }
-            blurLuma = (blurLuma / sumWeight) * (centerLuma / max(getRawPixel(coord), 0.001));
-
-            // USM公式: sharpened = original + amount * (original - blurred)
-            float edge = centerLuma - blurLuma;
-
-            // 阈值处理
-            if (abs(edge) < 1.0 / 255.0) {
-                edge = 0.0;
-            }
-
-            float sharpenedLuma = centerLuma + edge * uOutputSharpAmount;
-
-            // 应用到RGB，保持色度
-            return rgb * (sharpenedLuma / max(centerLuma, 0.001));
+        
+            // 3. 计算周围绿色的平均值 (模拟模糊)
+            // 采样周围一圈的 G (Stride-2 逻辑或者菱形逻辑)
+            // 这里使用简化的菱形采样 (Diamond Sampling)，覆盖周围 2 像素范围
+            //      G
+            //    G . G
+            //  G . C . G
+            //    G . G
+            //      G
+            
+            float gNeighbors = 0.0;
+            
+            // 采样上下左右 2 像素处的 G (同色采样，最安全)
+            gNeighbors += getRawPixel(coord + ivec2(-2, 0));
+            gNeighbors += getRawPixel(coord + ivec2(2, 0));
+            gNeighbors += getRawPixel(coord + ivec2(0, -2));
+            gNeighbors += getRawPixel(coord + ivec2(0, 2));
+            
+            // 采样对角线 1 像素处的 G (如果当前是 R/B，对角线是 G；如果当前是 G，对角线是 R/B)
+            // 为了算法简单且通用，我们只用上面 4 个确定的同色 G 点做模糊参考
+            // 这相当于一个半径为 2 的 High Pass Filter
+            
+            float rawMeanG = gNeighbors * 0.25;
+        
+            // 4. 提取高频细节 (High Frequency)
+            // 细节 = 中心绿 - 周围绿
+            float detail = rawCenterG - rawMeanG;
+        
+            // 5. 阈值与钳位 (防止噪点爆炸)
+            // 如果差异太小（比如暗部噪点），忽略它
+            if (abs(detail) < 0.002) detail = 0.0;
+            
+            // 限制细节幅度，防止黑白边 (Halo)
+            detail = clamp(detail, -0.1, 0.1);
+        
+            // 6. 叠加锐化
+            // 不再乘回 RGB，而是直接叠加亮度
+            // USM 公式: NewLuma = Luma + Amount * Detail
+            // 这种加法锐化比乘法锐化更自然，不易产生色偏
+            
+            float sharpenedLuma = luma + detail * uOutputSharpAmount;
+            
+            // 避免亮度溢出或死黑
+            sharpenedLuma = clamp(sharpenedLuma, 0.0, 1.0);
+        
+            // 7. 将亮度差异应用回 RGB
+            // 保持色相和饱和度，只改变明度
+            // Ratio = NewLuma / OldLuma
+            float ratio = sharpenedLuma / max(luma, 0.001);
+            
+            return rgb * ratio;
         }
 
         // sRGB转换
@@ -401,38 +453,59 @@ object RawShaders {
                 step(0.0031308, linear)
             );
         }
-
-
-        // 应用轻微的 S 曲线 (模拟 Adobe Standard 风格的对比度)
-        vec3 applySCurve(vec3 x) {
-            // 使用 30% 强度的 smoothstep 曲线，这种程度能增加对比度但不会丢失暗部和亮部细节
-            return mix(x, x * x * (3.0 - 2.0 * x), 1.0);
+        
+        // 亮度保持 Reinhard (色相/饱和度 0 偏移)
+        vec3 applyLumaReinhard(vec3 color) {
+            // 1. 计算亮度 (Luma)
+            // 使用 Rec.709 系数 (sRGB 标准)
+            float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            
+            // 2. 只对亮度应用 Reinhard 压缩曲线
+            // 公式: L / (1 + L)
+            // 这是一个完美的高光滚落函数，无限接近 1.0 但永远不超过
+            float toneMappedLuma = luma / (1.0 + luma);
+            
+            // 3. 恢复 RGB
+            // 核心逻辑: OutputColor = InputColor * (NewLuma / OldLuma)
+            // 这样就保证了 RGB 三个通道的比例严格不变
+            if (luma < 0.0001) return color; // 防止除零
+            return color * (toneMappedLuma / luma);
+        }
+        
+        // ========================================================================
+        // 2. 安全的线性对比度 (Safe Linear Contrast)
+        // 在 Linear 空间增加对比度，同时以 0.18 (中灰) 为锚点。
+        // 这样调整对比度时，中间调亮度不变，只压暗部、提高光。
+        // ========================================================================
+        vec3 applyLinearContrast(vec3 color, float contrast) {
+            // 锚点：0.18 (中性灰)
+            // 所有的旋转都围绕这个点，保证画面亮度基准不跑偏
+            float midGray = 0.18; 
+            
+            // Log 域对比度公式 (比直接 pow 更符合人眼对光线的感知)
+            return color * pow(max(vec3(0.0), color / midGray), vec3(contrast - 1.0));
         }
 
         void main() {
-            // Pass 1: 1:1 解马赛克，coord 直接对应像素索引
+            // Pass 1: 1:1 解马赛克
             ivec2 coord = ivec2(gl_FragCoord.xy);
 
-            // 步骤 1-4: 黑电平、白平衡、反卷积、RCD解马赛克
+            // 步骤 1-4: 解马赛克
             vec3 rgb = demosaicRCD(coord);
 
-            // 应用曝光增益 (线性空间)
-            rgb = rgb * uExposureGain;
-
-            // 步骤 5: 色彩转换 (CCM) - 将相机原生色彩空间转换到 sRGB 线性空间
+            // 步骤 5: 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
 
-            // 限制到 [0, 1] 范围 (sRGB 色域)
-            rgb = clamp(rgb, 0.0, 1.0);
-
-            // 步骤 6: sRGB gamma 编码 (线性 -> sRGB)
-            rgb = linearToSRGB(rgb);
-
-            // 步骤 7: 应用 S 曲线增加对比度 (在 Gamma 空间应用效果更接近 Adobe Standard)
-            rgb = applySCurve(rgb);
+            // 步骤 5b: 应用曝光增益 (Linear HDR Space)
+            rgb *= uExposureGain;
             
-            // 步骤 8: 结构增强 (已注释)
-            // rgb = applyStructure(rgb);
+            rgb = applyLumaReinhard(rgb);
+            rgb = applyLinearContrast(rgb, 1.4);
+
+            // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
+            rgb = linearToSRGB(rgb);
+            
+            rgb = applyOutputSharpening(rgb, coord);
 
             // 最终输出
             fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
@@ -471,55 +544,9 @@ object RawShaders {
         out vec4 fragColor;
         
         uniform sampler2D uTexture;
-        uniform vec2 uSourceSize;
-        uniform float uSharpAmount;
-        
-        // 简单的 Bilateral 降噪参数
-        const float SIGMA_COLOR = 0.15;
         
         void main() {
-            vec2 texelSize = 1.0 / uSourceSize;
-            vec3 center = texture(uTexture, vTexCoord).rgb;
-            
-            // 1. Bilateral 降噪 (3x3 窗口) - 平滑纹理同时保留边缘
-            vec3 denoised = vec3(0.0);
-            float totalWeight = 0.0;
-            
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    vec3 sampleRGB = texture(uTexture, vTexCoord + vec2(float(dx) * texelSize.x, float(dy) * texelSize.y)).rgb;
-                    
-                    // 计算颜色差异权重
-                    float diff = length(center - sampleRGB);
-                    float weight = exp(-(diff * diff) / (2.0 * SIGMA_COLOR * SIGMA_COLOR));
-                    
-                    denoised += sampleRGB * weight;
-                    totalWeight += weight;
-                }
-            }
-            denoised /= totalWeight;
-            
-            // 2. 边缘检测与自适应锐化
-            if (uSharpAmount <= 0.0) {
-                fragColor = vec4(denoised, 1.0);
-                return;
-            }
-
-            // 计算拉普拉斯边缘
-            vec3 n = texture(uTexture, vTexCoord + vec2(0.0, texelSize.y)).rgb;
-            vec3 s = texture(uTexture, vTexCoord - vec2(0.0, texelSize.y)).rgb;
-            vec3 e = texture(uTexture, vTexCoord + vec2(texelSize.x, 0.0)).rgb;
-            vec3 w = texture(uTexture, vTexCoord - vec2(texelSize.x, 0.0)).rgb;
-            
-            vec3 edge = 4.0 * denoised - n - s - e - w;
-            
-            // 亮度加权：暗部不进行锐化（防止噪点放大），亮部适度锐化
-            float luma = dot(denoised, vec3(0.299, 0.587, 0.114));
-            float sharpMask = smoothstep(0.05, 0.2, luma); // 阈值：低于 0.05 不锐化
-            
-            vec3 sharpened = denoised + edge * uSharpAmount * sharpMask;
-            
-            fragColor = vec4(clamp(sharpened, 0.0, 1.0), 1.0);
+            fragColor = texture(uTexture, vTexCoord);
         }
     """.trimIndent()
 

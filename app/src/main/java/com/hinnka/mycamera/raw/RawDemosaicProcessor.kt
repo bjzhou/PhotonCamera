@@ -104,8 +104,6 @@ class RawDemosaicProcessor {
     // Passthrough Uniform 位置
     private var uPassTextureLoc = 0
     private var uPassTexMatrixLoc = 0
-    private var uPassSourceSizeLoc = 0
-    private var uPassSharpAmountLoc = 0
 
     private var lensShadingTextureId = 0
     private var dummyShadingTextureId = 0
@@ -358,8 +356,6 @@ class RawDemosaicProcessor {
 
             uPassTextureLoc = GLES30.glGetUniformLocation(passthroughProgram, "uTexture")
             uPassTexMatrixLoc = GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix")
-            uPassSourceSizeLoc = GLES30.glGetUniformLocation(passthroughProgram, "uSourceSize")
-            uPassSharpAmountLoc = GLES30.glGetUniformLocation(passthroughProgram, "uSharpAmount")
 
             GLES30.glDeleteShader(fShaderPass)
         }
@@ -588,27 +584,33 @@ class RawDemosaicProcessor {
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
 
-        // 1. 下采样到约 512x512
+        // 1. 采样参数 (保持不变)
         val sampleSize = 512
         val stepX = (width / sampleSize).coerceAtLeast(1)
         val stepY = (height / sampleSize).coerceAtLeast(1)
-
-        val black = metadata.blackLevel[1] // 使用 Gr 通道的黑电平
+        val black = metadata.blackLevel[1]
         val range = metadata.whiteLevel - black
 
-        // 关键修复：RAW 数据一般为小端序 (Little Endian)
+        // 权重矩阵中心点
+        val centerX = width / 2.0
+        val centerY = height / 2.0
+        val maxDistSq = (width * width + height * height) / 4.0 // 对角线半径平方
+
+        // 统计变量
+        var weightedSum = 0.0
+        var totalWeight = 0.0
+        val valueList = ArrayList<Float>(2048) // 用于计算高光百分位
+
+        // RAW 数据一般为小端序
         val savedOrder = buffer.order()
         buffer.order(ByteOrder.LITTLE_ENDIAN)
-
-        val values = FloatArray(((width / stepX) + 1) * ((height / stepY) + 1))
-        var count = 0
         val savedPos = buffer.position()
 
         try {
             for (y in 0 until height step stepY) {
                 val rowOffset = y * rowStride
                 for (x in 0 until width step stepX) {
-                    // 确保选中绿色通道像素：(x + y) % 2 == 1
+                    // 确保选中绿色通道
                     var targetX = x
                     if ((targetX + y) % 2 == 0) {
                         targetX += 1
@@ -619,49 +621,76 @@ class RawDemosaicProcessor {
                         val offset = rowOffset + targetX * pixelStride
                         if (offset + 1 < buffer.limit()) {
                             val value = buffer.getShort(offset).toInt() and 0xFFFF
-                            val normalized = (value - black) / range
-                            if (count < values.size) {
-                                values[count++] = normalized.coerceAtLeast(0f)
-                            }
+                            // 归一化并 Clamp，防止坏点
+                            val normalized = ((value - black) / range).coerceIn(0f, 1f)
+
+                            // === 改进点 1: 中心权重计算 ===
+                            // 距离中心越近，权重越高 (高斯分布模拟)
+                            val distSq = (targetX - centerX) * (targetX - centerX) + (y - centerY) * (y - centerY)
+                            // 权重衰减系数：边缘处的权重约为中心的 0.2
+                            val weight = Math.exp(-distSq / (2.0 * (maxDistSq * 0.4))).toFloat()
+
+                            weightedSum += normalized * weight
+                            totalWeight += weight
+
+                            // 收集样本用于高光计算 (不需要全部收集，随机/间隔收集即可)
+                            // 这里直接复用循环，由于下采样了，List不会太大
+                            valueList.add(normalized)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to sample pixels for exposure calculation", e)
+            PLog.e(TAG, "Failed to sample pixels", e)
         } finally {
             buffer.position(savedPos)
             buffer.order(savedOrder)
         }
 
-        if (count == 0) return 1.0f
+        if (totalWeight == 0.0 || valueList.isEmpty()) return 1.0f
 
-        // 3. 排除极端值：忽略最亮 5% 和最暗 5%
-        val sortedValues = values.copyOfRange(0, count)
-        sortedValues.sort()
+        // 2. 计算加权平均亮度 (Weighted Average)
+        val weightedAvg = (weightedSum / totalWeight).toFloat()
 
-        val startIndex = (count * 0.05).toInt()
-        val endIndex = (count * 0.95).toInt()
+        // 3. 计算高光阈值 (98th Percentile)
+        // 只需要保护前 2% 的极亮像素不溢出，允许 specular highlights (太阳、反光) 溢出
+        valueList.sort()
+        val highIndex = (valueList.size * 0.98).toInt().coerceAtMost(valueList.size - 1)
+        val highlightLuma = valueList[highIndex]
 
-        if (startIndex >= endIndex) {
-            PLog.w(TAG, "calculateExposureGain early return: startIndex=$startIndex, endIndex=$endIndex")
-            return 1.0f
-        }
+        // === 核心改进逻辑 ===
 
-        // 4. 计算中道/均值平均亮度
-        var sum = 0.0
-        for (i in startIndex until endIndex) {
-            sum += sortedValues[i]
-        }
-        val avg = (sum / (endIndex - startIndex)).toFloat()
+        // 策略 A: 基础 18% 灰增益
+        // 改进点 2: 暗光场景补偿 (Dark Scene Compensation)
+        // 如果平均亮度极低，说明是夜景，Target 不应该是 0.18，而应该更低 (比如 0.05)
+        // 使用一个平滑函数调整 Target
+        val baseTarget = 0.18f
+        val darkSceneFactor = smoothStep(0.0f, 0.05f, weightedAvg) // 0~0.05 之间平滑过渡
+        val dynamicTarget = 0.05f + (baseTarget - 0.05f) * darkSceneFactor
 
-        // 5. 计算 Gain (目标亮度 0.18)
-        val target = 0.18f
-        val calculatedGain = if (avg > 0.0001f) target / avg else 1.0f
+        val gainAvg = if (weightedAvg > 0.0001f) dynamicTarget / weightedAvg else 1.0f
 
-        val finalGain = calculatedGain.coerceIn(1.0f, 4.0f)
+        // 策略 B: 高光保护增益
+        // 我们希望 98% 亮度的像素，在应用 Gain 之后，不要超过 1.0 (或者 0.9 以留余地)
+        // maxLuma * gain <= 1.0  =>  gain <= 1.0 / maxLuma
+        val gainHighlight = if (highlightLuma > 0.0001f) 1.0f / highlightLuma else 4.0f
 
-        return finalGain
+        // 4. 最终决策：取两者较小值，但允许一定程度的过曝以换取亮度
+        // 通常高光限制会非常严格，导致画面太暗，所以我们给高光增益一个 "软膝" 或者放宽一点 (比如 1.2 / highlightLuma)
+        // 这里采用保守策略：优先满足中性灰，但如果高光溢出太严重，就被高光强行拉回来
+
+        // 混合逻辑：final = min(gainAvg, gainHighlight * bias)
+        // bias = 1.25 表示允许最亮部溢出 25% (Tone Mapping 会救回来)
+        val finalGain = kotlin.math.min(gainAvg, gainHighlight * 1.5f)
+
+        // 5. 硬限制 (防止增益过大导致噪点失控)
+        return finalGain.coerceIn(1.0f, 8.0f) // 适当放宽上限到 8.0，但受高光约束
+    }
+
+    // 辅助函数: 平滑阶梯
+    private fun smoothStep(edge0: Float, edge1: Float, x: Float): Float {
+        val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0.0f, 1.0f)
+        return t * t * (3.0f - 2.0f * t)
     }
 
     private fun renderDemosaicPass(metadata: RawMetadata, exposureGain: Float) {
@@ -700,9 +729,9 @@ class RawDemosaicProcessor {
         )
         GLES30.glUniformMatrix3fv(uColorCorrectionMatrixLoc, 1, true, metadata.colorCorrectionMatrix, 0)
         GLES30.glUniform1f(uExposureGainLoc, exposureGain)
-        GLES30.glUniform1f(uDeconvStrengthLoc, 0.3f) // 重新开启轻微的 RAW 层去卷积
-        GLES30.glUniform1f(uStructureAmountLoc, 0.0f)
-        GLES30.glUniform1f(uOutputSharpAmountLoc, 0.0f)
+        GLES30.glUniform1f(uDeconvStrengthLoc, 0.6f) // 重新开启轻微的 RAW 层去卷积
+        GLES30.glUniform1f(uStructureAmountLoc, 0f)
+        GLES30.glUniform1f(uOutputSharpAmountLoc, 0f)
 
         // 绑定 LSC
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
@@ -762,10 +791,6 @@ class RawDemosaicProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, demosaicTextureId)
         GLES30.glUniform1i(uPassTextureLoc, 0)
-
-        // 设置锐化参数
-        GLES30.glUniform2f(uPassSourceSizeLoc, metadata.width.toFloat(), metadata.height.toFloat())
-        GLES30.glUniform1f(uPassSharpAmountLoc, 0.6f) // 开启第二通路锐化
 
         drawQuad(passthroughProgram)
         checkGlError("renderOutputPass")
