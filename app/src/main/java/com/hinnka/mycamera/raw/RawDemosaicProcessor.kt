@@ -24,22 +24,26 @@ import java.util.concurrent.Executors
 
 /**
  * RAW 图像解马赛克处理器
- * 
+ *
  * 使用 OpenGL ES 3.0 离屏渲染实现 GPU 加速的 RAW 处理管线：
- * 1. 黑电平校正和归一化
- * 2. Malvar-He-Cutler (MHC) 解马赛克算法
- * 3. 白平衡增益
- * 4. 色彩校正矩阵 (CCM)
- * 5. Gamma 校正 (sRGB)
+ * Capture One 风格处理流程:
+ * 1. 黑电平扣除
+ * 2. 线性白平衡增益
+ * 3. 输入锐化/反卷积 (Richardson-Lucy Deconvolution)
+ * 4. 解马赛克 (RCD - Ratio Corrected Demosaicing)
+ * 5. 色彩转换 (CCM)
+ * 6. Gamma 曲线 (Filmic: 短趾部 + Gamma 2.2 + 长肩部)
+ * 7. 结构增强 (Structure/Clarity - L通道高通滤波)
+ * 8. 最终锐化 (Unsharp Mask)
  */
 class RawDemosaicProcessor {
 
     companion object {
         private const val TAG = "RawDemosaicProcessor"
-        
+
         @Volatile
         private var instance: RawDemosaicProcessor? = null
-        
+
         fun getInstance(): RawDemosaicProcessor {
             return instance ?: synchronized(this) {
                 instance ?: RawDemosaicProcessor().also { instance = it }
@@ -77,8 +81,9 @@ class RawDemosaicProcessor {
     private var uWhiteBalanceGainsLoc = 0
     private var uColorCorrectionMatrixLoc = 0
     private var uExposureGainLoc = 0
-    private var uBrightnessOffsetLoc = 0
-    private var uDenoiseStrengthLoc = 0
+    private var uDeconvStrengthLoc = 0
+    private var uStructureAmountLoc = 0
+    private var uOutputSharpAmountLoc = 0
 
     private var isInitialized = false
 
@@ -114,7 +119,10 @@ class RawDemosaicProcessor {
             // 提取元数据
             val metadata = RawMetadata.create(width, height, characteristics, captureResult)
             PLog.d(TAG, "CFA Pattern: ${metadata.cfaPattern}, WhiteLevel: ${metadata.whiteLevel}")
-            PLog.d(TAG, "WB Gains: R=${metadata.whiteBalanceGains[0]}, Gr=${metadata.whiteBalanceGains[1]}, Gb=${metadata.whiteBalanceGains[2]}, B=${metadata.whiteBalanceGains[3]}")
+            PLog.d(
+                TAG,
+                "WB Gains: R=${metadata.whiteBalanceGains[0]}, Gr=${metadata.whiteBalanceGains[1]}, Gb=${metadata.whiteBalanceGains[2]}, B=${metadata.whiteBalanceGains[3]}"
+            )
             PLog.d(TAG, "Black Level: ${metadata.blackLevel.contentToString()}")
 
             // 上传 RAW 数据到纹理
@@ -318,8 +326,9 @@ class RawDemosaicProcessor {
         uWhiteBalanceGainsLoc = GLES30.glGetUniformLocation(shaderProgram, "uWhiteBalanceGains")
         uColorCorrectionMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uColorCorrectionMatrix")
         uExposureGainLoc = GLES30.glGetUniformLocation(shaderProgram, "uExposureGain")
-        uBrightnessOffsetLoc = GLES30.glGetUniformLocation(shaderProgram, "uBrightnessOffset")
-        uDenoiseStrengthLoc = GLES30.glGetUniformLocation(shaderProgram, "uDenoiseStrength")
+        uDeconvStrengthLoc = GLES30.glGetUniformLocation(shaderProgram, "uDeconvStrength")
+        uStructureAmountLoc = GLES30.glGetUniformLocation(shaderProgram, "uStructureAmount")
+        uOutputSharpAmountLoc = GLES30.glGetUniformLocation(shaderProgram, "uOutputSharpAmount")
 
         PLog.d(TAG, "Shader program created: $shaderProgram")
     }
@@ -387,14 +396,17 @@ class RawDemosaicProcessor {
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
 
-        PLog.d(TAG, "RAW texture upload: ${width}x${height}, rowStride=$rowStride, pixelStride=$pixelStride, buffer size=${buffer.remaining()}")
+        PLog.d(
+            TAG,
+            "RAW texture upload: ${width}x${height}, rowStride=$rowStride, pixelStride=$pixelStride, buffer size=${buffer.remaining()}"
+        )
 
         // RAW_SENSOR 通常是连续的 16 位数据
         // rowStride 应该等于 width * 2 (每像素 2 字节)
         // 如果有 padding，需要逐行复制
 
         val expectedRowBytes = width * 2 // 16-bit per pixel
-        
+
         if (rowStride == expectedRowBytes) {
             // 无 padding，直接上传
             buffer.position(0)
@@ -414,14 +426,14 @@ class RawDemosaicProcessor {
             // 有 padding，需要逐行复制
             val packedBuffer = ByteBuffer.allocateDirect(width * height * 2)
                 .order(ByteOrder.nativeOrder())
-            
+
             for (y in 0 until height) {
                 buffer.position(y * rowStride)
                 val rowBuffer = ByteArray(expectedRowBytes)
                 buffer.get(rowBuffer)
                 packedBuffer.put(rowBuffer)
             }
-            
+
             packedBuffer.position(0)
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
             GLES30.glTexImage2D(
@@ -479,6 +491,7 @@ class RawDemosaicProcessor {
 
         checkGlError("setupFramebuffer")
     }
+
     /**
      * 计算 RAW 图像的平均亮度（采用高光加权算法）
      */
@@ -497,11 +510,11 @@ class RawDemosaicProcessor {
         val black = metadata.blackLevel[0]
         val range = metadata.whiteLevel - black
         val savedPos = buffer.position()
-        
+
         // 预计算平均白平衡增益，用于对齐 CPU 亮度感官和 GPU 渲染结果
-        val avgWbGain = (metadata.whiteBalanceGains[0] + metadata.whiteBalanceGains[1] + 
-                        metadata.whiteBalanceGains[2] + metadata.whiteBalanceGains[3]) / 4.0f
-        
+        val avgWbGain = (metadata.whiteBalanceGains[0] + metadata.whiteBalanceGains[1] +
+                metadata.whiteBalanceGains[2] + metadata.whiteBalanceGains[3]) / 4.0f
+
         try {
             for (y in 0 until height step sampleStep) {
                 val rowOffset = y * rowStride
@@ -511,12 +524,12 @@ class RawDemosaicProcessor {
                         val value = buffer.getShort(offset).toInt() and 0xFFFF
                         // 加上白平衡增益修正，防止 CPU 漏算亮部强度导致增益过高
                         val luma = ((value - black) / range) * avgWbGain
-                        
+
                         // 权重函数：高光加权检测，抑制死白对整体曝光的影响
-                        val weight = if (luma < 0.1f) 0.5f 
-                                    else if (luma > 0.8f) 0.1f 
-                                    else 1.0f
-                        
+                        val weight = if (luma < 0.1f) 0.5f
+                        else if (luma > 0.8f) 0.1f
+                        else 1.0f
+
                         weightedSum += luma * weight
                         totalWeight += weight
                     }
@@ -561,11 +574,12 @@ class RawDemosaicProcessor {
             metadata.whiteBalanceGains[3]
         )
         GLES30.glUniformMatrix3fv(uColorCorrectionMatrixLoc, 1, true, metadata.colorCorrectionMatrix, 0)
-        
-        // 新增控制 Uniforms
+
+        // Capture One 风格控制 Uniforms
         GLES30.glUniform1f(uExposureGainLoc, exposureGain)
-        GLES30.glUniform1f(uBrightnessOffsetLoc, 0.0f) // 默认不偏移
-        GLES30.glUniform1f(uDenoiseStrengthLoc, 0.5f)    // 默认中等降噪强度
+        GLES30.glUniform1f(uDeconvStrengthLoc, 0.6f)      // 输入反卷积强度 (轻微)
+        GLES30.glUniform1f(uStructureAmountLoc, 0.5f)     // 结构增强强度 (中等)
+        GLES30.glUniform1f(uOutputSharpAmountLoc, 0.4f)   // 输出锐化强度 (轻微)
 
         // 绘制四边形
         val positionHandle = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
