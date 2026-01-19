@@ -58,20 +58,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 用户偏好设置仓库
     private val userPreferencesRepository = UserPreferencesRepository(application)
-    
-    // 软件处理模式设置
-    val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useSoftwareProcessing }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // 软件处理参数
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.3f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.2f)
 
     val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.noiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
 
     val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.chromaNoiseReduction }
@@ -165,9 +160,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     )
 
     // 细节处理编辑状态 (Sharpening, Noise Reduction, Chroma Noise Reduction)
-    var editSharpening = MutableStateFlow(0.3f)
+    var editSharpening = MutableStateFlow(0.2f)
         private set
-    var editNoiseReduction = MutableStateFlow(0.25f)
+    var editNoiseReduction = MutableStateFlow(0f)
         private set
     var editChromaNoiseReduction = MutableStateFlow(0.25f)
         private set
@@ -428,8 +423,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 lutImageProcessor.applyLut(
                     bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
                     lutConfig = lutConfig,
-                    colorRecipeParams = colorRecipeParams,
-                    useSoftwareProcessing = false  // 预览不需要软件处理
+                    colorRecipeParams = colorRecipeParams
+                    // 预览不需要软件处理
                 ).let { preview ->
                     previews[lutInfo.id] = preview
                 }
@@ -925,7 +920,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             uri = photo.uri,
             metadata = photo.metadata ?: PhotoMetadata(),
             photoProcessor = photoProcessor,
-            useSoftwareProcessing = useSoftwareProcessing.value,
             sharpening = sharpening.value,
             noiseReduction = noiseReduction.value,
             chromaNoiseReduction = chromaNoiseReduction.value
@@ -957,8 +951,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 // 预览生成：跟随当前编辑状态
                 photoProcessor.process(
-                    context, bitmap, metadata, photo.previewUri, 
-                    useSoftwareProcessing.value, editSharpening.value, editNoiseReduction.value, editChromaNoiseReduction.value
+                    context, bitmap, metadata, photo.previewUri,
+                    editSharpening.value, editNoiseReduction.value, editChromaNoiseReduction.value
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)
@@ -1084,8 +1078,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             // 处理照片：跟随用户设置
             val processedBitmap = photoProcessor.process(
-                context, bitmap, metadata, photo.uri, 
-                useSoftwareProcessing.value, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                context, bitmap, metadata, photo.uri,
+                sharpening.value, noiseReduction.value, chromaNoiseReduction.value
             )
 
             // 保存到缓存目录
@@ -1134,8 +1128,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 // 处理照片：跟随用户设置
                 val processedBitmap = photoProcessor.process(
-                    context, bitmap, metadata, photo.uri, 
-                    useSoftwareProcessing.value, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                    context, bitmap, metadata, photo.uri,
+                    sharpening.value, noiseReduction.value, chromaNoiseReduction.value
                 )
 
                 // 保存到指定目录

@@ -26,10 +26,9 @@ class PhotoProcessor(
      * @param input 输入 Bitmap
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
      * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
-     * @param useSoftwareProcessing 是否使用软件降噪/锐化（默认 true）
-     * @param sharpening 锐化强度（仅 useSoftwareProcessing=true 时生效）
-     * @param noiseReduction 降噪强度（仅 useSoftwareProcessing=true 时生效）
-     * @param chromaNoiseReduction 减少杂色强度（仅 useSoftwareProcessing=true 时生效）
+     * @param sharpening 锐化强度
+     * @param noiseReduction 降噪强度
+     * @param chromaNoiseReduction 减少杂色强度
      * @return 处理后的 Bitmap
      */
     suspend fun process(
@@ -37,9 +36,8 @@ class PhotoProcessor(
         input: Bitmap,
         metadata: PhotoMetadata,
         uri: Uri? = null,
-        useSoftwareProcessing: Boolean = false,
-        sharpening: Float = 0.3f,
-        noiseReduction: Float = 0.25f,
+        sharpening: Float = 0.2f,
+        noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0.25f
     ): Bitmap = withContext(Dispatchers.Default) {
         var result = input
@@ -59,7 +57,6 @@ class PhotoProcessor(
                     result, 
                     lutConfig, 
                     colorRecipeParams,
-                    useSoftwareProcessing,
                     finalSharpening,
                     finalNoiseReduction,
                     finalChromaNoiseReduction

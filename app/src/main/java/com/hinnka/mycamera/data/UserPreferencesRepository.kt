@@ -30,11 +30,10 @@ data class UserPreferences(
     val vibrationEnabled: Boolean = true,  // 拍摄震动
     val volumeKeyCapture: Boolean = false,  // 音量键拍摄
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
-    val useSoftwareProcessing: Boolean = false,  // 使用软件降噪/锐化（而非系统算法）
+    val nrOff: Boolean = false,  // 禁用系统降噪
     val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
-    // 软件处理参数（仅在 useSoftwareProcessing=true 时生效）
-    val sharpening: Float = 0.3f,              // 0.0 ~ 1.0 锐化强度
-    val noiseReduction: Float = 0.25f,         // 0.0 ~ 1.0 降噪强度
+    val sharpening: Float = 0.2f,              // 0.0 ~ 1.0 锐化强度
+    val noiseReduction: Float = 0f,         // 0.0 ~ 1.0 降噪强度
     val chromaNoiseReduction: Float = 0.25f,   // 0.0 ~ 1.0 减少杂色强度
     // 排序顺序
     val filterOrder: List<String> = emptyList(),  // 滤镜排序（ID列表）
@@ -59,7 +58,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
         private val VOLUME_KEY_CAPTURE = booleanPreferencesKey("volume_key_capture")
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
-        private val USE_SOFTWARE_PROCESSING = booleanPreferencesKey("use_software_processing")
+        private val NR_OFF = booleanPreferencesKey("use_software_processing")
         private val USE_RAW = booleanPreferencesKey("use_raw")
 
         // 软件处理参数 Keys
@@ -88,11 +87,11 @@ class UserPreferencesRepository(private val context: Context) {
                 vibrationEnabled = preferences[VIBRATION_ENABLED] ?: true,
                 volumeKeyCapture = preferences[VOLUME_KEY_CAPTURE] ?: false,
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
-                useSoftwareProcessing = preferences[USE_SOFTWARE_PROCESSING] ?: false,
+                nrOff = preferences[NR_OFF] ?: false,
                 useRaw = preferences[USE_RAW] ?: false,
                 // 软件处理参数
-                sharpening = preferences[SHARPENING] ?: 0.3f,
-                noiseReduction = preferences[NOISE_REDUCTION] ?: 0.25f,
+                sharpening = preferences[SHARPENING] ?: 0.2f,
+                noiseReduction = preferences[NOISE_REDUCTION] ?: 0f,
                 chromaNoiseReduction = preferences[CHROMA_NOISE_REDUCTION] ?: 0.25f,
                 // 排序
                 filterOrder = preferences[FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
@@ -201,9 +200,9 @@ class UserPreferencesRepository(private val context: Context) {
     /**
      * 保存是否使用软件降噪/锐化
      */
-    suspend fun saveUseSoftwareProcessing(enabled: Boolean) {
+    suspend fun saveNROff(enabled: Boolean) {
         context.dataStore.edit { preferences ->
-            preferences[USE_SOFTWARE_PROCESSING] = enabled
+            preferences[NR_OFF] = enabled
         }
     }
 

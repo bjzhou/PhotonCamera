@@ -93,20 +93,12 @@ fun PhotoEditScreen(
     val availableFrames = viewModel.availableFrames
     val editFrameCustomProperties by viewModel.editFrameCustomProperties.collectAsState()
 
-    // 软件处理状态
-    val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState()
     val sharpening by viewModel.editSharpening.collectAsState()
     val noiseReduction by viewModel.editNoiseReduction.collectAsState()
     val chromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
 
     // 编辑标签页状态
     var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理
-
-    LaunchedEffect(useSoftwareProcessing) {
-        if (!useSoftwareProcessing) {
-            editTab = 0
-        }
-    }
 
     LaunchedEffect(
         currentPhoto,
@@ -115,7 +107,6 @@ fun PhotoEditScreen(
         editLutConfig,
         editFrameId,
         editFrameCustomProperties,
-        useSoftwareProcessing,
         sharpening,
         noiseReduction,
         chromaNoiseReduction
@@ -268,22 +259,20 @@ fun PhotoEditScreen(
                     modifier = Modifier.padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
                 ) {
                     // 标签页切换
-                    if (useSoftwareProcessing) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(24.dp)
-                        ) {
-                            TabItem(
-                                title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
-                                isSelected = editTab == 0,
-                                onClick = { editTab = 0 }
-                            )
-                            TabItem(
-                                title = stringResource(R.string.recipe_tab_post),
-                                isSelected = editTab == 1,
-                                onClick = { editTab = 1 }
-                            )
-                        }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
+                        TabItem(
+                            title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
+                            isSelected = editTab == 0,
+                            onClick = { editTab = 0 }
+                        )
+                        TabItem(
+                            title = stringResource(R.string.recipe_tab_post),
+                            isSelected = editTab == 1,
+                            onClick = { editTab = 1 }
+                        )
                     }
 
                     if (editTab == 0) {

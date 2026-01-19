@@ -110,8 +110,8 @@
     <string name="settings_volume_key_description">Use volume keys to take photos</string>
     <string name="settings_auto_save">Auto Save</string>
     <string name="settings_auto_save_description">Automatically save photos after capture</string>
-    <string name="settings_software_processing">Software Denoising/Sharpening</string>
-    <string name="settings_software_processing_description">Use software algorithms for noise reduction and sharpening. Disable to use system hardware processing.</string>
+    <string name="settings_software_processing">Disable System Noise Reduction</string>
+    <string name="settings_software_processing_description">Disable system default noise reduction and sharpening to preserve more details.</string>
     <string name="settings_sharpening">Sharpening</string>
     <string name="settings_sharpening_description">Enhance image sharpness and edge definition</string>
     <string name="settings_noise_reduction">Noise Reduction</string>

@@ -165,21 +165,17 @@ class LutImageProcessor {
      * @param bitmap 输入图片
      * @param lutConfig LUT 配置
      * @param colorRecipeParams 色彩配方参数
-     * @param useSoftwareProcessing 是否使用软件处理模式
-     *        - true: 使用软件降噪/锐化算法
-     *        - false: 不应用软件降噪/锐化（因为系统已处理）
-     * @param sharpeningValue 锐化强度（仅 useSoftwareProcessing=true 时生效）
-     * @param noiseReductionValue 降噪强度（仅 useSoftwareProcessing=true 时生效）
-     * @param chromaNoiseReductionValue 减少杂色强度（仅 useSoftwareProcessing=true 时生效）
+     * @param sharpeningValue 锐化强度
+     * @param noiseReductionValue 降噪强度
+     * @param chromaNoiseReductionValue 减少杂色强度
      */
     suspend fun applyLut(
         bitmap: Bitmap,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
-        useSoftwareProcessing: Boolean = false,
-        sharpeningValue: Float = 0.3f,
-        noiseReductionValue: Float = 0.25f,
-        chromaNoiseReductionValue: Float = 0.25f,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
     ): Bitmap = withContext(glDispatcher) {
         if (!isInitialized) {
             if (!initialize()) {
@@ -202,23 +198,11 @@ class LutImageProcessor {
         val vignette = colorRecipeParams?.vignette ?: 0f
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
-        
+
         // 后期处理参数（仅在软件处理模式下生效）
-        val sharpening: Float
-        val noiseReduction: Float
-        val chromaNoiseReduction: Float
-        
-        if (useSoftwareProcessing) {
-            // 软件处理模式：使用传入的参数值
-            sharpening = sharpeningValue
-            noiseReduction = noiseReductionValue
-            chromaNoiseReduction = chromaNoiseReductionValue
-        } else {
-            // 系统处理模式：不应用软件降噪/锐化（系统已经处理了）
-            sharpening = 0f
-            noiseReduction = 0f
-            chromaNoiseReduction = 0f
-        }
+        val sharpening: Float = sharpeningValue
+        val noiseReduction: Float = noiseReductionValue
+        val chromaNoiseReduction: Float = chromaNoiseReductionValue
         
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)

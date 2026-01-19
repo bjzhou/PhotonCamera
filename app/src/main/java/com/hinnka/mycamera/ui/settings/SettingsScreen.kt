@@ -35,7 +35,6 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
-import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -58,11 +57,11 @@ fun SettingsScreen(
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
-    val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState(initial = false)
+    val nrOff by viewModel.nrOff.collectAsState(initial = false)
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     // 软件处理参数
-    val sharpening by viewModel.sharpening.collectAsState(initial = 0.3f)
-    val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0.25f)
+    val sharpening by viewModel.sharpening.collectAsState(initial = 0.2f)
+    val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
     val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0.25f)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
@@ -206,45 +205,42 @@ fun SettingsScreen(
                     SwitchSettingItem(
                         title = stringResource(R.string.settings_software_processing),
                         description = stringResource(R.string.settings_software_processing_description),
-                        checked = useSoftwareProcessing,
-                        onCheckedChange = { viewModel.setUseSoftwareProcessing(it) }
+                        checked = nrOff,
+                        onCheckedChange = { viewModel.setNROff(it) }
                     )
 
-                    // 软件处理参数（仅在软件处理模式开启时显示）
-                    if (useSoftwareProcessing) {
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
 
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_sharpening),
-                            description = stringResource(R.string.settings_sharpening_description),
-                            value = sharpening,
-                            valueRange = 0f..1f,
-                            onValueChange = { viewModel.setSharpening(it) }
-                        )
+                    SliderSettingItem(
+                        title = stringResource(R.string.settings_sharpening),
+                        description = stringResource(R.string.settings_sharpening_description),
+                        value = sharpening,
+                        valueRange = 0f..1f,
+                        onValueChange = { viewModel.setSharpening(it) }
+                    )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_noise_reduction),
-                            description = stringResource(R.string.settings_noise_reduction_description),
-                            value = noiseReduction,
-                            valueRange = 0f..1f,
-                            onValueChange = { viewModel.setNoiseReduction(it) }
-                        )
+                    SliderSettingItem(
+                        title = stringResource(R.string.settings_noise_reduction),
+                        description = stringResource(R.string.settings_noise_reduction_description),
+                        value = noiseReduction,
+                        valueRange = 0f..1f,
+                        onValueChange = { viewModel.setNoiseReduction(it) }
+                    )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_chroma_noise_reduction),
-                            description = stringResource(R.string.settings_chroma_noise_reduction_description),
-                            value = chromaNoiseReduction,
-                            valueRange = 0f..1f,
-                            onValueChange = { viewModel.setChromaNoiseReduction(it) }
-                        )
-                    }
+                    SliderSettingItem(
+                        title = stringResource(R.string.settings_chroma_noise_reduction),
+                        description = stringResource(R.string.settings_chroma_noise_reduction_description),
+                        value = chromaNoiseReduction,
+                        valueRange = 0f..1f,
+                        onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                    )
                 }
 
                 HorizontalDivider(

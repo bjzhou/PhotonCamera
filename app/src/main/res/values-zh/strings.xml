@@ -109,8 +109,8 @@
     <string name="settings_volume_key_description">使用音量键进行拍摄</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
     <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
-    <string name="settings_software_processing">软件降噪/锐化</string>
-    <string name="settings_software_processing_description">使用软件算法进行降噪和锐化处理。关闭后将使用系统硬件处理。</string>
+    <string name="settings_software_processing">禁用系统降噪</string>
+    <string name="settings_software_processing_description">禁用系统默认的降噪处理以获得更多细节。</string>
     <string name="settings_sharpening">锐化</string>
     <string name="settings_sharpening_description">增强图像锐度和边缘清晰度</string>
     <string name="settings_noise_reduction">降噪</string>

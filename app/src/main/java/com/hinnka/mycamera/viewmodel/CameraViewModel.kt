@@ -130,8 +130,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
     val volumeKeyCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.volumeKeyCapture }
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
-    val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useSoftwareProcessing }
+    val nrOff: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.nrOff }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
@@ -140,10 +140,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.3f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.2f)
     val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.noiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
     val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.chromaNoiseReduction }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.25f)
@@ -179,7 +179,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 isShutterSoundEnabled = it.shutterSoundEnabled
                 isVibrationEnabled = it.vibrationEnabled
                 // 同步软件处理设置到相机控制器
-                cameraController.setUseSoftwareProcessing(it.useSoftwareProcessing)
+                cameraController.setNROff(it.nrOff)
                 // 同步 RAW 设置到相机控制器
                 cameraController.setUseRaw(it.useRaw)
             }
@@ -592,8 +592,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             val previewBitmap = lutImageProcessor.applyLut(
                                 bitmap = bitmap,
                                 lutConfig = lutConfig,
-                                colorRecipeParams = colorRecipeParams,
-                                useSoftwareProcessing = false  // 预览不需要软件处理
+                                colorRecipeParams = colorRecipeParams
+                                // 预览不需要软件处理
                             )
                             newPreviews[lutInfo.id] = previewBitmap
                         }
@@ -793,9 +793,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置是否使用软件降噪/锐化
      */
-    fun setUseSoftwareProcessing(enabled: Boolean) {
+    fun setNROff(enabled: Boolean) {
         viewModelScope.launch {
-            userPreferencesRepository.saveUseSoftwareProcessing(enabled)
+            userPreferencesRepository.saveNROff(enabled)
         }
     }
 
@@ -863,7 +863,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val aspectRatio = state.value.aspectRatio
             val frameIdToSave = currentFrameId
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val shouldUseSoftwareProcessing = useSoftwareProcessing.value
             val sharpeningValue = sharpening.value
             val noiseReductionValue = noiseReduction.value
             val chromaNoiseReductionValue = chromaNoiseReduction.value
@@ -955,9 +954,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             val processedBitmap = withContext(Dispatchers.Default) {
                                 photoProcessor.process(
                                     context = context,
-                                    input = bitmap!!,
+                                    input = bitmap,
                                     metadata = metadata,
-                                    useSoftwareProcessing = shouldUseSoftwareProcessing,
                                     sharpening = sharpeningValue,
                                     noiseReduction = noiseReductionValue,
                                     chromaNoiseReduction = chromaNoiseReductionValue
