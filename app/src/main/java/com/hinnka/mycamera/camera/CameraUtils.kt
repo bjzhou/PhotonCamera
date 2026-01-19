@@ -86,6 +86,26 @@ object CameraUtils {
     }
     
     /**
+     * 获取 RAW 拍照尺寸
+     * 
+     * RAW 格式通常只有一个尺寸（传感器原生尺寸）
+     */
+    fun getRawCaptureSize(context: Context, cameraId: String): Size? {
+        return try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val sizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
+            
+            // RAW 通常只有一个尺寸，返回最大的
+            sizes?.maxByOrNull { it.width * it.height }
+        } catch (e: Exception) {
+            PLog.e("CameraUtils", "Failed to get RAW capture size: ${e.message}")
+            null
+        }
+    }
+    
+    /**
      * 格式化快门速度显示
      */
     fun formatShutterSpeed(exposureTimeNanos: Long): String {
