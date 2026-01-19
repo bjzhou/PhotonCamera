@@ -12,6 +12,8 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.lut.GlUtils
+import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
@@ -66,6 +68,8 @@ class RawDemosaicProcessor {
     private var rawTextureId = 0
     private var framebufferId = 0
     private var outputTextureId = 0
+    private var baseLutTextureId = 0
+    private var baseLutSize = 32f
 
     // 缓冲区
     private var vertexBuffer: FloatBuffer? = null
@@ -84,6 +88,8 @@ class RawDemosaicProcessor {
     private var uDeconvStrengthLoc = 0
     private var uStructureAmountLoc = 0
     private var uOutputSharpAmountLoc = 0
+    private var uBaseLutTextureLoc = 0
+    private var uBaseLutSizeLoc = 0
 
     private var isInitialized = false
 
@@ -98,6 +104,7 @@ class RawDemosaicProcessor {
      * @return 处理后的 Bitmap，失败返回 null
      */
     suspend fun process(
+        context: android.content.Context,
         rawImage: Image,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
@@ -106,7 +113,7 @@ class RawDemosaicProcessor {
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
-                if (!initializeOnGlThread()) {
+                if (!initializeOnGlThread(context)) {
                     PLog.e(TAG, "Failed to initialize processor")
                     return@withContext null
                 }
@@ -190,24 +197,24 @@ class RawDemosaicProcessor {
     /**
      * 预加载 EGL 环境和 Shader
      */
-    fun preload() {
+    fun preload(context: android.content.Context) {
         Executors.newSingleThreadExecutor().execute {
             runBlocking {
                 withContext(glDispatcher) {
-                    initializeOnGlThread()
+                    initializeOnGlThread(context)
                 }
             }
         }
     }
 
-    private suspend fun initializeOnGlThread(): Boolean = withContext(glDispatcher) {
-        initialize()
+    private suspend fun initializeOnGlThread(context: android.content.Context): Boolean = withContext(glDispatcher) {
+        initialize(context)
     }
 
     /**
      * 初始化 EGL 环境
      */
-    fun initialize(): Boolean {
+    fun initialize(context: android.content.Context): Boolean {
         if (isInitialized) return true
 
         try {
@@ -278,6 +285,16 @@ class RawDemosaicProcessor {
             initShaderProgram()
             initBuffers()
 
+            // 加载基础 LUT
+            try {
+                val lutConfig = LutParser.parseFromAssets(context, "luts/base.plut")
+                baseLutTextureId = GlUtils.create3DTexture(lutConfig)
+                baseLutSize = lutConfig.size.toFloat()
+                PLog.d(TAG, "Base LUT loaded: id=$baseLutTextureId, size=$baseLutSize")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to load base LUT", e)
+            }
+
             isInitialized = true
             PLog.d(TAG, "RawDemosaicProcessor initialized")
             return true
@@ -329,6 +346,8 @@ class RawDemosaicProcessor {
         uDeconvStrengthLoc = GLES30.glGetUniformLocation(shaderProgram, "uDeconvStrength")
         uStructureAmountLoc = GLES30.glGetUniformLocation(shaderProgram, "uStructureAmount")
         uOutputSharpAmountLoc = GLES30.glGetUniformLocation(shaderProgram, "uOutputSharpAmount")
+        uBaseLutTextureLoc = GLES30.glGetUniformLocation(shaderProgram, "uBaseLutTexture")
+        uBaseLutSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uBaseLutSize")
 
         PLog.d(TAG, "Shader program created: $shaderProgram")
     }
@@ -581,6 +600,12 @@ class RawDemosaicProcessor {
         GLES30.glUniform1f(uStructureAmountLoc, 0.5f)     // 结构增强强度 (中等)
         GLES30.glUniform1f(uOutputSharpAmountLoc, 0.4f)   // 输出锐化强度 (轻微)
 
+        // 绑定基础 LUT 纹理
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, baseLutTextureId)
+        GLES30.glUniform1i(uBaseLutTextureLoc, 1)
+        GLES30.glUniform1f(uBaseLutSizeLoc, baseLutSize)
+
         // 绘制四边形
         val positionHandle = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
         val texCoordHandle = GLES30.glGetAttribLocation(shaderProgram, "aTexCoord")
@@ -679,6 +704,9 @@ class RawDemosaicProcessor {
         }
         if (framebufferId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
+        }
+        if (baseLutTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(baseLutTextureId), 0)
         }
 
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)

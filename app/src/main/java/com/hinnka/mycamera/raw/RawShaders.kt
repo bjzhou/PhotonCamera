@@ -75,6 +75,10 @@ object RawShaders {
         uniform vec4 uWhiteBalanceGains;
         uniform mat3 uColorCorrectionMatrix;
 
+        // Base LUT
+        uniform mediump sampler3D uBaseLutTexture;
+        uniform float uBaseLutSize;
+
         // Capture One 风格控制参数
         uniform float uDeconvStrength;     // 输入反卷积强度 (0.0-1.0)
         uniform float uStructureAmount;    // 结构增强强度 (0.0-1.0)
@@ -376,6 +380,12 @@ object RawShaders {
 
             // 步骤 8: 输出锐化 (在 gamma 空间进行)
             rgb = applyOutputSharpening(rgb, coord);
+
+            // 步骤 9: 应用基础 LUT
+            float lutScale = (uBaseLutSize - 1.0) / uBaseLutSize;
+            float lutOffset = 1.0 / (2.0 * uBaseLutSize);
+            vec3 lutCoord = clamp(rgb, 0.0, 1.0) * lutScale + lutOffset;
+            rgb = texture(uBaseLutTexture, lutCoord).rgb;
 
             // 最终输出
             fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);

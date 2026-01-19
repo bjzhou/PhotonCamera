@@ -133,6 +133,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useSoftwareProcessing }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.sharpening }
@@ -153,7 +154,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     init {
         cameraController.initialize()
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
-            PLog.d(TAG, "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}")
+            PLog.d(
+                TAG,
+                "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
+            )
             viewModelScope.launch {
                 saveImage(image, captureInfo, characteristics, captureResult)
             }
@@ -263,7 +267,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun openCamera(surfaceTexture: SurfaceTexture) {
         PLog.d(TAG, "openCamera")
         // 预加载 RAW 处理器
-        RawDemosaicProcessor.getInstance().preload()
+        RawDemosaicProcessor.getInstance().preload(getApplication())
         currentSurfaceTexture = surfaceTexture
         cameraController.openCamera(surfaceTexture)
     }
@@ -838,7 +842,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 var waitCount = 0
                 while (waitCount < 20) {
                     kotlinx.coroutines.delay(10)
-                    finalCaptureResult = cameraController.getLastCaptureResult() as android.hardware.camera2.CaptureResult?
+                    finalCaptureResult =
+                        cameraController.getLastCaptureResult() as android.hardware.camera2.CaptureResult?
                     if (finalCaptureResult != null) {
                         if (waitCount > 2) { // 只有延迟超过 20ms 时才记录日志
                             PLog.d(TAG, "captureResult became available after ${waitCount * 10}ms")
@@ -878,9 +883,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     // RAW 图像：使用 RawProcessor 处理
                     if (characteristics != null && finalCaptureResult != null) {
                         PLog.d(TAG, "Processing RAW image")
-                        RawProcessor.processAndToBitmap(image, characteristics, finalCaptureResult, aspectRatio, rotation)
+                        RawProcessor.processAndToBitmap(
+                            context,
+                            image,
+                            characteristics,
+                            finalCaptureResult,
+                            aspectRatio,
+                            rotation
+                        )
                     } else {
-                        PLog.e(TAG, "Cannot process RAW: characteristics=${characteristics != null}, finalCaptureResult=${finalCaptureResult != null}")
+                        PLog.e(
+                            TAG,
+                            "Cannot process RAW: characteristics=${characteristics != null}, finalCaptureResult=${finalCaptureResult != null}"
+                        )
                         null
                     }
                 } else {
@@ -896,11 +911,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             try {
                 // 如果之前没有 captureResult 但现在等到了，尝试重新构建更完整的 CaptureInfo 供 EXIF 使用
-                val finalCaptureInfo = if (captureResult == null && finalCaptureResult is android.hardware.camera2.TotalCaptureResult) {
-                    cameraController.rebuildCaptureInfo(finalCaptureResult, image.width, image.height)
-                } else {
-                    captureInfo
-                }
+                val finalCaptureInfo =
+                    if (captureResult == null && finalCaptureResult is android.hardware.camera2.TotalCaptureResult) {
+                        cameraController.rebuildCaptureInfo(finalCaptureResult, image.width, image.height)
+                    } else {
+                        captureInfo
+                    }
 
                 // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
                 val metadata = PhotoMetadata(
@@ -948,7 +964,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             }
 
                             val filename = "PhotonCamera_${
-                                java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                                java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                                    .format(java.util.Date())
                             }.jpg"
                             val contentValues = android.content.ContentValues().apply {
                                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
