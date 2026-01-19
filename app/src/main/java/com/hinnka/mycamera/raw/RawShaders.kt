@@ -30,21 +30,6 @@ object RawShaders {
     """.trimIndent()
 
     /**
-     * 片元着色器 - RAW 解马赛克处理管线
-     * 
-     * 使用 Malvar-He-Cutler (MHC) 算法进行 Bayer 解马赛克
-     * 参考: "High-Quality Linear Interpolation for Demosaicing of Bayer-Patterned Color Images"
-     * 
-     * 处理流程:
-     * 1. 从 RAW 纹理采样（16位单通道）
-     * 2. 黑电平减除 + 归一化到 [0, 1]
-     * 3. 根据 CFA 模式识别像素类型 (R/Gr/Gb/B)
-     * 4. 使用 MHC 5x5 卷积核插值缺失的颜色通道
-     * 5. 应用白平衡增益
-     * 6. 应用色彩校正矩阵 (CCM)
-     * 7. Gamma 校正转换到 sRGB
-     */
-    /**
      * 片元着色器 - Capture One 风格 RAW 处理管线
      *
      * 完整处理流程:
@@ -374,18 +359,18 @@ object RawShaders {
 
             // 步骤 6: sRGB gamma 编码 (线性 -> sRGB)
             rgb = linearToSRGB(rgb);
+            
+            // 步骤 9: 应用基础 LUT
+            float lutScale = (uBaseLutSize - 1.0) / uBaseLutSize;
+            float lutOffset = 1.0 / (2.0 * uBaseLutSize);
+            vec3 lutCoord = clamp(rgb, 0.0, 1.0) * lutScale + lutOffset;
+            rgb = texture(uBaseLutTexture, lutCoord).rgb;
 
             // 步骤 7: 结构增强 (在 gamma 空间进行，更符合人眼感知)
             rgb = applyStructure(rgb);
 
             // 步骤 8: 输出锐化 (在 gamma 空间进行)
             rgb = applyOutputSharpening(rgb, coord);
-
-            // 步骤 9: 应用基础 LUT
-            float lutScale = (uBaseLutSize - 1.0) / uBaseLutSize;
-            float lutOffset = 1.0 / (2.0 * uBaseLutSize);
-            vec3 lutCoord = clamp(rgb, 0.0, 1.0) * lutScale + lutOffset;
-            rgb = texture(uBaseLutTexture, lutCoord).rgb;
 
             // 最终输出
             fragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);

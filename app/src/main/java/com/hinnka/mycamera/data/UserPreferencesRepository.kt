@@ -31,6 +31,7 @@ data class UserPreferences(
     val volumeKeyCapture: Boolean = false,  // 音量键拍摄
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
     val useSoftwareProcessing: Boolean = false,  // 使用软件降噪/锐化（而非系统算法）
+    val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
     // 软件处理参数（仅在 useSoftwareProcessing=true 时生效）
     val sharpening: Float = 0.3f,              // 0.0 ~ 1.0 锐化强度
     val noiseReduction: Float = 0.25f,         // 0.0 ~ 1.0 降噪强度
@@ -45,7 +46,7 @@ data class UserPreferences(
  * 使用 DataStore 持久化保存用户选择的配置
  */
 class UserPreferencesRepository(private val context: Context) {
-    
+
     companion object {
         // DataStore Keys
         private val ASPECT_RATIO_KEY = stringPreferencesKey("aspect_ratio")
@@ -59,15 +60,18 @@ class UserPreferencesRepository(private val context: Context) {
         private val VOLUME_KEY_CAPTURE = booleanPreferencesKey("volume_key_capture")
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
         private val USE_SOFTWARE_PROCESSING = booleanPreferencesKey("use_software_processing")
+        private val USE_RAW = booleanPreferencesKey("use_raw")
+
         // 软件处理参数 Keys
         private val SHARPENING = floatPreferencesKey("sharpening")
         private val NOISE_REDUCTION = floatPreferencesKey("noise_reduction")
         private val CHROMA_NOISE_REDUCTION = floatPreferencesKey("chroma_noise_reduction")
+
         // 排序 Keys
         private val FILTER_ORDER = stringPreferencesKey("filter_order")
         private val FRAME_ORDER = stringPreferencesKey("frame_order")
     }
-    
+
     /**
      * 用户偏好设置 Flow
      */
@@ -85,6 +89,7 @@ class UserPreferencesRepository(private val context: Context) {
                 volumeKeyCapture = preferences[VOLUME_KEY_CAPTURE] ?: false,
                 autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
                 useSoftwareProcessing = preferences[USE_SOFTWARE_PROCESSING] ?: false,
+                useRaw = preferences[USE_RAW] ?: false,
                 // 软件处理参数
                 sharpening = preferences[SHARPENING] ?: 0.3f,
                 noiseReduction = preferences[NOISE_REDUCTION] ?: 0.25f,
@@ -94,7 +99,7 @@ class UserPreferencesRepository(private val context: Context) {
                 frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
             )
         }
-    
+
     /**
      * 保存画面比例
      */
@@ -116,7 +121,7 @@ class UserPreferencesRepository(private val context: Context) {
             }
         }
     }
-    
+
     /**
      * 保存边框配置
      */
@@ -147,7 +152,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[SHOW_GRID] = show
         }
     }
-    
+
     /**
      * 保存是否显示水平仪
      */
@@ -156,7 +161,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[SHOW_LEVEL_INDICATOR] = show
         }
     }
-    
+
     /**
      * 保存是否启用快门声音
      */
@@ -183,7 +188,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[VOLUME_KEY_CAPTURE] = enabled
         }
     }
-    
+
     /**
      * 保存是否拍摄后自动保存
      */
@@ -199,6 +204,16 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseSoftwareProcessing(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_SOFTWARE_PROCESSING] = enabled
+        }
+    }
+
+    /**
+     * 保存是否使用 RAW 格式
+     */
+    @Suppress("MemberVisibilityCanBePrivate")
+    suspend fun saveUseRaw(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_RAW] = enabled
         }
     }
 

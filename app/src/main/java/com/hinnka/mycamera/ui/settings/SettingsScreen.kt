@@ -59,6 +59,7 @@ fun SettingsScreen(
     val volumeKeyCapture by viewModel.volumeKeyCapture.collectAsState(initial = false)
     val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
     val useSoftwareProcessing by viewModel.useSoftwareProcessing.collectAsState(initial = false)
+    val useRaw by viewModel.useRaw.collectAsState(initial = false)
     // 软件处理参数
     val sharpening by viewModel.sharpening.collectAsState(initial = 0.3f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0.25f)
@@ -131,6 +132,21 @@ fun SettingsScreen(
                     currentRatio = state.aspectRatio,
                     onRatioSelected = { viewModel.setAspectRatio(it) }
                 )
+
+                val currentCameraInfo = state.getCurrentCameraInfo()
+                if (currentCameraInfo?.supportsRaw == true) {
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_use_raw),
+                        description = stringResource(R.string.settings_use_raw_description),
+                        checked = useRaw,
+                        onCheckedChange = { viewModel.setUseRaw(it) }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -702,6 +718,7 @@ private fun FrameItem(
         )
     }
 }
+
 @Composable
 private fun PremiumCard(
     onClick: () -> Unit,
@@ -742,7 +759,7 @@ private fun PremiumCard(
                         fontSize = 13.sp
                     )
                 }
-                
+
                 Icon(
                     imageVector = Icons.Default.Check, // Reuse an icon or add Star
                     contentDescription = null,

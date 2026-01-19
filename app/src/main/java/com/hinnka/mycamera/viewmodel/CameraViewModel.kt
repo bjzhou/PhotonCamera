@@ -133,6 +133,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useSoftwareProcessing: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useSoftwareProcessing }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useRaw }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
@@ -177,6 +180,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 isVibrationEnabled = it.vibrationEnabled
                 // 同步软件处理设置到相机控制器
                 cameraController.setUseSoftwareProcessing(it.useSoftwareProcessing)
+                // 同步 RAW 设置到相机控制器
+                cameraController.setUseRaw(it.useRaw)
             }
         }
 
@@ -795,6 +800,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置是否使用 RAW 格式拍照
+     */
+    fun setUseRaw(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseRaw(enabled)
+        }
+    }
+
+    /**
      * 设置锐化强度
      */
     fun setSharpening(value: Float) {
@@ -879,7 +893,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             // 根据图像格式选择处理方式
             bitmap = withContext(Dispatchers.Default) {
-                if (cameraController.isRawSupported) {
+                if (image.format == android.graphics.ImageFormat.RAW_SENSOR) {
                     // RAW 图像：使用 RawProcessor 处理
                     if (characteristics != null && finalCaptureResult != null) {
                         PLog.d(TAG, "Processing RAW image")
