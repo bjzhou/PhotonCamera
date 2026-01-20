@@ -33,6 +33,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
+import android.content.Intent
+import android.net.Uri
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
@@ -359,6 +361,39 @@ fun SettingsScreen(
                         tint = Color.White.copy(alpha = 0.6f)
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 关于
+            SettingsSection(title = stringResource(R.string.settings_section_about)) {
+                NavigationSettingItem(
+                    title = stringResource(R.string.settings_donation),
+                    description = stringResource(R.string.settings_donation_description),
+                    onClick = {
+                        val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
+                        val alipayUrl = "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
+                            java.net.URLEncoder.encode(
+                                qrCodeUrl,
+                                "UTF-8"
+                            )
+                        }"
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // 如果没安装支付宝，则尝试用浏览器打开
+                            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
+                            webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            try {
+                                context.startActivity(webIntent)
+                            } catch (e2: Exception) {
+                                // 处理浏览器也没有的情况（极少见）
+                            }
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(32.dp))

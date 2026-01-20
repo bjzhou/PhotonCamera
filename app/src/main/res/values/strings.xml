@@ -255,4 +255,9 @@
     <string name="front_camera">Front Camera</string>
     <string name="camera">Camera</string>
     <string name="current_camera">Current Camera</string>
+
+    <!-- About & Donation -->
+    <string name="settings_section_about">About</string>
+    <string name="settings_donation">Donation</string>
+    <string name="settings_donation_description">Support the development of Photon Camera</string>
 </resources>

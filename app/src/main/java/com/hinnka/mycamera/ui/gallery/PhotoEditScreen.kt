@@ -71,6 +71,7 @@ fun PhotoEditScreen(
     val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.availableLuts
     val showPaymentDialog = viewModel.showPaymentDialog
+    val isPurchased by viewModel.isPurchased.collectAsState()
 
     var isSaving by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -174,6 +175,11 @@ fun PhotoEditScreen(
                     // 保存元数据按钮
                     IconButton(
                         onClick = {
+                            val currentLut = availableLuts.find { it.id == editLutId }
+                            if (currentLut?.isVip == true && !isPurchased) {
+                                viewModel.showPaymentDialog = true
+                                return@IconButton
+                            }
                             isSaving = true
                             viewModel.saveEditMetadata(currentPhoto) { success ->
                                 isSaving = false
@@ -456,6 +462,12 @@ fun PhotoEditScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val currentLut = availableLuts.find { it.id == editLutId }
+                        if (currentLut?.isVip == true && !isPurchased) {
+                            showExportDialog = false
+                            viewModel.showPaymentDialog = true
+                            return@TextButton
+                        }
                         showExportDialog = false
                         isSaving = true
                         viewModel.saveEdit(currentPhoto) { success ->

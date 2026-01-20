@@ -254,4 +254,9 @@
     <string name="front_camera">前置摄像头</string>
     <string name="camera">摄像头</string>
     <string name="current_camera">当前摄像头</string>
+
+    <!-- 关于与捐赠 -->
+    <string name="settings_section_about">关于</string>
+    <string name="settings_donation">捐赠</string>
+    <string name="settings_donation_description">支持 Photon Camera 的持续开发</string>
 </resources>
