@@ -677,7 +677,6 @@ private fun WatermarkEditSheet(
 
     ModalBottomSheet(
         onDismissRequest = {
-            viewModel.saveEditCustomProperties(customProperties)
             onDismiss()
         },
         sheetState = sheetState,
@@ -709,16 +708,23 @@ private fun WatermarkEditSheet(
             val logos = listOf(
                 "none" to stringResource(R.string.none),
                 "apple" to "Apple",
-                "leica" to "Leica",
-                "hasselblad" to "Hasselblad",
+                "samsung" to "Samsung",
+                "xiaomi" to "Xiaomi",
+                "huawei" to "Huawei",
+                "honor" to "Honor",
+                "oppo" to "OPPO",
+                "vivo" to "Vivo",
                 "sony" to "Sony",
                 "canon" to "Canon",
                 "nikon" to "Nikon",
                 "fujifilm" to "Fujifilm",
-                "xiaomi" to "Xiaomi",
-                "huawei" to "Huawei",
-                "oppo" to "OPPO",
-                "vivo" to "Vivo"
+                "leica" to "Leica",
+                "hasselblad" to "Hasselblad",
+                "dji" to "DJI",
+                "panasonic" to "Panasonic",
+                "olympus" to "Olympus",
+                "pentax" to "Pentax",
+                "ricoh" to "Ricoh"
             )
 
             val currentPhoto = viewModel.getCurrentPhoto()
@@ -734,7 +740,10 @@ private fun WatermarkEditSheet(
                 items(logos) { (id, name) ->
                     val isSelected = effectiveActiveId == id
                     Surface(
-                        onClick = { customProperties["LOGO"] = id },
+                        onClick = {
+                            customProperties["LOGO"] = id
+                            viewModel.saveEditCustomProperties(customProperties)
+                        },
                         color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(8.dp),
                         border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
@@ -787,7 +796,10 @@ private fun WatermarkEditSheet(
 
                 OutlinedTextField(
                     value = customProperties[type.name] ?: originalValue,
-                    onValueChange = { customProperties[type.name] = it },
+                    onValueChange = {
+                        customProperties[type.name] = it
+                        viewModel.saveEditCustomProperties(customProperties)
+                    },
                     label = { Text(label) },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -816,16 +828,16 @@ private fun ZoomableEditImage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    
+
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
-    
+
     // 用于计算边界的容器尺寸
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    
+
     val animatedScale by animateFloatAsState(targetValue = scale, label = "scale")
-    
+
     // 计算当前缩放下的位移边界
     fun updateOffset(panX: Float, panY: Float, currentScale: Float, imageWidth: Int, imageHeight: Int) {
         if (imageWidth <= 0 || imageHeight <= 0 || containerSize.width <= 0 || containerSize.height <= 0) {
@@ -837,7 +849,7 @@ private fun ZoomableEditImage(
         // 在 ContentScale.Fit 模式下，图片的显示尺寸
         val contentAspectRatio = imageWidth.toFloat() / imageHeight
         val containerAspectRatio = containerSize.width.toFloat() / containerSize.height
-        
+
         val (displayW, displayH) = if (contentAspectRatio > containerAspectRatio) {
             containerSize.width.toFloat() to (containerSize.width.toFloat() / contentAspectRatio)
         } else {
@@ -854,11 +866,11 @@ private fun ZoomableEditImage(
         offsetX = (offsetX + panX).coerceIn(-maxOffsetX, maxOffsetX)
         offsetY = (offsetY + panY).coerceIn(-maxOffsetY, maxOffsetY)
     }
-    
+
     // 获取图片尺寸
     val imageWidth = previewBitmap?.width ?: 1920
     val imageHeight = previewBitmap?.height ?: 1080
-    
+
     Box(
         modifier = modifier
             .onSizeChanged { containerSize = it }
@@ -891,7 +903,7 @@ private fun ZoomableEditImage(
                             // 2. 如果是单指但图片已经放大（正在平移）
                             if (pointerCount > 1 || scale > 1f) {
                                 val newScale = (scale * zoomChange).coerceIn(1f, 5f)
-                                
+
                                 if (newScale <= 1.01f && zoomChange < 1f) {
                                     scale = 1f
                                     offsetX = 0f
@@ -900,7 +912,7 @@ private fun ZoomableEditImage(
                                     scale = newScale
                                     updateOffset(panChange.x, panChange.y, newScale, imageWidth, imageHeight)
                                 }
-                                
+
                                 // 消费事件
                                 event.changes.forEach { if (it.positionChanged()) it.consume() }
                             }
