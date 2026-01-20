@@ -75,6 +75,7 @@ fun CameraScreen(
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
+    val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -345,6 +346,7 @@ fun CameraScreen(
                         currentLutId = currentLutId,
                         lutPreviewBitmaps = viewModel.lutPreviewBitmaps,
                         onLutSelected = { viewModel.setLut(it) },
+                        categoryOrder = categoryOrder,
                         modifier = Modifier.fillMaxWidth()
                             .padding(horizontal = 8.dp)
                     )

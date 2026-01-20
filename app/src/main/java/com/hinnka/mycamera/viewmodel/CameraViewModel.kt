@@ -512,6 +512,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val frameOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.frameOrder }
 
     /**
+     * 获取分类排序顺序
+     */
+    val categoryOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.categoryOrder }
+
+    /**
      * 保存滤镜排序顺序
      */
     fun saveFilterOrder(order: List<String>) {
@@ -526,6 +531,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun saveFrameOrder(order: List<String>) {
         viewModelScope.launch {
             userPreferencesRepository.saveFrameOrder(order)
+        }
+    }
+
+    /**
+     * 保存分类排序顺序
+     */
+    fun saveCategoryOrder(order: List<String>) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveCategoryOrder(order)
         }
     }
 

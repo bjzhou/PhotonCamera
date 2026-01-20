@@ -72,6 +72,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         .map { it.chromaNoiseReduction }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
 
+    val categoryOrder: StateFlow<List<String>> = userPreferencesRepository.userPreferences
+        .map { it.categoryOrder }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased

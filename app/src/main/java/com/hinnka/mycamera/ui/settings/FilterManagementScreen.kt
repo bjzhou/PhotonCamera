@@ -90,9 +90,17 @@ fun FilterManagementScreen(
 
     // 分类编辑状态
     var showCategoryDialog by remember { mutableStateOf(false) }
-    var categorizingLut by remember { mutableStateOf<LutInfo?>(null) }
+    var categorizingIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var categoryText by remember { mutableStateOf("") }
     var categoryToDelete by remember { mutableStateOf<String?>(null) }
+
+    // 多选状态
+    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    val isSelectionMode = selectedIds.isNotEmpty()
+
+    // 分类排序状态
+    val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
+    var showCategorySortDialog by remember { mutableStateOf(false) }
 
     // 批量文件选择器
     val lutFilePicker = rememberLauncherForActivityResult(
@@ -130,6 +138,9 @@ fun FilterManagementScreen(
             }
         }
     }
+
+    val allText = stringResource(R.string.category_all)
+    val customText = stringResource(R.string.custom)
 
     // 分类删除确认对话框
     if (categoryToDelete != null) {
@@ -201,58 +212,137 @@ fun FilterManagementScreen(
         // 顶部标题栏
         TopAppBar(
             title = {
-                Text(
-                    text = stringResource(R.string.filter_management_title),
-                    color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium
-                )
+                if (isSelectionMode) {
+                    Text(
+                        text = stringResource(R.string.selected_count, selectedIds.size),
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.filter_management_title),
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             },
             navigationIcon = {
-                IconButton(
-                    onClick = {
-                        // 保存排序顺序
-                        viewModel.saveFilterOrder(localLutList.map { it.id })
-                        onBack()
-                    },
-                    modifier = Modifier.autoRotate()
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.back),
-                        tint = Color.White
-                    )
+                if (isSelectionMode) {
+                    IconButton(onClick = { selectedIds = emptySet() }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.cancel),
+                            tint = Color.White
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = {
+                            // 保存排序顺序
+                            viewModel.saveFilterOrder(localLutList.map { it.id })
+                            onBack()
+                        },
+                        modifier = Modifier.autoRotate()
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            tint = Color.White
+                        )
+                    }
                 }
             },
             actions = {
-                // 导入进度提示
-                if (isImporting && importProgress != null) {
-                    Text(
-                        text = "${importProgress!!.first}/${importProgress!!.second}",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
-                // 导入按钮
-                IconButton(
-                    onClick = {
-                        lutFilePicker.launch("*/*")
-                    },
-                    enabled = !isImporting
-                ) {
-                    if (isImporting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
+                if (isSelectionMode) {
+                    // 全选按钮
+                    IconButton(onClick = {
+                        if (selectedIds.size == availableLuts.size) {
+                            selectedIds = emptySet()
+                        } else {
+                            selectedIds = availableLuts.map { it.id }.toSet()
+                        }
+                    }) {
                         Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = stringResource(R.string.import_filter),
+                            imageVector = if (selectedIds.size == availableLuts.size) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                            contentDescription = "Select All",
                             tint = Color.White
                         )
+                    }
+                    // 批量分类
+                    IconButton(onClick = {
+                        categorizingIds = selectedIds.toList()
+                        categoryText = ""
+                        showCategoryDialog = true
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Label,
+                            contentDescription = "Batch Categorize",
+                            tint = Color.White
+                        )
+                    }
+                    // 批量删除
+                    IconButton(onClick = {
+                        val toDelete = availableLuts.filter { it.id in selectedIds && !it.isBuiltIn }
+                        if (toDelete.isNotEmpty()) {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    toDelete.forEach {
+                                        customImportManager.deleteCustomLut(it.id)
+                                    }
+                                }
+                                viewModel.refreshCustomContent()
+                                selectedIds = emptySet()
+                            }
+                        }
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Batch Delete",
+                            tint = Color.White
+                        )
+                    }
+                } else {
+                    // 导入进度提示
+                    if (isImporting && importProgress != null) {
+                        Text(
+                            text = "${importProgress!!.first}/${importProgress!!.second}",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+
+                    // 分类排序按钮
+                    IconButton(onClick = { showCategorySortDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Sort,
+                            contentDescription = stringResource(R.string.sort_categories),
+                            tint = Color.White
+                        )
+                    }
+
+                    // 导入按钮
+                    IconButton(
+                        onClick = {
+                            lutFilePicker.launch("*/*")
+                        },
+                        enabled = !isImporting
+                    ) {
+                        if (isImporting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = stringResource(R.string.import_filter),
+                                tint = Color.White
+                            )
+                        }
                     }
                 }
             },
@@ -277,342 +367,476 @@ fun FilterManagementScreen(
             }
         }
 
-        // 分类 Tabs
-        val allText = stringResource(R.string.category_all)
-        val customText = stringResource(R.string.custom)
-        val categories = remember(localLutList, allText, customText) {
-            // 动态分类提取：只取数据中实际存在的分类，且排除掉“所有”和“自定义”这两个保留词用于逻辑分页
-            val dynamicCategories = localLutList.map { it.category }
-                .distinct()
-                .filter { it.isNotEmpty() && it != allText && it != customText }
-                .sorted()
-            listOf(allText, customText) + dynamicCategories
-        }
+        Column(modifier = Modifier.weight(1f)) {
+            val categories = remember(localLutList, categoryOrder, allText, customText) {
+                // 动态分类提取：只取数据中实际存在的分类，且排除掉“所有”和“自定义”这两个保留词用于逻辑分页
+                val dynamicCategories = localLutList.map { it.category }
+                    .distinct()
+                    .filter { it.isNotEmpty() && it != allText && it != customText }
 
-        var selectedTabIndex by remember { mutableStateOf(0) }
+                // 如果用户保存了排序，则按保存的排序排列；新分类排在后面
+                val sortedDynamic = dynamicCategories.sortedWith(compareBy<String> { cat ->
+                    val index = categoryOrder.indexOf(cat)
+                    if (index == -1) Int.MAX_VALUE else index
+                }.thenBy { it })
 
-        // 修正 Tab 越界（如果分类消失了）
-        LaunchedEffect(categories.size) {
-            if (selectedTabIndex >= categories.size) {
-                selectedTabIndex = 0
+                listOf(allText, customText) + sortedDynamic
             }
-        }
 
-        val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
-            if (selectedTabIndex >= categories.size) return@remember localLutList
+            var selectedTabIndex by remember { mutableStateOf(0) }
 
-            when (selectedTabIndex) {
-                0 -> localLutList // All
-                1 -> localLutList.filter { !it.isBuiltIn } // Custom
-                else -> localLutList.filter { it.category == categories[selectedTabIndex] }
+            // 修正 Tab 越界（如果分类消失了）
+            LaunchedEffect(categories.size) {
+                if (selectedTabIndex >= categories.size) {
+                    selectedTabIndex = 0
+                }
             }
-        }
 
+            val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
+                if (selectedTabIndex >= categories.size) return@remember localLutList
 
-
-        ScrollableTabRow(
-            selectedTabIndex = selectedTabIndex,
-            containerColor = Color.Transparent,
-            contentColor = Color.White,
-            edgePadding = 16.dp,
-            divider = {},
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                    color = Color(0xFFFF6B35)
-                )
+                when (selectedTabIndex) {
+                    0 -> localLutList // All
+                    1 -> localLutList.filter { !it.isBuiltIn } // Custom
+                    else -> localLutList.filter { it.category == categories[selectedTabIndex] }
+                }
             }
-        ) {
-            categories.forEachIndexed { index, category ->
-                Tab(
-                    selected = selectedTabIndex == index,
-                    onClick = { selectedTabIndex = index },
-                    modifier = Modifier.clickable { selectedTabIndex = index },
-                    text = {
-                        Text(
-                            text = category,
-                            fontSize = 14.sp,
-                            fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                )
-            }
-        }
 
-        // 滤镜列表
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            state = lazyListState,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
-        ) {
-            // 导入结果提示
-            importResult?.let { result ->
-                item(key = "import_result") {
-                    Text(
-                        text = result,
-                        color = if (result.contains("成功")) Color(0xFF4CAF50) else Color(0xFFFF5252),
-                        fontSize = 14.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                if (result.contains("成功")) Color(0xFF4CAF50).copy(alpha = 0.1f)
-                                else Color(0xFFFF5252).copy(alpha = 0.1f),
-                                RoundedCornerShape(8.dp)
+
+
+            ScrollableTabRow(
+                selectedTabIndex = selectedTabIndex,
+                containerColor = Color.Transparent,
+                contentColor = Color.White,
+                edgePadding = 16.dp,
+                divider = {},
+                indicator = { tabPositions ->
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                        color = Color(0xFFFF6B35)
+                    )
+                }
+            ) {
+                categories.forEachIndexed { index, category ->
+                    Tab(
+                        selected = selectedTabIndex == index,
+                        onClick = { selectedTabIndex = index },
+                        modifier = Modifier.clickable { selectedTabIndex = index },
+                        text = {
+                            Text(
+                                text = category,
+                                fontSize = 14.sp,
+                                fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal
                             )
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                        }
                     )
-
-                    LaunchedEffect(result) {
-                        kotlinx.coroutines.delay(3000)
-                        importResult = null
-                    }
                 }
             }
-            itemsIndexed(filteredLutList, key = { _, it -> it.id }) { index, lutInfo ->
-                ReorderableItem(reorderableLazyListState, key = lutInfo.id) { isDragging ->
-                    FilterManagementItem(
-                        lutInfo = lutInfo,
-                        isDefault = currentLutId == lutInfo.id,
-                        isDragging = isDragging,
-                        onSetDefault = {
-                            viewModel.setLut(lutInfo.id)
-                        },
-                        onRename = if (!lutInfo.isBuiltIn) {
-                            {
-                                renamingLut = lutInfo
-                                renameText = lutInfo.getName()
-                                showRenameDialog = true
-                            }
-                        } else null,
-                        onEditColorRecipe = {
-                            editingLutId = lutInfo.id
-                            showColorRecipeSheet = true
-                        },
-                        onDelete = if (!lutInfo.isBuiltIn) {
-                            {
-                                deletingLut = lutInfo
-                                showDeleteDialog = true
-                            }
-                        } else null,
-                        onEditCategory = {
-                            categorizingLut = lutInfo
-                            categoryText = lutInfo.category
-                            showCategoryDialog = true
-                        },
-                        dragModifier = Modifier.draggableHandle()
-                    )
+
+            // 滤镜列表
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                state = lazyListState,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)
+            ) {
+                // 导入结果提示
+                importResult?.let { result ->
+                    item(key = "import_result") {
+                        Text(
+                            text = result,
+                            color = if (result.contains("成功")) Color(0xFF4CAF50) else Color(0xFFFF5252),
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    if (result.contains("成功")) Color(0xFF4CAF50).copy(alpha = 0.1f)
+                                    else Color(0xFFFF5252).copy(alpha = 0.1f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+
+                        LaunchedEffect(result) {
+                            kotlinx.coroutines.delay(3000)
+                            importResult = null
+                        }
+                    }
+                }
+                itemsIndexed(filteredLutList, key = { _, it -> it.id }) { index, lutInfo ->
+                    ReorderableItem(reorderableLazyListState, key = lutInfo.id) { isDragging ->
+                        FilterManagementItem(
+                            lutInfo = lutInfo,
+                            isDefault = currentLutId == lutInfo.id,
+                            isSelected = selectedIds.contains(lutInfo.id),
+                            isSelectionMode = isSelectionMode,
+                            isDragging = isDragging,
+                            onSetDefault = {
+                                if (isSelectionMode) {
+                                    selectedIds = if (selectedIds.contains(lutInfo.id)) {
+                                        selectedIds - lutInfo.id
+                                    } else {
+                                        selectedIds + lutInfo.id
+                                    }
+                                } else {
+                                    viewModel.setLut(lutInfo.id)
+                                }
+                            },
+                            onToggleSelection = {
+                                selectedIds = if (selectedIds.contains(lutInfo.id)) {
+                                    selectedIds - lutInfo.id
+                                } else {
+                                    selectedIds + lutInfo.id
+                                }
+                            },
+                            onRename = if (!lutInfo.isBuiltIn && !isSelectionMode) {
+                                {
+                                    renamingLut = lutInfo
+                                    renameText = lutInfo.getName()
+                                    showRenameDialog = true
+                                }
+                            } else null,
+                            onEditColorRecipe = if (!isSelectionMode) {
+                                {
+                                    editingLutId = lutInfo.id
+                                    showColorRecipeSheet = true
+                                }
+                            } else null,
+                            onDelete = if (!lutInfo.isBuiltIn && !isSelectionMode) {
+                                {
+                                    deletingLut = lutInfo
+                                    showDeleteDialog = true
+                                }
+                            } else null,
+                            onEditCategory = if (!isSelectionMode) {
+                                {
+                                    categorizingIds = listOf(lutInfo.id)
+                                    categoryText = lutInfo.category
+                                    showCategoryDialog = true
+                                }
+                            } else null,
+                            showCategory = (selectedTabIndex <= 1) && lutInfo.category.isNotEmpty(),
+                            dragModifier = if (isSelectionMode) Modifier else Modifier.draggableHandle()
+                        )
+                    }
                 }
             }
         }
-    }
 
-    // 重命名对话框
-    if (showRenameDialog && renamingLut != null) {
-        AlertDialog(
-            onDismissRequest = { showRenameDialog = false },
-            title = {
-                Text(stringResource(R.string.rename_dialog_title))
-            },
-            text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    label = { Text(stringResource(R.string.name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                customImportManager.updateLutName(renamingLut!!.id, renameText)
-                            }
-                            viewModel.refreshCustomContent()
-                            showRenameDialog = false
-                            renamingLut = null
-                        }
-                    }
-                ) {
-                    Text(stringResource(R.string.confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
-
-    // 删除确认对话框
-    if (showDeleteDialog && deletingLut != null) {
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = {
-                Text(stringResource(R.string.delete_confirm_title))
-            },
-            text = {
-                Text(stringResource(R.string.delete_filter_confirm_message, deletingLut!!.getName()))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                customImportManager.deleteCustomLut(deletingLut!!.id)
-                            }
-                            // 如果删除的是当前选中的滤镜，切换到第一个
-                            if (currentLutId == deletingLut!!.id) {
-                                viewModel.setLut(localLutList.firstOrNull()?.id)
-                            }
-                            viewModel.refreshCustomContent()
-                            showDeleteDialog = false
-                            deletingLut = null
-                        }
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text(stringResource(R.string.delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
-
-    // 分类编辑对话框
-    if (showCategoryDialog && categorizingLut != null) {
-        AlertDialog(
-            onDismissRequest = { showCategoryDialog = false },
-            title = {
-                Text(stringResource(R.string.edit_category))
-            },
-            text = {
-                Column {
+        // 重命名对话框
+        if (showRenameDialog && renamingLut != null) {
+            AlertDialog(
+                onDismissRequest = { showRenameDialog = false },
+                title = {
+                    Text(stringResource(R.string.rename_dialog_title))
+                },
+                text = {
                     OutlinedTextField(
-                        value = categoryText,
-                        onValueChange = { categoryText = it },
-                        label = { Text(stringResource(R.string.category)) },
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        label = { Text(stringResource(R.string.name)) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = if (categoryText.isNotEmpty()) {
-                            {
-                                IconButton(onClick = { categoryText = "" }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Clear,
-                                        contentDescription = "Clear",
-                                        tint = Color.White.copy(alpha = 0.5f)
-                                    )
-                                }
-                            }
-                        } else null
+                        modifier = Modifier.fillMaxWidth()
                     )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 常用分类快速选择
-                    val commonCategories = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
-                    if (commonCategories.isNotEmpty()) {
-                        Text(
-                            text = stringResource(R.string.common_categories),
-                            fontSize = 12.sp,
-                            color = Color.White.copy(alpha = 0.5f),
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            // 清除选项
-                            if (categoryText.isNotEmpty()) {
-                                SuggestionChip(
-                                    onClick = { categoryText = "" },
-                                    label = { Text(stringResource(R.string.none)) },
-                                    colors = SuggestionChipDefaults.suggestionChipColors(
-                                        labelColor = Color(0xFFFF5252)
-                                    )
-                                )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    customImportManager.updateLutName(renamingLut!!.id, renameText)
+                                }
+                                viewModel.refreshCustomContent()
+                                showRenameDialog = false
+                                renamingLut = null
                             }
+                        }
+                    ) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRenameDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
+        }
 
-                            commonCategories.forEach { cat ->
-                                InputChip(
-                                    selected = categoryText == cat,
-                                    onClick = { categoryText = cat },
-                                    label = { Text(cat) },
-                                    trailingIcon = {
+        // 删除确认对话框
+        if (showDeleteDialog && deletingLut != null) {
+            AlertDialog(
+                onDismissRequest = { showDeleteDialog = false },
+                title = {
+                    Text(stringResource(R.string.delete_confirm_title))
+                },
+                text = {
+                    Text(stringResource(R.string.delete_filter_confirm_message, deletingLut!!.getName()))
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    customImportManager.deleteCustomLut(deletingLut!!.id)
+                                }
+                                // 如果删除的是当前选中的滤镜，切换到第一个
+                                if (currentLutId == deletingLut!!.id) {
+                                    viewModel.setLut(localLutList.firstOrNull()?.id)
+                                }
+                                viewModel.refreshCustomContent()
+                                showDeleteDialog = false
+                                deletingLut = null
+                            }
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(stringResource(R.string.delete))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
+        }
+
+        // 分类编辑对话框
+        if (showCategoryDialog && categorizingIds.isNotEmpty()) {
+            AlertDialog(
+                onDismissRequest = {
+                    showCategoryDialog = false
+                    categorizingIds = emptyList()
+                },
+                title = {
+                    Text(
+                        if (categorizingIds.size > 1) stringResource(R.string.batch_edit_category) else stringResource(
+                            R.string.edit_category
+                        )
+                    )
+                },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = categoryText,
+                            onValueChange = { categoryText = it },
+                            label = { Text(stringResource(R.string.category)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = if (categoryText.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { categoryText = "" }) {
                                         Icon(
-                                            imageVector = Icons.Default.Delete,
-                                            contentDescription = "Delete",
-                                            modifier = Modifier.size(16.dp).clickable { categoryToDelete = cat },
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "Clear",
                                             tint = Color.White.copy(alpha = 0.5f)
                                         )
                                     }
-                                )
-                            }
-                        }
-                    } else if (categoryText.isNotEmpty()) {
-                        // 如果没有常用分类但当前有文本，也显示清除按钮
-                        SuggestionChip(
-                            onClick = { categoryText = "" },
-                            label = { Text(stringResource(R.string.none)) },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                labelColor = Color(0xFFFF5252)
-                            )
+                                }
+                            } else null
                         )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                customImportManager.updateLutCategory(categorizingLut!!.id, categoryText)
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 常用分类快速选择
+                        val commonCategories = localLutList.map { it.category }.distinct().filter { it.isNotEmpty() }
+                        if (commonCategories.isNotEmpty()) {
+                            Text(
+                                text = stringResource(R.string.common_categories),
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                // 清除选项
+                                if (categoryText.isNotEmpty()) {
+                                    SuggestionChip(
+                                        onClick = { categoryText = "" },
+                                        label = { Text(stringResource(R.string.none)) },
+                                        colors = SuggestionChipDefaults.suggestionChipColors(
+                                            labelColor = Color(0xFFFF5252)
+                                        )
+                                    )
+                                }
+
+                                commonCategories.forEach { cat ->
+                                    InputChip(
+                                        selected = categoryText == cat,
+                                        onClick = { categoryText = cat },
+                                        label = { Text(cat) },
+                                        trailingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete",
+                                                modifier = Modifier.size(16.dp).clickable { categoryToDelete = cat },
+                                                tint = Color.White.copy(alpha = 0.5f)
+                                            )
+                                        }
+                                    )
+                                }
                             }
-                            viewModel.refreshCustomContent()
-                            showCategoryDialog = false
-                            categorizingLut = null
+                        } else if (categoryText.isNotEmpty()) {
+                            // 如果没有常用分类但当前有文本，也显示清除按钮
+                            SuggestionChip(
+                                onClick = { categoryText = "" },
+                                label = { Text(stringResource(R.string.none)) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    labelColor = Color(0xFFFF5252)
+                                )
+                            )
                         }
                     }
-                ) {
-                    Text(stringResource(R.string.confirm))
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    categorizingIds.forEach { id ->
+                                        customImportManager.updateLutCategory(id, categoryText)
+                                    }
+                                }
+                                viewModel.refreshCustomContent()
+                                showCategoryDialog = false
+                                categorizingIds = emptyList()
+                                selectedIds = emptySet() // 完成后清除选择
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showCategoryDialog = false
+                        categorizingIds = emptyList()
+                    }) {
+                        Text(stringResource(R.string.cancel))
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCategoryDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
+            )
+        }
 
-    // 页面退出时保存排序
-    DisposableEffect(Unit) {
-        onDispose {
-            viewModel.saveFilterOrder(localLutList.map { it.id })
+        // 页面退出时保存排序
+        DisposableEffect(Unit) {
+            onDispose {
+                viewModel.saveFilterOrder(localLutList.map { it.id })
+            }
+        }
+
+        // 色彩配方编辑底部弹窗
+        if (showColorRecipeSheet && editingLutId != null) {
+            LutEditBottomSheet(
+                lutId = editingLutId!!,
+                onDismiss = {
+                    showColorRecipeSheet = false
+                    editingLutId = null
+                }
+            )
+        }
+
+        // 分类排序对话框
+        if (showCategorySortDialog) {
+            val dynamicCategories = remember(localLutList, allText, customText) {
+                localLutList.map { it.category }
+                    .distinct()
+                    .filter { it.isNotEmpty() && it != allText && it != customText }
+                    .sortedWith(compareBy<String> { cat ->
+                        val index = categoryOrder.indexOf(cat)
+                        if (index == -1) Int.MAX_VALUE else index
+                    }.thenBy { it })
+            }
+            CategorySortDialog(
+                categories = dynamicCategories,
+                onDismiss = { showCategorySortDialog = false },
+                onSaveOrder = { newOrder ->
+                    viewModel.saveCategoryOrder(newOrder)
+                    showCategorySortDialog = false
+                }
+            )
+        }
+    }
+}
+
+/**
+ * 分类排序对话框
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun CategorySortDialog(
+    categories: List<String>,
+    onDismiss: () -> Unit,
+    onSaveOrder: (List<String>) -> Unit
+) {
+    var localCategories by remember { mutableStateOf(categories) }
+    val lazyListState = rememberLazyListState()
+    val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        localCategories = localCategories.toMutableList().apply {
+            add(to.index, removeAt(from.index))
         }
     }
 
-    // 色彩配方编辑底部弹窗
-    if (showColorRecipeSheet && editingLutId != null) {
-        LutEditBottomSheet(
-            lutId = editingLutId!!,
-            onDismiss = {
-                showColorRecipeSheet = false
-                editingLutId = null
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sort_categories)) },
+        text = {
+            Column(modifier = Modifier.heightIn(max = 400.dp)) {
+                Text(
+                    text = stringResource(R.string.drag_to_reorder_categories),
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                LazyColumn(
+                    state = lazyListState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    itemsIndexed(localCategories, key = { _, it -> it }) { _, category ->
+                        ReorderableItem(reorderableLazyListState, key = category) { isDragging ->
+                            val backgroundColor =
+                                if (isDragging) Color.White.copy(alpha = 0.1f) else Color.Transparent
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(backgroundColor, RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DragHandle,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.5f),
+                                    modifier = Modifier.draggableHandle()
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(text = category, color = Color.White)
+                            }
+                        }
+                    }
+                }
             }
-        )
-    }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSaveOrder(localCategories) }) {
+                Text(stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
 }
 
 /**
@@ -622,17 +846,26 @@ fun FilterManagementScreen(
 private fun FilterManagementItem(
     lutInfo: LutInfo,
     isDefault: Boolean,
+    isSelected: Boolean = false,
+    isSelectionMode: Boolean = false,
     isDragging: Boolean,
     onSetDefault: () -> Unit,
+    onToggleSelection: () -> Unit,
     onRename: (() -> Unit)?,
     onEditColorRecipe: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     onEditCategory: (() -> Unit)? = null,
+    showCategory: Boolean = false,
     dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
-    val borderColor = if (isDefault) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f)
+    val borderColor = when {
+        isSelected -> Color(0xFFFF6B35)
+        isDefault -> Color(0xFFFF6B35).copy(alpha = 0.5f)
+        else -> Color.White.copy(alpha = 0.2f)
+    }
     val backgroundColor = when {
+        isSelected -> Color(0xFFFF6B35).copy(alpha = 0.2f)
         isDragging -> Color.White.copy(alpha = 0.2f)
         isDefault -> Color.White.copy(alpha = 0.1f)
         else -> Color.White.copy(alpha = 0.05f)
@@ -644,26 +877,41 @@ private fun FilterManagementItem(
             .clip(RoundedCornerShape(12.dp))
             .background(backgroundColor)
             .border(
-                width = if (isDefault) 2.dp else 1.dp,
+                width = if (isSelected || isDefault) 2.dp else 1.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(12.dp)
             )
-            .padding(horizontal = 4.dp, vertical = 8.dp), // 减少 Row 整体 Padding
+            .combinedClickable(
+                onClick = onSetDefault,
+                onLongClick = onToggleSelection
+            )
+            .padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 拖拽图标
-        Icon(
-            imageVector = Icons.Default.DragHandle,
-            contentDescription = "Drag to reorder",
-            tint = Color.White.copy(alpha = 0.5f),
-            modifier = dragModifier.padding(8.dp).size(24.dp)
-        )
+        // 拖拽图标或多选框
+        if (isSelectionMode) {
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = { onToggleSelection() },
+                colors = CheckboxDefaults.colors(
+                    checkedColor = Color(0xFFFF6B35),
+                    uncheckedColor = Color.White.copy(alpha = 0.5f)
+                ),
+                modifier = Modifier.padding(4.dp)
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.DragHandle,
+                contentDescription = "Drag to reorder",
+                tint = Color.White.copy(alpha = 0.5f),
+                modifier = dragModifier.padding(8.dp).size(24.dp)
+            )
+        }
 
-        // 核心信息区（点击设为默认）
+        // 核心信息区
         Column(
             modifier = Modifier
                 .weight(1f)
-                .clickable(onClick = onSetDefault)
                 .padding(vertical = 4.dp, horizontal = 4.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -706,6 +954,20 @@ private fun FilterManagementItem(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(Color(0xFFFFD700).copy(alpha = 0.2f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+
+                // 分类标签
+                if (showCategory) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = lutInfo.category,
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.White.copy(alpha = 0.15f))
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     )
                 }

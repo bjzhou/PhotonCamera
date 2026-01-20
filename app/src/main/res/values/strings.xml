@@ -228,6 +228,10 @@
     <string name="delete_frame_confirm_message">Delete frame \"%s\"?</string>
     <string name="rename_dialog_title">Rename</string>
     <string name="edit_category">Edit Category</string>
+    <string name="batch_edit_category">Batch Edit Category</string>
+    <string name="sort_categories">Sort Categories</string>
+    <string name="drag_to_reorder_categories">Drag handles to reorder tabs</string>
+    <string name="selected_count">%d Selected</string>
     <string name="category">Category</string>
     <string name="common_categories">Common Categories</string>
     <string name="delete_category_title">Delete Category</string>

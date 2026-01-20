@@ -72,6 +72,7 @@ fun PhotoEditScreen(
     val availableLuts = viewModel.availableLuts
     val showPaymentDialog = viewModel.showPaymentDialog
     val isPurchased by viewModel.isPurchased.collectAsState()
+    val categoryOrder by viewModel.categoryOrder.collectAsState()
 
     var isSaving by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -328,7 +329,8 @@ fun PhotoEditScreen(
                             currentLutId = editLutId,
                             lutPreviewBitmaps = lutPreviews,
                             onLutSelected = { viewModel.setEditLut(it) },
-                            onEditClick = { showLutEditDialog = true }
+                            onEditClick = { showLutEditDialog = true },
+                            categoryOrder = categoryOrder
                         )
 
                         Spacer(modifier = Modifier.height(16.dp))

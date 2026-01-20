@@ -227,6 +227,10 @@
     <string name="delete_frame_confirm_message">删除边框 "%s"？</string>
     <string name="rename_dialog_title">重命名</string>
     <string name="edit_category">编辑分类</string>
+    <string name="batch_edit_category">批量编辑分类</string>
+    <string name="sort_categories">分类排序</string>
+    <string name="drag_to_reorder_categories">拖动图标调整 Tab 显示顺序</string>
+    <string name="selected_count">已选择 %d</string>
     <string name="category">分类</string>
     <string name="common_categories">已有分类</string>
     <string name="delete_category_title">删除分类</string>

@@ -47,7 +47,8 @@ data class UserPreferences(
     val cameraOrientationOffsets: Map<String, Int> = emptyMap(),
     // 排序顺序
     val filterOrder: List<String> = emptyList(),  // 滤镜排序（ID列表）
-    val frameOrder: List<String> = emptyList()    // 边框排序（ID列表）
+    val frameOrder: List<String> = emptyList(),    // 边框排序（ID列表）
+    val categoryOrder: List<String> = emptyList() // 分类排序
 )
 
 /**
@@ -80,6 +81,7 @@ class UserPreferencesRepository(private val context: Context) {
         // 排序 Keys
         private val FILTER_ORDER = stringPreferencesKey("filter_order")
         private val FRAME_ORDER = stringPreferencesKey("frame_order")
+        private val CATEGORY_ORDER = stringPreferencesKey("category_order")
 
         // 摄像头方向偏移 Key
         private val CAMERA_ORIENTATION_OFFSETS = stringPreferencesKey("camera_orientation_offsets")
@@ -114,7 +116,8 @@ class UserPreferencesRepository(private val context: Context) {
                 cameraOrientationOffsets = parseCameraOrientationOffsets(preferences[CAMERA_ORIENTATION_OFFSETS]),
                 // 排序
                 filterOrder = preferences[FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
-                frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
+                frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
+                categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
             )
         }
 
@@ -315,6 +318,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveFrameOrder(order: List<String>) {
         context.dataStore.edit { preferences ->
             preferences[FRAME_ORDER] = order.joinToString(",")
+        }
+    }
+
+    /**
+     * 保存分类排序顺序
+     */
+    suspend fun saveCategoryOrder(order: List<String>) {
+        context.dataStore.edit { preferences ->
+            preferences[CATEGORY_ORDER] = order.joinToString(",")
         }
     }
 

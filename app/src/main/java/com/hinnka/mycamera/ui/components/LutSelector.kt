@@ -45,6 +45,7 @@ fun LutSelector(
     lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
     onLutSelected: (String?) -> Unit,
     onEditClick: (() -> Unit)? = null,
+    categoryOrder: List<String> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberLazyListState()
@@ -52,8 +53,17 @@ fun LutSelector(
     var showLutEditDialogState by remember { mutableStateOf(false) }
 
     // 分类逻辑
-    val categories = remember(availableLuts) {
-        listOf(null) + availableLuts.map { it.category }.distinct().filter { it.isNotEmpty() } + listOf("Custom")
+    val categories = remember(availableLuts, categoryOrder) {
+        val dynamicCategories = availableLuts.map { it.category }
+            .distinct()
+            .filter { it.isNotEmpty() }
+
+        val sortedDynamic = dynamicCategories.sortedWith(compareBy<String> { cat ->
+            val index = categoryOrder.indexOf(cat)
+            if (index == -1) Int.MAX_VALUE else index
+        }.thenBy { it })
+
+        listOf(null) + sortedDynamic + listOf("Custom")
     }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
 
@@ -337,6 +347,7 @@ fun LutControlPanel(
     currentLutId: String?,
     lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
     onLutSelected: (String?) -> Unit,
+    categoryOrder: List<String> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     var showLutEditDialog by remember { mutableStateOf(false) }
@@ -401,7 +412,8 @@ fun LutControlPanel(
             currentLutId = currentLutId,
             lutPreviewBitmaps = lutPreviewBitmaps,
             onLutSelected = onLutSelected,
-            onEditClick = { showLutEditDialog = true }
+            onEditClick = { showLutEditDialog = true },
+            categoryOrder = categoryOrder
         )
     }
 }
