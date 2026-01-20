@@ -454,22 +454,18 @@ object RawShaders {
             );
         }
         
-        // 亮度保持 Reinhard (色相/饱和度 0 偏移)
-        vec3 applyLumaReinhard(vec3 color) {
-            // 1. 计算亮度 (Luma)
-            // 使用 Rec.709 系数 (sRGB 标准)
-            float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        vec3 applyPerChannelReinhardExtended(vec3 color) {
+            // 你的高光通透度控制 (和之前一样)
+            float whitePoint = 4.0;
+            float white2 = whitePoint * whitePoint;
             
-            // 2. 只对亮度应用 Reinhard 压缩曲线
-            // 公式: L / (1 + L)
-            // 这是一个完美的高光滚落函数，无限接近 1.0 但永远不超过
-            float toneMappedLuma = luma / (1.0 + luma);
+            // 公式: (x * (1 + x/w^2)) / (1 + x)
+            // GLSL 的向量运算会自动对 r, g, b 分别执行这个数学公式
             
-            // 3. 恢复 RGB
-            // 核心逻辑: OutputColor = InputColor * (NewLuma / OldLuma)
-            // 这样就保证了 RGB 三个通道的比例严格不变
-            if (luma < 0.0001) return color; // 防止除零
-            return color * (toneMappedLuma / luma);
+            vec3 numerator = color * (1.0 + (color / white2));
+            vec3 denominator = 1.0 + color;
+            
+            return numerator / denominator;
         }
         
         // ========================================================================
@@ -499,8 +495,8 @@ object RawShaders {
             // 步骤 5b: 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
             
-            rgb = applyLumaReinhard(rgb);
-            rgb = applyLinearContrast(rgb, 1.4);
+            rgb = applyPerChannelReinhardExtended(rgb);
+            rgb = applyLinearContrast(rgb, 1.3);
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
             rgb = linearToSRGB(rgb);
