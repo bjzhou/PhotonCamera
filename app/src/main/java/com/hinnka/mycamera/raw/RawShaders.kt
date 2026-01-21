@@ -527,18 +527,15 @@ object RawShaders {
             );
         }
         
-        // --- 辅助常量：人眼亮度权重 ---
-        const vec3 LUMA_COEFF = vec3(0.2126, 0.7152, 0.0722);
-        
         // Uchimura (GT Tone Mapping)
         vec3 UchimuraToneMapping(vec3 x) {
             x = max(vec3(0.0), x);
             
             float P = 1.0;  // 最大亮度 (Max Brightness)
-            float a = 1.3;  // 对比度 (Contrast) - 相当于你的 S 曲线强度
-            float m = 0.18; // 线性部分的起点 (Linear Section Start)
+            float a = 1.2;  // 对比度 (Contrast) - 相当于你的 S 曲线强度
+            float m = 0.15; // 线性部分的起点 (Linear Section Start)
             float l = 0.25;  // 线性部分的终点 (Linear Section End)
-            float c = 1.7; // 黑色部分的紧致度 (Black Tightness)
+            float c = 1.6; // 黑色部分的紧致度 (Black Tightness)
             float b = 0.0;  // 黑色偏移 (Black Offset) - 通常为0
         
             // 公式
