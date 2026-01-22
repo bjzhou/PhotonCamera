@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -240,20 +241,24 @@ fun PhotoDetailScreen(
             } else {
                 HorizontalPager(
                     state = pagerState,
+                    key = { page -> if (page < photos.size) photos[page].id else page },
                     modifier = Modifier.fillMaxSize(),
-                    userScrollEnabled = !isZoomed
+                    userScrollEnabled = !isZoomed,
+                    beyondViewportPageCount = 1
                 ) { page ->
-                    ZoomableImage(
-                        photo = photos[page],
-                        viewModel = viewModel,
-                        isZoomed = isZoomed && page == pagerState.currentPage,
-                        onZoomChange = { zoomed ->
-                            if (page == pagerState.currentPage) {
-                                isZoomed = zoomed
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    val photo = photos.getOrNull(page)
+                    if (photo != null) {
+                        ZoomableImage(
+                            photo = photo,
+                            viewModel = viewModel,
+                            onZoomChange = { zoomed ->
+                                if (page == pagerState.currentPage) {
+                                    isZoomed = zoomed
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
         }
@@ -412,50 +417,60 @@ private fun InfoRow(label: String, value: String) {
 private fun ZoomableImage(
     photo: PhotoData,
     viewModel: GalleryViewModel,
-    isZoomed: Boolean,
     onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var isLoading by remember { mutableStateOf(true) }
 
     key(photo.id) {
+        var isLoading by remember { mutableStateOf(true) }
         val zoomableState = rememberZoomableImageState(
             zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = 10f))
         )
 
-        // 使用 snapshotFlow 避免频繁更新导致的抖动
-        LaunchedEffect(Unit) {
-            snapshotFlow { zoomableState.zoomableState.zoomFraction }
-                .collect { fraction ->
-                    onZoomChange((fraction ?: 0f) > 0.01f)
-                }
+        LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
+            onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
         }
 
         Box(
             modifier = modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            val transformation = viewModel.getPhotoTransformation(photo)
-            ZoomableAsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(photo.previewUri)
-                    .memoryCacheKey(transformation.cacheKey)
-                    .crossfade(true)
-                    .transformations(transformation)
-                    .listener(
-                        onStart = { isLoading = true },
-                        onSuccess = { _, _ -> isLoading = false },
-                        onError = { _, _ -> isLoading = false }
-                    )
-                    .build(),
-                contentDescription = photo.displayName,
-                contentScale = ContentScale.Fit,
-                state = zoomableState,
-                modifier = Modifier.fillMaxSize()
-            )
+            // 使用 remember 缓存 transformation 和 ImageRequest，避免重组时重新创建导致图片闪烁
+            // 使用 metadata 的内容 hash 作为 key，确保编辑后能正确刷新
+            val metadataHash = remember(photo.metadata) {
+                photo.metadata?.toJson()?.hashCode() ?: 0
+            }
 
-            if (isLoading) {
+            var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+            LaunchedEffect(photo.id, metadataHash) {
+                bitmap = viewModel.getPreviewBitmap(photo)
+            }
+
+            if (bitmap != null) {
+                val imageModel = remember(photo.id, metadataHash) {
+                    ImageRequest.Builder(context)
+                        .data(bitmap)
+                        .crossfade(true) // 禁用交叉淡入淡出，避免缩放时的抖动
+                        .listener(
+                            onStart = { isLoading = true },
+                            onSuccess = { _, _ -> isLoading = false },
+                            onError = { _, _ -> isLoading = false }
+                        )
+                        .build()
+                }
+
+                ZoomableAsyncImage(
+                    model = imageModel,
+                    contentDescription = photo.displayName,
+                    contentScale = ContentScale.Fit,
+                    state = zoomableState,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            if (isLoading || bitmap == null) {
                 CircularProgressIndicator(
                     color = AccentOrange,
                     modifier = Modifier.size(48.dp)

@@ -120,7 +120,7 @@ class Camera2Controller(private val context: Context) {
     private var lastCaptureResult: TotalCaptureResult? = null
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
-    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult) -> Unit)? = null
+    var onImageCaptured: ((Image, Bitmap?, CaptureInfo, CameraCharacteristics?, CaptureResult) -> Unit)? = null
 
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
@@ -128,6 +128,8 @@ class Camera2Controller(private val context: Context) {
     // 预览帧捕获回调（用于 LUT 预览生成）
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
     private var shouldCapturePreviewFrame = false
+
+    var rawPreviewFrame: Bitmap? = null
 
     // 相机错误回调（供上层处理错误恢复）
     // errorCode: CameraDevice 的错误代码或自定义错误码
@@ -147,7 +149,7 @@ class Camera2Controller(private val context: Context) {
                 val pendingImage = pendingImages.remove(timestamp)
                 if (pendingImage != null) {
                     // 找到了匹配的图像，触发回调
-                    processAndTriggerCapture(pendingImage, result)
+                    processAndTriggerCapture(pendingImage, rawPreviewFrame, result)
                 } else {
                     // 还没找到图像，存入缓存
                     pendingResults[timestamp] = result
@@ -478,7 +480,7 @@ class Camera2Controller(private val context: Context) {
 
                             if (pendingResult != null) {
                                 // 找到了匹配的结果，触发回调
-                                processAndTriggerCapture(image, pendingResult)
+                                processAndTriggerCapture(image, rawPreviewFrame, pendingResult)
                             } else {
                                 // 还没找到结果，存入缓存
                                 pendingImages[timestamp] = image
@@ -646,7 +648,7 @@ class Camera2Controller(private val context: Context) {
                             }
 
                             val bitmap = YuvProcessor.processAndToBitmap(image, AspectRatio.RATIO_1_1, rotation)
-
+                            rawPreviewFrame = bitmap
                             onPreviewFrameCaptured?.invoke(bitmap)
                             return@setOnImageAvailableListener
                         }
@@ -1992,6 +1994,7 @@ class Camera2Controller(private val context: Context) {
                 )
             }
 
+            capturePreviewFrame()
             captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureStarted(
                     session: CameraCaptureSession,
@@ -2010,11 +2013,12 @@ class Camera2Controller(private val context: Context) {
                     request: CaptureRequest,
                     result: TotalCaptureResult
                 ) {
+                    _state.value = _state.value.copy(isCapturing = false)
                     val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
                     if (timestamp != null) {
                         val pendingImage = pendingImages.remove(timestamp)
                         if (pendingImage != null) {
-                            processAndTriggerCapture(pendingImage, result)
+                            processAndTriggerCapture(pendingImage, rawPreviewFrame, result)
                         } else {
                             pendingResults[timestamp] = result
                         }
@@ -2024,10 +2028,6 @@ class Camera2Controller(private val context: Context) {
                         TAG,
                         "Capture completed, result saved"
                     )
-
-                    // 关键修复：不在这里调用 resetPreviewAfterCapture()
-                    // 因为此时 RAW 图像数据可能还未传输完成，过早重置预览流会中断 ImageReader
-                    // resetPreviewAfterCapture() 现在在 ImageReader 的 onImageAvailableListener 中调用
                 }
 
                 override fun onCaptureFailed(
@@ -2238,7 +2238,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult) {
+    private fun processAndTriggerCapture(image: Image, preview: Bitmap?, result: TotalCaptureResult) {
         val processStartTime = System.currentTimeMillis()
         try {
             _state.value = _state.value.copy(isCapturing = false)
@@ -2250,7 +2250,7 @@ class Camera2Controller(private val context: Context) {
             val captureInfo = rebuildCaptureInfo(result, width, height)
 
             // 传递完整的 Image 对象、CaptureInfo、CameraCharacteristics 和 CaptureResult
-            onImageCaptured?.invoke(image, captureInfo, cachedCharacteristics, result)
+            onImageCaptured?.invoke(image, preview, captureInfo, cachedCharacteristics, result)
         } catch (e: Exception) {
             PLog.e(TAG, "Error processing joined capture data", e)
             image.close()

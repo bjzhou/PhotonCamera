@@ -41,21 +41,21 @@ class PhotoProcessor(
         chromaNoiseReduction: Float = 0f
     ): Bitmap = withContext(Dispatchers.Default) {
         var result = input
-        
+
         // 优先从元数据中获取软件处理参数
         // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
         val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
         val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-        
+
         // 1. 应用 LUT
         if (metadata.lutId != null) {
             val lutConfig = lutManager.loadLut(metadata.lutId)
             val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
             if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
                 val lutResult = lutImageProcessor.applyLut(
-                    result, 
-                    lutConfig, 
+                    result,
+                    lutConfig,
                     colorRecipeParams,
                     finalSharpening,
                     finalNoiseReduction,
@@ -64,7 +64,7 @@ class PhotoProcessor(
                 result = lutResult
             }
         }
-        
+
         // 2. 应用边框水印
         if (metadata.frameId != null) {
             val template = frameManager.loadTemplate(metadata.frameId)
@@ -102,7 +102,7 @@ class PhotoProcessor(
                         height = if (metadata.height > 0) metadata.height else result.height
                     )
                 }
-                
+
                 val framedResult = frameRenderer.render(
                     result,
                     template,

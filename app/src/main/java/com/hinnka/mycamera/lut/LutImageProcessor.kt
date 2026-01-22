@@ -203,41 +203,41 @@ class LutImageProcessor {
         val sharpening: Float = sharpeningValue
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
-        
+
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-        
+
         val width = bitmap.width
         val height = bitmap.height
-        
+
         // 创建/更新帧缓冲
         setupFramebuffer(width, height)
-        
+
         // 上传图片纹理
         uploadImageTexture(bitmap)
-        
+
         // 上传 LUT 纹理
         if (lutConfig != null) {
             uploadLutTexture(lutConfig)
         }
-        
+
         // 绑定帧缓冲
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
-        
+
         // 绘制
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(shaderProgram)
-        
+
         // 设置纹理 uniform
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
         GLES30.glUniform1i(uImageTextureLoc, 0)
-        
+
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
         GLES30.glUniform1i(uLutTextureLoc, 1)
-        
+
         // 设置 LUT 参数
         GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
         GLES30.glUniform1f(uLutIntensityLoc, if (lutConfig != null) intensity else 0f)
@@ -259,7 +259,7 @@ class LutImageProcessor {
             GLES30.glUniform1f(uVignetteLoc, vignette)
             GLES30.glUniform1f(uBleachBypassLoc, bleachBypass)
         }
-        
+
         // 设置后期处理参数（仅拍摄和后期编辑时生效）
         GLES30.glUniform1f(uSharpeningLoc, sharpening)
         GLES30.glUniform1f(uNoiseReductionLoc, noiseReduction)
@@ -270,45 +270,45 @@ class LutImageProcessor {
         val mvpMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(mvpMatrix, 0)
         GLES30.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, mvpMatrix, 0)
-        
+
         // 绘制四边形
         val positionHandle = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
         val texCoordHandle = GLES30.glGetAttribLocation(shaderProgram, "aTexCoord")
-        
+
         GLES30.glEnableVertexAttribArray(positionHandle)
         GLES30.glEnableVertexAttribArray(texCoordHandle)
-        
+
         vertexBuffer?.position(0)
         GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
-        
+
         texCoordBuffer?.position(0)
         GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
-        
+
         indexBuffer?.position(0)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, indexBuffer)
-        
+
         GLES30.glDisableVertexAttribArray(positionHandle)
         GLES30.glDisableVertexAttribArray(texCoordHandle)
-        
+
         // 读取像素
         val buffer = ByteBuffer.allocateDirect(width * height * 4)
         buffer.order(ByteOrder.nativeOrder())
         GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer)
         buffer.position(0)
-        
+
         // 创建临时 Bitmap
         val tempBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         tempBitmap.copyPixelsFromBuffer(buffer)
-        
+
         // 翻转 Y 轴（glReadPixels 从左下角开始读取，需要翻转）
         val matrix = android.graphics.Matrix()
         matrix.preScale(1f, -1f)
         val outputBitmap = Bitmap.createBitmap(tempBitmap, 0, 0, width, height, matrix, true)
         tempBitmap.recycle()
-        
+
         // 解绑帧缓冲
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        
+
         outputBitmap
     }
     

@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.compose.runtime.*
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -407,10 +408,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     suspend fun loadLutPreviews(photo: PhotoData): Map<String, Bitmap> {
         val context = getApplication<Application>()
         val inputStream = context.contentResolver.openInputStream(photo.thumbnailUri)
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = max(photo.width, photo.height) / 128
-        }
-        val bitmap = BitmapFactory.decodeStream(inputStream, null, options)
+        val bitmap = BitmapFactory.decodeStream(inputStream)
         inputStream?.close()
 
         if (bitmap == null) return emptyMap()
@@ -923,40 +921,63 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun getPhotoTransformation(photo: PhotoData): PhotoTransformation {
         val context = getApplication<Application>()
+        val metadata = photo.metadata ?: PhotoMetadata()
+
+        // 使用照片自己的 metadata 中保存的处理参数，如果没有则使用全局设置
+        // 导入的照片默认不应用处理（除非用户编辑过）
+        val photoSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+        val photoNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+        val photoChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+
         return PhotoTransformation(
             context = context,
             uri = photo.uri,
-            metadata = photo.metadata ?: PhotoMetadata(),
+            metadata = metadata,
             photoProcessor = photoProcessor,
-            sharpening = sharpening.value,
-            noiseReduction = noiseReduction.value,
-            chromaNoiseReduction = chromaNoiseReduction.value
+            sharpening = photoSharpening,
+            noiseReduction = photoNoiseReduction,
+            chromaNoiseReduction = photoChromaNoiseReduction
         )
     }
 
     /**
      * 获取应用 LUT 和边框后的预览 Bitmap
      */
-    suspend fun getPreviewBitmap(photo: PhotoData): Bitmap? {
+    suspend fun getPreviewBitmap(photo: PhotoData, useGlobalEdit: Boolean = false): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
-                val bitmap = PhotoManager.loadTiffImage(context, photo.id)?.toBitmap() ?: return@withContext null
+                val bitmap = BitmapFactory.decodeFile(PhotoManager.getPhotoFile(context, photo.id).absolutePath)
 
-                val metadata = (photo.metadata ?: PhotoMetadata()).copy(
-                    lutId = editLutId.value,
-                    frameId = editFrameId.value,
-                    colorRecipeParams = editLutRecipeParams.value,
-                    customProperties = editFrameCustomProperties.value,
-                    sharpening = editSharpening.value,
-                    noiseReduction = editNoiseReduction.value,
-                    chromaNoiseReduction = editChromaNoiseReduction.value
-                )
+                val finalMetadata: PhotoMetadata
+                val finalS: Float
+                val finalNR: Float
+                val finalCNR: Float
 
-                // 预览生成：跟随当前编辑状态
+                if (useGlobalEdit) {
+                    finalMetadata = (photo.metadata ?: PhotoMetadata()).copy(
+                        lutId = editLutId.value,
+                        frameId = editFrameId.value,
+                        colorRecipeParams = editLutRecipeParams.value,
+                        customProperties = editFrameCustomProperties.value,
+                        sharpening = editSharpening.value,
+                        noiseReduction = editNoiseReduction.value,
+                        chromaNoiseReduction = editChromaNoiseReduction.value
+                    )
+                    finalS = editSharpening.value
+                    finalNR = editNoiseReduction.value
+                    finalCNR = editChromaNoiseReduction.value
+                } else {
+                    finalMetadata = photo.metadata ?: PhotoMetadata()
+                    finalS = finalMetadata.sharpening ?: (if (finalMetadata.isImported) 0f else sharpening.value)
+                    finalNR = finalMetadata.noiseReduction ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
+                    finalCNR = finalMetadata.chromaNoiseReduction ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
+                }
+
+                // 预览生成
                 photoProcessor.process(
-                    context, bitmap, metadata, photo.previewUri,
-                    editSharpening.value, editNoiseReduction.value, editChromaNoiseReduction.value
+                    context, bitmap, finalMetadata, photo.uri,
+                    finalS, finalNR, finalCNR
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)

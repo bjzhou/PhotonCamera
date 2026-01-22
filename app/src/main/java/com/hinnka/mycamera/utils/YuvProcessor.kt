@@ -23,6 +23,40 @@ object YuvProcessor {
             PLog.e(TAG, "Failed to load native library", e)
         }
     }
+
+
+    fun process(image: Image, aspectRatio: AspectRatio, rotation: Int): IntArray? {
+        val planes = image.planes
+
+        val yBuffer = planes[0].buffer
+        val uBuffer = planes[1].buffer
+        val vBuffer = planes[2].buffer
+
+        val width = image.width
+        val height = image.height
+        val yRowStride = planes[0].rowStride
+        val uvRowStride = planes[1].rowStride
+        val uvPixelStride = planes[1].pixelStride
+
+        // 获取目标宽高比（长边/短边）
+        val targetRatio = aspectRatio.getValue(true)
+
+//        PLog.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
+
+        // 调用 native 方法处理
+        val result = processYuv(
+            yBuffer, uBuffer, vBuffer,
+            width, height,
+            yRowStride, uvRowStride, uvPixelStride,
+            rotation, targetRatio
+        )
+
+        if (result == null || result.size < 3) {
+            PLog.e(TAG, "Native processing failed, using fallback")
+            return null
+        }
+        return result
+    }
     
     /**
      * 处理 YUV Image 并返回 Bitmap
@@ -33,36 +67,7 @@ object YuvProcessor {
      * @return 处理后的 Bitmap
      */
     fun processAndToBitmap(image: Image, aspectRatio: AspectRatio, rotation: Int): Bitmap {
-        val planes = image.planes
-        
-        val yBuffer = planes[0].buffer
-        val uBuffer = planes[1].buffer
-        val vBuffer = planes[2].buffer
-        
-        val width = image.width
-        val height = image.height
-        val yRowStride = planes[0].rowStride
-        val uvRowStride = planes[1].rowStride
-        val uvPixelStride = planes[1].pixelStride
-        
-        // 获取目标宽高比（长边/短边）
-        val targetRatio = aspectRatio.getValue(true)
-        
-//        PLog.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
-        
-        // 调用 native 方法处理
-        val result = processYuv(
-            yBuffer, uBuffer, vBuffer,
-            width, height,
-            yRowStride, uvRowStride, uvPixelStride,
-            rotation, targetRatio
-        )
-        
-        if (result == null || result.size < 3) {
-            PLog.e(TAG, "Native processing failed, using fallback")
-            return fallbackProcess(image, aspectRatio)
-        }
-        
+        val result = process(image, aspectRatio, rotation) ?: return fallbackProcess(image, aspectRatio)
         // 结果前两个元素是宽高
         val outputWidth = result[0]
         val outputHeight = result[1]
@@ -201,4 +206,28 @@ object YuvProcessor {
         rotation: Int,
         targetRatio: Float
     ): ShortArray?
+
+    /**
+     * 将 ARGB 数据进行 gzip 压缩并保存到文件
+     * 
+     * @param argbData ARGB 像素数据
+     * @param width 图像宽度
+     * @param height 图像高度
+     * @param outputPath 输出文件路径
+     * @return 是否成功保存
+     */
+    external fun saveCompressedArgb(
+        argbData: IntArray,
+        width: Int,
+        height: Int,
+        outputPath: String
+    ): Boolean
+
+    /**
+     * 从文件中读取并解压缩 ARGB 数据
+     * 
+     * @param inputPath 输入文件路径
+     * @return IntArray: [width, height, pixel1, pixel2, ...]，失败返回 null
+     */
+    external fun loadCompressedArgb(inputPath: String): IntArray?
 }

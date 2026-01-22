@@ -113,7 +113,7 @@ fun PhotoEditScreen(
 
         isLoadingPreview = true
         previewBitmap = withContext(Dispatchers.IO) {
-            viewModel.getPreviewBitmap(currentPhoto)
+            viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true)
         }
         lutPreviews = withContext(Dispatchers.IO) {
             viewModel.loadLutPreviews(currentPhoto)
@@ -238,7 +238,7 @@ fun PhotoEditScreen(
                 // 显示预览
                 ZoomableEditImage(
                     previewBitmap = previewBitmap,
-                    fallbackUri = currentPhoto.previewUri,
+                    fallbackUri = currentPhoto.uri,
                     contentDescription = stringResource(R.string.edit),
                     modifier = Modifier.fillMaxSize()
                 )

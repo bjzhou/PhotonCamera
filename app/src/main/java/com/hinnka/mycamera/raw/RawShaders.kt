@@ -527,42 +527,43 @@ object RawShaders {
             );
         }
         
-        vec3 ApplyToneMapping(vec3 x) {
-            x = max(vec3(0.0), x);
-            
-            float P = 1.4;  // 最大亮度 (Max Brightness)
-            float a = 1.4;  // 对比度 (Contrast) - 相当于你的 S 曲线强度
-            float m = 0.1; // 线性部分的起点 (Linear Section Start)
-            float l = 0.3;  // 线性部分的终点 (Linear Section End)
-            float c = 1.5; // 黑色部分的紧致度 (Black Tightness)
-            float b = 0.0;  // 黑色偏移 (Black Offset) - 通常为0
-        
-            // 公式
-            float l0 = ((P - m) * l) / a;
-            float L0 = m - m / a;
-            float L1 = m + (1.0 - m) / a;
-            float S0 = m + l0;
-            float S1 = m + a * l0;
-            float C2 = (a * P) / (P - S1);
-            float CP = -C2 / P;
-        
-            vec3 w0 = 1.0 - smoothstep(0.0, m, x);
-            vec3 w2 = step(m + l0, x);
-            vec3 w1 = 1.0 - w0 - w2;
-        
-            vec3 T = m * pow(x / m, vec3(c)) + b;
-            vec3 S = P - (P - S1) * exp(CP * (x - S0));
-            vec3 L = m + a * (x - m);
-        
-            vec3 mappedColor = T * w0 + L * w1 + S * w2;
-
-            return mappedColor;
-        }
-        
         // 辅助函数：计算亮度 (Rec.709 权重，适用于 sRGB/Linear)
         float getLuma(vec3 color) {
             return dot(color, vec3(0.2126, 0.7152, 0.0722));
         }
+        
+        vec3 applyHighlightRecovery(vec3 color) {
+            float threshold = 0.8;
+            float maxOutput = 1.0;
+            // 1. 计算颜色的最大通道值（或者使用亮度 Luminance）
+            // 使用 max() 可以防止色相偏移 (Hue Shift)
+            float maxVal = max(color.r, max(color.g, color.b));
+            
+            // 2. 如果亮度在安全范围内，直接返回（只针对高光生效）
+            if (maxVal <= threshold) {
+                return color;
+            }
+            
+            // 3. 计算高光压缩曲线
+            // 我们使用由线性转为分数的函数： y = threshold + (val - threshold) / (1 + (val - threshold) * scale)
+            // 这种曲线在接缝处导数为1，过渡完美平滑
+            
+            float range = maxOutput - threshold;
+            float over = maxVal - threshold;
+            
+            // 核心压缩公式 (Rational form)
+            // 将 [0, 无穷] 的 over 映射到 [0, range]
+            float compressedMax = threshold + (over * range) / (over + range);
+            
+            return color * (compressedMax / maxVal);
+        }
+        
+        vec3 applyTonemap(vec3 color) {
+            color = applyHighlightRecovery(color);
+            vec3 sCurve = smoothstep(vec3(0.0), vec3(1.0), color);
+            return mix(color, sCurve, 0.7);
+        }
+
         
         /**
          * 双端去色函数
@@ -605,9 +606,9 @@ object RawShaders {
             // 步骤 5b: 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
             
-            rgb = applyDoubleEndedDesaturation(rgb);
+            rgb = applyTonemap(rgb);
             
-            rgb = ApplyToneMapping(rgb);
+            rgb = applyDoubleEndedDesaturation(rgb);
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)
             rgb = linearToSRGB(rgb);

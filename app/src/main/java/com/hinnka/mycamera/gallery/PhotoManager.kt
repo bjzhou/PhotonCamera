@@ -1,10 +1,12 @@
 package com.hinnka.mycamera.gallery
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
@@ -17,6 +19,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CaptureInfo
@@ -25,9 +28,11 @@ import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -46,9 +51,10 @@ object PhotoManager {
     private const val TAG = "PhotoManager"
     private const val PHOTOS_DIR = "photos"
     private const val PHOTO_FILE = "original.jpg"
+    private const val YUV_FILE = "original.yuv"
+    private const val DNG_FILE = "original.dng"
     private const val METADATA_FILE = "metadata.json"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
-    private const val PREVIEW_FILE = "preview_lut.jpg"
 
     private fun getPhotosBaseDir(context: Context): File {
         val dir = File(context.filesDir, PHOTOS_DIR)
@@ -78,9 +84,6 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), THUMBNAIL_FILE)
     }
 
-    fun getPreviewFile(context: Context, photoId: String): File {
-        return File(getPhotoDir(context, photoId), PREVIEW_FILE)
-    }
 
     suspend fun exportPhoto(context: Context, photoProcessor: PhotoProcessor, bitmap: Bitmap, metadata: PhotoMetadata, finalCaptureInfo: CaptureInfo, sharpeningValue: Float, noiseReductionValue: Float, chromaNoiseReductionValue: Float) {
         val processedBitmap = withContext(Dispatchers.Default) {
@@ -189,12 +192,18 @@ object PhotoManager {
     suspend fun savePhoto(
         context: Context,
         image: Image,
+        preview: Bitmap?,
         metadata: PhotoMetadata,
         rotation: Int,
         aspectRatio: AspectRatio,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
-        shouldAutoSave: Boolean = true
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        captureInfo: CaptureInfo,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -203,58 +212,94 @@ object PhotoManager {
 
                 // 预先准备所有文件路径
                 val photoFile = File(photoDir, PHOTO_FILE)
+                val yuvFile = File(photoDir, YUV_FILE)
+                val dngFile = File(photoDir, DNG_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
                 val format = image.format
 
-                var width: Int
-                var height: Int
+                var width = metadata.width
+                var height = metadata.height
+
+                var thumbnailGenerated = false
+                if (preview != null) {
+                    generateThumbnail(preview, thumbnailFile)
+                    thumbnailGenerated = true
+                }
 
                 // 根据图像格式处理
                 when (format) {
                     ImageFormat.YUV_420_888, ImageFormat.NV21 -> {
-                        // YUV 格式：使用 native 处理（包含旋转和裁切）
-                        val result = YuvProcessor.processAndToBitmap(image, aspectRatio, rotation)
-
-                        width = result.width
-                        height = result.height
-
-                        // 保存为 16-bit TIFF
-                        launch {
-                            FileOutputStream(photoFile).use { outputStream ->
-                                result.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                        val deferred = async {
+                            // YUV 格式：使用 native 处理（包含旋转和裁切）
+                            val result = YuvProcessor.process(image, aspectRatio, rotation) ?: return@async null
+                            width = result[0]
+                            height = result[1]
+                            val bitmap = Bitmap.createBitmap(result, width, height, Bitmap.Config.ARGB_8888)
+                            launch {
+                                withContext(Dispatchers.IO) {
+                                    FileOutputStream(photoFile).use { outputStream ->
+                                        // 直接从内存中的 Bitmap 生成缩略图
+                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                    }
+                                    if (shouldAutoSave) {
+                                        exportPhoto(context, photoProcessor, bitmap, metadata, captureInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                    }
+                                    bitmap.recycle()
+                                }
                             }
+                            launch {
+                                withContext(Dispatchers.IO) {
+                                    YuvProcessor.saveCompressedArgb(result, result[0],result[1], yuvFile.absolutePath)
+                                }
+                            }
+                            bitmap
                         }
-                        // 直接从内存中的 Bitmap 生成缩略图
-                        generateThumbnailFromTiff(result, thumbnailFile)
+                        if (!thumbnailGenerated) {
+                            val bitmap = deferred.await() ?: return@withContext null
+                            generateThumbnail(bitmap, thumbnailFile)
+                            bitmap.recycle()
+                        }
                     }
                     ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                        // RAW 格式：使用 RawProcessor 解马赛克处理
-                        val rawBitmap = RawProcessor.processAndToBitmap(
-                            context, image, characteristics, captureResult, aspectRatio, rotation
-                        )
+                        val deferred = async {
+//                            val bitmap = RawProcessor.processWithImageDecoder(image, characteristics, captureResult, aspectRatio, rotation) ?: return@async null
+                            val bitmap = RawProcessor.processAndToBitmap(context, image, characteristics, captureResult, aspectRatio, rotation) ?: return@async null
 
-                        if (rawBitmap == null) {
-                            PLog.e(TAG, "Failed to process RAW to Bitmap")
-                            return@withContext null
+                            val dimensions = RawProcessor.calculateProcessedDimensions(width, height, aspectRatio, rotation)
+
+                            width = dimensions.first
+                            height = dimensions.second
+
+                            launch {
+                                withContext(Dispatchers.IO) {
+                                    FileOutputStream(photoFile).use { outputStream ->
+                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                    }
+                                    if (shouldAutoSave) {
+                                        exportPhoto(context, photoProcessor, bitmap, metadata, captureInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                    }
+                                    bitmap.recycle()
+                                }
+                            }
+                            launch {
+                                withContext(Dispatchers.IO) {
+                                    FileOutputStream(dngFile).use {
+                                        RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
+                                    }
+                                    if (shouldAutoSave) {
+                                        exportDng(context, image, characteristics, captureResult, rotation)
+                                    }
+                                }
+                            }
+                            bitmap
                         }
-
-                        width = rawBitmap.width
-                        height = rawBitmap.height
-
-                        // 将 Bitmap 转换为 16-bit RGB 数据
-                        val rgbData = bitmapToRgb16(rawBitmap)
-
-                        // 保存为 16-bit TIFF
-                        launch {
-                            saveTiffImage(context, photoId, width, height, rgbData)
+                        if (!thumbnailGenerated) {
+                            val bitmap = deferred.await() ?: return@withContext null
+                            generateThumbnail(bitmap, thumbnailFile)
+                            bitmap.recycle()
                         }
-                        // 直接从内存中的 RGB16 数据生成缩略图
-                        generateThumbnailFromRgb16(width, height, rgbData, thumbnailFile)
-
-                        // 回收 Bitmap
-                        rawBitmap.recycle()
                     }
                     else -> {
                         PLog.e(TAG, "Unsupported image format: $format")
@@ -269,7 +314,6 @@ object PhotoManager {
                 )
                 metadataFile.writeText(metadataWithInfo.toJson())
 
-                PLog.d(TAG, "Photo saved as TIFF: $photoId (${width}x${height}, format=$format)")
                 photoId
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to save photo", e)
@@ -278,12 +322,26 @@ object PhotoManager {
         }
     }
 
+
+    private suspend fun generateThumbnailFromFile(dng: File, width: Int, height: Int, targetFile: File) {
+        val bitmap = withContext(Dispatchers.IO) {
+            val options = BitmapFactory.Options()
+            options.inSampleSize = max(width, height) / 512
+            options.inJustDecodeBounds = false
+            options.inPreferredConfig = Bitmap.Config.RGB_565
+            BitmapFactory.decodeFile(dng.absolutePath, options)
+        }
+        generateThumbnail(bitmap, targetFile)
+        bitmap.recycle()
+    }
+
     /**
      * 将 Bitmap 转换为 16-bit RGB 数据
      *
      * @param bitmap Bitmap
      * @return 16-bit RGB 数据 (R-G-B-R-G-B...)
      */
+    @SuppressLint("HalfFloat")
     private fun bitmapToRgb16(bitmap: Bitmap): ShortArray {
         val width = bitmap.width
         val height = bitmap.height
@@ -299,9 +357,9 @@ object PhotoManager {
             val shortBuffer = buffer.asShortBuffer()
             for (i in 0 until width * height) {
                 // RGBA_F16: 每个通道是 16-bit 半精度浮点数
-                val r = android.util.Half.toFloat(shortBuffer.get())
-                val g = android.util.Half.toFloat(shortBuffer.get())
-                val b = android.util.Half.toFloat(shortBuffer.get())
+                val r: Float = android.util.Half.toFloat(shortBuffer.get())
+                val g: Float = android.util.Half.toFloat(shortBuffer.get())
+                val b: Float = android.util.Half.toFloat(shortBuffer.get())
                 shortBuffer.get() // 跳过 alpha 通道
 
                 // 转换到 16-bit 整数范围 [0, 65535]
@@ -595,25 +653,19 @@ object PhotoManager {
     }
 
     /**
-     * 从 TIFF 文件生成 512x512 缩略图
+     * 生成 512x512 缩略图
      */
-    private suspend fun generateThumbnailFromTiff(context: Context, photoId: String, targetFile: File) {
+    private suspend fun generateThumbnail(bitmap: Bitmap, targetFile: File) {
         withContext(Dispatchers.IO) {
             try {
-                val bitmap = BitmapFactory.decodeFile(getPhotoFile(context, photoId).absolutePath)
-
                 // 生成 512x512 缩略图
                 val thumbnail = ThumbnailUtils.extractThumbnail(bitmap, 512, 512)
                 FileOutputStream(targetFile).use { out ->
                     thumbnail.compress(Bitmap.CompressFormat.JPEG, 80, out)
                 }
-
-                bitmap.recycle()
                 thumbnail.recycle()
-
-                PLog.d(TAG, "Thumbnail generated from TIFF: $photoId")
             } catch (e: Exception) {
-                PLog.e(TAG, "Failed to generate thumbnail from TIFF", e)
+                PLog.e(TAG, "Failed to generate thumbnail", e)
             }
         }
     }

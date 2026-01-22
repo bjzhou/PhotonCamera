@@ -100,9 +100,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var lutPreviewBitmaps: Map<String, Bitmap> by mutableStateOf(emptyMap())
         private set
 
-    // 原始预览帧（用于生成 LUT 预览）
-    private var rawPreviewFrame: Bitmap? = null
-
     // 是否正在生成预览
     private var isGeneratingPreviews = false
 
@@ -162,13 +159,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         cameraController.initialize()
-        cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
+        cameraController.onImageCaptured = { image, preview, captureInfo, characteristics, captureResult ->
             PLog.d(
                 TAG,
                 "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
             )
             viewModelScope.launch {
-                saveImage(image, captureInfo, characteristics, captureResult)
+                saveImage(image, preview, captureInfo, characteristics, captureResult)
             }
         }
 
@@ -594,10 +591,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.onPreviewFrameCaptured = { bitmap ->
             viewModelScope.launch(Dispatchers.Default) {
                 try {
-                    // 保存原始帧
-                    rawPreviewFrame?.recycle()
-                    rawPreviewFrame = bitmap
-
                     // 生成所有 LUT 预览
                     val newPreviews = mutableMapOf<String, Bitmap>()
 
@@ -692,8 +685,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun clearLutPreviews() {
         lutPreviewBitmaps.values.forEach { it.recycle() }
         lutPreviewBitmaps = emptyMap()
-        rawPreviewFrame?.recycle()
-        rawPreviewFrame = null
     }
 
     // ==================== 边框相关方法 ====================
@@ -1032,6 +1023,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     private suspend fun saveImage(
         image: Image,
+        preview: Bitmap?,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult
@@ -1092,7 +1084,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 launch {
                     val photoId = characteristics?.let {
                         PhotoManager.savePhoto(
-                            context, image, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave
+                            context, image, preview, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave,
+                            photoProcessor, captureInfo,  sharpening.value, noiseReduction.value, chromaNoiseReduction.value
                         )
                     }
                     if (photoId != null) {

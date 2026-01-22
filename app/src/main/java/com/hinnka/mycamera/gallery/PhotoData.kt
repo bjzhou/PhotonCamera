@@ -9,7 +9,6 @@ data class PhotoData(
     val id: String,
     val uri: Uri,
     val thumbnailUri: Uri,
-    val previewUri: Uri,
     val displayName: String,
     val dateAdded: Long,
     val size: Long,

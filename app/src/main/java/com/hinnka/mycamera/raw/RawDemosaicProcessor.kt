@@ -25,6 +25,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.Executors
+import kotlin.math.log
 import kotlin.math.min
 
 /**
@@ -629,9 +630,8 @@ class RawDemosaicProcessor {
 
         // 取两者的较小值，既保证了亮度，又绝对压制了过曝
         val gain = min(gainAvg, gainHigh)
-
         // 硬限制防止增益过大或过小
-        return gain.coerceIn(1.0f, 2.4f)
+        return gain.coerceIn(1.0f, 2.2f)
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)

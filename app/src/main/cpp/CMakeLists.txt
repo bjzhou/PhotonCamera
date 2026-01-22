@@ -22,6 +22,7 @@ target_compile_options(my-native-lib PRIVATE -O3 -ffast-math)
 target_link_libraries(
     my-native-lib
     yuv # libyuv 在 CMake 中定义的 target 名字通常是 'yuv'
+    z   # zlib for gzip compression
     log
     android
 )
