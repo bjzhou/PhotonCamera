@@ -1,8 +1,6 @@
 package com.hinnka.mycamera.lut
 
-import android.content.Context
 import android.graphics.Bitmap
-import android.net.Uri
 import coil.size.Size
 import coil.transform.Transformation
 import com.hinnka.mycamera.gallery.PhotoMetadata
@@ -17,8 +15,6 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
  * @param chromaNoiseReduction 减少杂色强度
  */
 class PhotoTransformation(
-    private val context: Context,
-    private val uri: Uri,
     private val metadata: PhotoMetadata,
     private val photoProcessor: PhotoProcessor,
     private val sharpening: Float = 0f,
@@ -26,12 +22,11 @@ class PhotoTransformation(
     private val chromaNoiseReduction: Float = 0f
 ) : Transformation {
     
-    override val cacheKey: String = "photo_${uri}_${metadata.toJson().hashCode()}_s${sharpening}_n${noiseReduction}_c${chromaNoiseReduction}"
+    override val cacheKey: String = "photo_${metadata.toJson().hashCode()}_s${sharpening}_n${noiseReduction}_c${chromaNoiseReduction}"
 
     override suspend fun transform(input: Bitmap, size: Size): Bitmap {
-        return photoProcessor.process(
-            context, input, metadata, uri,
-            sharpening, noiseReduction, chromaNoiseReduction
+        return photoProcessor.processBitmap(
+            input, metadata, sharpening, noiseReduction, chromaNoiseReduction
         )
     }
 }

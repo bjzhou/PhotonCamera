@@ -2,7 +2,6 @@ package com.hinnka.mycamera.gallery
 
 import android.content.Context
 import android.graphics.*
-import android.net.Uri
 import android.os.Build
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameManager
@@ -25,25 +24,63 @@ class PhotoProcessor(
     private val frameRenderer: FrameRenderer
 ) {
 
+    suspend fun process(context: Context, photoId: String, metadata: PhotoMetadata,
+                        sharpening: Float = 0f,
+                        noiseReduction: Float = 0f,
+                        chromaNoiseReduction: Float = 0f): Bitmap? {
+        val dngFile = PhotoManager.getDngFile(context, photoId)
+        val yuvFile = PhotoManager.getYuvFile(context, photoId)
+        val photoFile = PhotoManager.getPhotoFile(context, photoId)
+
+        if (dngFile.exists()) {
+            return processDng(
+                context,
+                dngFile.absolutePath,
+                metadata,
+                sharpening,
+                noiseReduction,
+                chromaNoiseReduction
+            )
+        } else if (yuvFile.exists()) {
+            val data = PhotoManager.loadYuvData(context, photoId) ?: return null
+
+            return processYuv(
+                data,
+                metadata,
+                sharpening,
+                noiseReduction,
+                chromaNoiseReduction
+            )
+        } else if (photoFile.exists()) {
+            val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
+            return processBitmap(
+                bitmap,
+                metadata,
+                sharpening,
+                noiseReduction,
+                chromaNoiseReduction
+            )
+        }
+        return null
+    }
+
     /**
      * @param context 上下文
      * @param dngPath dng 文件路径
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
-     * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
      * @param sharpening 锐化强度
      * @param noiseReduction 降噪强度
      * @param chromaNoiseReduction 减少杂色强度
      * @return 处理后的 Bitmap
      */
-    suspend fun process(
+    suspend fun processDng(
         context: Context,
         dngPath: String,
         metadata: PhotoMetadata,
-        uri: Uri? = null,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
-    ): Bitmap? = withContext(Dispatchers.Default) {
+    ): Bitmap? = withContext(Dispatchers.IO) {
         var result: Bitmap?
 
         // 优先从元数据中获取软件处理参数
@@ -62,30 +99,26 @@ class PhotoProcessor(
 
         result ?: return@withContext null
 
-        result = applyFrame(context, result, metadata, uri)
+        result = applyFrame(result, metadata)
 
         result
     }
 
     /**
-     * @param context 上下文
      * @param input 输入 ARGB的像素数组
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
-     * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
      * @param sharpening 锐化强度
      * @param noiseReduction 降噪强度
      * @param chromaNoiseReduction 减少杂色强度
      * @return 处理后的 Bitmap
      */
-    suspend fun process(
-        context: Context,
+    suspend fun processYuv(
         input: IntArray,
         metadata: PhotoMetadata,
-        uri: Uri? = null,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
-    ): Bitmap = withContext(Dispatchers.Default) {
+    ): Bitmap = withContext(Dispatchers.IO) {
         var result: Bitmap? = null
 
         // 优先从元数据中获取软件处理参数
@@ -113,30 +146,26 @@ class PhotoProcessor(
 
         result ?: return@withContext Bitmap.createBitmap(input, input[0], input[1], Bitmap.Config.ARGB_8888)
 
-        result = applyFrame(context, result, metadata, uri)
+        result = applyFrame(result, metadata)
 
         result
     }
 
     /**
-     * @param context 上下文
      * @param input 输入 Bitmap
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
-     * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
      * @param sharpening 锐化强度
      * @param noiseReduction 降噪强度
      * @param chromaNoiseReduction 减少杂色强度
      * @return 处理后的 Bitmap
      */
-    suspend fun process(
-        context: Context,
+    suspend fun processBitmap(
         input: Bitmap,
         metadata: PhotoMetadata,
-        uri: Uri? = null,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
-    ): Bitmap = withContext(Dispatchers.Default) {
+    ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
 
         // 优先从元数据中获取软件处理参数
@@ -162,17 +191,15 @@ class PhotoProcessor(
             }
         }
 
-        result = applyFrame(context, result, metadata, uri)
+        result = applyFrame(result, metadata)
         
         result
     }
 
 
     private fun applyFrame(
-        context: Context,
         input: Bitmap,
         metadata: PhotoMetadata,
-        uri: Uri? = null,
     ) : Bitmap {
         var result = input
         // 2. 应用边框水印
@@ -180,23 +207,7 @@ class PhotoProcessor(
             val template = frameManager.loadTemplate(metadata.frameId)
             if (template != null) {
                 // 如果 metadata 中没有拍摄信息，尝试从 URI 加载
-                val finalMetadata = if (metadata.deviceModel == null && uri != null) {
-                    // 从 URI 加载 EXIF 并合并到当前 metadata
-                    val exifData = PhotoMetadata.fromUri(context, uri)
-                    metadata.copy(
-                        deviceModel = exifData.deviceModel,
-                        brand = exifData.brand,
-                        dateTaken = exifData.dateTaken ?: metadata.dateTaken,
-                        location = exifData.location,
-                        iso = exifData.iso ?: metadata.iso,
-                        shutterSpeed = exifData.shutterSpeed ?: metadata.shutterSpeed,
-                        focalLength = exifData.focalLength ?: metadata.focalLength,
-                        focalLength35mm = exifData.focalLength35mm ?: metadata.focalLength35mm,
-                        aperture = exifData.aperture ?: metadata.aperture,
-                        width = if (result.width > 0) result.width else exifData.width,
-                        height = if (result.height > 0) result.height else exifData.height
-                    )
-                } else if (metadata.deviceModel == null) {
+                val finalMetadata = if (metadata.deviceModel == null) {
                     // 如果没有任何来源，使用默认值
                     metadata.copy(
                         deviceModel = Build.MODEL,

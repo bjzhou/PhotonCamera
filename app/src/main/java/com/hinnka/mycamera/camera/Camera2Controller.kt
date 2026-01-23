@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.YuvProcessor
@@ -367,6 +368,8 @@ class Camera2Controller(private val context: Context) {
             PLog.i(TAG, "首次打开相机，开始发现可用摄像头")
             discoverCameras()
         }
+
+        RawDemosaicProcessor.getInstance().preload(context)
 
         val cameraId = _state.value.currentCameraId
         val aspectRatio = _state.value.aspectRatio

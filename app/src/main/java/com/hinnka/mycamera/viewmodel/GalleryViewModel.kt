@@ -1,14 +1,12 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.MediaStore
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -32,7 +30,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileOutputStream
-import java.text.SimpleDateFormat
 import java.util.*
 
 /**
@@ -932,8 +929,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
 
         return PhotoTransformation(
-            context = context,
-            uri = photo.uri,
             metadata = metadata,
             photoProcessor = photoProcessor,
             sharpening = photoSharpening,
@@ -949,7 +944,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
-                val bitmap = BitmapFactory.decodeFile(PhotoManager.getPhotoFile(context, photo.id).absolutePath)
 
                 val finalMetadata: PhotoMetadata
                 val finalS: Float
@@ -978,9 +972,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
+                val bitmap = PhotoManager.loadBitmap(context, photo.id) ?: return@withContext null
                 // 预览生成
-                photoProcessor.process(
-                    context, bitmap, finalMetadata, photo.uri,
+                photoProcessor.processBitmap(
+                    bitmap, finalMetadata,
                     finalS, finalNR, finalCNR
                 )
             } catch (e: Exception) {
@@ -1104,18 +1099,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             val metadata = photo.metadata ?: PhotoManager.loadMetadata(context, photo.id) ?: PhotoMetadata()
 
-            // 读取照片
-            val inputStream = context.contentResolver.openInputStream(photo.uri)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
-
-            if (bitmap == null) return@withContext null
-
             // 处理照片：跟随用户设置
             val processedBitmap = photoProcessor.process(
-                context, bitmap, metadata, photo.uri,
+                context, photo.id, metadata,
                 sharpening.value, noiseReduction.value, chromaNoiseReduction.value
-            )
+            ) ?: return@withContext null
 
             // 保存到缓存目录
             val sharedDir = File(context.cacheDir, "shared")
@@ -1128,7 +1116,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
 
             processedBitmap.recycle()
-            bitmap.recycle()
 
             sharedFile
         } catch (e: Exception) {

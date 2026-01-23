@@ -100,31 +100,10 @@ object PhotoManager {
         withContext(Dispatchers.IO) {
             try {
                 // 读取照片
-                val photoFile = getPhotoFile(context, id)
-                val yuvFile = getYuvFile(context, id)
-                val dngFile = getDngFile(context, id)
-                val processedBitmap = if (dngFile.exists()) {
-                    val photoUri = Uri.fromFile(getPhotoFile(context, id))
-                    photoProcessor.process(
-                        context, dngFile.absolutePath, metadata, photoUri,
-                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                    )
-                } else if (yuvFile.exists()) {
-                    val argb = YuvProcessor.loadCompressedArgb(yuvFile.absolutePath) ?: return@withContext
-
-                    val photoUri = Uri.fromFile(getPhotoFile(context, id))
-                    photoProcessor.process(
-                        context, argb, metadata, photoUri,
-                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                    )
-                } else {
-                    val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
-                    val photoUri = Uri.fromFile(getPhotoFile(context, id))
-                    photoProcessor.process(
-                        context, bitmap, metadata, photoUri,
-                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                    )
-                }
+                val processedBitmap = photoProcessor.process(
+                    context, id, metadata,
+                    sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                )
 
                 processedBitmap ?: return@withContext
 
@@ -891,6 +870,22 @@ object PhotoManager {
                 false
             }
         }
+    }
+
+    fun loadYuvData(context: Context, photoId: String): IntArray? {
+        val yuvFile = getYuvFile(context, photoId)
+        if (!yuvFile.exists()) {
+            return null
+        }
+        return YuvProcessor.loadCompressedArgb(yuvFile.absolutePath)
+    }
+
+    fun loadBitmap(context: Context, photoId: String): Bitmap? {
+        val photoFile = getPhotoFile(context, photoId)
+        if (!photoFile.exists()) {
+            return null
+        }
+        return BitmapFactory.decodeFile(photoFile.absolutePath)
     }
 
     /**

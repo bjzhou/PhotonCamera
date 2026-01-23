@@ -17,6 +17,7 @@
 
 #define LOG_TAG "YuvProcessor"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
@@ -179,6 +180,19 @@ float illuminantToTemp(uint32_t illuminant) {
   default:
     return 5000.0f;
   }
+}
+
+// 字节序交换辅助函数 (OpcodeList 始终为 Big-Endian)
+template <typename T>
+T readBigEndian(const uint8_t* ptr) {
+    T val;
+    // 简单处理：假设宿主机器是 Little-Endian (如 ARM/x86)
+    // 如果是 Big-Endian 机器，直接 memcpy 即可
+    uint8_t* dest = reinterpret_cast<uint8_t*>(&val);
+    for (size_t i = 0; i < sizeof(T); ++i) {
+        dest[i] = ptr[sizeof(T) - 1 - i];
+    }
+    return val;
 }
 
 extern "C" {
@@ -1052,157 +1066,138 @@ void reorderArrayByPattern(std::vector<float> &arr, const uint32_t pattern[4]) {
 }
 
 /**
- * 从 OpcodeList2 中提取 Lens Shading Map (GainMap)
+ * 根据 CFA Pattern 和 Opcode 的物理坐标，计算逻辑通道索引。
+ * 目标顺序: [R, Gr, Gb, B] (Index 0, 1, 2, 3)
  *
- * DNG Spec: OpcodeList2 包含一系列 opcodes，每个 opcode 的格式：
- * - 4 bytes: Opcode ID (9 = GainMap)
- * - 4 bytes: Version (通常是 0x01000000)
- * - 4 bytes: Flags
- * - 4 bytes: Parameter size
- * - N bytes: Parameters
- *
- * GainMap parameters:
- * - AreaSpec (top, left, bottom, right, plane count) - 20 bytes
- * - 4 bytes: row pitch (每行间距)
- * - 4 bytes: col pitch (每列间距)
- * - 4 bytes: map width
- * - 4 bytes: map height
- * - 4 bytes: map plane count (通常 = 4, 对应 R/Gr/Gb/B)
- * - 4 bytes: map gain format (1=ushort, 2=float)
- * - N bytes: gain map data
+ * @param top Opcode ROI Top
+ * @param left Opcode ROI Left
+ * @param cfaPattern Android CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT
+ * 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
  */
-bool parseOpcodeList2ForLSC(const std::vector<uint8_t> &opcodeData,
-                            bool bigEndian, DngMetadata &metadata) {
-  if (opcodeData.empty()) {
-    LOGD("OpcodeList2 is empty");
-    return false;
-  }
+uint32_t getLogicalChannelIndex(uint32_t top, uint32_t left, int cfaPattern) {
+    // 1. 计算物理几何索引 (0=TopLeft, 1=TopRight, 2=BottomLeft, 3=BottomRight)
+    // 假设 Opcode 总是处理 2x2 块中的某一个
+    uint32_t geometricIndex = (top % 2) * 2 + (left % 2);
 
-  size_t offset = 0;
-  const uint8_t *data = opcodeData.data();
-  size_t dataSize = opcodeData.size();
+    // 2. 根据 CFA Pattern 映射到逻辑通道 [R=0, Gr=1, Gb=2, B=3]
+    switch (cfaPattern) {
+        case 0: // RGGB: R G / G B -> 0 1 / 2 3
+            // 0->0, 1->1, 2->2, 3->3 (Identity)
+            return geometricIndex;
 
-  // OpcodeList 格式: 4-byte count + opcodes
-  if (dataSize < 4) {
-    LOGE("OpcodeList2 too small");
-    return false;
-  }
+        case 1: // GRBG: G R / B G -> 1 0 / 3 2
+            // (0,0)G->1, (0,1)R->0, (1,0)B->3, (1,1)G->2
+            if (geometricIndex == 0) return 1; // Gr
+            if (geometricIndex == 1) return 0; // R
+            if (geometricIndex == 2) return 3; // B
+            if (geometricIndex == 3) return 2; // Gb
+            break;
 
-  // 根据DNG规范，OpcodeList始终使用big-endian字节序，与TIFF文件头无关
-  bool opcodeEndian = true;
+        case 2: // GBRG: G B / R G -> 2 3 / 0 1
+            // (0,0)G->2, (0,1)B->3, (1,0)R->0, (1,1)G->1
+            if (geometricIndex == 0) return 2; // Gb
+            if (geometricIndex == 1) return 3; // B
+            if (geometricIndex == 2) return 0; // R
+            if (geometricIndex == 3) return 1; // Gr
+            break;
 
-  uint32_t opcodeCount = readValue<uint32_t>(data, opcodeEndian);
-  offset += 4;
-  LOGD("Found %u opcodes in OpcodeList2 (using big endian)", opcodeCount);
-
-  for (uint32_t i = 0; i < opcodeCount && offset + 16 <= dataSize; i++) {
-    uint32_t opcodeID = readValue<uint32_t>(data + offset, opcodeEndian);
-    uint32_t version = readValue<uint32_t>(data + offset + 4, opcodeEndian);
-    uint32_t flags = readValue<uint32_t>(data + offset + 8, opcodeEndian);
-    uint32_t paramSize = readValue<uint32_t>(data + offset + 12, opcodeEndian);
-    size_t paramStart = offset + 16;
-
-    LOGD("Opcode #%u: ID=%u, Version=0x%X, Flags=0x%X, ParamSize=%u", i,
-         opcodeID, version, flags, paramSize);
-
-    if (offset + 16 + paramSize > dataSize) {
-      LOGE("Opcode parameter exceeds data size");
-      break;
+        case 3: // BGGR: B G / G R -> 3 2 / 1 0 (根据你的 Log 推断绿色的顺序)
+            // (0,0)B->3, (0,1)G->1, (1,0)G->2, (1,1)R->0
+            // 注意：你的日志显示 Green 通道在 BGGR 下对应 Opcode(0,1)->Index 1 和 Opcode(1,0)->Index 2
+            // 这意味着 BGGR 下的 Green 映射与 RGGB 相同，只有 R/B 互换。
+            if (geometricIndex == 0) return 3; // B
+            if (geometricIndex == 1) return 1; // Gr (Matches Log)
+            if (geometricIndex == 2) return 2; // Gb (Matches Log)
+            if (geometricIndex == 3) return 0; // R
+            break;
     }
+    return geometricIndex; // Fallback
+}
 
-    // Opcode ID 9 = GainMap (Lens Shading Correction)
-    if (opcodeID == 9) {
-      LOGI("Processing GainMap opcode (ID 9)");
 
-      if (paramSize < 76) {
-        LOGE("GainMap parameter block too small (%u bytes)", paramSize);
-        offset += 16 + paramSize;
-        continue;
-      }
+bool parseOpcodeList2ForLSC(const std::vector<uint8_t> &opcodeData, DngMetadata &metadata, int cfaPattern) {
+    if (opcodeData.empty()) return false;
 
-      // 按照 DNG Spec 解析参数体 (Big Endian)
-      // Top(0), Left(4), Bottom(8), Right(12), Plane(16), Planes(20),
-      // RowPitch(24), ColPitch(28), MapPointsV(32), MapPointsH(36),
-      // ...doubles (40-71), MapPlanes(72), GainValues(76)
+    const uint8_t *data = opcodeData.data();
+    size_t dataSize = opcodeData.size();
+    size_t offset = 0;
 
-      uint32_t planeStart =
-          readValue<uint32_t>(data + paramStart + 16, opcodeEndian);
-      uint32_t planesCount =
-          readValue<uint32_t>(data + paramStart + 20, opcodeEndian);
-      uint32_t rowPitch =
-          readValue<uint32_t>(data + paramStart + 24, opcodeEndian);
-      uint32_t colPitch =
-          readValue<uint32_t>(data + paramStart + 28, opcodeEndian);
-      uint32_t mapPointsV =
-          readValue<uint32_t>(data + paramStart + 32, opcodeEndian);
-      uint32_t mapPointsH =
-          readValue<uint32_t>(data + paramStart + 36, opcodeEndian);
-      uint32_t mapPlanes =
-          readValue<uint32_t>(data + paramStart + 72, opcodeEndian);
+    if (dataSize < 4) return false;
 
-      LOGI("LSC GainMap: %ux%u, planes: %u, startPlane: %u, rowPitch: %u, "
-           "colPitch: %u, mapPlanes: %u",
-           mapPointsH, mapPointsV, planesCount, planeStart, rowPitch, colPitch,
-           mapPlanes);
+    uint32_t opcodeCount = readBigEndian<uint32_t>(data + offset);
+    offset += 4;
 
-      if (mapPointsH == 0 || mapPointsV == 0 || planesCount == 0) {
-        LOGE("Invalid GainMap parameters");
-        offset += 16 + paramSize;
-        continue;
-      }
+    bool foundAnyLSC = false;
 
-      // 初始化 LSC 增益图 (App 内部始终使用 RGBA 4通道布局)
-      metadata.lensShadingMap.assign(mapPointsH * mapPointsV * 4, 1.0f);
-      metadata.lscWidth = mapPointsH;
-      metadata.lscHeight = mapPointsV;
+    for (uint32_t i = 0; i < opcodeCount; i++) {
+        if (offset + 16 > dataSize) break;
 
-      size_t gainValuesStart = paramStart + 76;
+        uint32_t opcodeID = readBigEndian<uint32_t>(data + offset);
+        uint32_t paramSize = readBigEndian<uint32_t>(data + offset + 12);
+        size_t paramStart = offset + 16;
 
-      // DNG Index Formula: (p - Plane) * RowPitch * MapPointsV + r * RowPitch +
-      // c * ColPitch
-      for (uint32_t p = 0; p < planesCount && (planeStart + p) < 4; p++) {
-        for (uint32_t r = 0; r < mapPointsV; r++) {
-          for (uint32_t c = 0; c < mapPointsH; c++) {
-            size_t srcIdx = (size_t)p * rowPitch * mapPointsV +
-                            (size_t)r * rowPitch + (size_t)c * colPitch;
-            size_t valOffset = gainValuesStart + srcIdx * 4;
+        if (paramStart + paramSize > dataSize) break;
 
-            if (valOffset + 4 <= paramStart + paramSize) {
-              uint32_t bits =
-                  readValue<uint32_t>(data + valOffset, opcodeEndian);
-              float gain;
-              memcpy(&gain, &bits, 4);
-
-              // 映射到 App 的交错 RGBA 数组
-              metadata
-                  .lensShadingMap[(r * mapPointsH + c) * 4 + (planeStart + p)] =
-                  gain;
+        // Opcode ID 9: GainMap
+        if (opcodeID == 9) {
+            if (paramSize < 76) {
+                offset += 16 + paramSize;
+                continue;
             }
-          }
-        }
-      }
 
-      // 处理单平面或共享平面的补全
-      if (planesCount == 1) {
-        for (uint32_t i = 0; i < mapPointsH * mapPointsV; i++) {
-          float g = metadata.lensShadingMap[i * 4 + planeStart];
-          metadata.lensShadingMap[i * 4 + 0] = g;
-          metadata.lensShadingMap[i * 4 + 1] = g;
-          metadata.lensShadingMap[i * 4 + 2] = g;
-          metadata.lensShadingMap[i * 4 + 3] = g;
-        }
-      }
+            uint32_t top = readBigEndian<uint32_t>(data + paramStart + 0);
+            uint32_t left = readBigEndian<uint32_t>(data + paramStart + 4);
+            uint32_t startPlaneIndex = readBigEndian<uint32_t>(data + paramStart + 16);
+            uint32_t planesCount = readBigEndian<uint32_t>(data + paramStart + 20);
+            uint32_t mapPointsV = readBigEndian<uint32_t>(data + paramStart + 32);
+            uint32_t mapPointsH = readBigEndian<uint32_t>(data + paramStart + 36);
+            uint32_t mapPlanes = readBigEndian<uint32_t>(data + paramStart + 72);
 
-      LOGI("Successfully extracted LSC data: %ux%u points", mapPointsH,
-           mapPointsV);
-      return true;
+            // 初始化容器
+            if (metadata.lensShadingMap.empty()) {
+                metadata.lscWidth = mapPointsH;
+                metadata.lscHeight = mapPointsV;
+                metadata.lensShadingMap.assign(mapPointsH * mapPointsV * 4, 1.0f);
+            }
+
+            // 计算该 Opcode 对应的逻辑通道 (R, Gr, Gb, B)
+            uint32_t logicalChannel = startPlaneIndex;
+            // 如果 startPlaneIndex 为 0，说明是 Split Opcode，需要根据 ROI 和 CFA Pattern 计算
+            if (startPlaneIndex == 0 && planesCount == 1) {
+                logicalChannel = getLogicalChannelIndex(top, left, cfaPattern);
+            }
+
+            // 数据指针
+            const uint8_t* gainDataPtr = data + paramStart + 76;
+
+            // 填充数据
+            for (uint32_t r = 0; r < mapPointsV; r++) {
+                for (uint32_t c = 0; c < mapPointsH; c++) {
+                    size_t pixelBaseIdx = (r * mapPointsH + c) * 4;
+
+                    for (uint32_t mp = 0; mp < mapPlanes; mp++) {
+                        float gain = readBigEndian<float>(gainDataPtr);
+                        gainDataPtr += 4;
+
+                        // 写入正确的逻辑通道
+                        uint32_t targetCh = logicalChannel + mp;
+
+                        // 处理单平面覆盖多通道的情况 (Broadcast)
+                        if (mp == mapPlanes - 1 && planesCount > mapPlanes) {
+                             // 如果是全平面共用 (黑白raw)，或者 Green 共用
+                             // 这里为了稳妥，如果 planesCount=1，我们只写 targetCh
+                             if (targetCh < 4) metadata.lensShadingMap[pixelBaseIdx + targetCh] = gain;
+                        } else {
+                            if (targetCh < 4) metadata.lensShadingMap[pixelBaseIdx + targetCh] = gain;
+                        }
+                    }
+                }
+            }
+            foundAnyLSC = true;
+        }
+        offset += 16 + paramSize;
     }
-
-    offset += 16 + paramSize;
-  }
-
-  LOGD("No GainMap opcode found in OpcodeList2");
-  return false;
+    return foundAnyLSC;
 }
 
 /**
@@ -1243,8 +1238,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_extractDngDataNative(
     return nullptr;
   }
   file.close();
-
-  LOGI("File size: %ld bytes", static_cast<long>(fileSize));
 
   // === Step 1: 解析 TIFF 头部 ===
   if (fileSize < 8) {
@@ -1462,7 +1455,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_extractDngDataNative(
     // 解析 OpcodeList2 提取 Lens Shading Map
     if (ifd.count(TiffTags::OpcodeList2)) {
       auto &opcodeTag = ifd.at(TiffTags::OpcodeList2);
-      parseOpcodeList2ForLSC(opcodeTag.data, bigEndian, metadata);
+      int cfaEnum = mapCfaPattern(metadata.cfaPattern);
+      parseOpcodeList2ForLSC(opcodeTag.data, metadata, cfaEnum);
     }
   }
   // === Step 3: 计算白平衡与色彩校正矩阵 (CCM) ===
@@ -1700,8 +1694,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_extractDngDataNative(
     lscArray = env->NewFloatArray(metadata.lensShadingMap.size());
     env->SetFloatArrayRegion(lscArray, 0, metadata.lensShadingMap.size(),
                              metadata.lensShadingMap.data());
-    LOGI("LSC data: %dx%d (%zu values)", metadata.lscWidth, metadata.lscHeight,
-         metadata.lensShadingMap.size());
   }
 
   int cfaEnum = mapCfaPattern(metadata.cfaPattern);

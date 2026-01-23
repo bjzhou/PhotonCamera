@@ -581,8 +581,6 @@ class RawDemosaicProcessor {
                 return@withContext null
             }
 
-            Log.d(TAG, "process: DNG lsc ${dngData.metadata.lensShadingMap?.contentToString()}")
-
             // 使用 .use 确保 native 内存在处理后被释放
             dngData.use {
                 // 使用提取的数据调用内部处理方法
@@ -650,7 +648,6 @@ class RawDemosaicProcessor {
 
             // 提取元数据
             val metadata = RawMetadata.create(width, height, characteristics, captureResult)
-            Log.d(TAG, "process: Image lsc ${metadata.lensShadingMap?.contentToString()}")
 
             // 使用内部处理方法
             processInternal(
