@@ -108,6 +108,7 @@ class Camera2Controller(private val context: Context) {
     private var availableVideoStabilizationModes: IntArray = intArrayOf()
     private var availableOpticalStabilizationModes: IntArray = intArrayOf()
     var isRawSupported = false
+    private var isP010Supported = false
 
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
@@ -427,10 +428,12 @@ class Camera2Controller(private val context: Context) {
                     cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                         ?: intArrayOf()
                 isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
+                val outputFormats = cachedCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.outputFormats ?: intArrayOf()
+                isP010Supported = outputFormats.contains(ImageFormat.YCBCR_P010)
 
                 PLog.i(
                     TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
-                            "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, RAW: $isRawSupported"
+                            "ManualSensor: $isManualSensorSupported, ManualPost: $isManualPostProcessingSupported, RAW: $isRawSupported, P010: $isP010Supported"
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to cache camera characteristics", e)
@@ -459,12 +462,20 @@ class Camera2Controller(private val context: Context) {
             }
             val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
                 ImageFormat.RAW_SENSOR
+            } else if (isP010Supported) {
+                ImageFormat.YCBCR_P010
             } else {
                 ImageFormat.YUV_420_888
             }
             PLog.d(
                 TAG,
-                "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${if (captureFormat == ImageFormat.RAW_SENSOR) "RAW" else "YUV"}"
+                "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
+                    when (captureFormat) {
+                        ImageFormat.RAW_SENSOR -> "RAW"
+                        ImageFormat.YCBCR_P010 -> "P010"
+                        else -> "YUV"
+                    }
+                }"
             )
             imageReader = ImageReader.newInstance(
                 captureSize.width,

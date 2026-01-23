@@ -25,34 +25,38 @@ object YuvProcessor {
     }
 
 
-    fun process(image: Image, aspectRatio: AspectRatio, rotation: Int): IntArray? {
+    fun process(image: Image, aspectRatio: AspectRatio, rotation: Int): ShortArray? {
         val planes = image.planes
 
         val yBuffer = planes[0].buffer
         val uBuffer = planes[1].buffer
         val vBuffer = planes[2].buffer
 
+        // 重置 buffer position 到 0，确保从正确位置读取
+        yBuffer.rewind()
+        uBuffer.rewind()
+        vBuffer.rewind()
+
         val width = image.width
         val height = image.height
         val yRowStride = planes[0].rowStride
         val uvRowStride = planes[1].rowStride
         val uvPixelStride = planes[1].pixelStride
+        val format = image.format
 
         // 获取目标宽高比（长边/短边）
         val targetRatio = aspectRatio.getValue(true)
-
-//        PLog.d(TAG, "Processing image: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
 
         // 调用 native 方法处理
         val result = processYuv(
             yBuffer, uBuffer, vBuffer,
             width, height,
             yRowStride, uvRowStride, uvPixelStride,
-            rotation, targetRatio
+            rotation, targetRatio, format
         )
 
         if (result == null || result.size < 3) {
-            PLog.e(TAG, "Native processing failed, using fallback")
+            PLog.e(TAG, "Native processing failed")
             return null
         }
         return result
@@ -68,14 +72,24 @@ object YuvProcessor {
      */
     fun processAndToBitmap(image: Image, aspectRatio: AspectRatio, rotation: Int): Bitmap {
         val result = process(image, aspectRatio, rotation) ?: return fallbackProcess(image, aspectRatio)
-        // 结果前两个元素是宽高
-        val outputWidth = result[0]
-        val outputHeight = result[1]
+        return rgb16ToBitmap(result)
+    }
 
-//        PLog.d(TAG, "Creating bitmap: ${outputWidth}x${outputHeight}")
+    fun rgb16ToBitmap(argbData: ShortArray): Bitmap {
+        val width = argbData[0].toInt() and 0xFFFF
+        val height = argbData[1].toInt() and 0xFFFF
 
-        // 创建 Bitmap，直接使用原数组避免额外内存分配
-        return Bitmap.createBitmap(result, 2, outputWidth, outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+        if (width <= 0 || height <= 0) return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+
+        val pixels = IntArray(width * height)
+        for (i in 0 until width * height) {
+            val r = (argbData[i * 4 + 2].toInt() and 0xFFFF) shr 8
+            val g = (argbData[i * 4 + 3].toInt() and 0xFFFF) shr 8
+            val b = (argbData[i * 4 + 4].toInt() and 0xFFFF) shr 8
+            val a = (argbData[i * 4 + 5].toInt() and 0xFFFF) shr 8
+            pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
     
     /**
@@ -118,63 +132,11 @@ object YuvProcessor {
         
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
-    
-    /**
-     * 处理 YUV Image 并转换为 16-bit RGB 数据
-     * 包含旋转和裁切功能
-     *
-     * @param image YUV_420_888 格式的 Image
-     * @param aspectRatio 目标宽高比
-     * @param rotation 旋转角度 (0, 90, 180, 270)
-     * @return Pair<IntArray, ShortArray>: 前者为 [width, height]，后者为 16-bit RGB 数据
-     */
-    fun processYuvToRgb16(image: Image, aspectRatio: AspectRatio, rotation: Int): Pair<IntArray, ShortArray>? {
-        val planes = image.planes
-
-        val yBuffer = planes[0].buffer
-        val uBuffer = planes[1].buffer
-        val vBuffer = planes[2].buffer
-
-        val width = image.width
-        val height = image.height
-        val yRowStride = planes[0].rowStride
-        val uvRowStride = planes[1].rowStride
-        val uvPixelStride = planes[1].pixelStride
-
-        // 获取目标宽高比（长边/短边）
-        val targetRatio = aspectRatio.getValue(true)
-
-        PLog.d(TAG, "Processing YUV to RGB16: ${width}x${height}, rotation=$rotation, ratio=$targetRatio")
-
-        // 调用 native 方法处理
-        val result = processYuvToRgb16Native(
-            yBuffer, uBuffer, vBuffer,
-            width, height,
-            yRowStride, uvRowStride, uvPixelStride,
-            rotation, targetRatio
-        )
-
-        if (result == null || result.size < 3) {
-            PLog.e(TAG, "Native RGB16 processing failed")
-            return null
-        }
-
-        // 结果前两个元素是宽高
-        val outputWidth = result[0].toInt()
-        val outputHeight = result[1].toInt()
-
-        // 剩余部分是 RGB16 数据
-        val rgb16Data = result.copyOfRange(2, result.size)
-
-        PLog.d(TAG, "RGB16 processing completed: ${outputWidth}x${outputHeight}")
-
-        return Pair(intArrayOf(outputWidth, outputHeight), rgb16Data)
-    }
 
     /**
      * Native YUV 处理方法
      *
-     * @return IntArray: [width, height, pixel1, pixel2, ...]
+     * @return ShortArray: [width, height, r1, g1, b1, a1, r2, g2, b2, a2, ...]
      */
     private external fun processYuv(
         yBuffer: ByteBuffer,
@@ -186,40 +148,19 @@ object YuvProcessor {
         uvRowStride: Int,
         uvPixelStride: Int,
         rotation: Int,
-        targetRatio: Float
-    ): IntArray?
-
-    /**
-     * Native YUV 转 16-bit RGB 处理方法（包含旋转和裁切）
-     *
-     * @return ShortArray: [width, height, r1, g1, b1, r2, g2, b2, ...]
-     */
-    private external fun processYuvToRgb16Native(
-        yBuffer: ByteBuffer,
-        uBuffer: ByteBuffer,
-        vBuffer: ByteBuffer,
-        width: Int,
-        height: Int,
-        yRowStride: Int,
-        uvRowStride: Int,
-        uvPixelStride: Int,
-        rotation: Int,
-        targetRatio: Float
+        targetRatio: Float,
+        format: Int
     ): ShortArray?
 
     /**
-     * 将 ARGB 数据进行 gzip 压缩并保存到文件
+     * 将 RGBA16 数据进行 gzip 压缩并保存到文件
      * 
-     * @param argbData ARGB 像素数据
-     * @param width 图像宽度
-     * @param height 图像高度
+     * @param argbData RGBA16 像素数据 [width, height, r1, g1, b1, a1, ...]
      * @param outputPath 输出文件路径
      * @return 是否成功保存
      */
     external fun saveCompressedArgb(
-        argbData: IntArray,
-        width: Int,
-        height: Int,
+        argbData: ShortArray,
         outputPath: String
     ): Boolean
 
@@ -227,7 +168,7 @@ object YuvProcessor {
      * 从文件中读取并解压缩 ARGB 数据
      * 
      * @param inputPath 输入文件路径
-     * @return IntArray: [width, height, pixel1, pixel2, ...]，失败返回 null
+     * @return ShortArray: [width, height, pixel1, pixel2, ...]，失败返回 null
      */
-    external fun loadCompressedArgb(inputPath: String): IntArray?
+    external fun loadCompressedArgb(inputPath: String): ShortArray?
 }

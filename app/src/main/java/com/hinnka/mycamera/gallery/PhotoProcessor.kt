@@ -9,6 +9,7 @@ import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -113,7 +114,7 @@ class PhotoProcessor(
      * @return 处理后的 Bitmap
      */
     suspend fun processYuv(
-        input: IntArray,
+        input: ShortArray,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
@@ -144,7 +145,9 @@ class PhotoProcessor(
             }
         }
 
-        result ?: return@withContext Bitmap.createBitmap(input, input[0], input[1], Bitmap.Config.ARGB_8888)
+        if (result == null) {
+            result = YuvProcessor.rgb16ToBitmap(input)
+        }
 
         result = applyFrame(result, metadata)
 

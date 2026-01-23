@@ -3,7 +3,7 @@
  *
  * 使用 libyuv 实现 YUV 图像处理：旋转、裁切、转换为 ARGB
  */
-#include "libyuv.h"
+#include "libyuv_source/include/libyuv.h"
 #include <algorithm>
 #include <android/log.h>
 #include <cstdlib>
@@ -183,40 +183,51 @@ float illuminantToTemp(uint32_t illuminant) {
 }
 
 // 字节序交换辅助函数 (OpcodeList 始终为 Big-Endian)
-template <typename T>
-T readBigEndian(const uint8_t* ptr) {
-    T val;
-    // 简单处理：假设宿主机器是 Little-Endian (如 ARM/x86)
-    // 如果是 Big-Endian 机器，直接 memcpy 即可
-    uint8_t* dest = reinterpret_cast<uint8_t*>(&val);
-    for (size_t i = 0; i < sizeof(T); ++i) {
-        dest[i] = ptr[sizeof(T) - 1 - i];
-    }
-    return val;
+template <typename T> T readBigEndian(const uint8_t *ptr) {
+  T val;
+  // 简单处理：假设宿主机器是 Little-Endian (如 ARM/x86)
+  // 如果是 Big-Endian 机器，直接 memcpy 即可
+  uint8_t *dest = reinterpret_cast<uint8_t *>(&val);
+  for (size_t i = 0; i < sizeof(T); ++i) {
+    dest[i] = ptr[sizeof(T) - 1 - i];
+  }
+  return val;
 }
 
 extern "C" {
 
+// 16-bit 平面旋转辅助函数
+void RotatePlane16(const uint16_t *src, uint16_t *dst, int width, int height,
+                   int rotation) {
+  if (rotation == 0) {
+    memcpy(dst, src, width * height * sizeof(uint16_t));
+    return;
+  }
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      int srcIdx = y * width + x;
+      int dstIdx;
+      if (rotation == 90) {
+        dstIdx = x * height + (height - 1 - y);
+      } else if (rotation == 180) {
+        dstIdx = (height - 1 - y) * width + (width - 1 - x);
+      } else { // 270
+        dstIdx = (width - 1 - x) * height + y;
+      }
+      dst[dstIdx] = src[srcIdx];
+    }
+  }
+}
+
 /**
- * 处理 YUV_420_888 图像：旋转、裁切、转换为 ARGB
- *
- * @param yBuffer Y 平面数据
- * @param uBuffer U 平面数据
- * @param vBuffer V 平面数据
- * @param width 原始宽度
- * @param height 原始高度
- * @param yRowStride Y 平面行跨度
- * @param uvRowStride UV 平面行跨度
- * @param uvPixelStride UV 平面像素跨度
- * @param rotation 旋转角度 (0, 90, 180, 270)
- * @param targetRatio 目标宽高比 (长边/短边)
- * @return ARGB 像素数组
+ * 处理 YUV_420_888 或 P010 图像：旋转、裁切、转换为 RGBA16
  */
-JNIEXPORT jintArray JNICALL
+JNIEXPORT jshortArray JNICALL
 Java_com_hinnka_mycamera_utils_YuvProcessor_processYuv(
     JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
     jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint rotation, jfloat targetRatio) {
+    jint uvPixelStride, jint rotation, jfloat targetRatio, jint format) {
 
   // 获取 buffer 指针
   auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
@@ -228,547 +239,251 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processYuv(
     return nullptr;
   }
 
-  //        LOGI("Processing YUV: %dx%d, rotation=%d, targetRatio=%.2f",
-  //             width, height, rotation, targetRatio);
+  bool isP010 = (format == 0x36);
 
-  // === Step 1: 将 YUV_420_888 转换为 I420 ===
-  int i420Size = width * height * 3 / 2;
-  auto *i420Data = static_cast<uint8_t *>(malloc(i420Size));
-  if (i420Data == nullptr) {
-    LOGE("Failed to allocate I420 buffer");
-    return nullptr;
-  }
-
-  uint8_t *i420Y = i420Data;
-  uint8_t *i420U = i420Data + width * height;
-  uint8_t *i420V = i420U + (width / 2) * (height / 2);
-
-  // 处理 Y 平面
-  if (yRowStride == width) {
-    memcpy(i420Y, yData, width * height);
-  } else {
-    for (int row = 0; row < height; row++) {
-      memcpy(i420Y + row * width, yData + row * yRowStride, width);
-    }
-  }
-
-  // 处理 UV 平面
+  // === Step 1: 将 YUV 格式化为 16-bit I420/I010 结构 ===
+  int ySize = width * height;
   int uvWidth = width / 2;
   int uvHeight = height / 2;
+  int uvSize = uvWidth * uvHeight;
+  int totalSize = (ySize + uvSize * 2) * sizeof(uint16_t);
 
-  if (uvPixelStride == 1 && uvRowStride == uvWidth) {
-    // 已经是紧凑格式
-    memcpy(i420U, uData, uvWidth * uvHeight);
-    memcpy(i420V, vData, uvWidth * uvHeight);
-  } else if (uvPixelStride == 2) {
-    // NV21/NV12 交错格式
-    for (int row = 0; row < uvHeight; row++) {
-      for (int col = 0; col < uvWidth; col++) {
-        i420U[row * uvWidth + col] =
-            uData[row * uvRowStride + col * uvPixelStride];
-        i420V[row * uvWidth + col] =
-            vData[row * uvRowStride + col * uvPixelStride];
-      }
-    }
-  } else {
-    // 通用情况
-    for (int row = 0; row < uvHeight; row++) {
-      for (int col = 0; col < uvWidth; col++) {
-        i420U[row * uvWidth + col] =
-            uData[row * uvRowStride + col * uvPixelStride];
-        i420V[row * uvWidth + col] =
-            vData[row * uvRowStride + col * uvPixelStride];
+  auto *yuv16Data = static_cast<uint16_t *>(malloc(totalSize));
+  if (yuv16Data == nullptr) {
+    LOGE("Failed to allocate YUV16 buffer");
+    return nullptr;
+  }
+
+  uint16_t *iY = yuv16Data;
+  uint16_t *iU = yuv16Data + ySize;
+  uint16_t *iV = iU + uvSize;
+
+  // 转换 Y 平面
+  for (int row = 0; row < height; row++) {
+    for (int col = 0; col < width; col++) {
+      if (isP010) {
+        iY[row * width + col] =
+            readValue<uint16_t>(yData + row * yRowStride + col * 2, false);
+      } else {
+        iY[row * width + col] =
+            static_cast<uint16_t>(yData[row * yRowStride + col]) << 8;
       }
     }
   }
 
-  // === Step 2: 旋转 I420 ===
+  // 转换 UV 平面
+  for (int row = 0; row < uvHeight; row++) {
+    for (int col = 0; col < uvWidth; col++) {
+      if (isP010) {
+        iU[row * uvWidth + col] = readValue<uint16_t>(
+            uData + row * uvRowStride + col * uvPixelStride, false);
+        iV[row * uvWidth + col] = readValue<uint16_t>(
+            vData + row * uvRowStride + col * uvPixelStride, false);
+      } else {
+        iU[row * uvWidth + col] =
+            static_cast<uint16_t>(
+                uData[row * uvRowStride + col * uvPixelStride])
+            << 8;
+        iV[row * uvWidth + col] =
+            static_cast<uint16_t>(
+                vData[row * uvRowStride + col * uvPixelStride])
+            << 8;
+      }
+    }
+  }
+
+  // === Step 2: 旋转 YUV16 ===
   int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
   int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
+  int rotatedUvWidth = rotatedWidth / 2;
+  int rotatedUvHeight = rotatedHeight / 2;
 
-  auto *rotatedI420 =
-      static_cast<uint8_t *>(malloc(rotatedWidth * rotatedHeight * 3 / 2));
-  if (rotatedI420 == nullptr) {
-    LOGE("Failed to allocate rotated I420 buffer");
-    free(i420Data);
+  auto *rotatedYuv16 = static_cast<uint16_t *>(malloc(totalSize));
+  if (rotatedYuv16 == nullptr) {
+    LOGE("Failed to allocate rotated YUV16 buffer");
+    free(yuv16Data);
     return nullptr;
   }
 
-  uint8_t *rotatedY = rotatedI420;
-  uint8_t *rotatedU = rotatedI420 + rotatedWidth * rotatedHeight;
-  uint8_t *rotatedV = rotatedU + (rotatedWidth / 2) * (rotatedHeight / 2);
+  uint16_t *rY = rotatedYuv16;
+  uint16_t *rU = rotatedYuv16 + rotatedWidth * rotatedHeight;
+  uint16_t *rV = rU + rotatedUvWidth * rotatedUvHeight;
 
-  libyuv::RotationMode mode;
-  switch (rotation) {
-  case 90:
-    mode = libyuv::kRotate90;
-    break;
-  case 180:
-    mode = libyuv::kRotate180;
-    break;
-  case 270:
-    mode = libyuv::kRotate270;
-    break;
-  default:
-    mode = libyuv::kRotate0;
-    break;
-  }
+  RotatePlane16(iY, rY, width, height, rotation);
+  RotatePlane16(iU, rU, uvWidth, uvHeight, rotation);
+  RotatePlane16(iV, rV, uvWidth, uvHeight, rotation);
 
-  if (mode == libyuv::kRotate0) {
-    // 无需旋转，直接复制
-    memcpy(rotatedI420, i420Data, rotatedWidth * rotatedHeight * 3 / 2);
-  } else {
-    libyuv::I420Rotate(i420Y, width, i420U, width / 2, i420V, width / 2,
-                       rotatedY, rotatedWidth, rotatedU, rotatedWidth / 2,
-                       rotatedV, rotatedWidth / 2, width, height, mode);
-  }
+  free(yuv16Data);
 
-  free(i420Data);
-
-  // === Step 3: 计算裁切区域 ===
-  int visualWidth = rotatedWidth;
-  int visualHeight = rotatedHeight;
+  // === Step 3: 裁切计算 ===
   int finalWidth, finalHeight;
-
-  // 判断是横图还是竖图
-  if (visualWidth > visualHeight) {
-    // 横图
-    float expectedWidth = visualHeight * targetRatio;
-    if (expectedWidth <= visualWidth) {
-      finalHeight = visualHeight;
-      finalWidth = static_cast<int>(expectedWidth);
+  if (rotatedWidth > rotatedHeight) {
+    float expectedWidth = rotatedHeight * targetRatio;
+    if (expectedWidth <= rotatedWidth) {
+      finalHeight = rotatedHeight;
+      finalWidth = (static_cast<int>(expectedWidth) / 2) * 2;
     } else {
-      finalWidth = visualWidth;
-      finalHeight = static_cast<int>(visualWidth / targetRatio);
+      finalWidth = rotatedWidth;
+      finalHeight = (static_cast<int>(rotatedWidth / targetRatio) / 2) * 2;
     }
   } else {
-    // 竖图
-    float expectedHeight = visualWidth * targetRatio;
-    if (expectedHeight <= visualHeight) {
-      finalWidth = visualWidth;
-      finalHeight = static_cast<int>(expectedHeight);
+    float expectedHeight = rotatedWidth * targetRatio;
+    if (expectedHeight <= rotatedHeight) {
+      finalWidth = rotatedWidth;
+      finalHeight = (static_cast<int>(expectedHeight) / 2) * 2;
     } else {
-      finalHeight = visualHeight;
-      finalWidth = static_cast<int>(visualHeight / targetRatio);
+      finalHeight = rotatedHeight;
+      finalWidth = (static_cast<int>(rotatedHeight / targetRatio) / 2) * 2;
     }
   }
 
-  // 确保尺寸为偶数（YUV 要求）
-  finalWidth = (finalWidth / 2) * 2;
-  finalHeight = (finalHeight / 2) * 2;
+  int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
+  int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
 
-  int cropX = (rotatedWidth - finalWidth) / 2;
-  int cropY = (rotatedHeight - finalHeight) / 2;
-  cropX = (cropX / 2) * 2; // 确保偶数
-  cropY = (cropY / 2) * 2;
-
-  //    LOGI("Crop: %dx%d at (%d, %d) from %dx%d",
-  //         finalWidth, finalHeight, cropX, cropY, rotatedWidth,
-  //         rotatedHeight);
-
-  // === Step 4: 裁切并转换为 ARGB ===
-  int argbSize = finalWidth * finalHeight;
-  auto *argbData = static_cast<uint8_t *>(malloc(argbSize * 4));
-  if (argbData == nullptr) {
-    LOGE("Failed to allocate ARGB buffer");
-    free(rotatedI420);
-    return nullptr;
-  }
-
-  // 计算裁切后的 Y/U/V 起始位置
-  uint8_t *croppedY = rotatedY + cropY * rotatedWidth + cropX;
-  uint8_t *croppedU = rotatedU + (cropY / 2) * (rotatedWidth / 2) + (cropX / 2);
-  uint8_t *croppedV = rotatedV + (cropY / 2) * (rotatedWidth / 2) + (cropX / 2);
-
-  // I420 to ARGB
-  libyuv::I420ToARGB(croppedY, rotatedWidth, croppedU, rotatedWidth / 2,
-                     croppedV, rotatedWidth / 2, argbData, finalWidth * 4,
-                     finalWidth, finalHeight);
-
-  free(rotatedI420);
-
-  // === Step 5: 创建 Java int 数组并返回 ===
-  // ARGB 格式：每个像素 4 字节，转换为 int
-  jintArray result = env->NewIntArray(argbSize + 2);
-  if (result == nullptr) {
-    LOGE("Failed to create result array");
-    free(argbData);
-    return nullptr;
-  }
-
-  // 前两个元素存储宽高
-  jint dimensions[2] = {finalWidth, finalHeight};
-  env->SetIntArrayRegion(result, 0, 2, dimensions);
-
-  // 转换 ARGB 字节为 int 数组
-  auto *pixels = static_cast<jint *>(malloc(argbSize * sizeof(jint)));
-  if (pixels == nullptr) {
-    LOGE("Failed to allocate pixels buffer");
-    free(argbData);
-    return nullptr;
-  }
-
-  for (int i = 0; i < argbSize; i++) {
-    int offset = i * 4;
-    // ARGB 格式: B, G, R, A (libyuv 输出)
-    uint8_t b = argbData[offset];
-    uint8_t g = argbData[offset + 1];
-    uint8_t r = argbData[offset + 2];
-    uint8_t a = argbData[offset + 3];
-    pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
-  }
-
-  env->SetIntArrayRegion(result, 2, argbSize, pixels);
-
-  free(argbData);
-  free(pixels);
-
-  //    LOGI("YUV processing completed: output %dx%d", finalWidth, finalHeight);
-
-  return result;
-}
-
-/**
- * 处理 YUV_420_888 图像并转换为 16-bit RGB：旋转、裁切、转换为 RGB16
- *
- * @param yBuffer Y 平面数据
- * @param uBuffer U 平面数据
- * @param vBuffer V 平面数据
- * @param width 原始宽度
- * @param height 原始高度
- * @param yRowStride Y 平面行跨度
- * @param uvRowStride UV 平面行跨度
- * @param uvPixelStride UV 平面像素跨度
- * @param rotation 旋转角度 (0, 90, 180, 270)
- * @param targetRatio 目标宽高比 (长边/短边)
- * @return short 数组: [width, height, r1, g1, b1, r2, g2, b2, ...]
- */
-JNIEXPORT jshortArray JNICALL
-Java_com_hinnka_mycamera_utils_YuvProcessor_processYuvToRgb16Native(
-    JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
-    jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint rotation, jfloat targetRatio) {
-
-  // 获取 buffer 指针
-  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
-  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
-  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
-
-  if (yData == nullptr || uData == nullptr || vData == nullptr) {
-    LOGE("Failed to get buffer addresses");
-    return nullptr;
-  }
-
-  LOGI("Processing YUV to RGB16: %dx%d, rotation=%d, targetRatio=%.2f", width,
-       height, rotation, targetRatio);
-
-  // === Step 1: 将 YUV_420_888 转换为 I420 ===
-  int i420Size = width * height * 3 / 2;
-  auto *i420Data = static_cast<uint8_t *>(malloc(i420Size));
-  if (i420Data == nullptr) {
-    LOGE("Failed to allocate I420 buffer");
-    return nullptr;
-  }
-
-  uint8_t *i420Y = i420Data;
-  uint8_t *i420U = i420Data + width * height;
-  uint8_t *i420V = i420U + (width / 2) * (height / 2);
-
-  // 处理 Y 平面
-  if (yRowStride == width) {
-    memcpy(i420Y, yData, width * height);
-  } else {
-    for (int row = 0; row < height; row++) {
-      memcpy(i420Y + row * width, yData + row * yRowStride, width);
-    }
-  }
-
-  // 处理 UV 平面
-  int uvWidth = width / 2;
-  int uvHeight = height / 2;
-
-  if (uvPixelStride == 1 && uvRowStride == uvWidth) {
-    // 已经是紧凑格式
-    memcpy(i420U, uData, uvWidth * uvHeight);
-    memcpy(i420V, vData, uvWidth * uvHeight);
-  } else if (uvPixelStride == 2) {
-    // NV21/NV12 交错格式
-    for (int row = 0; row < uvHeight; row++) {
-      for (int col = 0; col < uvWidth; col++) {
-        i420U[row * uvWidth + col] =
-            uData[row * uvRowStride + col * uvPixelStride];
-        i420V[row * uvWidth + col] =
-            vData[row * uvRowStride + col * uvPixelStride];
-      }
-    }
-  } else {
-    // 通用情况
-    for (int row = 0; row < uvHeight; row++) {
-      for (int col = 0; col < uvWidth; col++) {
-        i420U[row * uvWidth + col] =
-            uData[row * uvRowStride + col * uvPixelStride];
-        i420V[row * uvWidth + col] =
-            vData[row * uvRowStride + col * uvPixelStride];
-      }
-    }
-  }
-
-  // === Step 2: 旋转 I420 ===
-  int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
-  int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
-
-  auto *rotatedI420 =
-      static_cast<uint8_t *>(malloc(rotatedWidth * rotatedHeight * 3 / 2));
-  if (rotatedI420 == nullptr) {
-    LOGE("Failed to allocate rotated I420 buffer");
-    free(i420Data);
-    return nullptr;
-  }
-
-  uint8_t *rotatedY = rotatedI420;
-  uint8_t *rotatedU = rotatedI420 + rotatedWidth * rotatedHeight;
-  uint8_t *rotatedV = rotatedU + (rotatedWidth / 2) * (rotatedHeight / 2);
-
-  libyuv::RotationMode mode;
-  switch (rotation) {
-  case 90:
-    mode = libyuv::kRotate90;
-    break;
-  case 180:
-    mode = libyuv::kRotate180;
-    break;
-  case 270:
-    mode = libyuv::kRotate270;
-    break;
-  default:
-    mode = libyuv::kRotate0;
-    break;
-  }
-
-  if (mode == libyuv::kRotate0) {
-    // 无需旋转，直接复制
-    memcpy(rotatedI420, i420Data, rotatedWidth * rotatedHeight * 3 / 2);
-  } else {
-    libyuv::I420Rotate(i420Y, width, i420U, width / 2, i420V, width / 2,
-                       rotatedY, rotatedWidth, rotatedU, rotatedWidth / 2,
-                       rotatedV, rotatedWidth / 2, width, height, mode);
-  }
-
-  free(i420Data);
-
-  // === Step 3: 计算裁切区域 ===
-  int visualWidth = rotatedWidth;
-  int visualHeight = rotatedHeight;
-  int finalWidth, finalHeight;
-
-  // 判断是横图还是竖图
-  if (visualWidth > visualHeight) {
-    // 横图
-    float expectedWidth = visualHeight * targetRatio;
-    if (expectedWidth <= visualWidth) {
-      finalHeight = visualHeight;
-      finalWidth = static_cast<int>(expectedWidth);
-    } else {
-      finalWidth = visualWidth;
-      finalHeight = static_cast<int>(visualWidth / targetRatio);
-    }
-  } else {
-    // 竖图
-    float expectedHeight = visualWidth * targetRatio;
-    if (expectedHeight <= visualHeight) {
-      finalWidth = visualWidth;
-      finalHeight = static_cast<int>(expectedHeight);
-    } else {
-      finalHeight = visualHeight;
-      finalWidth = static_cast<int>(visualHeight / targetRatio);
-    }
-  }
-
-  // 确保尺寸为偶数（YUV 要求）
-  finalWidth = (finalWidth / 2) * 2;
-  finalHeight = (finalHeight / 2) * 2;
-
-  int cropX = (rotatedWidth - finalWidth) / 2;
-  int cropY = (rotatedHeight - finalHeight) / 2;
-  cropX = (cropX / 2) * 2; // 确保偶数
-  cropY = (cropY / 2) * 2;
-
-  LOGI("Crop: %dx%d at (%d, %d) from %dx%d", finalWidth, finalHeight, cropX,
-       cropY, rotatedWidth, rotatedHeight);
-
-  // === Step 4: 裁切并转换为 RGB24 (8-bit) ===
-  int rgbSize = finalWidth * finalHeight * 3;
-  auto *rgb24Data = static_cast<uint8_t *>(malloc(rgbSize));
-  if (rgb24Data == nullptr) {
-    LOGE("Failed to allocate RGB24 buffer");
-    free(rotatedI420);
-    return nullptr;
-  }
-
-  // 计算裁切后的 Y/U/V 起始位置
-  uint8_t *croppedY = rotatedY + cropY * rotatedWidth + cropX;
-  uint8_t *croppedU = rotatedU + (cropY / 2) * (rotatedWidth / 2) + (cropX / 2);
-  uint8_t *croppedV = rotatedV + (cropY / 2) * (rotatedWidth / 2) + (cropX / 2);
-
-  // I420 to RGB24
-  libyuv::I420ToRGB24(croppedY, rotatedWidth, croppedU, rotatedWidth / 2,
-                      croppedV, rotatedWidth / 2, rgb24Data, finalWidth * 3,
-                      finalWidth, finalHeight);
-
-  free(rotatedI420);
-
-  // === Step 5: 转换为 16-bit RGB ===
+  // === Step 4: 转换并返回 16-bit RGBA (RGBA64) ===
   int pixelCount = finalWidth * finalHeight;
-  jshortArray result = env->NewShortArray(pixelCount * 3 + 2);
+  jshortArray result = env->NewShortArray(pixelCount * 4 + 2);
   if (result == nullptr) {
     LOGE("Failed to create result array");
-    free(rgb24Data);
+    free(rotatedYuv16);
     return nullptr;
   }
 
-  // 前两个元素存储宽高
-  jshort dimensions[2] = {static_cast<jshort>(finalWidth),
-                          static_cast<jshort>(finalHeight)};
-  env->SetShortArrayRegion(result, 0, 2, dimensions);
+  jshort header[2] = {static_cast<jshort>(finalWidth),
+                      static_cast<jshort>(finalHeight)};
+  env->SetShortArrayRegion(result, 0, 2, header);
 
-  // 转换 8-bit BGR 为 16-bit RGB (左移 8 位，并交换 R 和 B)
-  auto *rgb16Data =
-      static_cast<jshort *>(malloc(pixelCount * 3 * sizeof(jshort)));
-  if (rgb16Data == nullptr) {
-    LOGE("Failed to allocate RGB16 buffer");
-    free(rgb24Data);
-    return nullptr;
+  auto *outData =
+      static_cast<jshort *>(malloc(pixelCount * 4 * sizeof(jshort)));
+
+  for (int y = 0; y < finalHeight; y++) {
+    for (int x = 0; x < finalWidth; x++) {
+      int srcY = (cropY + y) * rotatedWidth + (cropX + x);
+      int srcUV = ((cropY + y) / 2) * (rotatedWidth / 2) + ((cropX + x) / 2);
+
+      float Y, U, V;
+      if (isP010) {
+        // P010: 10-bit values in upper bits
+        // Full scale is 65535, center for UV is 32768
+        // Coefficients expect UV delta normalized by same scale as Y
+        Y = rY[srcY] / 65535.0f;
+        U = (static_cast<float>(rU[srcUV]) - 32768.0f) / 65535.0f;
+        V = (static_cast<float>(rV[srcUV]) - 32768.0f) / 65535.0f;
+      } else {
+        // 8-bit shifted to 16-bit: value << 8
+        // Max Y is 255*256 = 65280, UV center is 128*256 = 32768
+        // Coefficients expect UV delta normalized by same scale as Y (65280)
+        Y = rY[srcY] / 65280.0f;
+        U = (static_cast<float>(rU[srcUV]) - 32768.0f) / 65280.0f;
+        V = (static_cast<float>(rV[srcUV]) - 32768.0f) / 65280.0f;
+      }
+
+      float R, G, B;
+      if (isP010) {
+        // BT.2020 full range
+        // Standard coefficients for normalized Y (0-1) and UV delta/scale
+        R = Y + 1.4746f * V;
+        G = Y - 0.16455f * U - 0.57135f * V;
+        B = Y + 1.8814f * U;
+      } else {
+        // BT.601 full range
+        R = Y + 1.402f * V;
+        G = Y - 0.344136f * U - 0.714136f * V;
+        B = Y + 1.772f * U;
+      }
+
+      int idx = (y * finalWidth + x) * 4;
+      outData[idx] =
+          static_cast<jshort>(std::max(0.0f, std::min(1.0f, R)) * 65535.0f);
+      outData[idx + 1] =
+          static_cast<jshort>(std::max(0.0f, std::min(1.0f, G)) * 65535.0f);
+      outData[idx + 2] =
+          static_cast<jshort>(std::max(0.0f, std::min(1.0f, B)) * 65535.0f);
+      outData[idx + 3] = static_cast<jshort>(65535); // Alpha
+    }
   }
 
-  // libyuv::I420ToRGB24 输出的是 BGR 顺序，需要转换为 RGB
-  for (int i = 0; i < pixelCount; i++) {
-    uint8_t b = rgb24Data[i * 3];     // B
-    uint8_t g = rgb24Data[i * 3 + 1]; // G
-    uint8_t r = rgb24Data[i * 3 + 2]; // R
-
-    // 按 RGB 顺序存储，并扩展到 16-bit
-    rgb16Data[i * 3] = static_cast<jshort>(r << 8);     // R
-    rgb16Data[i * 3 + 1] = static_cast<jshort>(g << 8); // G
-    rgb16Data[i * 3 + 2] = static_cast<jshort>(b << 8); // B
-  }
-
-  env->SetShortArrayRegion(result, 2, pixelCount * 3, rgb16Data);
-
-  free(rgb24Data);
-  free(rgb16Data);
-
-  LOGI("YUV to RGB16 processing completed: output %dx%d", finalWidth,
-       finalHeight);
+  env->SetShortArrayRegion(result, 2, pixelCount * 4, outData);
+  free(outData);
+  free(rotatedYuv16);
 
   return result;
 }
 
 /**
- * 将 ARGB 数据进行 gzip 压缩并保存到文件
+ * 将 RGBA16 数据进行 gzip 压缩并保存到文件
  *
- * @param argbData ARGB 像素数据
- * @param width 图像宽度
- * @param height 图像高度
+ * @param argbData RGBA16 像素数据 [width, height, r1, g1, b1, a1, ...]
  * @param outputPath 输出文件路径
  * @return 是否成功保存
  */
 JNIEXPORT jboolean JNICALL
 Java_com_hinnka_mycamera_utils_YuvProcessor_saveCompressedArgb(
-    JNIEnv *env, jobject /* this */, jintArray argbData, jint width,
-    jint height, jstring outputPath) {
+    JNIEnv *env, jobject /* this */, jshortArray argbData, jstring outputPath) {
 
-  // 获取输出路径
   const char *path = env->GetStringUTFChars(outputPath, nullptr);
-  if (path == nullptr) {
-    LOGE("Failed to get output path");
-    return JNI_FALSE;
-  }
-
-  // 获取 ARGB 数据
-  jint *pixels = env->GetIntArrayElements(argbData, nullptr);
-  if (pixels == nullptr) {
-    LOGE("Failed to get ARGB data");
-    env->ReleaseStringUTFChars(outputPath, path);
-    return JNI_FALSE;
-  }
-
+  jshort *pixels = env->GetShortArrayElements(argbData, nullptr);
   jsize dataSize = env->GetArrayLength(argbData);
 
-  LOGI("Saving compressed ARGB: %dx%d (%d pixels) to %s", width, height,
-       dataSize, path);
+  if (dataSize < 2 || pixels == nullptr) {
+    LOGE("saveCompressedArgb: Invalid argbData");
+    if (pixels != nullptr) {
+      env->ReleaseShortArrayElements(argbData, pixels, JNI_ABORT);
+    }
+    env->ReleaseStringUTFChars(outputPath, path);
+    return JNI_FALSE;
+  }
 
-  // 打开文件（wb1 表示最快压缩速度）
+  // 直接从数组头部读取 width 和 height
+  int32_t width = static_cast<uint16_t>(pixels[0]);
+  int32_t height = static_cast<uint16_t>(pixels[1]);
+
   gzFile file = gzopen(path, "wb1");
   if (file == nullptr) {
-    LOGE("Failed to open file for writing: %s", path);
-    env->ReleaseIntArrayElements(argbData, pixels, JNI_ABORT);
+    LOGE("saveCompressedArgb: Failed to open file for writing");
+    env->ReleaseShortArrayElements(argbData, pixels, JNI_ABORT);
     env->ReleaseStringUTFChars(outputPath, path);
     return JNI_FALSE;
   }
 
-  // 写入头部信息（宽度和高度）
-  int32_t header[2] = {width, height};
-  if (gzwrite(file, header, sizeof(header)) != sizeof(header)) {
-    LOGE("Failed to write header");
-    gzclose(file);
-    env->ReleaseIntArrayElements(argbData, pixels, JNI_ABORT);
-    env->ReleaseStringUTFChars(outputPath, path);
-    return JNI_FALSE;
-  }
+  // Header: width, height, version (1 for 16-bit RGBA)
+  int32_t header[3] = {width, height, 1};
+  gzwrite(file, header, sizeof(header));
 
-  // 写入 ARGB 数据
-  size_t bytesToWrite = dataSize * sizeof(jint);
-  if (gzwrite(file, pixels, bytesToWrite) != static_cast<int>(bytesToWrite)) {
-    LOGE("Failed to write ARGB data");
-    gzclose(file);
-    env->ReleaseIntArrayElements(argbData, pixels, JNI_ABORT);
-    env->ReleaseStringUTFChars(outputPath, path);
-    return JNI_FALSE;
-  }
+  // 跳过前 2 个 short (width, height header)，只写入像素数据
+  int pixelDataSize = (dataSize - 2) * sizeof(jshort);
+  gzwrite(file, pixels + 2, pixelDataSize);
 
-  // 关闭文件
   gzclose(file);
 
-  // 释放资源
-  env->ReleaseIntArrayElements(argbData, pixels, JNI_ABORT);
+  env->ReleaseShortArrayElements(argbData, pixels, JNI_ABORT);
   env->ReleaseStringUTFChars(outputPath, path);
-
-  LOGI("ARGB data compressed and saved successfully");
-
   return JNI_TRUE;
 }
 
 /**
- * 从文件中读取并解压缩 ARGB 数据
+ * 从文件中读取并解压缩 RGBA16 数据
  *
  * @param inputPath 输入文件路径
- * @return IntArray: [width, height, pixel1, pixel2, ...]，失败返回 null
+ * @return ShortArray: [width, height, r1, g1, b1, a1, ...]，失败返回 null
  */
-JNIEXPORT jintArray JNICALL
+JNIEXPORT jshortArray JNICALL
 Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
     JNIEnv *env, jobject /* this */, jstring inputPath) {
 
-  // 获取输入路径
   const char *path = env->GetStringUTFChars(inputPath, nullptr);
-  if (path == nullptr) {
-    LOGE("Failed to get input path");
-    return nullptr;
-  }
-
-  LOGI("Loading compressed ARGB from %s", path);
-
-  // 打开文件
   gzFile file = gzopen(path, "rb");
   if (file == nullptr) {
-    LOGE("Failed to open file for reading: %s", path);
+    LOGE("loadCompressedArgb: Failed to open file: %s", path);
     env->ReleaseStringUTFChars(inputPath, path);
     return nullptr;
   }
 
-  // 读取头部信息
-  int32_t header[2];
-  if (gzread(file, header, sizeof(header)) != sizeof(header)) {
-    LOGE("Failed to read header");
+  // 读取 header: width, height, version
+  int32_t header[3];
+  int headerRead = gzread(file, header, sizeof(header));
+  if (headerRead < static_cast<int>(sizeof(header))) {
+    LOGE("loadCompressedArgb: Failed to read header from: %s", path);
     gzclose(file);
     env->ReleaseStringUTFChars(inputPath, path);
     return nullptr;
@@ -776,52 +491,40 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
 
   int32_t width = header[0];
   int32_t height = header[1];
+  // header[2] 是 version，当前只支持 version=1 (16-bit RGBA)
+
   int32_t pixelCount = width * height;
-
-  LOGI("Image dimensions: %dx%d (%d pixels)", width, height, pixelCount);
-
-  // 创建结果数组（包含宽度、高度和像素数据）
-  jintArray result = env->NewIntArray(pixelCount + 2);
+  jshortArray result = env->NewShortArray(pixelCount * 4 + 2);
   if (result == nullptr) {
-    LOGE("Failed to create result array");
+    LOGE("loadCompressedArgb: Failed to allocate result array");
     gzclose(file);
     env->ReleaseStringUTFChars(inputPath, path);
     return nullptr;
   }
 
-  // 写入宽度和高度
-  env->SetIntArrayRegion(result, 0, 2, header);
+  // 写入 header
+  jshort resHeader[2] = {static_cast<jshort>(width),
+                         static_cast<jshort>(height)};
+  env->SetShortArrayRegion(result, 0, 2, resHeader);
 
-  // 读取 ARGB 数据
-  auto *pixels = static_cast<jint *>(malloc(pixelCount * sizeof(jint)));
-  if (pixels == nullptr) {
-    LOGE("Failed to allocate pixel buffer");
-    gzclose(file);
-    env->ReleaseStringUTFChars(inputPath, path);
-    return nullptr;
-  }
+  // 读取像素数据
+  if (pixelCount > 0) {
+    jshort *pixels =
+        static_cast<jshort *>(malloc(pixelCount * 4 * sizeof(jshort)));
+    if (pixels == nullptr) {
+      LOGE("loadCompressedArgb: Failed to allocate pixels buffer");
+      gzclose(file);
+      env->ReleaseStringUTFChars(inputPath, path);
+      return nullptr;
+    }
 
-  size_t bytesToRead = pixelCount * sizeof(jint);
-  int bytesRead = gzread(file, pixels, bytesToRead);
-  if (bytesRead != static_cast<int>(bytesToRead)) {
-    LOGE("Failed to read ARGB data: expected %zu bytes, got %d bytes",
-         bytesToRead, bytesRead);
+    gzread(file, pixels, pixelCount * 4 * sizeof(jshort));
+    env->SetShortArrayRegion(result, 2, pixelCount * 4, pixels);
     free(pixels);
-    gzclose(file);
-    env->ReleaseStringUTFChars(inputPath, path);
-    return nullptr;
   }
 
-  // 写入像素数据到结果数组
-  env->SetIntArrayRegion(result, 2, pixelCount, pixels);
-
-  // 释放资源
-  free(pixels);
   gzclose(file);
   env->ReleaseStringUTFChars(inputPath, path);
-
-  LOGI("ARGB data loaded and decompressed successfully");
-
   return result;
 }
 
@@ -1071,133 +774,155 @@ void reorderArrayByPattern(std::vector<float> &arr, const uint32_t pattern[4]) {
  *
  * @param top Opcode ROI Top
  * @param left Opcode ROI Left
- * @param cfaPattern Android CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT
- * 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+ * @param cfaPattern Android
+ * CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT 0=RGGB, 1=GRBG,
+ * 2=GBRG, 3=BGGR
  */
 uint32_t getLogicalChannelIndex(uint32_t top, uint32_t left, int cfaPattern) {
-    // 1. 计算物理几何索引 (0=TopLeft, 1=TopRight, 2=BottomLeft, 3=BottomRight)
-    // 假设 Opcode 总是处理 2x2 块中的某一个
-    uint32_t geometricIndex = (top % 2) * 2 + (left % 2);
+  // 1. 计算物理几何索引 (0=TopLeft, 1=TopRight, 2=BottomLeft, 3=BottomRight)
+  // 假设 Opcode 总是处理 2x2 块中的某一个
+  uint32_t geometricIndex = (top % 2) * 2 + (left % 2);
 
-    // 2. 根据 CFA Pattern 映射到逻辑通道 [R=0, Gr=1, Gb=2, B=3]
-    switch (cfaPattern) {
-        case 0: // RGGB: R G / G B -> 0 1 / 2 3
-            // 0->0, 1->1, 2->2, 3->3 (Identity)
-            return geometricIndex;
+  // 2. 根据 CFA Pattern 映射到逻辑通道 [R=0, Gr=1, Gb=2, B=3]
+  switch (cfaPattern) {
+  case 0: // RGGB: R G / G B -> 0 1 / 2 3
+    // 0->0, 1->1, 2->2, 3->3 (Identity)
+    return geometricIndex;
 
-        case 1: // GRBG: G R / B G -> 1 0 / 3 2
-            // (0,0)G->1, (0,1)R->0, (1,0)B->3, (1,1)G->2
-            if (geometricIndex == 0) return 1; // Gr
-            if (geometricIndex == 1) return 0; // R
-            if (geometricIndex == 2) return 3; // B
-            if (geometricIndex == 3) return 2; // Gb
-            break;
+  case 1: // GRBG: G R / B G -> 1 0 / 3 2
+    // (0,0)G->1, (0,1)R->0, (1,0)B->3, (1,1)G->2
+    if (geometricIndex == 0)
+      return 1; // Gr
+    if (geometricIndex == 1)
+      return 0; // R
+    if (geometricIndex == 2)
+      return 3; // B
+    if (geometricIndex == 3)
+      return 2; // Gb
+    break;
 
-        case 2: // GBRG: G B / R G -> 2 3 / 0 1
-            // (0,0)G->2, (0,1)B->3, (1,0)R->0, (1,1)G->1
-            if (geometricIndex == 0) return 2; // Gb
-            if (geometricIndex == 1) return 3; // B
-            if (geometricIndex == 2) return 0; // R
-            if (geometricIndex == 3) return 1; // Gr
-            break;
+  case 2: // GBRG: G B / R G -> 2 3 / 0 1
+    // (0,0)G->2, (0,1)B->3, (1,0)R->0, (1,1)G->1
+    if (geometricIndex == 0)
+      return 2; // Gb
+    if (geometricIndex == 1)
+      return 3; // B
+    if (geometricIndex == 2)
+      return 0; // R
+    if (geometricIndex == 3)
+      return 1; // Gr
+    break;
 
-        case 3: // BGGR: B G / G R -> 3 2 / 1 0 (根据你的 Log 推断绿色的顺序)
-            // (0,0)B->3, (0,1)G->1, (1,0)G->2, (1,1)R->0
-            // 注意：你的日志显示 Green 通道在 BGGR 下对应 Opcode(0,1)->Index 1 和 Opcode(1,0)->Index 2
-            // 这意味着 BGGR 下的 Green 映射与 RGGB 相同，只有 R/B 互换。
-            if (geometricIndex == 0) return 3; // B
-            if (geometricIndex == 1) return 1; // Gr (Matches Log)
-            if (geometricIndex == 2) return 2; // Gb (Matches Log)
-            if (geometricIndex == 3) return 0; // R
-            break;
-    }
-    return geometricIndex; // Fallback
+  case 3: // BGGR: B G / G R -> 3 2 / 1 0 (根据你的 Log 推断绿色的顺序)
+    // (0,0)B->3, (0,1)G->1, (1,0)G->2, (1,1)R->0
+    // 注意：你的日志显示 Green 通道在 BGGR 下对应 Opcode(0,1)->Index 1 和
+    // Opcode(1,0)->Index 2 这意味着 BGGR 下的 Green 映射与 RGGB 相同，只有 R/B
+    // 互换。
+    if (geometricIndex == 0)
+      return 3; // B
+    if (geometricIndex == 1)
+      return 1; // Gr (Matches Log)
+    if (geometricIndex == 2)
+      return 2; // Gb (Matches Log)
+    if (geometricIndex == 3)
+      return 0; // R
+    break;
+  }
+  return geometricIndex; // Fallback
 }
 
+bool parseOpcodeList2ForLSC(const std::vector<uint8_t> &opcodeData,
+                            DngMetadata &metadata, int cfaPattern) {
+  if (opcodeData.empty())
+    return false;
 
-bool parseOpcodeList2ForLSC(const std::vector<uint8_t> &opcodeData, DngMetadata &metadata, int cfaPattern) {
-    if (opcodeData.empty()) return false;
+  const uint8_t *data = opcodeData.data();
+  size_t dataSize = opcodeData.size();
+  size_t offset = 0;
 
-    const uint8_t *data = opcodeData.data();
-    size_t dataSize = opcodeData.size();
-    size_t offset = 0;
+  if (dataSize < 4)
+    return false;
 
-    if (dataSize < 4) return false;
+  uint32_t opcodeCount = readBigEndian<uint32_t>(data + offset);
+  offset += 4;
 
-    uint32_t opcodeCount = readBigEndian<uint32_t>(data + offset);
-    offset += 4;
+  bool foundAnyLSC = false;
 
-    bool foundAnyLSC = false;
+  for (uint32_t i = 0; i < opcodeCount; i++) {
+    if (offset + 16 > dataSize)
+      break;
 
-    for (uint32_t i = 0; i < opcodeCount; i++) {
-        if (offset + 16 > dataSize) break;
+    uint32_t opcodeID = readBigEndian<uint32_t>(data + offset);
+    uint32_t paramSize = readBigEndian<uint32_t>(data + offset + 12);
+    size_t paramStart = offset + 16;
 
-        uint32_t opcodeID = readBigEndian<uint32_t>(data + offset);
-        uint32_t paramSize = readBigEndian<uint32_t>(data + offset + 12);
-        size_t paramStart = offset + 16;
+    if (paramStart + paramSize > dataSize)
+      break;
 
-        if (paramStart + paramSize > dataSize) break;
-
-        // Opcode ID 9: GainMap
-        if (opcodeID == 9) {
-            if (paramSize < 76) {
-                offset += 16 + paramSize;
-                continue;
-            }
-
-            uint32_t top = readBigEndian<uint32_t>(data + paramStart + 0);
-            uint32_t left = readBigEndian<uint32_t>(data + paramStart + 4);
-            uint32_t startPlaneIndex = readBigEndian<uint32_t>(data + paramStart + 16);
-            uint32_t planesCount = readBigEndian<uint32_t>(data + paramStart + 20);
-            uint32_t mapPointsV = readBigEndian<uint32_t>(data + paramStart + 32);
-            uint32_t mapPointsH = readBigEndian<uint32_t>(data + paramStart + 36);
-            uint32_t mapPlanes = readBigEndian<uint32_t>(data + paramStart + 72);
-
-            // 初始化容器
-            if (metadata.lensShadingMap.empty()) {
-                metadata.lscWidth = mapPointsH;
-                metadata.lscHeight = mapPointsV;
-                metadata.lensShadingMap.assign(mapPointsH * mapPointsV * 4, 1.0f);
-            }
-
-            // 计算该 Opcode 对应的逻辑通道 (R, Gr, Gb, B)
-            uint32_t logicalChannel = startPlaneIndex;
-            // 如果 startPlaneIndex 为 0，说明是 Split Opcode，需要根据 ROI 和 CFA Pattern 计算
-            if (startPlaneIndex == 0 && planesCount == 1) {
-                logicalChannel = getLogicalChannelIndex(top, left, cfaPattern);
-            }
-
-            // 数据指针
-            const uint8_t* gainDataPtr = data + paramStart + 76;
-
-            // 填充数据
-            for (uint32_t r = 0; r < mapPointsV; r++) {
-                for (uint32_t c = 0; c < mapPointsH; c++) {
-                    size_t pixelBaseIdx = (r * mapPointsH + c) * 4;
-
-                    for (uint32_t mp = 0; mp < mapPlanes; mp++) {
-                        float gain = readBigEndian<float>(gainDataPtr);
-                        gainDataPtr += 4;
-
-                        // 写入正确的逻辑通道
-                        uint32_t targetCh = logicalChannel + mp;
-
-                        // 处理单平面覆盖多通道的情况 (Broadcast)
-                        if (mp == mapPlanes - 1 && planesCount > mapPlanes) {
-                             // 如果是全平面共用 (黑白raw)，或者 Green 共用
-                             // 这里为了稳妥，如果 planesCount=1，我们只写 targetCh
-                             if (targetCh < 4) metadata.lensShadingMap[pixelBaseIdx + targetCh] = gain;
-                        } else {
-                            if (targetCh < 4) metadata.lensShadingMap[pixelBaseIdx + targetCh] = gain;
-                        }
-                    }
-                }
-            }
-            foundAnyLSC = true;
-        }
+    // Opcode ID 9: GainMap
+    if (opcodeID == 9) {
+      if (paramSize < 76) {
         offset += 16 + paramSize;
+        continue;
+      }
+
+      uint32_t top = readBigEndian<uint32_t>(data + paramStart + 0);
+      uint32_t left = readBigEndian<uint32_t>(data + paramStart + 4);
+      uint32_t startPlaneIndex =
+          readBigEndian<uint32_t>(data + paramStart + 16);
+      uint32_t planesCount = readBigEndian<uint32_t>(data + paramStart + 20);
+      uint32_t mapPointsV = readBigEndian<uint32_t>(data + paramStart + 32);
+      uint32_t mapPointsH = readBigEndian<uint32_t>(data + paramStart + 36);
+      uint32_t mapPlanes = readBigEndian<uint32_t>(data + paramStart + 72);
+
+      // 初始化容器
+      if (metadata.lensShadingMap.empty()) {
+        metadata.lscWidth = mapPointsH;
+        metadata.lscHeight = mapPointsV;
+        metadata.lensShadingMap.assign(mapPointsH * mapPointsV * 4, 1.0f);
+      }
+
+      // 计算该 Opcode 对应的逻辑通道 (R, Gr, Gb, B)
+      uint32_t logicalChannel = startPlaneIndex;
+      // 如果 startPlaneIndex 为 0，说明是 Split Opcode，需要根据 ROI 和 CFA
+      // Pattern 计算
+      if (startPlaneIndex == 0 && planesCount == 1) {
+        logicalChannel = getLogicalChannelIndex(top, left, cfaPattern);
+      }
+
+      // 数据指针
+      const uint8_t *gainDataPtr = data + paramStart + 76;
+
+      // 填充数据
+      for (uint32_t r = 0; r < mapPointsV; r++) {
+        for (uint32_t c = 0; c < mapPointsH; c++) {
+          size_t pixelBaseIdx = (r * mapPointsH + c) * 4;
+
+          for (uint32_t mp = 0; mp < mapPlanes; mp++) {
+            float gain = readBigEndian<float>(gainDataPtr);
+            gainDataPtr += 4;
+
+            // 写入正确的逻辑通道
+            uint32_t targetCh = logicalChannel + mp;
+
+            // 处理单平面覆盖多通道的情况 (Broadcast)
+            if (mp == mapPlanes - 1 && planesCount > mapPlanes) {
+              // 如果是全平面共用 (黑白raw)，或者 Green 共用
+              // 这里为了稳妥，如果 planesCount=1，我们只写 targetCh
+              if (targetCh < 4)
+                metadata.lensShadingMap[pixelBaseIdx + targetCh] = gain;
+            } else {
+              if (targetCh < 4)
+                metadata.lensShadingMap[pixelBaseIdx + targetCh] = gain;
+            }
+          }
+        }
+      }
+      foundAnyLSC = true;
     }
-    return foundAnyLSC;
+    offset += 16 + paramSize;
+  }
+  return foundAnyLSC;
 }
 
 /**

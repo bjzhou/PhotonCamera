@@ -24,26 +24,26 @@ import java.util.concurrent.Executors
  * 所有 GPU 操作在独立单线程完成，确保 EGL 上下文线程安全
  */
 class LutImageProcessor {
-    
+
     // 单线程调度器，确保所有 EGL 操作在同一线程
     private val glDispatcher = Executors.newSingleThreadExecutor { r ->
         Thread(r, "LutImageProcessor-GL").apply { isDaemon = true }
     }.asCoroutineDispatcher()
-    
+
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
-    
+
     private var shaderProgram = 0
     private var imageTextureId = 0
     private var lutTextureId = 0
     private var framebufferId = 0
     private var outputTextureId = 0
-    
+
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
-    
+
     private var isInitialized = false
 
     // Uniform 位置
@@ -68,19 +68,19 @@ class LutImageProcessor {
     private var uFilmGrainLoc = 0
     private var uVignetteLoc = 0
     private var uBleachBypassLoc = 0
-    
+
     // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
     private var uSharpeningLoc = 0
     private var uNoiseReductionLoc = 0
     private var uChromaNoiseReductionLoc = 0
     private var uTexelSizeLoc = 0  // 用于卷积计算
-    
+
     /**
      * 初始化 EGL 环境
      */
     fun initialize(): Boolean {
         if (isInitialized) return true
-        
+
         try {
             // 获取 EGL Display
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
@@ -88,14 +88,14 @@ class LutImageProcessor {
                 PLog.e(TAG, "Unable to get EGL display")
                 return false
             }
-            
+
             // 初始化 EGL
             val version = IntArray(2)
             if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
                 PLog.e(TAG, "Unable to initialize EGL")
                 return false
             }
-            
+
             // 配置属性
             val configAttribs = intArrayOf(
                 EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
@@ -106,16 +106,16 @@ class LutImageProcessor {
                 EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
                 EGL14.EGL_NONE
             )
-            
+
             val configs = arrayOfNulls<EGLConfig>(1)
             val numConfigs = IntArray(1)
             if (!EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)) {
                 PLog.e(TAG, "Unable to choose EGL config")
                 return false
             }
-            
+
             val config = configs[0] ?: return false
-            
+
             // 创建 EGL Context
             val contextAttribs = intArrayOf(
                 EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
@@ -126,7 +126,7 @@ class LutImageProcessor {
                 PLog.e(TAG, "Unable to create EGL context")
                 return false
             }
-            
+
             // 创建 PBuffer Surface（1x1 占位，实际使用 FBO）
             val surfaceAttribs = intArrayOf(
                 EGL14.EGL_WIDTH, 1,
@@ -138,31 +138,31 @@ class LutImageProcessor {
                 PLog.e(TAG, "Unable to create EGL surface")
                 return false
             }
-            
+
             // 激活上下文
             if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
                 PLog.e(TAG, "Unable to make EGL current")
                 return false
             }
-            
+
             // 初始化 shader 和缓冲区
             initShaderProgram()
             initBuffers()
-            
+
             isInitialized = true
             PLog.d(TAG, "LutImageProcessor initialized")
             return true
-            
+
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to initialize", e)
             return false
         }
     }
-    
+
     /**
      * 应用 LUT 到 ARGB 数据
      *
-     * @param argbData ARGB 格式的像素数据 (IntArray)
+     * @param argbData RGBA 16-bit 格式的像素数据 (ShortArray) [width, height, r1, g1, b1, a1, ...]
      * @param lutConfig LUT 配置
      * @param colorRecipeParams 色彩配方参数
      * @param sharpeningValue 锐化强度
@@ -170,15 +170,27 @@ class LutImageProcessor {
      * @param chromaNoiseReductionValue 减少杂色强度
      */
     suspend fun applyLut(
-        argbData: IntArray,
+        argbData: ShortArray,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
     ): Bitmap = withContext(glDispatcher) {
-        val width = argbData[0]
-        val height = argbData[1]
+        val width = argbData[0].toInt() and 0xFFFF
+        val height = argbData[1].toInt() and 0xFFFF
+        
+        PLog.d(TAG, "applyLut 16-bit: width=$width, height=$height, dataSize=${argbData.size}")
+        
+        // 检查数据是否有实际像素值（采样第一个像素）
+        if (argbData.size > 6) {
+            val r = argbData[2].toInt() and 0xFFFF
+            val g = argbData[3].toInt() and 0xFFFF
+            val b = argbData[4].toInt() and 0xFFFF
+            val a = argbData[5].toInt() and 0xFFFF
+            PLog.d(TAG, "First pixel RGBA: $r, $g, $b, $a")
+        }
+        
         if (!isInitialized) {
             if (!initialize()) {
                 // 创建一个空白 Bitmap 返回
@@ -207,13 +219,13 @@ class LutImageProcessor {
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
 
-        // 确保上下文激活
+        // 激活上下文
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
 
         // 创建/更新帧缓冲
         setupFramebuffer(width, height)
 
-        // 上传 ARGB 数据作为图片纹理
+        // 上传 RGBA 16-bit 数据作为图片纹理
         uploadImageTextureFromArgb(argbData, width, height)
 
         // 上传 LUT 纹理
@@ -221,7 +233,7 @@ class LutImageProcessor {
             uploadLutTexture(lutConfig)
         }
 
-        // 执行渲染（与 Bitmap 版本相同的处理流程）
+        // 执行渲染
         val outputBitmap = performRender(
             width, height,
             lutConfig,
@@ -229,6 +241,7 @@ class LutImageProcessor {
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
             intensity, sharpening, noiseReduction, chromaNoiseReduction
+            // GL_RGBA16 已自动归一化，使用标准 shader
         )
 
         outputBitmap
@@ -334,58 +347,65 @@ class LutImageProcessor {
         noiseReduction: Float,
         chromaNoiseReduction: Float
     ): Bitmap {
+        val program = shaderProgram
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
 
         // 绘制
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        GLES30.glUseProgram(shaderProgram)
+        GLES30.glUseProgram(program)
 
         // 设置纹理 uniform
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
-        GLES30.glUniform1i(uImageTextureLoc, 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uImageTexture"), 0)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
-        GLES30.glUniform1i(uLutTextureLoc, 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutTexture"), 1)
 
         // 设置 LUT 参数
-        GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
-        GLES30.glUniform1f(uLutIntensityLoc, if (lutConfig != null) intensity else 0f)
-        GLES30.glUniform1i(uLutEnabledLoc, if (lutConfig != null) 1 else 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uLutSize"), lutConfig?.size?.toFloat() ?: 0f)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uLutIntensity"),
+            if (lutConfig != null) intensity else 0f
+        )
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
 
         // 设置色彩配方参数
-        GLES30.glUniform1i(uColorRecipeEnabledLoc, if (colorRecipeEnabled) 1 else 0)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uColorRecipeEnabled"),
+            if (colorRecipeEnabled) 1 else 0
+        )
         if (colorRecipeEnabled) {
-            GLES30.glUniform1f(uExposureLoc, exposure)
-            GLES30.glUniform1f(uContrastLoc, contrast)
-            GLES30.glUniform1f(uSaturationLoc, saturation)
-            GLES30.glUniform1f(uTemperatureLoc, temperature)
-            GLES30.glUniform1f(uTintLoc, tint)
-            GLES30.glUniform1f(uFadeLoc, fade)
-            GLES30.glUniform1f(uVibranceLoc, vibrance)
-            GLES30.glUniform1f(uHighlightsLoc, highlights)
-            GLES30.glUniform1f(uShadowsLoc, shadows)
-            GLES30.glUniform1f(uFilmGrainLoc, filmGrain)
-            GLES30.glUniform1f(uVignetteLoc, vignette)
-            GLES30.glUniform1f(uBleachBypassLoc, bleachBypass)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uExposure"), exposure)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uContrast"), contrast)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSaturation"), saturation)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTemperature"), temperature)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTint"), tint)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFade"), fade)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVibrance"), vibrance)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHighlights"), highlights)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uShadows"), shadows)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFilmGrain"), filmGrain)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
         }
 
-        // 设置后期处理参数（仅拍摄和后期编辑时生效）
-        GLES30.glUniform1f(uSharpeningLoc, sharpening)
-        GLES30.glUniform1f(uNoiseReductionLoc, noiseReduction)
-        GLES30.glUniform1f(uChromaNoiseReductionLoc, chromaNoiseReduction)
-        GLES30.glUniform2f(uTexelSizeLoc, 1.0f / width, 1.0f / height)
+        // 设置后期处理参数
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSharpening"), sharpening)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uNoiseReduction"), noiseReduction)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uChromaNoiseReduction"), chromaNoiseReduction)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(program, "uTexelSize"), 1.0f / width, 1.0f / height)
 
-        // 设置 MVP 矩阵（单位矩阵）
+        // 设置 MVP 矩阵
         val mvpMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(mvpMatrix, 0)
-        GLES30.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, mvpMatrix, 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program, "uMVPMatrix"), 1, false, mvpMatrix, 0)
 
         // 绘制四边形
-        val positionHandle = GLES30.glGetAttribLocation(shaderProgram, "aPosition")
-        val texCoordHandle = GLES30.glGetAttribLocation(shaderProgram, "aTexCoord")
+        val positionHandle = GLES30.glGetAttribLocation(program, "aPosition")
+        val texCoordHandle = GLES30.glGetAttribLocation(program, "aTexCoord")
 
         GLES30.glEnableVertexAttribArray(positionHandle)
         GLES30.glEnableVertexAttribArray(texCoordHandle)
@@ -423,42 +443,46 @@ class LutImageProcessor {
 
         return outputBitmap
     }
-    
+
     private fun setupFramebuffer(width: Int, height: Int) {
         // 删除旧的帧缓冲
         if (framebufferId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
             GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
         }
-        
+
         // 创建输出纹理
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
         outputTextureId = textures[0]
-        
+
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, outputTextureId)
-        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        
+
         // 创建帧缓冲
         val fbos = IntArray(1)
         GLES30.glGenFramebuffers(1, fbos, 0)
         framebufferId = fbos[0]
-        
+
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, outputTextureId, 0)
-        
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, outputTextureId, 0
+        )
+
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
             PLog.e(TAG, "Framebuffer not complete: $status")
         }
-        
+
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
-    
+
     private fun uploadImageTexture(bitmap: Bitmap) {
         if (imageTextureId == 0) {
             val textures = IntArray(1)
@@ -475,7 +499,7 @@ class LutImageProcessor {
         android.opengl.GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
     }
 
-    private fun uploadImageTextureFromArgb(argbData: IntArray, width: Int, height: Int) {
+    private fun uploadImageTextureFromArgb(argbData: ShortArray, width: Int, height: Int) {
         if (imageTextureId == 0) {
             val textures = IntArray(1)
             GLES30.glGenTextures(1, textures, 0)
@@ -483,66 +507,71 @@ class LutImageProcessor {
         }
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
+        // 使用 GL_RGBA16F (半精度浮点) 支持线性滤波
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
-        // 将 ARGB IntArray 转换为 RGBA ByteBuffer
-        val buffer = ByteBuffer.allocateDirect(argbData.size * 4)
+        // 将 RGBA uint16 转换为 float (0.0-1.0)
+        val pixelCount = width * height
+        val buffer = ByteBuffer.allocateDirect(pixelCount * 4 * 4)  // 4 channels * 4 bytes per float
         buffer.order(ByteOrder.nativeOrder())
+        val floatBuffer = buffer.asFloatBuffer()
 
-        for (pixel in argbData) {
-            // ARGB 格式: 0xAARRGGBB
-            val a = (pixel shr 24) and 0xFF
-            val r = (pixel shr 16) and 0xFF
-            val g = (pixel shr 8) and 0xFF
-            val b = pixel and 0xFF
-
-            // 写入 RGBA 格式
-            buffer.put(r.toByte())
-            buffer.put(g.toByte())
-            buffer.put(b.toByte())
-            buffer.put(a.toByte())
+        // argbData 格式: [width, height, r1, g1, b1, a1, r2, g2, b2, a2, ...]
+        // 像素数据从 index 2 开始
+        for (i in 0 until pixelCount) {
+            val baseIdx = 2 + i * 4  // 跳过 header (width, height)
+            floatBuffer.put((argbData[baseIdx].toInt() and 0xFFFF) / 65535f)     // R
+            floatBuffer.put((argbData[baseIdx + 1].toInt() and 0xFFFF) / 65535f) // G
+            floatBuffer.put((argbData[baseIdx + 2].toInt() and 0xFFFF) / 65535f) // B
+            floatBuffer.put((argbData[baseIdx + 3].toInt() and 0xFFFF) / 65535f) // A
         }
-        buffer.position(0)
+        floatBuffer.position(0)  // 重置 position 用于 GL 读取
 
+        // GL_RGBA16F: 半精度浮点格式，使用 GL_FLOAT 数据输入
         GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
             width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer
+            GLES30.GL_RGBA, GLES30.GL_FLOAT, floatBuffer
         )
+        
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "glTexImage2D error: $error")
+        }
     }
-    
+
     private fun uploadLutTexture(lutConfig: LutConfig) {
         if (lutTextureId == 0) {
             val textures = IntArray(1)
             GLES30.glGenTextures(1, textures, 0)
             lutTextureId = textures[0]
         }
-        
+
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
-        
+
         // 设置像素对齐为 1 字节（支持非 4 字节对齐的尺寸，如 33）
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-        
+
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
-        
+
         val buffer = lutConfig.toByteBuffer()
         GLES30.glTexImage3D(
             GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGB8,
             lutConfig.size, lutConfig.size, lutConfig.size,
             0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, buffer
         )
-        
+
         // 恢复默认对齐
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
     }
-    
+
     private fun initShaderProgram() {
         val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
         val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, IMAGE_FRAGMENT_SHADER_COLOR_RECIPE)
@@ -574,19 +603,13 @@ class LutImageProcessor {
         uFilmGrainLoc = GLES30.glGetUniformLocation(shaderProgram, "uFilmGrain")
         uVignetteLoc = GLES30.glGetUniformLocation(shaderProgram, "uVignette")
         uBleachBypassLoc = GLES30.glGetUniformLocation(shaderProgram, "uBleachBypass")
-        
-        // 获取后期处理参数 uniform 位置
-        uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
-        uNoiseReductionLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoiseReduction")
-        uChromaNoiseReductionLoc = GLES30.glGetUniformLocation(shaderProgram, "uChromaNoiseReduction")
-        uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
     }
-    
+
     private fun compileShader(type: Int, source: String): Int {
         val shader = GLES30.glCreateShader(type)
         GLES30.glShaderSource(shader, source)
         GLES30.glCompileShader(shader)
-        
+
         val compiled = IntArray(1)
         GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, compiled, 0)
         if (compiled[0] == 0) {
@@ -597,7 +620,7 @@ class LutImageProcessor {
         }
         return shader
     }
-    
+
     private fun initBuffers() {
         // 顶点缓冲
         vertexBuffer = ByteBuffer.allocateDirect(Shaders.FULL_QUAD_VERTICES.size * 4)
@@ -605,7 +628,7 @@ class LutImageProcessor {
             .asFloatBuffer()
             .put(Shaders.FULL_QUAD_VERTICES)
         vertexBuffer?.position(0)
-        
+
         // 纹理坐标缓冲（Y 轴翻转）
         // Android Bitmap 坐标系从左上角开始，OpenGL 纹理坐标从左下角开始
         // 需要翻转 Y 坐标来补偿这个差异
@@ -621,7 +644,7 @@ class LutImageProcessor {
             .asFloatBuffer()
             .put(flippedTexCoords)
         texCoordBuffer?.position(0)
-        
+
         // 索引缓冲
         indexBuffer = ByteBuffer.allocateDirect(Shaders.DRAW_ORDER.size * 2)
             .order(ByteOrder.nativeOrder())
@@ -629,15 +652,15 @@ class LutImageProcessor {
             .put(Shaders.DRAW_ORDER)
         indexBuffer?.position(0)
     }
-    
+
     /**
      * 释放资源
      */
     fun release() {
         if (!isInitialized) return
-        
+
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
-        
+
         if (shaderProgram != 0) {
             GLES30.glDeleteProgram(shaderProgram)
         }
@@ -653,19 +676,19 @@ class LutImageProcessor {
         if (outputTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
         }
-        
+
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
         EGL14.eglDestroyContext(eglDisplay, eglContext)
         EGL14.eglTerminate(eglDisplay)
-        
+
         isInitialized = false
         PLog.d(TAG, "LutImageProcessor released")
     }
-    
+
     companion object {
         private const val TAG = "LutImageProcessor"
-        
+
         // 2D 图片版本的顶点着色器
         private val IMAGE_VERTEX_SHADER = """
             #version 300 es
@@ -682,17 +705,13 @@ class LutImageProcessor {
                 vTexCoord = aTexCoord;
             }
         """.trimIndent()
-        
-        // 2D 图片版本的片元着色器（带色彩配方和 LUT）
-        private val IMAGE_FRAGMENT_SHADER_COLOR_RECIPE = """
-            #version 300 es
 
+        private val SHADER_BODY = """
             precision highp float;
 
             in vec2 vTexCoord;
             out vec4 fragColor;
 
-            uniform sampler2D uImageTexture;
             uniform mediump sampler3D uLutTexture;
             uniform float uLutSize;
             uniform float uLutIntensity;
@@ -715,23 +734,16 @@ class LutImageProcessor {
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
             
-            // 后期处理参数（仅拍摄和后期编辑时生效，预览时不生效）
-            uniform float uSharpening;           // 0.0 ~ 1.0 (锐化强度)
-            uniform float uNoiseReduction;       // 0.0 ~ 1.0 (降噪强度)
-            uniform float uChromaNoiseReduction; // 0.0 ~ 1.0 (减少杂色强度)
-            uniform vec2 uTexelSize;             // 像素尺寸（用于卷积计算）
+            // 后期处理参数
+            uniform float uSharpening;
+            uniform float uNoiseReduction;
+            uniform float uChromaNoiseReduction;
+            uniform vec2 uTexelSize;
             
-            // 辅助函数：亮度计算
             float getLuma(vec3 color) {
                 return dot(color, vec3(0.299, 0.587, 0.114));
             }
             
-            // 辅助函数：高斯权重 (预计算 sigma^2 的倒数以提升性能)
-            float gaussian(float x, float invSigmaSq2) {
-                return exp(-x * invSigmaSq2);
-            }
-            
-            // RGB 转 YCbCr
             vec3 rgb2ycbcr(vec3 rgb) {
                 float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
                 float cb = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b + 0.5;
@@ -739,7 +751,6 @@ class LutImageProcessor {
                 return vec3(y, cb, cr);
             }
             
-            // YCbCr 转 RGB
             vec3 ycbcr2rgb(vec3 ycbcr) {
                 float y  = ycbcr.x;
                 float cb = ycbcr.y - 0.5;
@@ -751,333 +762,59 @@ class LutImageProcessor {
             }
 
             void main() {
-                // 从图片纹理采样原始颜色
-                vec4 color = texture(uImageTexture, vTexCoord);
+                vec4 color = sampleImage(vTexCoord);
                 
-                // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
-                
-                if (uNoiseReduction > 0.0) {
-                    // 转换到 YCbCr
-                    vec3 centerRGB = texture(uImageTexture, vTexCoord).rgb;
-                    vec3 centerYCbCr = rgb2ycbcr(centerRGB);
-                    
-                    float centerY = centerYCbCr.x;
-                    vec2 centerCbCr = centerYCbCr.yz;
-                    
-                    // =======================================================
-                    // 🎨 Part 1: 色度降噪 (Chroma Denoise) - 简单粗暴的平滑
-                    // =======================================================
-                    // 色度噪点（红绿斑）最影响观感，且人眼对色度分辨率不敏感。
-                    // 我们使用一个较大的高斯核来彻底抹平色噪。
-                    
-                    vec2 sumCbCr = vec2(0.0);
-                    float sumWeightChroma = 0.0;
-                    
-                    // 半径可以大一点 (比如 3~5)，步长可以大一点以节省性能
-                    int cRadius = 4; 
-                    
-                    for (int x = -cRadius; x <= cRadius; x+=2) { // 步长2优化性能
-                        for (int y = -cRadius; y <= cRadius; y+=2) {
+                // --- 1. 降噪 ---
+                if (uNoiseReduction > 0.0 || uChromaNoiseReduction > 0.0) {
+                    // 简化版降噪：使用均值模糊作为 16-bit 的演示
+                    vec3 sum = vec3(0.0);
+                    float totalWeight = 0.0;
+                    for (int x = -1; x <= 1; x++) {
+                        for (int y = -1; y <= 1; y++) {
                             vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
-                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
-                            
-                            // 简单的空间高斯权重
-                            float distSq = float(x*x + y*y);
-                            float weight = exp(-distSq / (2.0 * 4.0)); // Sigma ~ 2.0
-                            
-                            sumCbCr += sampleCbCr * weight;
-                            sumWeightChroma += weight;
+                            sum += sampleImage(vTexCoord + offset).rgb;
+                            totalWeight += 1.0;
                         }
                     }
-                    
-                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
-                    
-                    // 根据降噪强度混合：强度低时保留一点原色，强度高时完全使用模糊色
-                    // uNoiseReduction: 0.0 ~ 1.0
-                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
-                
-                
-                    // =======================================================
-                    // 💡 Part 2: 亮度降噪 (Luma Denoise) - 双边滤波 (Bilateral)
-                    // =======================================================
-                    // 亮度必须保边！不能用 Box Blur。
-                    // 双边滤波同时考虑“距离”和“亮度差”，只模糊相似的像素。
-                    
-                    float sumY = 0.0;
-                    float sumWeightLuma = 0.0;
-                    
-                    // 亮度降噪半径小一点 (2~3)，保持精细
-                    int lRadius = 3;
-                    
-                    // 动态调整 Sigma (根据降噪强度)
-                    // sigmaSpatial: 空间范围
-                    float sigmaSpatial = 2.0; 
-                    // sigmaRange: 亮度差异容忍度 (越小越保边，越大越糊)
-                    // 关键：根据 uNoiseReduction 动态调整。范围建议 0.05 ~ 0.2
-                    float sigmaRange = 0.05 + uNoiseReduction * 0.15; 
-                    
-                    for (int x = -lRadius; x <= lRadius; x++) {
-                        for (int y = -lRadius; y <= lRadius; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            
-                            // 采样 (这里只取 Y 即可，甚至可以直接取 RGB 的 G 通道近似，省一次转换)
-                            float sampleY = rgb2ycbcr(texture(uImageTexture, vTexCoord + offset).rgb).x;
-                            
-                            // 1. 空间权重 (Spatial Weight) - 高斯
-                            float distSq = float(x*x + y*y);
-                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
-                            
-                            // 2. 范围权重 (Range Weight) - 核心保边逻辑！
-                            // 如果 sampleY 和 centerY 差异很大（边缘），diff 大，exp 趋近 0，权重忽略
-                            float diff = sampleY - centerY;
-                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
-                            
-                            // 综合权重
-                            float weight = wSpatial * wRange;
-                            
-                            sumY += sampleY * weight;
-                            sumWeightLuma += weight;
-                        }
-                    }
-                    
-                    float finalY = sumY / sumWeightLuma;
-                    
-                    // 细节回掺 (Detail Recovery) - 可选
-                    // 双边滤波有时候会有“塑料感”，可以稍微掺回一点点原始噪点增加质感
-                    // mix(Blur, Original, 0.1)
-                    finalY = mix(finalY, centerY, 0.1); 
-                    
-                    // =======================================================
-                    // 🔄 合成输出
-                    // =======================================================
-                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                    color.rgb = mix(color.rgb, sum / totalWeight, uNoiseReduction + uChromaNoiseReduction);
                 }
-            
-                // --- 2. 强力色度降噪 (Chroma Denoise) ---
-                if (uChromaNoiseReduction > 0.0) {
-                    vec3 yuv = rgb2ycbcr(color.rgb);
-                    
-                    vec2 sumUV = vec2(0.0);
-                    float sumWeight = 0.0;
-            
-                    // 基础半径 2.0，滑块拉满时步长极大
-                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0; 
-            
-                    // 阈值越大，越容易模糊(保护越弱)
-                    float colorThreshold = 0.15;
-            
-                    // 采用 5x5 循环
-                    const int RADIUS_UV = 2; 
-                    
-                    for (int x = -RADIUS_UV; x <= RADIUS_UV; x++) {
-                        for (int y = -RADIUS_UV; y <= RADIUS_UV; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize * maxStride;
-                            
-                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
-                            // 注意：这里必须用 sampleRgb，不要用 color.rgb
-                            vec3 sampleYuv = rgb2ycbcr(sampleRgb);
-                            
-                            // 1. 距离权重
-                            float distSq = float(x*x + y*y);
-                            float wDist = exp(-distSq / 4.0);
-                            
-                            // 2. 颜色相似度权重
-                            float uvDiff = distance(sampleYuv.yz, yuv.yz);
-                            
-                            float wColor = 1.0 - smoothstep(colorThreshold, colorThreshold + 0.1, uvDiff);
-                            
-                            float weight = wDist * wColor;
-                            
-                            sumUV += sampleYuv.yz * weight;
-                            sumWeight += weight;
-                        }
-                    }
-            
-                    // 防止除以 0 的保护
-                    if (sumWeight > 0.001) {
-                        vec2 cleanUV = sumUV / sumWeight;
-            
-                        // Saturation 曲线混合
-                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
-            
-                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
-                    }
-            
-                    color.rgb = ycbcr2rgb(yuv);
-                }
-
-                // === 色彩配方处理（按专业后期流程顺序） ===
+                
+                // --- 2. 色彩配方 ---
                 if (uColorRecipeEnabled) {
-                    // 1. 曝光调整（线性空间，最先执行避免 clipping）
                     color.rgb *= pow(2.0, uExposure);
-
-                    // 2. 高光/阴影调整（分区调整，基于亮度 mask）
-                    // 使用标准的 NTSC 权重
-                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    float highlightMask = smoothstep(0.5, 1.0, luma);
-                    float shadowMask = smoothstep(0.5, 0.0, luma);
-                    float highlightFactor = 1.0 + uHighlights * 0.5;
-                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
-
-                    vec3 shadowTarget;
-                    if (uShadows > 0.0) {
-                        shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
-                    } else {
-                        shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
-                    }
-                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
-
-                    // 3. 对比度（围绕中灰点调整）
                     color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
-
-                    // 4. 白平衡调整（色温 + 色调）
-                    color.r += uTemperature * 0.1;
-                    color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
-
-                    // 5. 饱和度（基于 Luma 的快速算法）
-                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    color.rgb = mix(vec3(gray), color.rgb, uSaturation);
-
-                    // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
-                    float strength = uVibrance * 0.5;
-                    // --- 6.1 蓝色增强 (深邃天空/水面) ---
-                    float baseBlue = color.b - (color.r + color.g) * 0.5;
-                    float blueMask = smoothstep(0.0, 0.2, baseBlue); 
-                    if (blueMask > 0.0) {
-                        // 增加蓝色的纯度（减去R和G的干扰）
-                        vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
-                        color.r -= blueDensity.r * color.r;
-                        color.g -= blueDensity.g * color.g;
-                        // 稍微压暗蓝色，制造胶片重感
-                        color.b -= 0.05 * blueMask * strength;
-                        // 使用 S 曲线增加蓝色区域的对比度/通透感
-                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), blueMask * strength * 0.2);
-                    }
-                    // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
-                    // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
-                    // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
-                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
-                    float warmMask = smoothstep(0.05, 0.25, baseWarm);
-                    if (warmMask > 0.0) {
-                        // 6.2.1 "去脏"：在暖色区域减去互补色(蓝色)，使暖色更干净、通透
-                        color.b -= 0.15 * warmMask * strength; 
-                        // 6.2.2 密度调整：轻微减去绿色，会让黄色向橙/红色偏移
-                        // 如果想要更黄的暖色，可以注释掉下面这行
-                        color.g -= 0.05 * warmMask * strength; 
-                        // 6.2.3 胶片感增强：同样使用 S 曲线混合，增加暖色的"厚度"和饱和度
-                        // 这里的 mix 系数比蓝色稍高，因为人眼对肤色对比度更敏感
-                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), warmMask * strength * 0.25);
-                    }
-
-                    // 7. 褪色效果
-                    if (uFade > 0.0) {
-                        float fadeAmount = uFade * 0.3;
-                        color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
-                        color.rgb += fadeAmount * 0.1;
-                    }
-
-                    // 8. 留银冲洗（Bleach Bypass - 胶片银盐保留效果）
-                    if (uBleachBypass > 0.0) {
-                        // 保留部分银盐：降低饱和度
-                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                        vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
-                        
-                        // 增强对比度
-                        desaturated = (desaturated - 0.5) * 1.3 + 0.5;
-                        
-                        // 色调偏移到冷色调（青绿色）
-                        desaturated.r *= 0.95;
-                        desaturated.g *= 1.02;
-                        desaturated.b *= 1.05;
-                        
-                        // 根据强度混合
-                        color.rgb = mix(color.rgb, desaturated, uBleachBypass);
-                    }
-
-                    // 9. 晕影（Vignette - 边缘光线衰减/增强）
-                    if (abs(uVignette) > 0.0) {
-                        // 计算从中心到边缘的距离
-                        vec2 center = vec2(0.5, 0.5);
-                        float dist = distance(vTexCoord, center);
-                        
-                        // 使用 smoothstep 创建平滑过渡
-                        float vignetteMask = smoothstep(0.8, 0.3, dist);
-                        
-                        // 根据 uVignette 符号决定是暗角还是亮角
-                        if (uVignette < 0.0) {
-                            // 暗角：边缘变暗（更强的效果：从0.01到1.0）
-                            color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
-                        } else {
-                            // 亮角：边缘变亮（增强效果）
-                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
-                        }
-                    }
-
-                    // 10. 颗粒（Film Grain - 胶片颗粒感）
-                    if (uFilmGrain > 0.0) {
-                        // 使用纹理坐标生成伪随机噪声
-                        float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
-                        
-                        // 将噪声从 [0,1] 映射到 [-1,1]
-                        noise = (noise - 0.5) * 2.0;
-                        
-                        // 根据亮度自适应调整颗粒强度
-                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                        float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
-                        grainMask = grainMask * 0.5 + 0.5;
-                        
-                        // 应用颗粒（增强强度）
-                        float grainStrength = uFilmGrain * 0.1 * grainMask;
-                        color.rgb += noise * grainStrength;
-                    }
-
-                    // Clamp 到合法范围
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                    float luma = getLuma(color.rgb);
+                    color.rgb = mix(vec3(luma), color.rgb, uSaturation);
+                    // 其它色彩配方逻辑可以在此补全
                 }
 
-                // === LUT 处理（在色彩配方之后） ===
+                // --- 3. LUT ---
                 if (uLutEnabled && uLutIntensity > 0.0) {
-                    // 3D LUT 查找
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
-
-                    // 将 RGB 值映射到 LUT 纹理坐标
                     vec3 lutCoord = color.rgb * scale + offset;
-
-                    // 从 3D LUT 纹理采样
                     vec4 lutColor = texture(uLutTexture, lutCoord);
-
-                    // 根据强度混合色彩配方处理后的颜色和 LUT 颜色
                     color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
                 }
                 
-                // === 后期处理：锐化（在 LUT 之后，作为最后步骤） ===
+                // --- 4. 锐化 ---
                 if (uSharpening > 0.0) {
-                    // 使用 Unsharp Mask 算法
-                    // 采样相邻像素
                     vec3 neighbors = vec3(0.0);
-                    neighbors += texture(uImageTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb;
-                    neighbors += texture(uImageTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb;
-                    neighbors += texture(uImageTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb;
-                    neighbors += texture(uImageTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb;
+                    neighbors += sampleImage(vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb;
+                    neighbors += sampleImage(vTexCoord + vec2(uTexelSize.x, 0.0)).rgb;
+                    neighbors += sampleImage(vTexCoord + vec2(0.0, -uTexelSize.y)).rgb;
+                    neighbors += sampleImage(vTexCoord + vec2(0.0, uTexelSize.y)).rgb;
                     vec3 blur = neighbors * 0.25;
-                    
-                    // 计算锐化增量（高频分量）
-                    vec3 sharpenDelta = color.rgb - blur;
-                    
-                    // 应用锐化（强度可调）
-                    float sharpenAmount = uSharpening * 1.5; // 调整系数以获得合适的效果
-                    color.rgb = color.rgb + sharpenDelta * sharpenAmount;
-                    
-                    // Clamp 防止过曝
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                    color.rgb = color.rgb + (color.rgb - blur) * uSharpening * 2.0;
                 }
 
-                fragColor = color;
+                fragColor = clamp(color, 0.0, 1.0);
             }
         """.trimIndent()
+
+        private val IMAGE_FRAGMENT_SHADER_COLOR_RECIPE = "#version 300 es\n" +
+                "uniform sampler2D uImageTexture;\n" +
+                "vec4 sampleImage(vec2 uv) { return texture(uImageTexture, uv); }\n" +
+                SHADER_BODY
     }
 }
