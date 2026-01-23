@@ -3,10 +3,13 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.graphics.*
 import android.net.Uri
+import android.os.Build
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -21,6 +24,48 @@ class PhotoProcessor(
     private val frameManager: FrameManager,
     private val frameRenderer: FrameRenderer
 ) {
+
+    /**
+     * @param context 上下文
+     * @param dngPath dng 文件路径
+     * @param metadata 照片元数据（包含编辑配置和拍摄信息）
+     * @param uri 照片 URI（用于提取 EXIF，仅在 metadata 中没有拍摄信息时使用）
+     * @param sharpening 锐化强度
+     * @param noiseReduction 降噪强度
+     * @param chromaNoiseReduction 减少杂色强度
+     * @return 处理后的 Bitmap
+     */
+    suspend fun process(
+        context: Context,
+        dngPath: String,
+        metadata: PhotoMetadata,
+        uri: Uri? = null,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f
+    ): Bitmap? = withContext(Dispatchers.Default) {
+        var result: Bitmap?
+
+        // 优先从元数据中获取软件处理参数
+        // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
+        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+        val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
+        val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+
+        // 1. 应用 LUT
+        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
+        val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val lutResult = RawDemosaicProcessor.getInstance().process(context, dngPath,
+            metadata.ratio ?: AspectRatio.RATIO_4_3, lutConfig, colorRecipeParams,
+                    finalSharpening, finalNoiseReduction, finalChromaNoiseReduction)
+        result = lutResult
+
+        result ?: return@withContext null
+
+        result = applyFrame(context, result, metadata, uri)
+
+        result
+    }
 
     /**
      * @param context 上下文
@@ -154,8 +199,8 @@ class PhotoProcessor(
                 } else if (metadata.deviceModel == null) {
                     // 如果没有任何来源，使用默认值
                     metadata.copy(
-                        deviceModel = android.os.Build.MODEL,
-                        brand = android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
+                        deviceModel = Build.MODEL,
+                        brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
                         dateTaken = metadata.dateTaken ?: System.currentTimeMillis(),
                         width = result.width,
                         height = result.height

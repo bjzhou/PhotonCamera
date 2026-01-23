@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
@@ -16,7 +17,7 @@ import java.util.*
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
-    val version: Int = 6,  // 升级版本以支持细节处理参数
+    val version: Int = 7,  // 升级版本以支持细节处理参数
     // 编辑配置
     val lutId: String? = null,
     // 色彩配方配置
@@ -30,6 +31,7 @@ data class PhotoMetadata(
     // 图片尺寸
     val width: Int = 0,
     val height: Int = 0,
+    val ratio: AspectRatio? = null,
     // 拍摄信息
     val deviceModel: String? = null,
     val brand: String? = null,
@@ -120,6 +122,7 @@ data class PhotoMetadata(
             put("frameId", frameId ?: JSONObject.NULL)
             put("width", width)
             put("height", height)
+            put("ratio", ratio?.getDisplayName() ?: JSONObject.NULL)
             // 拍摄信息
             put("deviceModel", deviceModel ?: JSONObject.NULL)
             put("brand", brand ?: JSONObject.NULL)
@@ -190,6 +193,7 @@ data class PhotoMetadata(
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),
+                    ratio = if (obj.isNull("ratio")) null else AspectRatio.fromString(obj.optString("ratio")),
                     // 拍摄信息
                     deviceModel = if (obj.isNull("deviceModel")) null else obj.optString("deviceModel"),
                     brand = if (obj.isNull("brand")) null else obj.optString("brand"),

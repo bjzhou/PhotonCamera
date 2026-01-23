@@ -75,6 +75,10 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), YUV_FILE)
     }
 
+    fun getDngFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), DNG_FILE)
+    }
+
     fun getMetadataFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), METADATA_FILE)
     }
@@ -96,15 +100,33 @@ object PhotoManager {
         withContext(Dispatchers.IO) {
             try {
                 // 读取照片
-                val file = getYuvFile(context, id)
-                val argb = YuvProcessor.loadCompressedArgb(file.absolutePath) ?: return@withContext
+                val photoFile = getPhotoFile(context, id)
+                val yuvFile = getYuvFile(context, id)
+                val dngFile = getDngFile(context, id)
+                val processedBitmap = if (dngFile.exists()) {
+                    val photoUri = Uri.fromFile(getPhotoFile(context, id))
+                    photoProcessor.process(
+                        context, dngFile.absolutePath, metadata, photoUri,
+                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                    )
+                } else if (yuvFile.exists()) {
+                    val argb = YuvProcessor.loadCompressedArgb(yuvFile.absolutePath) ?: return@withContext
 
-                val photoUri = Uri.fromFile(getPhotoFile(context, id))
-                // 处理照片：跟随用户设置
-                val processedBitmap = photoProcessor.process(
-                    context, argb, metadata, photoUri,
-                    sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                )
+                    val photoUri = Uri.fromFile(getPhotoFile(context, id))
+                    photoProcessor.process(
+                        context, argb, metadata, photoUri,
+                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                    )
+                } else {
+                    val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+                    val photoUri = Uri.fromFile(getPhotoFile(context, id))
+                    photoProcessor.process(
+                        context, bitmap, metadata, photoUri,
+                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                    )
+                }
+
+                processedBitmap ?: return@withContext
 
                 // 保存到指定目录
                 val filename =
@@ -265,6 +287,7 @@ object PhotoManager {
                                     val metadataWithInfo = metadata.copy(
                                         width = width,
                                         height = height,
+                                        ratio = aspectRatio,
                                     )
                                     metadataFile.writeText(metadataWithInfo.toJson())
                                     FileOutputStream(photoFile).use { outputStream ->
@@ -306,6 +329,10 @@ object PhotoManager {
                                     val metadataWithInfo = metadata.copy(
                                         width = width,
                                         height = height,
+                                        ratio = aspectRatio,
+                                        sharpening = 0.2f,
+                                        noiseReduction = 0f,
+                                        chromaNoiseReduction = 0.25f,
                                     )
                                     metadataFile.writeText(metadataWithInfo.toJson())
                                     FileOutputStream(photoFile).use { outputStream ->

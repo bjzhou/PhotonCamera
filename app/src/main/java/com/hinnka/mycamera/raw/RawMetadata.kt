@@ -58,7 +58,8 @@ data class RawMetadata(
     /**
      * 数字增益 (Post RAW Boost)
      */
-    val postRawSensitivityBoost: Float = 1.0f
+    val postRawSensitivityBoost: Float = 1.0f,
+    val baselineExposure: Float = 0.0f
 ) {
     companion object {
         private const val TAG = "RawMetadata"
@@ -208,17 +209,8 @@ data class RawMetadata(
             }
 
             // 5. 获取色彩校正矩阵
-            val ccmTransform = captureResult.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
-            val colorCorrectionMatrix = if (ccmTransform != null) {
-                extractCCM(ccmTransform)
-            } else {
-                // 默认：单位矩阵
-                floatArrayOf(
-                    1f, 0f, 0f,
-                    0f, 1f, 0f,
-                    0f, 0f, 1f
-                )
-            }
+            // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
+            val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult)
 
             // 6. 获取镜头阴影校正
             val shadingMap = captureResult.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
@@ -248,7 +240,177 @@ data class RawMetadata(
                 lensShadingMap = lensShadingMap,
                 lensShadingMapWidth = shadingWidth,
                 lensShadingMapHeight = shadingHeight,
-                postRawSensitivityBoost = postRawSensitivityBoost
+                postRawSensitivityBoost = postRawSensitivityBoost,
+                baselineExposure = 0f
+            )
+        }
+
+        /**
+         * 使用 ForwardMatrix/ColorMatrix 计算色彩校正矩阵
+         *
+         * 此实现与 native-lib.cpp 中的 DNG 解析逻辑完全一致：
+         * 1. 优先使用 ForwardMatrix，否则使用 ColorMatrix 的逆矩阵
+         * 2. 支持双光源插值（Illuminant1/Illuminant2）
+         * 3. 最终 CCM = XYZ_D50_TO_SRGB × interpolate(CamToXYZ1, CamToXYZ2, weight)
+         */
+        private fun computeCCMFromCharacteristics(
+            characteristics: CameraCharacteristics,
+            captureResult: CaptureResult
+        ): FloatArray {
+            // XYZ D50 到 Linear sRGB 的转换矩阵（与 native-lib.cpp 完全一致）
+            val XYZ_D50_TO_SRGB = floatArrayOf(
+                3.1338561f, -1.6168667f, -0.4906146f,
+                -0.9787684f, 1.9161415f, 0.0334540f,
+                0.0719453f, -0.2289914f, 1.4052427f
+            )
+
+            // 获取参考光源
+            val illuminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.toInt()
+            val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
+
+            // 获取矩阵（两组）
+            val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
+            val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+            val forwardMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
+            val forwardMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
+
+            // 获取白平衡增益（用于计算插值权重）
+            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
+
+            // 1. 计算双光源插值权重
+            val weight = calculateInterpolationWeight(illuminant1, illuminant2, wbGains)
+
+            // 2. 获取两个光源下的 Camera -> XYZ(D50) 矩阵
+            val m1: FloatArray? = if (forwardMatrix1 != null) {
+                extractCCM(forwardMatrix1)
+            } else if (colorMatrix1 != null) {
+                // 如果没有 ForwardMatrix，使用 ColorMatrix 的逆矩阵
+                invertMatrix3x3(extractCCM(colorMatrix1))
+            } else {
+                null
+            }
+
+            val m2: FloatArray? = if (forwardMatrix2 != null) {
+                extractCCM(forwardMatrix2)
+            } else if (colorMatrix2 != null) {
+                invertMatrix3x3(extractCCM(colorMatrix2))
+            } else {
+                null
+            }
+
+            // 3. 插值得到最终的 Camera -> XYZ(D50) 矩阵
+            val camToXYZ = when {
+                m1 != null && m2 != null -> {
+                    // 双矩阵插值
+                    FloatArray(9) { i -> m1[i] * weight + m2[i] * (1.0f - weight) }
+                }
+                m1 != null -> m1
+                m2 != null -> m2
+                else -> {
+                    // Fallback: 单位矩阵
+                    Log.d(TAG, "No ForwardMatrix/ColorMatrix available, using identity matrix")
+                    floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+                }
+            }
+
+            // 4. 计算最终 CCM: XYZ_D50_TO_SRGB × CamToXYZ
+            val finalCCM = multiplyMatrix3x3(XYZ_D50_TO_SRGB, camToXYZ)
+
+            Log.d(TAG, "Computed CCM from ForwardMatrix/ColorMatrix (weight=$weight):")
+            Log.d(TAG, "[${finalCCM[0]}, ${finalCCM[1]}, ${finalCCM[2]}]")
+            Log.d(TAG, "[${finalCCM[3]}, ${finalCCM[4]}, ${finalCCM[5]}]")
+            Log.d(TAG, "[${finalCCM[6]}, ${finalCCM[7]}, ${finalCCM[8]}]")
+
+            return finalCCM
+        }
+
+        /**
+         * 计算双光源插值权重（与 native-lib.cpp 逻辑一致）
+         *
+         * @param illuminant1 参考光源 1 ID
+         * @param illuminant2 参考光源 2 ID
+         * @param wbGains 白平衡增益
+         * @return 插值权重 (0.0 = 完全使用 illuminant2, 1.0 = 完全使用 illuminant1)
+         */
+        private fun calculateInterpolationWeight(
+            illuminant1: Int?,
+            illuminant2: Int?,
+            wbGains: RggbChannelVector?
+        ): Float {
+            // 默认使用 Illuminant2 (通常是 D65/Daylight)
+            if (illuminant1 == null || illuminant2 == null || illuminant1 == 0 || illuminant2 == 0 || wbGains == null) {
+                return 0.0f
+            }
+
+            val temp1 = illuminantToTemp(illuminant1)
+            val temp2 = illuminantToTemp(illuminant2)
+
+            // 从当前 WB Gains 计算 R/B 比例
+            val rGain = wbGains.red
+            val bGain = wbGains.blue
+
+            if (bGain <= 0) return 0.0f
+
+            val currentRatio = rGain / bGain
+
+            // 根据色温范围判断插值策略
+            // 典型情况: Illuminant1 = StdA (2856K), Illuminant2 = D65 (6504K)
+            if (temp1 < 4000 && temp2 > 5000) {
+                return when {
+                    currentRatio < 0.5f -> 1.0f  // 低色温环境，完全使用 A 光源
+                    currentRatio > 0.8f -> 0.0f  // 高色温环境，完全使用 D65
+                    else -> (0.8f - currentRatio) / (0.8f - 0.5f)  // 线性插值
+                }
+            }
+
+            return 0.0f
+        }
+
+        /**
+         * 光源 ID 转色温（与 native-lib.cpp 的 illuminantToTemp 一致）
+         */
+        private fun illuminantToTemp(illuminant: Int): Float {
+            return when (illuminant) {
+                1 -> 2856f    // Daylight
+                17 -> 2856f   // Standard Light A
+                20 -> 5500f   // D55
+                21 -> 5000f   // D50
+                11, 22 -> 6504f  // D65
+                23 -> 7500f   // D75
+                else -> 5000f
+            }
+        }
+
+        /**
+         * 3x3 矩阵求逆
+         */
+        private fun invertMatrix3x3(m: FloatArray): FloatArray? {
+            if (m.size != 9) return null
+
+            // 计算行列式
+            val det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
+                      m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                      m[2] * (m[3] * m[7] - m[4] * m[6])
+
+            if (kotlin.math.abs(det) < 1e-12f) {
+                Log.e(TAG, "Matrix is singular, cannot invert")
+                return null
+            }
+
+            val invDet = 1.0f / det
+            return floatArrayOf(
+                // 第一行
+                (m[4] * m[8] - m[5] * m[7]) * invDet,
+                (m[2] * m[7] - m[1] * m[8]) * invDet,
+                (m[1] * m[5] - m[2] * m[4]) * invDet,
+                // 第二行
+                (m[5] * m[6] - m[3] * m[8]) * invDet,
+                (m[0] * m[8] - m[2] * m[6]) * invDet,
+                (m[2] * m[3] - m[0] * m[5]) * invDet,
+                // 第三行
+                (m[3] * m[7] - m[4] * m[6]) * invDet,
+                (m[1] * m[6] - m[0] * m[7]) * invDet,
+                (m[0] * m[4] - m[1] * m[3]) * invDet
             )
         }
 
@@ -265,6 +427,24 @@ data class RawMetadata(
             }
             return matrix
         }
+
+        /**
+         * 3x3 矩阵乘法
+         */
+        private fun multiplyMatrix3x3(a: FloatArray, b: FloatArray): FloatArray {
+            require(a.size == 9 && b.size == 9) { "Both matrices must be 3x3" }
+
+            val result = FloatArray(9)
+            for (i in 0 until 3) {
+                for (j in 0 until 3) {
+                    result[i * 3 + j] =
+                        a[i * 3 + 0] * b[0 * 3 + j] +
+                        a[i * 3 + 1] * b[1 * 3 + j] +
+                        a[i * 3 + 2] * b[2 * 3 + j]
+                }
+            }
+            return result
+        }
     }
 
     override fun equals(other: Any?): Boolean {
@@ -280,6 +460,7 @@ data class RawMetadata(
         if (whiteLevel != other.whiteLevel) return false
         if (!whiteBalanceGains.contentEquals(other.whiteBalanceGains)) return false
         if (!colorCorrectionMatrix.contentEquals(other.colorCorrectionMatrix)) return false
+        if (baselineExposure != other.baselineExposure) return false
 
         return true
     }
@@ -296,6 +477,7 @@ data class RawMetadata(
         result = 31 * result + lensShadingMapWidth
         result = 31 * result + lensShadingMapHeight
         result = 31 * result + postRawSensitivityBoost.hashCode()
+        result = 31 * result + baselineExposure.hashCode()
         return result
     }
 }

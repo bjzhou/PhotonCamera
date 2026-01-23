@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.utils
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.graphics.ImageFormat
@@ -10,8 +11,11 @@ import android.hardware.camera2.DngCreator
 import android.media.Image
 import android.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
@@ -53,7 +57,7 @@ object RawProcessor {
      * @return 处理后的 Bitmap，如果失败返回 null
      */
     fun processAndToBitmap(
-        context: android.content.Context,
+        context: Context,
         image: Image,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,

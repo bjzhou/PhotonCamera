@@ -24,6 +24,12 @@ enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
     fun getDisplayName(): String {
         return "$widthRatio:$heightRatio"
     }
+
+    companion object {
+        fun fromString(string: String): AspectRatio {
+            return entries.firstOrNull { it.getDisplayName() == string } ?: RATIO_4_3
+        }
+    }
 }
 
 /**
