@@ -513,28 +513,20 @@ class LutImageProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
-        // 将 RGBA uint16 转换为 float (0.0-1.0)
-        val pixelCount = width * height
-        val buffer = ByteBuffer.allocateDirect(pixelCount * 4 * 4)  // 4 channels * 4 bytes per float
-        buffer.order(ByteOrder.nativeOrder())
-        val floatBuffer = buffer.asFloatBuffer()
-
         // argbData 格式: [width, height, r1, g1, b1, a1, r2, g2, b2, a2, ...]
-        // 像素数据从 index 2 开始
-        for (i in 0 until pixelCount) {
-            val baseIdx = 2 + i * 4  // 跳过 header (width, height)
-            floatBuffer.put((argbData[baseIdx].toInt() and 0xFFFF) / 65535f)     // R
-            floatBuffer.put((argbData[baseIdx + 1].toInt() and 0xFFFF) / 65535f) // G
-            floatBuffer.put((argbData[baseIdx + 2].toInt() and 0xFFFF) / 65535f) // B
-            floatBuffer.put((argbData[baseIdx + 3].toInt() and 0xFFFF) / 65535f) // A
-        }
-        floatBuffer.position(0)  // 重置 position 用于 GL 读取
+        // 像素数据从 index 2 开始，已经是 FP16 格式 (short bits)
+        val pixelCount = width * height
+        val pixelData = ShortArray(pixelCount * 4)
+        System.arraycopy(argbData, 2, pixelData, 0, pixelData.size)
+        
+        val shortBuffer = ShortBuffer.wrap(pixelData)
 
-        // GL_RGBA16F: 半精度浮点格式，使用 GL_FLOAT 数据输入
+        // GL_RGBA16F: 半精度浮点格式。
+        // 数据类型使用 GL_HALF_FLOAT，数据源是包含 half float bits 的 short buffer
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
             width, height, 0,
-            GLES30.GL_RGBA, GLES30.GL_FLOAT, floatBuffer
+            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, shortBuffer
         )
         
         val error = GLES30.glGetError()

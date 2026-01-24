@@ -1,28 +1,28 @@
-cmake_minimum_required(VERSION 3.18.1)
-project("yuv-tool")
+cmake_minimum_required(VERSION 3.22.1)
+project("native-tool")
 
-# 1. 设置 libyuv 的选项 (关闭测试和 JPEG 以简化编译)
-set(LIBYUV_DISABLE_JPEG ON CACHE BOOL "" FORCE)
-set(TEST OFF CACHE BOOL "" FORCE)
+set(LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 
-# 2. 添加 libyuv 子目录
-# 假设你把源码放到了 cpp/libyuv_source
-add_subdirectory(libyuv_source)
+# 4. 添加头文件路径
+include_directories(${LIB_PATH}/include)
 
-# 3. 添加 libyuv 头文件路径
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libyuv_source/include)
-
+file(GLOB JXL_LIBS "${LIB_PATH}/lib/${ANDROID_ABI}/*.a")
 
 # 6. 将你的 native 库链接到 libyuv
-add_library(my-native-lib SHARED native-lib.cpp)
+add_library(my-native-lib SHARED 
+    native-lib.cpp
+    dng_parser.cpp
+    yuv_utils.cpp
+    jxl_utils.cpp
+)
 
 # 启用优化
 target_compile_options(my-native-lib PRIVATE -O3 -ffast-math)
 
 target_link_libraries(
     my-native-lib
-    yuv # libyuv 在 CMake 中定义的 target 名字通常是 'yuv'
-    z   # zlib for gzip compression
+    ${JXL_LIBS}
     log
+    jnigraphics
     android
 )

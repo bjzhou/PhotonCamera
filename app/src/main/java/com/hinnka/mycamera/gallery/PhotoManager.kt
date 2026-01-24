@@ -19,8 +19,10 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
@@ -47,13 +49,13 @@ object PhotoManager {
     private const val TAG = "PhotoManager"
     private const val PHOTOS_DIR = "photos"
     private const val PHOTO_FILE = "original.jpg"
-    private const val YUV_FILE = "original.yuv"
+    private const val YUV_FILE = "original.jxl"
     private const val DNG_FILE = "original.dng"
     private const val METADATA_FILE = "metadata.json"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
 
     private fun getPhotosBaseDir(context: Context): File {
-        val dir = File(context.filesDir, PHOTOS_DIR)
+        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
         if (!dir.exists()) {
             dir.mkdirs()
         }
@@ -256,36 +258,45 @@ object PhotoManager {
                 when (format) {
                     ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
                         val deferred = async {
-                            // YUV 格式：使用 native 处理（包含旋转和裁切）
-                            val result = YuvProcessor.process(image, aspectRatio, rotation) ?: return@async null
-                            val bitmap = YuvProcessor.rgb16ToBitmap(result)
+                            // 计算处理后的尺寸
+                            val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
+                            val finalWidth = dimensions.first
+                            val finalHeight = dimensions.second
+                            
+                            // 创建预览用的 Bitmap
+                            val previewBitmap = createBitmap(finalWidth, finalHeight)
+
+                            // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
+                            val success = YuvProcessor.processAndSave(
+                                image, aspectRatio, rotation,
+                                yuvFile.absolutePath, previewBitmap
+                            )
+
                             launch {
                                 withContext(Dispatchers.IO) {
                                     FileOutputStream(photoFile).use { outputStream ->
-                                        // 直接从内存中的 Bitmap 生成缩略图
-                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                        // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
+                                        previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                                     }
-
-                                    bitmap.recycle()
                                 }
                             }
                             launch {
                                 // 保存元数据
                                 val metadataWithInfo = metadata.copy(
-                                    width = result[0].toInt() and 0xFFFF,
-                                    height = result[1].toInt() and 0xFFFF,
+                                    width = finalWidth,
+                                    height = finalHeight,
                                     ratio = aspectRatio,
                                 )
                                 metadataFile.writeText(metadataWithInfo.toJson())
-                                val success = YuvProcessor.saveCompressedArgb(result, yuvFile.absolutePath)
+                                
                                 if (shouldAutoSave && success) {
                                     exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
                                 }
                             }
-                            bitmap
+                            previewBitmap
                         }
                         if (!thumbnailGenerated) {
-                            val bitmap = deferred.await() ?: return@withContext null
+                            val bitmap = deferred.await()
                             generateThumbnail(bitmap, thumbnailFile)
                             bitmap.recycle()
                         }
@@ -295,7 +306,7 @@ object PhotoManager {
 //                            val bitmap = RawProcessor.processWithImageDecoder(image, characteristics, captureResult, aspectRatio, rotation) ?: return@async null
                             val bitmap = RawProcessor.processAndToBitmap(context, image, characteristics, captureResult, aspectRatio, rotation) ?: return@async null
 
-                            val dimensions = RawProcessor.calculateProcessedDimensions(width, height, aspectRatio, rotation)
+                            val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
 
                             width = dimensions.first
                             height = dimensions.second

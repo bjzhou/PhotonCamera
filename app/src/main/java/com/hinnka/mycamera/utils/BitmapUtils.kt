@@ -159,4 +159,61 @@ object BitmapUtils {
         this.compress(Bitmap.CompressFormat.JPEG, 100, stream)
         return stream.toByteArray()
     }
+
+    /**
+     * 计算经过旋转和裁切后的图像尺寸
+     *
+     * @param width 原始宽度
+     * @param height 原始高度
+     * @param aspectRatio 目标宽高比
+     * @param rotation 旋转角度 (0, 90, 180, 270)
+     * @return Pair<宽度, 高度> 处理后的尺寸
+     */
+    fun calculateProcessedDimensions(
+        width: Int,
+        height: Int,
+        aspectRatio: AspectRatio,
+        rotation: Int
+    ): Pair<Int, Int> {
+        // Step 1: 计算旋转后的尺寸
+        val rotatedWidth: Int
+        val rotatedHeight: Int
+
+        when (rotation) {
+            90, 270 -> {
+                // 旋转 90 或 270 度，宽高互换
+                rotatedWidth = height
+                rotatedHeight = width
+            }
+            else -> {
+                // 旋转 0 或 180 度，宽高不变
+                rotatedWidth = width
+                rotatedHeight = height
+            }
+        }
+
+        // Step 2: 计算裁切后的尺寸
+        val srcRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+        val targetRatio = aspectRatio.getValue(false) // width/height
+
+        // 如果宽高比已经匹配，直接返回旋转后的尺寸
+        if (kotlin.math.abs(srcRatio - targetRatio) < 0.01f) {
+            return Pair(rotatedWidth, rotatedHeight)
+        }
+
+        val finalWidth: Int
+        val finalHeight: Int
+
+        if (srcRatio > targetRatio) {
+            // 原图更宽，裁切左右，高度不变
+            finalHeight = rotatedHeight
+            finalWidth = (rotatedHeight * targetRatio).toInt()
+        } else {
+            // 原图更高，裁切上下，宽度不变
+            finalWidth = rotatedWidth
+            finalHeight = (rotatedWidth / targetRatio).toInt()
+        }
+
+        return Pair(finalWidth, finalHeight)
+    }
 }
