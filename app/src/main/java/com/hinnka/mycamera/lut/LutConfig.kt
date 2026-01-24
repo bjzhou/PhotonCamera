@@ -44,8 +44,8 @@ data class LutConfig(
      */
     fun toByteBuffer(): ByteBuffer {
         if (byteBuffer != null) {
-            byteBuffer.position(0)
-            return byteBuffer
+            // Return a duplicate to verify thread safety (avoid position race conditions)
+            return byteBuffer.duplicate().apply { position(0) }
         }
 
         val floatData = data ?: throw IllegalStateException("No data available in LutConfig")

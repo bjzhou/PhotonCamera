@@ -536,24 +536,13 @@ object RawShaders {
         vec3 applyHighlightRecovery(vec3 color) {
             float threshold = 0.8;
             float maxOutput = 1.0;
-            // 1. 计算颜色的最大通道值（或者使用亮度 Luminance）
-            // 使用 max() 可以防止色相偏移 (Hue Shift)
             float maxVal = max(color.r, max(color.g, color.b));
-            
-            // 2. 如果亮度在安全范围内，直接返回（只针对高光生效）
             if (maxVal <= threshold) {
                 return color;
             }
-            
-            // 3. 计算高光压缩曲线
-            // 我们使用由线性转为分数的函数： y = threshold + (val - threshold) / (1 + (val - threshold) * scale)
-            // 这种曲线在接缝处导数为1，过渡完美平滑
-            
             float range = maxOutput - threshold;
             float over = maxVal - threshold;
-            
-            // 核心压缩公式 (Rational form)
-            // 将 [0, 无穷] 的 over 映射到 [0, range]
+
             float compressedMax = threshold + (over * range) / (over + range);
             
             return color * (compressedMax / maxVal);
@@ -562,10 +551,129 @@ object RawShaders {
         vec3 applyTonemap(vec3 color) {
             color = applyHighlightRecovery(color);
             vec3 sCurve = smoothstep(vec3(0.0), vec3(1.0), color);
-            return mix(color, sCurve, 0.7);
+            return mix(color, sCurve, 0.6);
+        }
+        
+        // ==========================================
+        // 辅助函数：RGB <-> HCV/HSL 转换
+        // 这种算法比标准的 RGB2HSV 更平滑，适合图像处理
+        // ==========================================
+        vec3 rgb2hcv(vec3 color) {
+            vec4 P = (color.g < color.b) ? vec4(color.bg, -1.0, 2.0/3.0) : vec4(color.gb, 0.0, -1.0/3.0);
+            vec4 Q = (color.r < P.x) ? vec4(P.xyw, color.r) : vec4(color.r, P.yzx);
+            float C = Q.x - min(Q.w, Q.y);
+            float H = abs((Q.w - Q.y) / (6.0 * C + 1e-10) + Q.z);
+            return vec3(H, C, Q.x);
         }
 
+        vec3 rgb2hsl(vec3 color) {
+            vec3 HCV = rgb2hcv(color);
+            float L = HCV.z - HCV.y * 0.5;
+            float S = HCV.y / (1.0 - abs(L * 2.0 - 1.0) + 1e-10);
+            return vec3(HCV.x, S, L);
+        }
+
+        vec3 hsl2rgb(vec3 hsl) {
+            vec3 rgb = clamp(abs(mod(hsl.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+            float C = (1.0 - abs(2.0 * hsl.z - 1.0)) * hsl.y;
+            return (rgb - 0.5) * C + hsl.z;
+        }
+
+        /**
+         * 肤色优化 (Skin Tone Optimization)
+         * 识别肤色并使其更加通透、自然
+         */
+        vec3 optimizeSkinTone(vec3 color) {
+            // 1. 转换到 HSL 空间
+            vec3 hsl = rgb2hsl(color);
+            
+            // 2. 定义肤色检测范围 (亚洲人肤色中心通常在 25度 左右)
+            // GLSL中 Hue 范围是 0.0 - 1.0。 25度/360度 ≈ 0.07
+            float skinHue = 0.07; 
+            float hueWidth = 0.06; // 肤色检测宽度，覆盖橙色到黄色
+            
+            // 3. 计算“肤色权重” (Skin Mask)
+            // 使用平滑的钟形曲线 (1.0 表示完全是肤色，0.0 表示非肤色)
+            // 这样边缘过渡自然，不会出现塑料感
+            float hueDist = abs(hsl.x - skinHue);
+            // 处理色相环绕 (0.99 和 0.01 应该很近)
+            if (hueDist > 0.5) hueDist = 1.0 - hueDist; 
+            float isSkin = smoothstep(hueWidth, 0.0, hueDist);
+            
+            // 增加饱和度和亮度限制，避免把白墙或过于鲜艳的橙色物体识别为皮肤
+            isSkin *= smoothstep(0.05, 0.15, hsl.y); // 排除极低饱和度 (灰/白/黑)
+            isSkin *= smoothstep(0.0, 0.2, hsl.z);   // 排除极暗区域
+            
+            // ------------------------------------------
+            // 4. 执行调色逻辑 (仅针对 mask 区域)
+            // ------------------------------------------
+            
+            // A. 【祛黄校正】: 色相向红/洋红偏移 (Hue Shift)
+            // 负值代表向逆时针(红色)方向偏移
+            float hueShiftAmount = -0.015; // 约 -5度
+            hsl.x += hueShiftAmount * isSkin;
+            
+            // B. 【去油腻】: 降低饱和度 (Desaturation)
+            // 亚洲肤色容易油光发亮，降低饱和度会让肤质更粉嫩
+            float satReduceAmount = 0.15; 
+            hsl.y -= (hsl.y * satReduceAmount) * isSkin;
+            
+            // C. 【通透美白】: 提升亮度 (Luma Boost)
+            // 这是“冷白皮”的关键。非线性提亮，保护高光不溢出。
+            float lumaBoost = 0.08;
+            // 使用 pow 曲线保护高光，或者简单的加法
+            // 这里使用加法但在高光处衰减
+            float highlightProtect = 1.0 - smoothstep(0.7, 1.0, hsl.z);
+            hsl.z += lumaBoost * isSkin * highlightProtect;
         
+            // ------------------------------------------
+            
+            // 5. 转回 RGB
+            return hsl2rgb(hsl);
+        }
+
+        /**
+         * 自然饱和度 (Vibrance)
+         * 提升低饱和度区域色彩，保护高饱和度区域和肤色
+         */
+        vec3 applyVibrance(vec3 color) {
+            // 5. 饱和度（基于 Luma 的快速算法）
+            float gray = dot(color, vec3(0.299, 0.587, 0.114));
+            color = mix(vec3(gray), color, 1.0);
+
+            // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
+            float strength = 0.8 * 0.5;
+            // --- 6.1 蓝色增强 (深邃天空/水面) ---
+            float baseBlue = color.b - (color.r + color.g) * 0.5;
+            float blueMask = smoothstep(0.0, 0.2, baseBlue); 
+            if (blueMask > 0.0) {
+                // 增加蓝色的纯度（减去R和G的干扰）
+                vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
+                color.r -= blueDensity.r * color.r;
+                color.g -= blueDensity.g * color.g;
+                // 稍微压暗蓝色，制造胶片重感
+                color.b -= 0.05 * blueMask * strength;
+                // 使用 S 曲线增加蓝色区域的对比度/通透感
+                color = mix(color, color * color * (3.0 - 2.0 * color), blueMask * strength * 0.2);
+            }
+            // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
+            // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
+            // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
+            float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
+            float warmMask = smoothstep(0.05, 0.25, baseWarm);
+            if (warmMask > 0.0) {
+                // 6.2.1 "去脏"：在暖色区域减去互补色(蓝色)，使暖色更干净、通透
+                color.b -= 0.15 * warmMask * strength; 
+                // 6.2.2 密度调整：轻微减去绿色，会让黄色向橙/红色偏移
+                // 如果想要更黄的暖色，可以注释掉下面这行
+                color.g -= 0.05 * warmMask * strength; 
+                // 6.2.3 胶片感增强：同样使用 S 曲线混合，增加暖色的"厚度"和饱和度
+                // 这里的 mix 系数比蓝色稍高，因为人眼对肤色对比度更敏感
+                color = mix(color, color * color * (3.0 - 2.0 * color), warmMask * strength * 0.25);
+            }
+            return color;
+        }
+
         /**
          * 双端去色函数
          * @param color   输入 RGB 颜色
@@ -598,18 +706,22 @@ object RawShaders {
             // Pass 1: 1:1 解马赛克
             ivec2 coord = ivec2(gl_FragCoord.xy);
 
-            // 步骤 1-4: 解马赛克 (联合双边 + 色度降噪内嵌)
+            // 解马赛克 (联合双边 + 色度降噪内嵌)
             vec3 rgb = demosaicLMMSE(coord);
 
-            // 步骤 5: 色彩转换 (CCM)
+            // 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
             
             rgb = applyDoubleEndedDesaturation(rgb);
 
-            // 步骤 5b: 应用曝光增益 (Linear HDR Space)
+            // 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
             
             rgb = applyTonemap(rgb);
+            
+            // 高级色彩校正 (肤色 -> 自然饱和度)
+            rgb = optimizeSkinTone(rgb);
+            rgb = applyVibrance(rgb);
             
 
             // 步骤 7: sRGB gamma 编码 (Linear -> sRGB)

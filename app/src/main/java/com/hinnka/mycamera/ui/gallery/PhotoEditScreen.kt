@@ -71,7 +71,6 @@ fun PhotoEditScreen(
     val categoryOrder by viewModel.categoryOrder.collectAsState()
 
     var isSaving by remember { mutableStateOf(false) }
-    var showExportDialog by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
     val lutScrollState = rememberLazyListState()
     val frameScrollState = rememberLazyListState()
@@ -446,47 +445,6 @@ fun PhotoEditScreen(
             onDismiss = {
                 viewModel.showWatermarkSheet = false
             }
-        )
-    }
-
-    // 导出确认对话框
-    if (showExportDialog) {
-        AlertDialog(
-            onDismissRequest = { showExportDialog = false },
-            title = { Text(stringResource(R.string.export)) },
-            text = {
-                Text(stringResource(R.string.export_confirm))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val currentLut = availableLuts.find { it.id == editLutId }
-                        if (currentLut?.isVip == true && !isPurchased) {
-                            showExportDialog = false
-                            viewModel.showPaymentDialog = true
-                            return@TextButton
-                        }
-                        showExportDialog = false
-                        isSaving = true
-                        viewModel.saveEdit(currentPhoto) { success ->
-                            isSaving = false
-                            if (success) {
-                                onBack()
-                            }
-                        }
-                    }
-                ) {
-                    Text(stringResource(R.string.export), color = AccentOrange)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showExportDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-            containerColor = Color(0xFF2D2D2D),
-            titleContentColor = Color.White,
-            textContentColor = Color.White
         )
     }
 

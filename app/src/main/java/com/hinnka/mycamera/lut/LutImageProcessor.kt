@@ -761,10 +761,17 @@ class LutImageProcessor {
             uniform float uChromaNoiseReduction;
             uniform vec2 uTexelSize;
             
+            // 辅助函数：亮度计算
             float getLuma(vec3 color) {
                 return dot(color, vec3(0.299, 0.587, 0.114));
             }
             
+            // 辅助函数：高斯权重 (预计算 sigma^2 的倒数以提升性能)
+            float gaussian(float x, float invSigmaSq2) {
+                return exp(-x * invSigmaSq2);
+            }
+            
+            // RGB 转 YCbCr
             vec3 rgb2ycbcr(vec3 rgb) {
                 float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
                 float cb = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b + 0.5;
@@ -772,6 +779,7 @@ class LutImageProcessor {
                 return vec3(y, cb, cr);
             }
             
+            // YCbCr 转 RGB
             vec3 ycbcr2rgb(vec3 ycbcr) {
                 float y  = ycbcr.x;
                 float cb = ycbcr.y - 0.5;
@@ -785,31 +793,291 @@ class LutImageProcessor {
             void main() {
                 vec4 color = sampleImage(vTexCoord);
                 
-                // --- 1. 降噪 ---
-                if (uNoiseReduction > 0.0 || uChromaNoiseReduction > 0.0) {
-                    // 简化版降噪：使用均值模糊作为 16-bit 的演示
-                    vec3 sum = vec3(0.0);
-                    float totalWeight = 0.0;
-                    for (int x = -1; x <= 1; x++) {
-                        for (int y = -1; y <= 1; y++) {
+                // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
+                
+                if (uNoiseReduction > 0.0) {
+                    // 转换到 YCbCr
+                    vec3 centerRGB = texture(uImageTexture, vTexCoord).rgb;
+                    vec3 centerYCbCr = rgb2ycbcr(centerRGB);
+                    
+                    float centerY = centerYCbCr.x;
+                    vec2 centerCbCr = centerYCbCr.yz;
+                    
+                    // =======================================================
+                    // 🎨 Part 1: 色度降噪 (Chroma Denoise) - 简单粗暴的平滑
+                    // =======================================================
+                    // 色度噪点（红绿斑）最影响观感，且人眼对色度分辨率不敏感。
+                    // 我们使用一个较大的高斯核来彻底抹平色噪。
+                    
+                    vec2 sumCbCr = vec2(0.0);
+                    float sumWeightChroma = 0.0;
+                    
+                    // 半径可以大一点 (比如 3~5)，步长可以大一点以节省性能
+                    int cRadius = 4; 
+                    
+                    for (int x = -cRadius; x <= cRadius; x+=2) { // 步长2优化性能
+                        for (int y = -cRadius; y <= cRadius; y+=2) {
                             vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            sum += sampleImage(vTexCoord + offset).rgb;
-                            totalWeight += 1.0;
+                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
+                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
+                            
+                            // 简单的空间高斯权重
+                            float distSq = float(x*x + y*y);
+                            float weight = exp(-distSq / (2.0 * 4.0)); // Sigma ~ 2.0
+                            
+                            sumCbCr += sampleCbCr * weight;
+                            sumWeightChroma += weight;
                         }
                     }
-                    color.rgb = mix(color.rgb, sum / totalWeight, uNoiseReduction + uChromaNoiseReduction);
-                }
+                    
+                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
+                    
+                    // 根据降噪强度混合：强度低时保留一点原色，强度高时完全使用模糊色
+                    // uNoiseReduction: 0.0 ~ 1.0
+                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
                 
-                // --- 2. 色彩配方 ---
-                if (uColorRecipeEnabled) {
-                    color.rgb *= pow(2.0, uExposure);
-                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
-                    float luma = getLuma(color.rgb);
-                    color.rgb = mix(vec3(luma), color.rgb, uSaturation);
-                    // 其它色彩配方逻辑可以在此补全
+                
+                    // =======================================================
+                    // 💡 Part 2: 亮度降噪 (Luma Denoise) - 双边滤波 (Bilateral)
+                    // =======================================================
+                    // 亮度必须保边！不能用 Box Blur。
+                    // 双边滤波同时考虑“距离”和“亮度差”，只模糊相似的像素。
+                    
+                    float sumY = 0.0;
+                    float sumWeightLuma = 0.0;
+                    
+                    // 亮度降噪半径小一点 (2~3)，保持精细
+                    int lRadius = 3;
+                    
+                    // 动态调整 Sigma (根据降噪强度)
+                    // sigmaSpatial: 空间范围
+                    float sigmaSpatial = 2.0; 
+                    // sigmaRange: 亮度差异容忍度 (越小越保边，越大越糊)
+                    // 关键：根据 uNoiseReduction 动态调整。范围建议 0.05 ~ 0.2
+                    float sigmaRange = 0.05 + uNoiseReduction * 0.15; 
+                    
+                    for (int x = -lRadius; x <= lRadius; x++) {
+                        for (int y = -lRadius; y <= lRadius; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                            
+                            // 采样 (这里只取 Y 即可，甚至可以直接取 RGB 的 G 通道近似，省一次转换)
+                            float sampleY = rgb2ycbcr(texture(uImageTexture, vTexCoord + offset).rgb).x;
+                            
+                            // 1. 空间权重 (Spatial Weight) - 高斯
+                            float distSq = float(x*x + y*y);
+                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
+                            
+                            // 2. 范围权重 (Range Weight) - 核心保边逻辑！
+                            // 如果 sampleY 和 centerY 差异很大（边缘），diff 大，exp 趋近 0，权重忽略
+                            float diff = sampleY - centerY;
+                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
+                            
+                            // 综合权重
+                            float weight = wSpatial * wRange;
+                            
+                            sumY += sampleY * weight;
+                            sumWeightLuma += weight;
+                        }
+                    }
+                    
+                    float finalY = sumY / sumWeightLuma;
+                    
+                    // 细节回掺 (Detail Recovery) - 可选
+                    // 双边滤波有时候会有“塑料感”，可以稍微掺回一点点原始噪点增加质感
+                    // mix(Blur, Original, 0.1)
+                    finalY = mix(finalY, centerY, 0.1); 
+                    
+                    // =======================================================
+                    // 🔄 合成输出
+                    // =======================================================
+                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+            
+                // --- 2. 强力色度降噪 (Chroma Denoise) ---
+                if (uChromaNoiseReduction > 0.0) {
+                    vec3 yuv = rgb2ycbcr(color.rgb);
+                    
+                    vec2 sumUV = vec2(0.0);
+                    float sumWeight = 0.0;
+            
+                    // 基础半径 2.0，滑块拉满时步长极大
+                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0; 
+            
+                    // 阈值越大，越容易模糊(保护越弱)
+                    float colorThreshold = 0.15;
+            
+                    // 采用 5x5 循环
+                    const int RADIUS_UV = 2; 
+                    
+                    for (int x = -RADIUS_UV; x <= RADIUS_UV; x++) {
+                        for (int y = -RADIUS_UV; y <= RADIUS_UV; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize * maxStride;
+                            
+                            vec3 sampleRgb = texture(uImageTexture, vTexCoord + offset).rgb;
+                            // 注意：这里必须用 sampleRgb，不要用 color.rgb
+                            vec3 sampleYuv = rgb2ycbcr(sampleRgb);
+                            
+                            // 1. 距离权重
+                            float distSq = float(x*x + y*y);
+                            float wDist = exp(-distSq / 4.0);
+                            
+                            // 2. 颜色相似度权重
+                            float uvDiff = distance(sampleYuv.yz, yuv.yz);
+                            
+                            float wColor = 1.0 - smoothstep(colorThreshold, colorThreshold + 0.1, uvDiff);
+                            
+                            float weight = wDist * wColor;
+                            
+                            sumUV += sampleYuv.yz * weight;
+                            sumWeight += weight;
+                        }
+                    }
+            
+                    // 防止除以 0 的保护
+                    if (sumWeight > 0.001) {
+                        vec2 cleanUV = sumUV / sumWeight;
+            
+                        // Saturation 曲线混合
+                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
+            
+                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
+                    }
+            
+                    color.rgb = ycbcr2rgb(yuv);
                 }
 
-                // --- 3. LUT ---
+                // === 色彩配方处理（按专业后期流程顺序） ===
+                if (uColorRecipeEnabled) {
+                    // 1. 曝光调整（线性空间，最先执行避免 clipping）
+                    color.rgb *= pow(2.0, uExposure);
+
+                    // 2. 高光/阴影调整（分区调整，基于亮度 mask）
+                    // 使用标准的 NTSC 权重
+                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    float highlightMask = smoothstep(0.5, 1.0, luma);
+                    float shadowMask = smoothstep(0.5, 0.0, luma);
+                    float highlightFactor = 1.0 + uHighlights * 0.5;
+                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
+
+                    vec3 shadowTarget;
+                    if (uShadows > 0.0) {
+                        shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
+                    } else {
+                        shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
+                    }
+                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
+
+                    // 3. 对比度（围绕中灰点调整）
+                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+
+                    // 4. 白平衡调整（色温 + 色调）
+                    color.r += uTemperature * 0.1;
+                    color.b -= uTemperature * 0.1;
+                    color.g += uTint * 0.05;
+
+                    // 5. 饱和度（基于 Luma 的快速算法）
+                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    color.rgb = mix(vec3(gray), color.rgb, uSaturation);
+
+                    // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
+                    float strength = uVibrance * 0.5;
+                    // --- 6.1 蓝色增强 (深邃天空/水面) ---
+                    float baseBlue = color.b - (color.r + color.g) * 0.5;
+                    float blueMask = smoothstep(0.0, 0.2, baseBlue); 
+                    if (blueMask > 0.0) {
+                        // 增加蓝色的纯度（减去R和G的干扰）
+                        vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
+                        color.r -= blueDensity.r * color.r;
+                        color.g -= blueDensity.g * color.g;
+                        // 稍微压暗蓝色，制造胶片重感
+                        color.b -= 0.05 * blueMask * strength;
+                        // 使用 S 曲线增加蓝色区域的对比度/通透感
+                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), blueMask * strength * 0.2);
+                    }
+                    // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
+                    // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
+                    // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
+                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
+                    float warmMask = smoothstep(0.05, 0.25, baseWarm);
+                    if (warmMask > 0.0) {
+                        // 6.2.1 "去脏"：在暖色区域减去互补色(蓝色)，使暖色更干净、通透
+                        color.b -= 0.15 * warmMask * strength; 
+                        // 6.2.2 密度调整：轻微减去绿色，会让黄色向橙/红色偏移
+                        // 如果想要更黄的暖色，可以注释掉下面这行
+                        color.g -= 0.05 * warmMask * strength; 
+                        // 6.2.3 胶片感增强：同样使用 S 曲线混合，增加暖色的"厚度"和饱和度
+                        // 这里的 mix 系数比蓝色稍高，因为人眼对肤色对比度更敏感
+                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), warmMask * strength * 0.25);
+                    }
+
+                    // 7. 褪色效果
+                    if (uFade > 0.0) {
+                        float fadeAmount = uFade * 0.3;
+                        color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
+                        color.rgb += fadeAmount * 0.1;
+                    }
+
+                    // 8. 留银冲洗（Bleach Bypass - 胶片银盐保留效果）
+                    if (uBleachBypass > 0.0) {
+                        // 保留部分银盐：降低饱和度
+                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                        vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
+                        
+                        // 增强对比度
+                        desaturated = (desaturated - 0.5) * 1.3 + 0.5;
+                        
+                        // 色调偏移到冷色调（青绿色）
+                        desaturated.r *= 0.95;
+                        desaturated.g *= 1.02;
+                        desaturated.b *= 1.05;
+                        
+                        // 根据强度混合
+                        color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                    }
+
+                    // 9. 晕影（Vignette - 边缘光线衰减/增强）
+                    if (abs(uVignette) > 0.0) {
+                        // 计算从中心到边缘的距离
+                        vec2 center = vec2(0.5, 0.5);
+                        float dist = distance(vTexCoord, center);
+                        
+                        // 使用 smoothstep 创建平滑过渡
+                        float vignetteMask = smoothstep(0.8, 0.3, dist);
+                        
+                        // 根据 uVignette 符号决定是暗角还是亮角
+                        if (uVignette < 0.0) {
+                            // 暗角：边缘变暗（更强的效果：从0.01到1.0）
+                            color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
+                        } else {
+                            // 亮角：边缘变亮（增强效果）
+                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
+                        }
+                    }
+
+                    // 10. 颗粒（Film Grain - 胶片颗粒感）
+                    if (uFilmGrain > 0.0) {
+                        // 使用纹理坐标生成伪随机噪声
+                        float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
+                        
+                        // 将噪声从 [0,1] 映射到 [-1,1]
+                        noise = (noise - 0.5) * 2.0;
+                        
+                        // 根据亮度自适应调整颗粒强度
+                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                        float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
+                        grainMask = grainMask * 0.5 + 0.5;
+                        
+                        // 应用颗粒（增强强度）
+                        float grainStrength = uFilmGrain * 0.1 * grainMask;
+                        color.rgb += noise * grainStrength;
+                    }
+
+                    // Clamp 到合法范围
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+
+                // === LUT 处理（在色彩配方之后） ===
                 if (uLutEnabled && uLutIntensity > 0.0) {
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
@@ -820,13 +1088,19 @@ class LutImageProcessor {
                 
                 // --- 4. 锐化 ---
                 if (uSharpening > 0.0) {
-                    vec3 neighbors = vec3(0.0);
-                    neighbors += sampleImage(vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb;
-                    neighbors += sampleImage(vTexCoord + vec2(uTexelSize.x, 0.0)).rgb;
-                    neighbors += sampleImage(vTexCoord + vec2(0.0, -uTexelSize.y)).rgb;
-                    neighbors += sampleImage(vTexCoord + vec2(0.0, uTexelSize.y)).rgb;
-                    vec3 blur = neighbors * 0.25;
-                    color.rgb = color.rgb + (color.rgb - blur) * uSharpening * 2.0;
+                    // 使用基于亮度的 Unsharp Mask，避免色彩污染
+                    vec3 inputColor = sampleImage(vTexCoord).rgb;
+                    float inputLuma = getLuma(inputColor);
+
+                    float neighborsLuma = 0.0;
+                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb);
+                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(uTexelSize.x, 0.0)).rgb);
+                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(0.0, -uTexelSize.y)).rgb);
+                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(0.0, uTexelSize.y)).rgb);
+                    float blurLuma = neighborsLuma * 0.25;
+
+                    float detail = inputLuma - blurLuma;
+                    color.rgb += detail * uSharpening * 2.0;
                 }
 
                 fragColor = clamp(color, 0.0, 1.0);

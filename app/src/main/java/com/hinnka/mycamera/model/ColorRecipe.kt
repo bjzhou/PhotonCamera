@@ -37,8 +37,7 @@ data class ColorRecipeParams(
                 shadows == 0f &&
                 filmGrain == 0f &&
                 vignette == 0f &&
-                bleachBypass == 0f &&
-                lutIntensity == 1f
+                bleachBypass == 0f
     }
 
     /**

@@ -1040,42 +1040,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 保存编辑（导出烘焙后的图片）
-     */
-    fun saveEdit(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
-        // 检查 VIP 权限
-        val currentLut = availableLuts.find { it.id == editLutId.value }
-        if (currentLut?.isVip == true && !isPurchased.value) {
-            showPaymentDialog = true
-            return
-        }
-
-        val metadata = (photo.metadata ?: PhotoMetadata()).copy(
-            lutId = editLutId.value,
-            frameId = editFrameId.value,
-            colorRecipeParams = editLutRecipeParams.value,
-            customProperties = editFrameCustomProperties.value,
-            sharpening = editSharpening.value,
-            noiseReduction = editNoiseReduction.value,
-            chromaNoiseReduction = editChromaNoiseReduction.value
-        )
-        viewModelScope.launch {
-            val context = getApplication<Application>()
-            PhotoManager.exportPhoto(
-                context, photo.id, photoProcessor, metadata,
-                sharpening.value, noiseReduction.value,
-                chromaNoiseReduction.value
-            ) { success ->
-                if (success) {
-                    exitEditMode()
-                    loadPhotos()
-                }
-                onComplete(success)
-            }
-        }
-    }
-
-    /**
      * 导出照片到公共目录（带 LUT 烘焙）
      */
     fun exportPhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {

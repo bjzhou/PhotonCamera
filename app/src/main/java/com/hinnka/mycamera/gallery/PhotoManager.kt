@@ -296,7 +296,7 @@ object PhotoManager {
                     processingScope.launch {
                         withContext(Dispatchers.IO) {
                             photoFile.createNewFile()
-                            val bitmap = RawProcessor.processAndToBitmap(context, image, characteristics, captureResult, aspectRatio, rotation) ?: return@withContext
+                            val bitmap = RawProcessor.processAndToBitmap(image, characteristics, captureResult, aspectRatio, rotation) ?: return@withContext
                             if (thumbnail == null) {
                                 generateThumbnail(bitmap, thumbnailFile)
                             }

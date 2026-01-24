@@ -219,6 +219,10 @@ class RawDemosaicProcessor {
                 float b = y + 1.772 * cb;
                 return vec3(r, g, b);
             }
+            
+            float getLuma(vec3 color) {
+                return dot(color, vec3(0.299, 0.587, 0.114));
+            }
 
             void main() {
                 // 从输入纹理采样原始颜色
@@ -437,21 +441,26 @@ class RawDemosaicProcessor {
 
                 // === 后期处理：锐化（在 LUT 之后，作为最后步骤） ===
                 if (uSharpening > 0.0) {
-                    // 使用 Unsharp Mask 算法
-                    vec3 neighbors = vec3(0.0);
-                    neighbors += texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb;
-                    neighbors += texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb;
-                    neighbors += texture(uInputTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb;
-                    neighbors += texture(uInputTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb;
-                    vec3 blur = neighbors * 0.25;
-
-                    // 计算锐化增量（高频分量）
-                    vec3 sharpenDelta = color.rgb - blur;
-
-                    // 应用锐化
+                    // 使用基于亮度的 Unsharp Mask，避免色彩污染
+                    // 1. 计算原始图像的亮度
+                    vec3 inputColor = texture(uInputTexture, vTexCoord).rgb;
+                    float inputLuma = dot(inputColor, vec3(0.299, 0.587, 0.114));
+    
+                    // 2. 计算周围像素的平均亮度 (Blur Luma)
+                    float neighborsLuma = 0.0;
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+                    float blurLuma = neighborsLuma * 0.25;
+    
+                    // 3. 计算亮度高频分量 (Detail)
+                    float detail = inputLuma - blurLuma;
+    
+                    // 4. 将亮度细节叠加到最终输出颜色上
                     float sharpenAmount = uSharpening * 1.5;
-                    color.rgb = color.rgb + sharpenDelta * sharpenAmount;
-
+                    color.rgb += detail * sharpenAmount;
+    
                     // Clamp 防止过曝
                     color.rgb = clamp(color.rgb, 0.0, 1.0);
                 }
@@ -1407,25 +1416,20 @@ class RawDemosaicProcessor {
         GLES30.glUniform1i(uLutInputTextureLoc, 0)
 
         // 上传并绑定 3D LUT 纹理
-        if (lutConfig != null) {
-            uploadLut3DTexture(lutConfig)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
-            GLES30.glUniform1i(uLut3DTextureLoc, 1)
-            GLES30.glUniform1f(uLutSizeLoc, lutConfig.size.toFloat())
-            GLES30.glUniform1f(uLutIntensityLoc, colorRecipeParams?.lutIntensity ?: 1f)
-            GLES30.glUniform1i(uLutEnabledLoc, 1)
-        } else {
-            GLES30.glUniform1f(uLutSizeLoc, 0f)
-            GLES30.glUniform1f(uLutIntensityLoc, 0f)
-            GLES30.glUniform1i(uLutEnabledLoc, 0)
-        }
+        val lutIntensity = colorRecipeParams?.lutIntensity ?: 0f
+        lutConfig?.let { uploadLut3DTexture(it) }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
+        GLES30.glUniform1i(uLut3DTextureLoc, 1)
+        GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
+        GLES30.glUniform1f(uLutIntensityLoc, lutIntensity)
+        GLES30.glUniform1i(uLutEnabledLoc, 1)
 
         // 设置色彩配方参数
         val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
         GLES30.glUniform1i(uColorRecipeEnabledLoc, if (colorRecipeEnabled) 1 else 0)
 
-        if (colorRecipeEnabled && colorRecipeParams != null) {
+        if (colorRecipeEnabled) {
             GLES30.glUniform1f(uExposureLoc, colorRecipeParams.exposure)
             GLES30.glUniform1f(uContrastLoc, colorRecipeParams.contrast)
             GLES30.glUniform1f(uSaturationLoc, colorRecipeParams.saturation)
@@ -1632,17 +1636,14 @@ class RawDemosaicProcessor {
             GLES30.glEnableVertexAttribArray(positionHandle)
             vertexBuffer?.position(0)
             GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
-        } else {
-            PLog.w(TAG, "drawQuad: aPosition attribute not found in program $program")
         }
 
         if (texCoordHandle >= 0) {
             GLES30.glEnableVertexAttribArray(texCoordHandle)
             texCoordBuffer?.position(0)
             GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
-        } else {
-            PLog.w(TAG, "drawQuad: aTexCoord attribute not found in program $program")
         }
+
 
         indexBuffer?.position(0)
         GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, indexBuffer)
