@@ -214,6 +214,8 @@ object RawProcessor {
             }
             dngCreator.setOrientation(orientation)
             dngCreator.writeImage(outputStream, image)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save DNG", e)
         } finally {
             dngCreator.close()
         }

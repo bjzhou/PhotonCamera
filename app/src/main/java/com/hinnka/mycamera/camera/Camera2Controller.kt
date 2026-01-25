@@ -727,10 +727,8 @@ class Camera2Controller(private val context: Context) {
                 }
             }, cameraHandler)
 
-        } catch (e: CameraAccessException) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to open camera", e)
-        } catch (e: SecurityException) {
-            PLog.e(TAG, "Camera permission denied", e)
         }
     }
 
@@ -907,7 +905,7 @@ class Camera2Controller(private val context: Context) {
             )
             device.createCaptureSession(sessionConfig)
 
-        } catch (e: CameraAccessException) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to create preview session", e)
         }
     }
