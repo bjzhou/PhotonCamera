@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -76,7 +77,9 @@ class CustomImportManager(private val context: Context) {
             // 读取 .cube 文件并转换为 .plut
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(plutFile).use { outputStream ->
-                    val success = LutConverter.convertCubeToplut(inputStream, outputStream)
+                    val success = if (fileName.endsWith(".xmp")) {
+                        XmpLutParser.parse(inputStream, outputStream)
+                    } else LutConverter.convertCubeToplut(inputStream, outputStream)
 
                     if (!success) {
                         plutFile.delete()

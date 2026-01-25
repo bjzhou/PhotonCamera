@@ -1,0 +1,214 @@
+package com.hinnka.mycamera.lut
+
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.zip.Inflater
+import javax.xml.parsers.DocumentBuilderFactory
+
+object XmpLutParser {
+
+    private const val BTT_RGB_TABLE = 1
+    private const val RGB_TABLE_VERSION = 1
+    private const val MAGIC_PLUT = 0x54554C50 // 'PLUT' in Little Endian
+
+    private val DECODE_TABLE = IntArray(256) { -1 }.apply {
+        val encodeTable = "0123456789" +
+                "abcdefghij" +
+                "klmnopqrst" +
+                "uvwxyzABCD" +
+                "EFGHIJKLMN" +
+                "OPQRSTUVWX" +
+                "YZ.-:+=^!/" +
+                "*?`'|()[]{" +
+                "}@%$#"
+        for (i in encodeTable.indices) {
+            this[encodeTable[i].code] = i
+        }
+    }
+
+    fun parse(inputStream: InputStream, outputStream: OutputStream): Boolean {
+        val factory = DocumentBuilderFactory.newInstance()
+        factory.isNamespaceAware = true
+        val builder = factory.newDocumentBuilder()
+        val doc = builder.parse(inputStream)
+
+        val crsNs = "http://ns.adobe.com/camera-raw-settings/1.0/"
+        val descriptions = doc.getElementsByTagNameNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "Description")
+        
+        var rgbTableId: String? = null
+        var tableDataEncoded: String? = null
+        var lutTitle = ""
+
+        for (i in 0 until descriptions.length) {
+            val desc = descriptions.item(i) as org.w3c.dom.Element
+            
+            if (desc.hasAttributeNS(crsNs, "RGBTable")) {
+                rgbTableId = desc.getAttributeNS(crsNs, "RGBTable")
+            }
+
+            if (lutTitle.isEmpty() && desc.hasAttributeNS(crsNs, "LookName")) {
+                lutTitle = desc.getAttributeNS(crsNs, "LookName")
+            }
+        }
+
+        if (rgbTableId == null) {
+            // Try searching for any Table_ attribute if RGBTable is missing
+            val attrs = descriptions.item(0).attributes
+            for (j in 0 until attrs.length) {
+                val attr = attrs.item(j)
+                if (attr.nodeName.startsWith("crs:Table_")) {
+                    tableDataEncoded = attr.nodeValue
+                    break
+                }
+            }
+        } else {
+            val tableName = "Table_$rgbTableId"
+            for (i in 0 until descriptions.length) {
+                val desc = descriptions.item(i) as org.w3c.dom.Element
+                if (desc.hasAttributeNS(crsNs, tableName)) {
+                    tableDataEncoded = desc.getAttributeNS(crsNs, tableName)
+                    break
+                }
+            }
+        }
+
+        if (tableDataEncoded == null) {
+            return false
+        }
+
+        val decodedData = decodeBase85(tableDataEncoded)
+        val decompressedData = decompress(decodedData)
+        val lutData = parseLutData(decompressedData)
+
+        return writePlutFile(outputStream, lutData)
+    }
+
+    private fun decodeBase85(input: String): ByteArray {
+        val out = ByteArrayOutputStream()
+        var phase = 0
+        var value = 0L
+
+        for (c in input) {
+            if (c.code > 255) continue
+            val d = DECODE_TABLE[c.code]
+            if (d == -1) continue
+
+            phase++
+            when (phase) {
+                1 -> value = d.toLong()
+                2 -> value += d.toLong() * 85
+                3 -> value += d.toLong() * 85 * 85
+                4 -> value += d.toLong() * 85 * 85 * 85
+                5 -> {
+                    value += d.toLong() * 85 * 85 * 85 * 85
+                    out.write((value and 0xFF).toInt())
+                    out.write(((value shr 8) and 0xFF).toInt())
+                    out.write(((value shr 16) and 0xFF).toInt())
+                    out.write(((value shr 24) and 0xFF).toInt())
+                    phase = 0
+                }
+            }
+        }
+
+        if (phase > 1) {
+            out.write((value and 0xFF).toInt())
+            if (phase > 2) {
+                out.write(((value shr 8) and 0xFF).toInt())
+                if (phase > 3) {
+                    out.write(((value shr 16) and 0xFF).toInt())
+                }
+            }
+        }
+
+        return out.toByteArray()
+    }
+
+    private fun decompress(data: ByteArray): ByteArray {
+        val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+        val uncompressedSize = buffer.int
+        
+        val inflater = Inflater()
+        inflater.setInput(data, 4, data.size - 4)
+        
+        val result = ByteArray(uncompressedSize)
+        val count = inflater.inflate(result)
+        inflater.end()
+        
+        if (count != uncompressedSize) {
+            // Some versions might have a slightly different count, but usually it should match
+        }
+        
+        return result
+    }
+
+    private fun parseLutData(data: ByteArray): LutData {
+        val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+        
+        val btt = buffer.int
+        if (btt != BTT_RGB_TABLE) {
+            throw IllegalArgumentException("Not an RGB table: $btt")
+        }
+        
+        val version = buffer.int
+        if (version != RGB_TABLE_VERSION) {
+            throw IllegalArgumentException("Unsupported RGB table version: $version")
+        }
+        
+        val dimensions = buffer.int
+        val divisions = buffer.int
+        
+        if (dimensions != 3) {
+            throw IllegalArgumentException("Only 3D LUTs are supported, got $dimensions")
+        }
+
+        val nopValue = IntArray(divisions)
+        for (i in 0 until divisions) {
+            nopValue[i] = ((i * 0xFFFF + (divisions / 2)) / (divisions - 1))
+        }
+
+        val size = divisions * divisions * divisions
+        val samples = FloatArray(size * 3)
+        
+        for (bd in 0 until divisions) {
+            for (gd in 0 until divisions) {
+                for (rd in 0 until divisions) {
+                    val index = ((bd * divisions + gd) * divisions + rd) * 3
+
+                    val bf = ((buffer.short.toInt() and 0xFFFF) + nopValue[bd]) and 0xFFFF
+                    val gf = ((buffer.short.toInt() and 0xFFFF) + nopValue[gd]) and 0xFFFF
+                    val rf = ((buffer.short.toInt() and 0xFFFF) + nopValue[rd]) and 0xFFFF
+
+                    samples[index] = rf.toFloat() / 65535f
+                    samples[index + 1] = gf.toFloat() / 65535f
+                    samples[index + 2] = bf.toFloat() / 65535f
+                }
+            }
+        }
+        
+        return LutData(divisions, samples)
+    }
+
+    private fun writePlutFile(outputStream: OutputStream, lut: LutData): Boolean {
+        val size = lut.divisions
+        val expectedSize = size * size * size * 3
+        val buffer = ByteBuffer.allocate(16 + expectedSize).order(ByteOrder.LITTLE_ENDIAN)
+
+        buffer.putInt(MAGIC_PLUT)
+        buffer.putInt(1) // version
+        buffer.putInt(size)
+        buffer.putInt(0) // dataType: 0 = UINT8
+
+        for (f in lut.samples) {
+            buffer.put((f.coerceIn(0f, 1f) * 255f).toInt().toByte())
+        }
+
+        outputStream.write(buffer.array())
+        outputStream.flush()
+        return true
+    }
+
+    class LutData(val divisions: Int, val samples: FloatArray)
+}
