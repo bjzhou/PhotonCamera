@@ -13,6 +13,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
@@ -52,7 +53,6 @@ class Camera2Controller(private val context: Context) {
 
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
-        private const val STATE_WAITING_LOCK = 1 // Waiting for the focus to be locked.
         private const val STATE_WAITING_PRECAPTURE = 2 // Waiting for the exposure to be precapture state.
         private const val STATE_WAITING_NON_PRECAPTURE =
             3 // Waiting for the exposure state to be something other than precapture.
@@ -207,50 +207,32 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private var lastAeState = 0
+
     /**
      * 处理拍照状态机的核心逻辑
      */
     private fun processCaptureState(result: CaptureResult) {
+        val aeState = result.get(CaptureResult.CONTROL_AE_STATE) ?: return
+        if (aeState != lastAeState) {
+            Log.d(TAG, "processCaptureState: aeState = $aeState")
+            lastAeState = aeState
+        }
         when (internalCaptureState) {
             STATE_PREVIEW -> {
                 // 正常预览状态，不做处理
             }
 
-            STATE_WAITING_LOCK -> {
-                // 如果需要 AF 锁定，在这里处理
-                val afState = result.get(CaptureResult.CONTROL_AF_STATE)
-                if (afState == null) {
-                    runCaptureSequence()
-                } else if (CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED == afState ||
-                    CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED == afState
-                ) {
-                    // AE 状态检查
-                    val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                    if (aeState == null || aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
-                        internalCaptureState = STATE_PICTURE_TAKEN
-                        runCaptureSequence()
-                    } else {
-                        runPrecaptureSequence()
-                    }
-                }
-            }
-
             STATE_WAITING_PRECAPTURE -> {
                 // 等待 AE 预取（预闪）完成
-                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                if (aeState == null ||
-                    aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
-                    aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED ||
-                    aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED
-                ) {
+                if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
                     internalCaptureState = STATE_WAITING_NON_PRECAPTURE
                 }
             }
 
             STATE_WAITING_NON_PRECAPTURE -> {
                 // 等待 AE 退出预取状态
-                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-                if (aeState == null || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                if (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
                     internalCaptureState = STATE_PICTURE_TAKEN
                     runCaptureSequence()
                 }
@@ -279,17 +261,18 @@ class Camera2Controller(private val context: Context) {
         try {
             previewRequestBuilder?.let { builder ->
                 // 触发预闪
+                if (_state.value.flashMode == CameraMetadata.FLASH_MODE_SINGLE) {
+                    builder.set(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                    )
+                }
                 builder.set(
                     CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                     CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START
                 )
                 internalCaptureState = STATE_WAITING_PRECAPTURE
                 captureSession?.capture(builder.build(), null, cameraHandler)
-                // 设置回 IDLE，避免重复触发
-                builder.set(
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
-                )
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to run precapture sequence", e)
@@ -992,7 +975,10 @@ class Camera2Controller(private val context: Context) {
             // 1. 全自动曝光：根据闪光灯模式选择对应的 AE_MODE
             state.isIsoAuto && state.isShutterSpeedAuto -> {
                 when (state.flashMode) {
-                    CameraMetadata.FLASH_MODE_SINGLE -> CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                    CameraMetadata.FLASH_MODE_SINGLE -> {
+                        if (isCapture) CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                        else CaptureRequest.CONTROL_AE_MODE_ON
+                    }
                     CameraMetadata.FLASH_MODE_TORCH -> CaptureRequest.CONTROL_AE_MODE_ON
                     else -> CaptureRequest.CONTROL_AE_MODE_ON
                 }
@@ -1071,59 +1057,21 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        if (!state.isIsoAuto || !state.isShutterSpeedAuto) {
-            // 手动曝光模式（AE_MODE = OFF）
-            when (state.flashMode) {
-                CameraMetadata.FLASH_MODE_SINGLE -> {
-                    // 关键修复：预览时不使用闪光灯，只在拍摄时才触发
-                    // 避免在预览流中误触发闪光灯
-                    if (isCapture) {
-                        builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
-                    } else {
-                        builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
-                    }
-                }
-
-                CameraMetadata.FLASH_MODE_TORCH -> {
-                    // 手电筒模式在预览和拍摄时都应该保持常亮
-                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
-
-                    // 关键修复：拍摄时明确禁用 AE 的闪光灯控制，防止闪烁
-                    // TEMPLATE_STILL_CAPTURE 可能会尝试控制闪光灯，需要明确覆盖
-                    if (isCapture) {
-                        // 确保 AE 不会尝试触发闪光灯
-                        builder.set(
-                            CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                            CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
-                        )
-                    }
-                }
-
-                else -> {
+        // 修正：在全自动曝光下，ISP 虽然主导闪光控制，但为了 YUV 模式下的快门同步，
+        // 在拍摄瞬间显式指定 FLASH_MODE_SINGLE 能显著提升兼容性。
+        when (state.flashMode) {
+            CameraMetadata.FLASH_MODE_SINGLE -> {
+                if (isCapture) {
+                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                } else {
                     builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
                 }
             }
-        } else {
-            // 自动曝光模式
-            when (state.flashMode) {
-                CameraMetadata.FLASH_MODE_TORCH -> {
-                    // 手电筒模式：预览和拍摄时都保持常亮
-                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
-
-                    // 自动曝光 + 手电筒模式拍摄时也需要防止闪烁
-                    if (isCapture) {
-                        builder.set(
-                            CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                            CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
-                        )
-                    }
-                }
-
-                else -> {
-                    // 自动曝光模式下，单次闪光和关闭都应当将 FLASH_MODE 设为 OFF
-                    // 闪光灯的行为由 AE_MODE 控制 (例如 CONTROL_AE_MODE_ON_ALWAYS_FLASH)
-                    builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
-                }
+            CameraMetadata.FLASH_MODE_TORCH -> {
+                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
+            }
+            else -> {
+                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
             }
         }
     }
@@ -1953,11 +1901,7 @@ class Camera2Controller(private val context: Context) {
                 pendingCaptureDevice = device
                 pendingCaptureReader = reader
 
-                // 自动曝光 + 单次闪光：需要先触发预闪流程
                 PLog.d(TAG, "启动状态机拍照流程")
-                // 如果当前 AF 模式是自动或连续，可以先锁定 AF，这里为了简单直接走 AE 流程
-                // 如果需要 AF 锁定，可以设置 internalCaptureState = STATE_WAITING_LOCK
-                // 这里我们直接走 AE 预闪
                 runPrecaptureSequence()
             } else {
                 // 其他情况（手动曝光、手电筒模式、不使用闪光灯）：直接拍照
@@ -1980,14 +1924,14 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
-                // 关键修复：拍照请求中也加入预览 Surface
-                // 许多设备要求在拍照时保持预览流活跃，否则会导致相机内部流重构失败，
-                // 从而抛出 ERROR_CAMERA_DEVICE (4) 错误。
                 previewSurface?.let { addTarget(it) }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
                 applyBaseCameraSettings(this, isCapture = true)
+
+                // 强制将此请求的触发器设为 IDLE，防止携带预览中的触发状态
+                set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
 
                 // 从预览请求复制对焦相关设置
                 previewRequestBuilder?.let { preview ->
@@ -2080,35 +2024,22 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
-            // 关键修复：使用单次 capture 调用来发送 CANCEL 信号，
-            // 而不是直接在 setRepeatingRequest 中设置。
-            // 如果在重复请求中设置 CANCEL，某些设备会导致 AE 状态不断重置，从而产生屏幕闪烁。
+            applyBaseCameraSettings(builder, isCapture = false)
+
             builder.set(
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL
             )
-            // 发送单次取消请求
             session.capture(builder.build(), null, cameraHandler)
-
-            // 关键修复：发送完 CANCEL 后立即将触发器重置为 IDLE，用于后续的重复预览请求
             builder.set(
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
             )
-
-            // 重新应用所有设置（确保使用正确的预览参数）
-            applyBaseCameraSettings(builder, isCapture = false)
-
-            // 发送重置后的预览请求（此时触发器是 IDLE）
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
 
-            PLog.d(TAG, "Preview reset after capture (CANCEL sent and IDLE restored)")
-        } catch (e: CameraAccessException) {
-            PLog.e(TAG, "Failed to reset preview after capture", e)
-        } catch (e: IllegalStateException) {
-            PLog.w(TAG, "Failed to reset preview - camera closed", e)
+            PLog.d(TAG, "Preview reset completed (CANCEL -> IDLE)")
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to reset preview after capture", e)
+            PLog.e(TAG, "Failed to reset preview", e)
         }
     }
 

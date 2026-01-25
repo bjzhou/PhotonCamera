@@ -255,33 +255,34 @@ object PhotoManager {
                     val finalHeight = dimensions.second
                     processingScope.launch {
                         withContext(Dispatchers.IO) {
-                            photoFile.createNewFile()
+                            image.use { image ->
+                                photoFile.createNewFile()
+                                // 创建预览用的 Bitmap
+                                val previewBitmap = createBitmap(finalWidth, finalHeight)
 
-                            // 创建预览用的 Bitmap
-                            val previewBitmap = createBitmap(finalWidth, finalHeight)
-
-                            // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
-                            val success = YuvProcessor.processAndSave(
-                                image, aspectRatio, rotation,
-                                yuvFile.absolutePath, previewBitmap
-                            )
-                            if (success) {
-                                // 保存元数据
-                                val metadataWithInfo = metadata.copy(
-                                    width = finalWidth,
-                                    height = finalHeight,
-                                    ratio = aspectRatio,
+                                // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
+                                val success = YuvProcessor.processAndSave(
+                                    image, aspectRatio, rotation,
+                                    yuvFile.absolutePath, previewBitmap
                                 )
-                                metadataFile.writeText(metadataWithInfo.toJson())
-                                if (thumbnail == null) {
-                                    generateThumbnail(previewBitmap, thumbnailFile)
-                                }
-                                FileOutputStream(photoFile).use { outputStream ->
-                                    // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
-                                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                                }
-                                if (shouldAutoSave) {
-                                    exportPhoto(context, photoId, photoProcessor, metadataWithInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                if (success) {
+                                    // 保存元数据
+                                    val metadataWithInfo = metadata.copy(
+                                        width = finalWidth,
+                                        height = finalHeight,
+                                        ratio = aspectRatio,
+                                    )
+                                    metadataFile.writeText(metadataWithInfo.toJson())
+                                    if (thumbnail == null) {
+                                        generateThumbnail(previewBitmap, thumbnailFile)
+                                    }
+                                    FileOutputStream(photoFile).use { outputStream ->
+                                        // 直接从内存中的 Bitmap 生成 8-bit JPEG 副本
+                                        previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                    }
+                                    if (shouldAutoSave) {
+                                        exportPhoto(context, photoId, photoProcessor, metadataWithInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                    }
                                 }
                             }
                         }
@@ -293,36 +294,55 @@ object PhotoManager {
                     val finalHeight = dimensions.second
                     processingScope.launch {
                         withContext(Dispatchers.IO) {
-                            photoFile.createNewFile()
-                            val bitmap = RawProcessor.processAndToBitmap(image, characteristics, captureResult, aspectRatio, rotation) ?: return@withContext
-                            if (thumbnail == null) {
-                                generateThumbnail(bitmap, thumbnailFile)
-                            }
-                            FileOutputStream(photoFile).use { outputStream ->
-                                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
-                            }
-                            bitmap.recycle()
-                        }
-                    }
-                    processingScope.launch {
-                        withContext(Dispatchers.IO) {
-                            // 保存元数据
-                            val metadataWithInfo = metadata.copy(
-                                width = finalWidth,
-                                height = finalHeight,
-                                ratio = aspectRatio,
-                                cropRegion = cropRegion,
-                                sharpening = 0.2f,
-                                noiseReduction = 0f,
-                                chromaNoiseReduction = 0.25f,
-                            )
-                            metadataFile.writeText(metadataWithInfo.toJson())
-                            FileOutputStream(dngFile).use {
-                                RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
-                            }
-                            if (shouldAutoSave) {
-                                exportDng(context, image, metadataWithInfo, characteristics, captureResult, rotation)
-                                exportPhoto(context, photoId, photoProcessor, metadataWithInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                            image.use { image ->
+                                photoFile.createNewFile()
+                                val bitmap = RawProcessor.processAndToBitmap(
+                                    image,
+                                    characteristics,
+                                    captureResult,
+                                    aspectRatio,
+                                    rotation
+                                ) ?: return@withContext
+                                if (thumbnail == null) {
+                                    generateThumbnail(bitmap, thumbnailFile)
+                                }
+                                FileOutputStream(photoFile).use { outputStream ->
+                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
+                                }
+                                bitmap.recycle()
+                                // 保存元数据
+                                val metadataWithInfo = metadata.copy(
+                                    width = finalWidth,
+                                    height = finalHeight,
+                                    ratio = aspectRatio,
+                                    cropRegion = cropRegion,
+                                    sharpening = 0.2f,
+                                    noiseReduction = 0f,
+                                    chromaNoiseReduction = 0.25f,
+                                )
+                                metadataFile.writeText(metadataWithInfo.toJson())
+                                FileOutputStream(dngFile).use {
+                                    RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
+                                }
+                                if (shouldAutoSave) {
+                                    exportDng(
+                                        context,
+                                        image,
+                                        metadataWithInfo,
+                                        characteristics,
+                                        captureResult,
+                                        rotation
+                                    )
+                                    exportPhoto(
+                                        context,
+                                        photoId,
+                                        photoProcessor,
+                                        metadataWithInfo,
+                                        sharpeningValue,
+                                        noiseReductionValue,
+                                        chromaNoiseReductionValue
+                                    )
+                                }
                             }
                         }
                     }
