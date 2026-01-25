@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.*
 import android.os.Build
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
@@ -203,7 +204,7 @@ class PhotoProcessor(
     }
 
 
-    private fun applyFrame(
+    private suspend fun applyFrame(
         input: Bitmap,
         metadata: PhotoMetadata,
     ) : Bitmap {
@@ -212,23 +213,15 @@ class PhotoProcessor(
         if (metadata.frameId != null) {
             val template = frameManager.loadTemplate(metadata.frameId)
             if (template != null) {
-                // 如果 metadata 中没有拍摄信息，尝试从 URI 加载
-                val finalMetadata = if (metadata.deviceModel == null) {
-                    // 如果没有任何来源，使用默认值
-                    metadata.copy(
-                        deviceModel = Build.MODEL,
-                        brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
-                        dateTaken = metadata.dateTaken ?: System.currentTimeMillis(),
-                        width = result.width,
-                        height = result.height
-                    )
-                } else {
-                    // 使用现有 metadata，但确保尺寸正确
-                    metadata.copy(
-                        width = if (metadata.width > 0) metadata.width else result.width,
-                        height = if (metadata.height > 0) metadata.height else result.height
-                    )
-                }
+                val customProperties = frameManager.loadCustomProperties(metadata.frameId)
+                val finalMetadata = metadata.copy(
+                    deviceModel = metadata.deviceModel ?: Build.MODEL,
+                    brand = metadata.brand ?: Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
+                    dateTaken = metadata.dateTaken ?: metadata.dateTaken ?: System.currentTimeMillis(),
+                    width = if (metadata.width > 0) metadata.width else result.width,
+                    height = if (metadata.height > 0) metadata.height else result.height,
+                    customProperties = metadata.customProperties.ifEmpty { customProperties }
+                )
 
                 val framedResult = frameRenderer.render(
                     result,
