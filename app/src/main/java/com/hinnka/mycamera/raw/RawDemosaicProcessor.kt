@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
@@ -361,21 +362,32 @@ class RawDemosaicProcessor {
 
                     // 6. 色彩增强（Vibrance）
                     float strength = uVibrance * 0.5;
+                    // --- 6.1 蓝色增强 (深邃天空/水面) ---
                     float baseBlue = color.b - (color.r + color.g) * 0.5;
-                    float blueMask = smoothstep(0.0, 0.2, baseBlue);
+                    float blueMask = smoothstep(0.0, 0.2, baseBlue); 
                     if (blueMask > 0.0) {
-                        vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
-                        color.r -= blueDensity.r * color.r;
-                        color.g -= blueDensity.g * color.g;
-                        color.b -= 0.05 * blueMask * strength;
-                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), blueMask * strength * 0.2);
+                        // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
+                        color.r = mix(color.r, color.r * 0.7, blueMask * strength);
+                        color.g = mix(color.g, color.g * 0.7, blueMask * strength);
+                        // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
+                        color.b = mix(color.b, color.b * 0.95, blueMask * strength);
+                        // 使用 S 曲线增加蓝色区域的对比度/通透感
+                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                        color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
                     }
-                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7);
+                    // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
+                    // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
+                    // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
+                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
                     float warmMask = smoothstep(0.05, 0.25, baseWarm);
                     if (warmMask > 0.0) {
-                        color.b -= 0.15 * warmMask * strength;
-                        color.g -= 0.05 * warmMask * strength;
-                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), warmMask * strength * 0.25);
+                        // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
+                        color.b = mix(color.b, color.b * 0.85, warmMask * strength); 
+                        // 6.2.2 密度调整
+                        color.g = mix(color.g, color.g * 0.95, warmMask * strength); 
+                        // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
+                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                        color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
                     }
 
                     // 7. 褪色效果
@@ -559,6 +571,7 @@ class RawDemosaicProcessor {
      *
      * @param dngFilePath DNG 文件路径
      * @param aspectRatio 目标宽高比
+     * @param cropRegion 可选裁切区域（在 RAW 纹理空间）
      * @param lutConfig LUT 配置（可选）
      * @param colorRecipeParams 色彩配方参数（可选）
      * @param sharpeningValue 锐化强度 (0.0-1.0)
@@ -569,6 +582,7 @@ class RawDemosaicProcessor {
     suspend fun process(
         dngFilePath: String,
         aspectRatio: AspectRatio,
+        cropRegion: Rect?,
         lutConfig: LutConfig? = null,
         colorRecipeParams: ColorRecipeParams? = null,
         sharpeningValue: Float = 0f,
@@ -600,6 +614,7 @@ class RawDemosaicProcessor {
                     rowStride = it.rowStride,
                     metadata = it.metadata,
                     aspectRatio = aspectRatio,
+                    cropRegion = cropRegion,
                     rotation = it.rotation,  // 使用从 DNG 文件读取的 rotation
                     lutConfig = lutConfig,
                     colorRecipeParams = colorRecipeParams,
@@ -654,6 +669,7 @@ class RawDemosaicProcessor {
 
             // 提取元数据
             val metadata = RawMetadata.create(width, height, characteristics, captureResult)
+            val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
 
             // 使用内部处理方法
             processInternal(
@@ -663,6 +679,7 @@ class RawDemosaicProcessor {
                 rowStride = rawImage.planes[0].rowStride,
                 metadata = metadata,
                 aspectRatio = aspectRatio,
+                cropRegion = cropRegion,
                 rotation = rotation,
                 lutConfig = lutConfig,
                 colorRecipeParams = colorRecipeParams,
@@ -686,6 +703,7 @@ class RawDemosaicProcessor {
         rowStride: Int,
         metadata: RawMetadata,
         aspectRatio: AspectRatio,
+        cropRegion: Rect?,
         rotation: Int,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
@@ -715,28 +733,27 @@ class RawDemosaicProcessor {
         uploadRawTextureFromBuffer(rawData, width, height, rowStride)
         PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
 
-        // 1. 计算裁切后的尺寸
-        // 关键：直接使用 targetRatio 在原始纹理空间裁切，然后根据旋转交换最终尺寸
-        val isSwapped = rotation == 90 || rotation == 270
-        val srcRatio = width.toFloat() / height.toFloat()
+        // 1. 根据 cropRegion 和 aspectRatio 计算裁切后的尺寸
+        val baseWidth = cropRegion?.width() ?: width
+        val baseHeight = cropRegion?.height() ?: height
+        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
         val targetRatio = aspectRatio.getValue(true)  // 使用横向比例，因为 RAW 纹理始终是横向的
 
-        // 在原始空间计算裁切后的尺寸（不翻转 targetRatio）
-        val croppedWidth: Int
-        val croppedHeight: Int
+        var finalCropWidth = baseWidth.toFloat()
+        var finalCropHeight = baseHeight.toFloat()
+
         if (srcRatio > targetRatio) {
-            // 原图更宽，水平方向裁切
-            croppedHeight = height
-            croppedWidth = (height * targetRatio).toInt()
+            // 基础区域更宽，水平方向裁切
+            finalCropWidth = baseHeight * targetRatio
         } else {
-            // 原图更高，垂直方向裁切
-            croppedWidth = width
-            croppedHeight = (width / targetRatio).toInt()
+            // 基础区域更高，垂直方向裁切
+            finalCropHeight = baseWidth / targetRatio
         }
 
         // 旋转后的最终输出尺寸
-        val finalWidth = if (isSwapped) croppedHeight else croppedWidth
-        val finalHeight = if (isSwapped) croppedWidth else croppedHeight
+        val isSwapped = rotation == 90 || rotation == 270
+        val finalWidth = if (isSwapped) finalCropHeight.toInt() else finalCropWidth.toInt()
+        val finalHeight = if (isSwapped) finalCropWidth.toInt() else finalCropHeight.toInt()
 
         // 3. 曝光增益计算
         var exposureGain = 0f
@@ -779,7 +796,7 @@ class RawDemosaicProcessor {
         // 6. 第三步：缩放、旋转、裁剪并输出 (Output Pass)
         setupOutputFramebuffer(finalWidth, finalHeight)
         val outputStart = System.currentTimeMillis()
-        renderOutputPass(metadata, rotation, aspectRatio, finalWidth, finalHeight, sourceTextureForOutput)
+        renderOutputPass(metadata, rotation, aspectRatio, cropRegion, finalWidth, finalHeight, sourceTextureForOutput)
         PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
 
         // 7. 读取结果
@@ -1556,6 +1573,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         rotation: Int,
         aspectRatio: AspectRatio,
+        cropRegion: Rect?,
         finalWidth: Int,
         finalHeight: Int,
         sourceTextureId: Int
@@ -1596,22 +1614,36 @@ class RawDemosaicProcessor {
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
 
         // === 第二步：裁切变换（实际先于旋转执行）===
-        // 在原始纹理空间（横向）进行裁切
-        // 直接使用 targetRatio，不需要翻转
-        val srcRatio = metadata.width.toFloat() / metadata.height.toFloat()
-        val targetRatio = aspectRatio.getValue(true)  // 使用横向比例，因为 RAW 纹理始终是横向的
+        // 处理 cropRegion 和 aspectRatio 双重裁切
+        val baseLeft = cropRegion?.left ?: 0
+        val baseTop = cropRegion?.top ?: 0
+        val baseWidth = cropRegion?.width() ?: metadata.width
+        val baseHeight = cropRegion?.height() ?: metadata.height
 
-        var scaleX = 1.0f
-        var scaleY = 1.0f
+        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
+        val targetRatio = aspectRatio.getValue(true)
+
+        var finalCropWidth = baseWidth.toFloat()
+        var finalCropHeight = baseHeight.toFloat()
+
         if (srcRatio > targetRatio) {
-            // 原图更宽，水平方向缩放裁切
-            scaleX = targetRatio / srcRatio
+            finalCropWidth = baseHeight * targetRatio
         } else {
-            // 原图更高，垂直方向缩放裁切
-            scaleY = srcRatio / targetRatio
+            finalCropHeight = baseWidth / targetRatio
         }
 
-        GlMatrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
+        val finalCropLeft = baseLeft + (baseWidth - finalCropWidth) / 2f
+        val finalCropTop = baseTop + (baseHeight - finalCropHeight) / 2f
+
+        // 计算归一化的中心点和缩放比例
+        val scaleX = finalCropWidth / metadata.width
+        val scaleY = finalCropHeight / metadata.height
+        val centerX = (finalCropLeft + finalCropWidth / 2f) / metadata.width
+        val centerY = (finalCropTop + finalCropHeight / 2f) / metadata.height
+
+        // 应用变换矩阵
+        // 注意：这里的平移是移动到裁切区域的中心
+        GlMatrix.translateM(texMatrix, 0, centerX, centerY, 0f)
         GlMatrix.scaleM(texMatrix, 0, scaleX, scaleY, 1.0f)
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
 

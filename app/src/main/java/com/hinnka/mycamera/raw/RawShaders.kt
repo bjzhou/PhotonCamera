@@ -309,8 +309,8 @@ object RawShaders {
                 // 中值钳位：限制在邻居的 [min, max] 范围内 (适当放宽范围以减少边缘断层)
                 avgDiff = clamp(avgDiff, minDiff - 0.02, maxDiff + 0.02);
                 
-                // 收紧色差范围：在 Raw 域超过 ±0.15 往往是噪点
-                avgDiff = clamp(avgDiff, -0.15, 0.15);
+                // 收紧色差范围
+                avgDiff = clamp(avgDiff, -0.2, 0.2);
                 
                 b = g + avgDiff;
                 
@@ -354,7 +354,7 @@ object RawShaders {
                 float avgDiff = diffSum / (weightSum + epsilon);
                 // 中值钳位：限制在邻居的 [min, max] 范围内 (适当放宽范围以减少边缘断层)
                 avgDiff = clamp(avgDiff, minDiff - 0.02, maxDiff + 0.02);
-                avgDiff = clamp(avgDiff, -0.15, 0.15);
+                avgDiff = clamp(avgDiff, -0.2, 0.2);
                 
                 r = g + avgDiff;
                 
@@ -378,7 +378,7 @@ object RawShaders {
                     float w_right = computeBilateralWeight(g, gEst_right, 1.0);
                     
                     float rDiff = (diff_left * w_left + diff_right * w_right) / (w_left + w_right + epsilon);
-                    rDiff = clamp(rDiff, -0.15, 0.15);
+                    rDiff = clamp(rDiff, -0.2, 0.2);
                     r = g + rDiff;
                     
                     // B 通道 (垂直方向)
@@ -394,7 +394,7 @@ object RawShaders {
                     float w_bottom = computeBilateralWeight(g, gEst_bottom, 1.0);
                     
                     float bDiff = (diff_top * w_top + diff_bottom * w_bottom) / (w_top + w_bottom + epsilon);
-                    bDiff = clamp(bDiff, -0.15, 0.15);
+                    bDiff = clamp(bDiff, -0.2, 0.2);
                     b = g + bDiff;
                     
                 } else {
@@ -413,7 +413,7 @@ object RawShaders {
                     float w_bottom = computeBilateralWeight(g, gEst_bottom, 1.0);
                     
                     float rDiff = (diff_top * w_top + diff_bottom * w_bottom) / (w_top + w_bottom + epsilon);
-                    rDiff = clamp(rDiff, -0.15, 0.15);
+                    rDiff = clamp(rDiff, -0.2, 0.2);
                     r = g + rDiff;
                     
                     // B 通道 (水平方向)
@@ -429,7 +429,7 @@ object RawShaders {
                     float w_right = computeBilateralWeight(g, gEst_right, 1.0);
                     
                     float bDiff = (diff_left * w_left + diff_right * w_right) / (w_left + w_right + epsilon);
-                    bDiff = clamp(bDiff, -0.15, 0.15);
+                    bDiff = clamp(bDiff, -0.2, 0.2);
                     b = g + bDiff;
                 }
             }
@@ -620,11 +620,12 @@ object RawShaders {
             
             // C. 【通透美白】: 提升亮度 (Luma Boost)
             // 这是“冷白皮”的关键。非线性提亮，保护高光不溢出。
-            float lumaBoost = 0.08;
+            float lumaBoost = 0.15;
             // 使用 pow 曲线保护高光，或者简单的加法
             // 这里使用加法但在高光处衰减
-            float highlightProtect = 1.0 - smoothstep(0.7, 1.0, hsl.z);
+            float highlightProtect = 1.0 - smoothstep(0.8, 1.0, hsl.z);
             hsl.z += lumaBoost * isSkin * highlightProtect;
+            hsl.z = max(hsl.z, 0.0);
         
             // ------------------------------------------
             
@@ -647,14 +648,14 @@ object RawShaders {
             float baseBlue = color.b - (color.r + color.g) * 0.5;
             float blueMask = smoothstep(0.0, 0.2, baseBlue); 
             if (blueMask > 0.0) {
-                // 增加蓝色的纯度（减去R和G的干扰）
-                vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
-                color.r -= blueDensity.r * color.r;
-                color.g -= blueDensity.g * color.g;
-                // 稍微压暗蓝色，制造胶片重感
-                color.b -= 0.05 * blueMask * strength;
+                // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
+                color.r = mix(color.r, color.r * 0.7, blueMask * strength);
+                color.g = mix(color.g, color.g * 0.7, blueMask * strength);
+                // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
+                color.b = mix(color.b, color.b * 0.95, blueMask * strength);
                 // 使用 S 曲线增加蓝色区域的对比度/通透感
-                color = mix(color, color * color * (3.0 - 2.0 * color), blueMask * strength * 0.2);
+                vec3 sCurve = color * color * (3.0 - 2.0 * color);
+                color = mix(color, sCurve, blueMask * strength * 0.2);
             }
             // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
             // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
@@ -662,14 +663,13 @@ object RawShaders {
             float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
             float warmMask = smoothstep(0.05, 0.25, baseWarm);
             if (warmMask > 0.0) {
-                // 6.2.1 "去脏"：在暖色区域减去互补色(蓝色)，使暖色更干净、通透
-                color.b -= 0.15 * warmMask * strength; 
-                // 6.2.2 密度调整：轻微减去绿色，会让黄色向橙/红色偏移
-                // 如果想要更黄的暖色，可以注释掉下面这行
-                color.g -= 0.05 * warmMask * strength; 
-                // 6.2.3 胶片感增强：同样使用 S 曲线混合，增加暖色的"厚度"和饱和度
-                // 这里的 mix 系数比蓝色稍高，因为人眼对肤色对比度更敏感
-                color = mix(color, color * color * (3.0 - 2.0 * color), warmMask * strength * 0.25);
+                // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
+                color.b = mix(color.b, color.b * 0.85, warmMask * strength); 
+                // 6.2.2 密度调整
+                color.g = mix(color.g, color.g * 0.95, warmMask * strength); 
+                // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
+                vec3 sCurve = color * color * (3.0 - 2.0 * color);
+                color = mix(color, sCurve, warmMask * strength * 0.25);
             }
             return color;
         }

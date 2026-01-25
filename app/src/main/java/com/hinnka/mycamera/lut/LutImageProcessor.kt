@@ -986,14 +986,14 @@ class LutImageProcessor {
                     float baseBlue = color.b - (color.r + color.g) * 0.5;
                     float blueMask = smoothstep(0.0, 0.2, baseBlue); 
                     if (blueMask > 0.0) {
-                        // 增加蓝色的纯度（减去R和G的干扰）
-                        vec3 blueDensity = vec3(0.3, 0.3, 0.0) * blueMask * strength;
-                        color.r -= blueDensity.r * color.r;
-                        color.g -= blueDensity.g * color.g;
-                        // 稍微压暗蓝色，制造胶片重感
-                        color.b -= 0.05 * blueMask * strength;
+                        // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
+                        color.r = mix(color.r, color.r * 0.7, blueMask * strength);
+                        color.g = mix(color.g, color.g * 0.7, blueMask * strength);
+                        // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
+                        color.b = mix(color.b, color.b * 0.95, blueMask * strength);
                         // 使用 S 曲线增加蓝色区域的对比度/通透感
-                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), blueMask * strength * 0.2);
+                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                        color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
                     }
                     // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
                     // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
@@ -1001,14 +1001,13 @@ class LutImageProcessor {
                     float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
                     float warmMask = smoothstep(0.05, 0.25, baseWarm);
                     if (warmMask > 0.0) {
-                        // 6.2.1 "去脏"：在暖色区域减去互补色(蓝色)，使暖色更干净、通透
-                        color.b -= 0.15 * warmMask * strength; 
-                        // 6.2.2 密度调整：轻微减去绿色，会让黄色向橙/红色偏移
-                        // 如果想要更黄的暖色，可以注释掉下面这行
-                        color.g -= 0.05 * warmMask * strength; 
-                        // 6.2.3 胶片感增强：同样使用 S 曲线混合，增加暖色的"厚度"和饱和度
-                        // 这里的 mix 系数比蓝色稍高，因为人眼对肤色对比度更敏感
-                        color.rgb = mix(color.rgb, color.rgb * color.rgb * (3.0 - 2.0 * color.rgb), warmMask * strength * 0.25);
+                        // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
+                        color.b = mix(color.b, color.b * 0.85, warmMask * strength); 
+                        // 6.2.2 密度调整
+                        color.g = mix(color.g, color.g * 0.95, warmMask * strength); 
+                        // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
+                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                        color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
                     }
 
                     // 7. 褪色效果

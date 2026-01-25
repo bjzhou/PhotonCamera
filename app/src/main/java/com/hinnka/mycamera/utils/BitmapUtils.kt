@@ -166,6 +166,7 @@ object BitmapUtils {
      * @param width 原始宽度
      * @param height 原始高度
      * @param aspectRatio 目标宽高比
+     * @param cropRect 裁切区域 (可选)
      * @param rotation 旋转角度 (0, 90, 180, 270)
      * @return Pair<宽度, 高度> 处理后的尺寸
      */
@@ -173,46 +174,33 @@ object BitmapUtils {
         width: Int,
         height: Int,
         aspectRatio: AspectRatio,
+        cropRect: Rect?,
         rotation: Int
     ): Pair<Int, Int> {
-        // Step 1: 计算旋转后的尺寸
-        val rotatedWidth: Int
-        val rotatedHeight: Int
+        // Step 1: 以 cropRect 或原始尺寸作为基础尺寸
+        val baseWidth = cropRect?.width() ?: width
+        val baseHeight = cropRect?.height() ?: height
 
-        when (rotation) {
-            90, 270 -> {
-                // 旋转 90 或 270 度，宽高互换
-                rotatedWidth = height
-                rotatedHeight = width
-            }
-            else -> {
-                // 旋转 0 或 180 度，宽高不变
-                rotatedWidth = width
-                rotatedHeight = height
-            }
-        }
+        // Step 2: 在原始空间（横向）计算裁切后的尺寸
+        // 逻辑与 RawDemosaicProcessor.processInternal 保持一致
+        val srcRatio = baseWidth.toFloat() / baseHeight.toFloat()
+        val targetRatio = aspectRatio.getValue(true) // 使用横向比例进行计算
 
-        // Step 2: 计算裁切后的尺寸
-        val srcRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
-        val targetRatio = aspectRatio.getValue(false) // width/height
-
-        // 如果宽高比已经匹配，直接返回旋转后的尺寸
-        if (kotlin.math.abs(srcRatio - targetRatio) < 0.01f) {
-            return Pair(rotatedWidth, rotatedHeight)
-        }
-
-        val finalWidth: Int
-        val finalHeight: Int
+        var finalCropWidth = baseWidth.toFloat()
+        var finalCropHeight = baseHeight.toFloat()
 
         if (srcRatio > targetRatio) {
-            // 原图更宽，裁切左右，高度不变
-            finalHeight = rotatedHeight
-            finalWidth = (rotatedHeight * targetRatio).toInt()
-        } else {
-            // 原图更高，裁切上下，宽度不变
-            finalWidth = rotatedWidth
-            finalHeight = (rotatedWidth / targetRatio).toInt()
+            // 基础区域更宽，水平方向裁切
+            finalCropWidth = baseHeight * targetRatio
+        } else if (srcRatio < targetRatio) {
+            // 基础区域更高，垂直方向裁切
+            finalCropHeight = baseWidth / targetRatio
         }
+
+        // Step 3: 根据旋转角度确定最终宽高
+        val isSwapped = rotation == 90 || rotation == 270
+        val finalWidth = if (isSwapped) finalCropHeight.toInt() else finalCropWidth.toInt()
+        val finalHeight = if (isSwapped) finalCropWidth.toInt() else finalCropHeight.toInt()
 
         return Pair(finalWidth, finalHeight)
     }

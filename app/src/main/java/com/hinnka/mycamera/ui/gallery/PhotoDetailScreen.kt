@@ -367,7 +367,7 @@ fun PhotoDetailScreen(
                 Column {
                     InfoRow(stringResource(R.string.photo_info_date), currentPhoto.getFormattedDate())
                     InfoRow(stringResource(R.string.photo_info_resolution), currentPhoto.getResolution())
-                    InfoRow(stringResource(R.string.photo_info_size), currentPhoto.getFormattedSize())
+//                    InfoRow(stringResource(R.string.photo_info_size), currentPhoto.getFormattedSize())
                     currentPhoto.metadata?.let {
                         InfoRow(stringResource(R.string.photo_info_focal_length), it.focalLength35mm ?: "N/A")
                         InfoRow(stringResource(R.string.photo_info_aperture), it.aperture ?: "N/A")

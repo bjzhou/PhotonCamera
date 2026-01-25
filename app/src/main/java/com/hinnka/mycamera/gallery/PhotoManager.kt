@@ -250,14 +250,15 @@ object PhotoManager {
                 generateThumbnail(thumbnail, thumbnailFile)
             }
 
-            // 计算处理后的尺寸
-            val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
-            val finalWidth = dimensions.first
-            val finalHeight = dimensions.second
+            val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
+
 
             // 根据图像格式处理
             when (format) {
                 ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                    val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, null, rotation)
+                    val finalWidth = dimensions.first
+                    val finalHeight = dimensions.second
                     processingScope.launch {
                         withContext(Dispatchers.IO) {
                             photoFile.createNewFile()
@@ -286,13 +287,16 @@ object PhotoManager {
                                     previewBitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
                                 }
                                 if (shouldAutoSave) {
-                                    exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                    exportPhoto(context, photoId, photoProcessor, metadataWithInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
                                 }
                             }
                         }
                     }
                 }
                 ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                    val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, cropRegion, rotation)
+                    val finalWidth = dimensions.first
+                    val finalHeight = dimensions.second
                     processingScope.launch {
                         withContext(Dispatchers.IO) {
                             photoFile.createNewFile()
@@ -310,9 +314,10 @@ object PhotoManager {
                         withContext(Dispatchers.IO) {
                             // 保存元数据
                             val metadataWithInfo = metadata.copy(
-                                width = width,
-                                height = height,
+                                width = finalWidth,
+                                height = finalHeight,
                                 ratio = aspectRatio,
+                                cropRegion = cropRegion,
                                 sharpening = 0.2f,
                                 noiseReduction = 0f,
                                 chromaNoiseReduction = 0.25f,
@@ -322,8 +327,8 @@ object PhotoManager {
                                 RawProcessor.saveToDng(image, characteristics, captureResult, it, rotation)
                             }
                             if (shouldAutoSave) {
-                                exportDng(context, image, metadata, characteristics, captureResult, rotation)
-                                exportPhoto(context, photoId, photoProcessor, metadata, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
+                                exportDng(context, image, metadataWithInfo, characteristics, captureResult, rotation)
+                                exportPhoto(context, photoId, photoProcessor, metadataWithInfo, sharpeningValue, noiseReductionValue, chromaNoiseReductionValue)
                             }
                         }
                     }

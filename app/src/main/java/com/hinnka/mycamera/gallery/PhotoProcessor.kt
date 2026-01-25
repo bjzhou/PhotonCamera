@@ -93,9 +93,11 @@ class PhotoProcessor(
         // 1. 应用 LUT
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val cropRegion = metadata.cropRegion
         val lutResult = RawDemosaicProcessor.getInstance().process(
             dngPath,
-            metadata.ratio ?: AspectRatio.RATIO_4_3, lutConfig, colorRecipeParams,
+            metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion,
+            lutConfig, colorRecipeParams,
                     finalSharpening, finalNoiseReduction, finalChromaNoiseReduction)
         result = lutResult
 

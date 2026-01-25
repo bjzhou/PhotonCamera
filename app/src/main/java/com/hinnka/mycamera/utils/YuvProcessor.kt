@@ -46,7 +46,7 @@ object YuvProcessor {
         val format = image.format
 
         val targetRatio = aspectRatio.getValue(true)
-        val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, rotation)
+        val dimensions = BitmapUtils.calculateProcessedDimensions(width, height, aspectRatio, null, rotation)
         val previewBitmap = createBitmap(dimensions.first, dimensions.second)
 
         processToBitmap(

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.gallery
 
 import android.content.Context
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
@@ -32,6 +33,7 @@ data class PhotoMetadata(
     val width: Int = 0,
     val height: Int = 0,
     val ratio: AspectRatio? = null,
+    val cropRegion: Rect? = null,
     // 拍摄信息
     val deviceModel: String? = null,
     val brand: String? = null,
@@ -123,6 +125,16 @@ data class PhotoMetadata(
             put("width", width)
             put("height", height)
             put("ratio", ratio?.getDisplayName() ?: JSONObject.NULL)
+            put("cropRegion", if (cropRegion != null) {
+                JSONObject().apply {
+                    put("left", cropRegion.left)
+                    put("top", cropRegion.top)
+                    put("right", cropRegion.right)
+                    put("bottom", cropRegion.bottom)
+                }
+            } else {
+                JSONObject.NULL
+            })
             // 拍摄信息
             put("deviceModel", deviceModel ?: JSONObject.NULL)
             put("brand", brand ?: JSONObject.NULL)
@@ -194,6 +206,15 @@ data class PhotoMetadata(
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),
                     ratio = if (obj.isNull("ratio")) null else AspectRatio.fromString(obj.optString("ratio")),
+                    cropRegion = if (obj.isNull("cropRegion")) null else {
+                        val cropObj = obj.getJSONObject("cropRegion")
+                        Rect(
+                            cropObj.optInt("left", 0),
+                            cropObj.optInt("top", 0),
+                            cropObj.optInt("right", 0),
+                            cropObj.optInt("bottom", 0)
+                        )
+                    },
                     // 拍摄信息
                     deviceModel = if (obj.isNull("deviceModel")) null else obj.optString("deviceModel"),
                     brand = if (obj.isNull("brand")) null else obj.optString("brand"),
