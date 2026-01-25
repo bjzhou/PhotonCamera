@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -20,6 +21,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -33,6 +38,7 @@ import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import kotlinx.coroutines.delay
 import me.saket.telephoto.zoomable.ZoomSpec
 
 /**
@@ -427,13 +433,57 @@ private fun ZoomableImage(
         val zoomableState = rememberZoomableImageState(
             zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = 10f))
         )
+        var showOrigin by remember { mutableStateOf(false) }
 
         LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
             onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
         }
 
         Box(
-            modifier = modifier.fillMaxSize(),
+            modifier = modifier.fillMaxSize().pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        // 确认第一个手指按下，且当前只有一个指针
+                        val downEvent = awaitPointerEvent(PointerEventPass.Initial)
+                        if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                            var upEvent: PointerEvent? = null
+                            var isMultiTouch = false
+
+                            // 期间如果出现第二个手指，立即标志并退出
+                            withTimeoutOrNull(longPressTimeout) {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (event.changes.size > 1) {
+                                        isMultiTouch = true
+                                        break
+                                    }
+                                    if (event.type == PointerEventType.Release) {
+                                        upEvent = event
+                                        break
+                                    }
+                                }
+                            }
+
+                            // 如果不是多指操作，才根据结果执行逻辑
+                            if (!isMultiTouch) {
+                                if (upEvent == null) {
+                                    // 确认为长按：显示原图
+                                    showOrigin = true
+                                    // 继续监控直到手指抬起，或者变成多指（开始缩放）
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (event.type == PointerEventType.Release || event.changes.size > 1) {
+                                            break
+                                        }
+                                    }
+                                    showOrigin = false
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             contentAlignment = Alignment.Center
         ) {
             // 使用 remember 缓存 transformation 和 ImageRequest，避免重组时重新创建导致图片闪烁
@@ -444,20 +494,24 @@ private fun ZoomableImage(
 
             var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-            LaunchedEffect(photo.id, metadataHash) {
-                bitmap = viewModel.getPreviewBitmap(photo)
+            LaunchedEffect(photo.id, metadataHash, showOrigin) {
+                suspend fun loadBitmap() {
+                    isLoading = bitmap == null
+                    bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin)
+                    if (bitmap == null) {
+                        delay(500)
+                        loadBitmap()
+                    }
+                    isLoading = bitmap == null
+                }
+                loadBitmap()
             }
 
             if (bitmap != null) {
-                val imageModel = remember(photo.id, metadataHash) {
+                val imageModel = remember(photo.id, metadataHash, bitmap) {
                     ImageRequest.Builder(context)
                         .data(bitmap)
                         .crossfade(true) // 禁用交叉淡入淡出，避免缩放时的抖动
-                        .listener(
-                            onStart = { isLoading = true },
-                            onSuccess = { _, _ -> isLoading = false },
-                            onError = { _, _ -> isLoading = false }
-                        )
                         .build()
                 }
 
@@ -470,7 +524,7 @@ private fun ZoomableImage(
                 )
             }
 
-            if (isLoading || bitmap == null) {
+            if (isLoading) {
                 CircularProgressIndicator(
                     color = AccentOrange,
                     modifier = Modifier.size(48.dp)

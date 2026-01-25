@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -94,8 +96,11 @@ fun PhotoEditScreen(
     val noiseReduction by viewModel.editNoiseReduction.collectAsState()
     val chromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
 
+    var showOrigin by remember { mutableStateOf(false) }
+
     // 编辑标签页状态
     var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理
+    var showControls by remember { mutableStateOf(true) }
 
     LaunchedEffect(
         currentPhoto,
@@ -106,13 +111,14 @@ fun PhotoEditScreen(
         editFrameCustomProperties,
         sharpening,
         noiseReduction,
-        chromaNoiseReduction
+        chromaNoiseReduction,
+        showOrigin
     ) {
         if (currentPhoto == null) return@LaunchedEffect
 
-        isLoadingPreview = true
+        isLoadingPreview = previewBitmap == null
         previewBitmap = withContext(Dispatchers.IO) {
-            viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true)
+            viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true, showOrigin = showOrigin)
         }
         lutPreviews = withContext(Dispatchers.IO) {
             viewModel.loadLutPreviews(currentPhoto)
@@ -146,78 +152,6 @@ fun PhotoEditScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                modifier = Modifier,
-                title = {
-                    Text(
-                        text = stringResource(R.string.edit),
-                        color = Color.White
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.exitEditMode()
-                        onBack()
-                    }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                            tint = Color.White
-                        )
-                    }
-                },
-                actions = {
-                    // 保存元数据按钮
-                    IconButton(
-                        onClick = {
-                            val currentLut = availableLuts.find { it.id == editLutId }
-                            if (currentLut?.isVip == true && !isPurchased) {
-                                viewModel.showPaymentDialog = true
-                                return@IconButton
-                            }
-                            isSaving = true
-                            viewModel.saveEditMetadata(currentPhoto) { success ->
-                                isSaving = false
-                                if (success) {
-                                    onBack()
-                                }
-                            }
-                        },
-                        enabled = !isSaving
-                    ) {
-                        if (isSaving) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = stringResource(R.string.save),
-                                tint = AccentOrange
-                            )
-                        }
-                    }
-
-                    // 导出（烘焙）按钮
-                    /*IconButton(
-                        onClick = { showExportDialog = true },
-                        enabled = !isSaving
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Save,
-                            contentDescription = "Export",
-                            tint = Color.White
-                        )
-                    }*/
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black
-                )
-            )
-        },
         containerColor = Color.Black,
         modifier = modifier
     ) { paddingValues ->
@@ -225,19 +159,129 @@ fun PhotoEditScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .animateContentSize()
         ) {
+            AnimatedVisibility(
+                visible = showControls,
+                enter = slideInVertically(initialOffsetY = { -it }) + expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+            ) {
+                TopAppBar(
+                    modifier = Modifier,
+                    title = {
+                        Text(
+                            text = stringResource(R.string.edit),
+                            color = Color.White
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            viewModel.exitEditMode()
+                            onBack()
+                        }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                                tint = Color.White
+                            )
+                        }
+                    },
+                    actions = {
+                        // 保存元数据按钮
+                        IconButton(
+                            onClick = {
+                                val currentLut = availableLuts.find { it.id == editLutId }
+                                if (currentLut?.isVip == true && !isPurchased) {
+                                    viewModel.showPaymentDialog = true
+                                    return@IconButton
+                                }
+                                isSaving = true
+                                viewModel.saveEditMetadata(currentPhoto) { success ->
+                                    isSaving = false
+                                    if (success) {
+                                        onBack()
+                                    }
+                                }
+                            },
+                            enabled = !isSaving
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.save),
+                                    tint = AccentOrange
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Black
+                    )
+                )
+            }
             // 预览区域
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                // 确认第一个手指按下，且当前只有一个指针
+                                val downEvent = awaitPointerEvent(PointerEventPass.Initial)
+                                if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                                    val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                                    var upEvent: PointerEvent? = null
+                                    var isMultiTouch = false
+
+                                    // 期间如果出现第二个手指，立即标志并退出
+                                    withTimeoutOrNull(longPressTimeout) {
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                            if (event.changes.size > 1) {
+                                                isMultiTouch = true
+                                                break
+                                            }
+                                            if (event.type == PointerEventType.Release) {
+                                                upEvent = event
+                                                break
+                                            }
+                                        }
+                                    }
+
+                                    // 如果不是多指操作，才根据结果执行逻辑
+                                    if (!isMultiTouch) {
+                                        if (upEvent != null) {
+                                            // 快速点击：切换控制区域显隐
+                                            showControls = !showControls
+                                        } else {
+                                            // 确认为长按：显示原图
+                                            showOrigin = true
+                                            // 继续监控直到手指抬起，或者变成多指（开始缩放）
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                if (event.type == PointerEventType.Release || event.changes.size > 1) {
+                                                    break
+                                                }
+                                            }
+                                            showOrigin = false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 // 显示预览
                 ZoomableEditImage(
                     previewBitmap = previewBitmap,
-                    fallbackUri = currentPhoto.uri,
                     contentDescription = stringResource(R.string.edit),
                     modifier = Modifier.fillMaxSize()
                 )
@@ -252,104 +296,57 @@ fun PhotoEditScreen(
             }
 
             // 编辑控制区域
-            Surface(
-                color = Color(0xFF1A1A1A),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                modifier = Modifier.fillMaxWidth()
+            AnimatedVisibility(
+                visible = showControls,
+                enter = slideInVertically(initialOffsetY = { it }) + expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
             ) {
-                Column(
-                    modifier = Modifier.padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
+                Surface(
+                    color = Color(0xFF1A1A1A),
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    // 标签页切换
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    Column(
+                        modifier = Modifier.padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
                     ) {
-                        TabItem(
-                            title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
-                            isSelected = editTab == 0,
-                            onClick = { editTab = 0 }
-                        )
-                        TabItem(
-                            title = stringResource(R.string.recipe_tab_post),
-                            isSelected = editTab == 1,
-                            onClick = { editTab = 1 }
-                        )
-                    }
-
-                    if (editTab == 0) {
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        // LUT 选择器
+                        // 标签页切换
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(24.dp)
                         ) {
-                            Text(
-                                text = stringResource(R.string.filter),
-                                color = Color.White,
-                                fontSize = 16.sp
+                            TabItem(
+                                title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
+                                isSelected = editTab == 0,
+                                onClick = { editTab = 0 }
                             )
-
-                            if (editLutId != null) {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(Color.White.copy(alpha = 0.1f))
-                                        .clickable { showLutEditDialog = true }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Tune,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFFD700),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = stringResource(R.string.color_recipe),
-                                        color = Color.White,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
+                            TabItem(
+                                title = stringResource(R.string.recipe_tab_post),
+                                isSelected = editTab == 1,
+                                onClick = { editTab = 1 }
+                            )
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (editTab == 0) {
 
-                        LutSelector(
-                            availableLuts = viewModel.availableLuts,
-                            currentLutId = editLutId,
-                            lutPreviewBitmaps = lutPreviews,
-                            onLutSelected = { viewModel.setEditLut(it) },
-                            onEditClick = { showLutEditDialog = true },
-                            categoryOrder = categoryOrder
-                        )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            // LUT 选择器
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.filter),
+                                    color = Color.White,
+                                    fontSize = 16.sp
+                                )
 
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // 边框水印选择器
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = stringResource(R.string.frame),
-                                color = Color.White,
-                                fontSize = 16.sp
-                            )
-
-                            if (editFrameId != null) {
-                                val currentFrame = availableFrames.find { it.id == editFrameId }
-                                if (currentFrame?.isEditable == true) {
+                                if (editLutId != null) {
                                     Row(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(16.dp))
                                             .background(Color.White.copy(alpha = 0.1f))
-                                            .clickable { viewModel.showWatermarkSheet = true }
+                                            .clickable { showLutEditDialog = true }
                                             .padding(horizontal = 10.dp, vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -361,71 +358,124 @@ fun PhotoEditScreen(
                                             modifier = Modifier.size(14.dp)
                                         )
                                         Text(
-                                            text = stringResource(R.string.edit),
+                                            text = stringResource(R.string.color_recipe),
                                             color = Color.White,
                                             fontSize = 11.sp
                                         )
                                     }
                                 }
                             }
-                        }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
 
+                            LutSelector(
+                                availableLuts = viewModel.availableLuts,
+                                currentLutId = editLutId,
+                                lutPreviewBitmaps = lutPreviews,
+                                onLutSelected = { viewModel.setEditLut(it) },
+                                onEditClick = { showLutEditDialog = true },
+                                categoryOrder = categoryOrder
+                            )
 
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            state = frameScrollState
-                        ) {
-                            // 无边框选项
-                            item {
-                                FrameOption(
-                                    name = stringResource(R.string.none),
-                                    isSelected = editFrameId == null,
-                                    isCustom = false,  // 无边框不是自定义
-                                    onClick = { viewModel.setEditFrame(null) }
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // 边框水印选择器
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.frame),
+                                    color = Color.White,
+                                    fontSize = 16.sp
                                 )
-                            }
 
-                            // 边框选项
-                            items(availableFrames) { frame ->
-                                FrameOption(
-                                    name = frame.name,
-                                    isSelected = editFrameId == frame.id,
-                                    isCustom = !frame.isBuiltIn,  // 添加自定义标识
-                                    isEditable = frame.isEditable,
-                                    onClick = {
-                                        if (editFrameId == frame.id) {
-                                            viewModel.showWatermarkSheet = true
-                                        } else {
-                                            viewModel.setEditFrame(frame.id)
+                                if (editFrameId != null) {
+                                    val currentFrame = availableFrames.find { it.id == editFrameId }
+                                    if (currentFrame?.isEditable == true) {
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(Color.White.copy(alpha = 0.1f))
+                                                .clickable { viewModel.showWatermarkSheet = true }
+                                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Tune,
+                                                contentDescription = null,
+                                                tint = Color(0xFFFFD700),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = stringResource(R.string.edit),
+                                                color = Color.White,
+                                                fontSize = 11.sp
+                                            )
                                         }
                                     }
-                                )
+                                }
                             }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                state = frameScrollState
+                            ) {
+                                // 无边框选项
+                                item {
+                                    FrameOption(
+                                        name = stringResource(R.string.none),
+                                        isSelected = editFrameId == null,
+                                        isCustom = false,  // 无边框不是自定义
+                                        onClick = { viewModel.setEditFrame(null) }
+                                    )
+                                }
+
+                                // 边框选项
+                                items(availableFrames) { frame ->
+                                    FrameOption(
+                                        name = frame.name,
+                                        isSelected = editFrameId == frame.id,
+                                        isCustom = !frame.isBuiltIn,  // 添加自定义标识
+                                        isEditable = frame.isEditable,
+                                        onClick = {
+                                            if (editFrameId == frame.id) {
+                                                viewModel.showWatermarkSheet = true
+                                            } else {
+                                                viewModel.setEditFrame(frame.id)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            // 细节处理调整 (锐化, 降噪, 杂色降噪)
+                            SliderSettingItem(
+                                title = stringResource(R.string.settings_sharpening),
+                                value = sharpening,
+                                valueRange = 0f..1f,
+                                onValueChange = { viewModel.setSharpening(it) }
+                            )
+                            SliderSettingItem(
+                                title = stringResource(R.string.settings_noise_reduction),
+                                value = noiseReduction,
+                                valueRange = 0f..1f,
+                                onValueChange = { viewModel.setNoiseReduction(it) }
+                            )
+                            SliderSettingItem(
+                                title = stringResource(R.string.settings_chroma_noise_reduction),
+                                value = chromaNoiseReduction,
+                                valueRange = 0f..1f,
+                                onValueChange = { viewModel.setChromaNoiseReduction(it) }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
-                    } else {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        // 细节处理调整 (锐化, 降噪, 杂色降噪)
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_sharpening),
-                            value = sharpening,
-                            valueRange = 0f..1f,
-                            onValueChange = { viewModel.setSharpening(it) }
-                        )
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_noise_reduction),
-                            value = noiseReduction,
-                            valueRange = 0f..1f,
-                            onValueChange = { viewModel.setNoiseReduction(it) }
-                        )
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_chroma_noise_reduction),
-                            value = chromaNoiseReduction,
-                            valueRange = 0f..1f,
-                            onValueChange = { viewModel.setChromaNoiseReduction(it) }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }
@@ -791,38 +841,18 @@ private fun WatermarkEditSheet(
 @Composable
 private fun ZoomableEditImage(
     previewBitmap: Bitmap?,
-    fallbackUri: android.net.Uri,
     contentDescription: String,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var isLoading by remember { mutableStateOf(true) }
     val zoomableState = rememberZoomableImageState(
         zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = 10f))
     )
 
-    // 根据是否有预览位图选择数据源
-    val model = if (previewBitmap != null) {
-        ImageRequest.Builder(context)
-            .data(previewBitmap)
-            .crossfade(true)
-            .listener(
-                onStart = { isLoading = true },
-                onSuccess = { _, _ -> isLoading = false },
-                onError = { _, _ -> isLoading = false }
-            )
-            .build()
-    } else {
-        ImageRequest.Builder(context)
-            .data(fallbackUri)
-            .crossfade(true)
-            .listener(
-                onStart = { isLoading = true },
-                onSuccess = { _, _ -> isLoading = false },
-                onError = { _, _ -> isLoading = false }
-            )
-            .build()
-    }
+    val model = ImageRequest.Builder(context)
+        .data(previewBitmap)
+        .crossfade(true)
+        .build()
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -835,12 +865,5 @@ private fun ZoomableEditImage(
             state = zoomableState,
             modifier = Modifier.fillMaxSize()
         )
-
-        if (isLoading) {
-            CircularProgressIndicator(
-                color = AccentOrange,
-                modifier = Modifier.size(48.dp)
-            )
-        }
     }
 }

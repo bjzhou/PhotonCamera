@@ -187,6 +187,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var batchDeletePendingIntent: android.app.PendingIntent? by mutableStateOf(null)
         private set
 
+
+    private var previewBitmapCache = WeakHashMap<String, Bitmap>()
+
     init {
         loadPhotos()
 
@@ -940,7 +943,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 获取应用 LUT 和边框后的预览 Bitmap
      */
-    suspend fun getPreviewBitmap(photo: PhotoData, useGlobalEdit: Boolean = false): Bitmap? {
+    suspend fun getPreviewBitmap(photo: PhotoData, useGlobalEdit: Boolean = false, showOrigin: Boolean = false): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val context = getApplication<Application>()
@@ -972,12 +975,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
-                val bitmap = PhotoManager.loadBitmap(context, photo.id) ?: return@withContext null
-                // 预览生成
-                photoProcessor.processBitmap(
-                    bitmap, finalMetadata,
-                    finalS, finalNR, finalCNR
-                )
+                val bitmap = previewBitmapCache[photo.id] ?: PhotoManager.loadBitmap(context, photo.id) ?: return@withContext null
+                previewBitmapCache[photo.id] = bitmap
+
+                if (showOrigin) {
+                    bitmap
+                } else {
+                    // 预览生成
+                    photoProcessor.processBitmap(
+                        bitmap, finalMetadata,
+                        finalS, finalNR, finalCNR
+                    )
+                }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to create preview", e)
                 null
