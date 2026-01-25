@@ -46,7 +46,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 内容仓库（单例，与 CameraViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
-    private val lutImageProcessor = LutImageProcessor()
+    private val lutImageProcessor = contentRepository.imageProcessor
     private val frameRenderer = FrameRenderer(application)
     private val photoProcessor = PhotoProcessor(
         contentRepository.lutManager,
@@ -403,37 +403,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    suspend fun loadLutPreviews(photo: PhotoData): Map<String, Bitmap> {
+    fun loadThumbnail(photo: PhotoData): Bitmap? {
         val context = getApplication<Application>()
         val inputStream = context.contentResolver.openInputStream(photo.thumbnailUri)
         val bitmap = BitmapFactory.decodeStream(inputStream)
         inputStream?.close()
-
-        if (bitmap == null) return emptyMap()
-
-        val previews = mutableMapOf<String, Bitmap>()
-
-        availableLuts.forEach { lutInfo ->
-            val lutConfig = withContext(Dispatchers.IO) {
-                contentRepository.lutManager.loadLut(lutInfo.id)
-            }
-
-            if (lutConfig != null) {
-                val colorRecipeParams = withContext(Dispatchers.IO) {
-                    contentRepository.lutManager.loadColorRecipeParams(lutInfo.id)
-                }
-                lutImageProcessor.applyLut(
-                    bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false),
-                    lutConfig = lutConfig,
-                    colorRecipeParams = colorRecipeParams
-                    // 预览不需要软件处理
-                ).let { preview ->
-                    previews[lutInfo.id] = preview
-                }
-            }
-        }
-
-        return previews
+        return bitmap
     }
 
     /**

@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,9 +30,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * LUT 选择器组件
@@ -42,7 +46,7 @@ import kotlinx.coroutines.launch
 fun LutSelector(
     availableLuts: List<LutInfo>,
     currentLutId: String?,
-    lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
+    thumbnail: Bitmap?,
     onLutSelected: (String?) -> Unit,
     onEditClick: (() -> Unit)? = null,
     categoryOrder: List<String> = emptyList(),
@@ -145,8 +149,9 @@ fun LutSelector(
             // LUT 列表
             items(filteredLuts, key = { it.id }) { lut ->
                 LutItem(
+                    id = lut.id,
                     name = lut.getName(),
-                    previewBitmap = lutPreviewBitmaps[lut.id],
+                    previewBitmap = thumbnail,
                     isSelected = currentLutId == lut.id,
                     isVip = lut.isVip,
                     isCustom = !lut.isBuiltIn,
@@ -173,6 +178,7 @@ fun LutSelector(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LutItem(
+    id: String,
     name: String,
     previewBitmap: Bitmap?,
     isSelected: Boolean,
@@ -182,6 +188,7 @@ private fun LutItem(
     isCustom: Boolean = false,  // 添加自定义标识参数
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val backgroundColor = if (isSelected) {
         Color.White.copy(alpha = 0.3f)
     } else {
@@ -192,6 +199,28 @@ private fun LutItem(
         Color.White
     } else {
         Color.Gray.copy(alpha = 0.5f)
+    }
+
+    var bitmap by remember(previewBitmap) { mutableStateOf(previewBitmap) }
+
+    LaunchedEffect(previewBitmap) {
+        val contentRepository = ContentRepository.getInstance(context)
+        val lutConfig = withContext(Dispatchers.IO) {
+            contentRepository.lutManager.loadLut(id)
+        }
+
+        if (lutConfig != null) {
+            val colorRecipeParams = contentRepository.lutManager.loadColorRecipeParams(id)
+            // LUT 预览生成：禁用软件处理（预览图小，不需要降噪/锐化）
+            bitmap = previewBitmap?.let {
+                contentRepository.imageProcessor.applyLut(
+                    bitmap = it,
+                    lutConfig = lutConfig,
+                    colorRecipeParams = colorRecipeParams
+                    // 预览不需要软件处理
+                )
+            }
+        }
     }
 
     Column(
@@ -217,7 +246,7 @@ private fun LutItem(
                 .then(
                     if (isNone) {
                         Modifier.background(Color.DarkGray)
-                    } else if (previewBitmap != null) {
+                    } else if (bitmap != null) {
                         // 显示真实预览图
                         Modifier
                     } else {
@@ -236,9 +265,9 @@ private fun LutItem(
             contentAlignment = Alignment.Center
         ) {
             // 显示预览图片
-            if (!isNone && previewBitmap != null) {
+            if (!isNone && bitmap != null) {
                 Image(
-                    bitmap = previewBitmap.asImageBitmap(),
+                    bitmap = bitmap!!.asImageBitmap(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -345,7 +374,7 @@ private fun LutItem(
 fun LutControlPanel(
     availableLuts: List<LutInfo>,
     currentLutId: String?,
-    lutPreviewBitmaps: Map<String, Bitmap> = emptyMap(),
+    thumbnail: Bitmap?,
     onLutSelected: (String?) -> Unit,
     categoryOrder: List<String> = emptyList(),
     modifier: Modifier = Modifier
@@ -411,7 +440,7 @@ fun LutControlPanel(
         LutSelector(
             availableLuts = availableLuts,
             currentLutId = currentLutId,
-            lutPreviewBitmaps = lutPreviewBitmaps,
+            thumbnail = thumbnail,
             onLutSelected = onLutSelected,
             onEditClick = { showLutEditDialog = true },
             categoryOrder = categoryOrder

@@ -85,7 +85,7 @@ fun PhotoEditScreen(
 
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var lutPreviews by remember { mutableStateOf<Map<String, Bitmap>>(emptyMap()) }
+    var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     // 边框编辑状态
     val editFrameId by viewModel.editFrameId.collectAsState()
@@ -120,8 +120,8 @@ fun PhotoEditScreen(
         previewBitmap = withContext(Dispatchers.IO) {
             viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true, showOrigin = showOrigin)
         }
-        lutPreviews = withContext(Dispatchers.IO) {
-            viewModel.loadLutPreviews(currentPhoto)
+        thumbnailBitmap = withContext(Dispatchers.IO) {
+            viewModel.loadThumbnail(currentPhoto)
         }
         isLoadingPreview = false
     }
@@ -371,7 +371,7 @@ fun PhotoEditScreen(
                             LutSelector(
                                 availableLuts = viewModel.availableLuts,
                                 currentLutId = editLutId,
-                                lutPreviewBitmaps = lutPreviews,
+                                thumbnail = thumbnailBitmap,
                                 onLutSelected = { viewModel.setEditLut(it) },
                                 onEditClick = { showLutEditDialog = true },
                                 categoryOrder = categoryOrder

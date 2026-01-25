@@ -6,7 +6,6 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -23,7 +22,6 @@ import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.OrientationObserver
@@ -52,7 +50,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 内容仓库（单例，与 GalleryViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
-    private val lutImageProcessor = LutImageProcessor()
+    private val lutImageProcessor = contentRepository.imageProcessor
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -99,8 +97,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     // LUT 预览图缓存（lutId -> 预览Bitmap）
-    var lutPreviewBitmaps: Map<String, Bitmap> by mutableStateOf(emptyMap())
-        private set
+    var previewThumbnail by mutableStateOf<Bitmap?>(null)
 
     // 是否正在生成预览
     private var isGeneratingPreviews = false
@@ -654,39 +651,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 设置回调接收原始 YUV 预览帧
         cameraController.onPreviewFrameCaptured = { bitmap ->
             viewModelScope.launch(Dispatchers.Default) {
-                try {
-                    // 生成所有 LUT 预览
-                    val newPreviews = mutableMapOf<String, Bitmap>()
-
-                    availableLutList.forEach { lutInfo ->
-                        val lutConfig = withContext(Dispatchers.IO) {
-                            contentRepository.lutManager.loadLut(lutInfo.id)
-                        }
-
-                        if (lutConfig != null) {
-                            val colorRecipeParams = contentRepository.lutManager.loadColorRecipeParams(lutInfo.id)
-                            // LUT 预览生成：禁用软件处理（预览图小，不需要降噪/锐化）
-                            val previewBitmap = lutImageProcessor.applyLut(
-                                bitmap = bitmap,
-                                lutConfig = lutConfig,
-                                colorRecipeParams = colorRecipeParams
-                                // 预览不需要软件处理
-                            )
-                            newPreviews[lutInfo.id] = previewBitmap
-                        }
-                    }
-
-                    // 更新预览图
-                    withContext(Dispatchers.Main) {
-                        lutPreviewBitmaps.values.forEach { it.recycle() }
-                        lutPreviewBitmaps = newPreviews
-                        isGeneratingPreviews = false
-                        PLog.d(TAG, "Generated ${newPreviews.size} LUT previews from YUV")
-                    }
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to generate LUT previews", e)
-                    isGeneratingPreviews = false
-                }
+                previewThumbnail = bitmap
+                isGeneratingPreviews = false
             }
         }
 
@@ -741,14 +707,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.e(TAG, "Failed to convert YUV to Bitmap", e)
             null
         }
-    }
-
-    /**
-     * 清除 LUT 预览缓存
-     */
-    fun clearLutPreviews() {
-        lutPreviewBitmaps.values.forEach { it.recycle() }
-        lutPreviewBitmaps = emptyMap()
     }
 
     // ==================== 边框相关方法 ====================
@@ -1254,8 +1212,5 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutImageProcessor.release()
         contentRepository.frameManager.clearCache()
         shutterSoundPlayer.release()
-
-        // 清理 LUT 预览图
-        clearLutPreviews()
     }
 }

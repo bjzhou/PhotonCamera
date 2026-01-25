@@ -3,6 +3,7 @@ package com.hinnka.mycamera.data
 import android.content.Context
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
+import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +37,8 @@ class ContentRepository private constructor(context: Context) {
     val lutManager = LutManager(appContext)
     val frameManager = FrameManager(appContext)
     private val customImportManager = CustomImportManager(appContext)
+
+    val imageProcessor = LutImageProcessor()
 
     // 使用 StateFlow 存储可用内容列表，支持响应式更新
     private val _availableLuts = MutableStateFlow<List<LutInfo>>(emptyList())

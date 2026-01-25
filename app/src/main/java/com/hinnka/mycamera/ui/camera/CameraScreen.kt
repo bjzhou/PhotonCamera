@@ -38,10 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
-import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.ui.components.LutControlPanel
@@ -418,7 +416,7 @@ fun CameraScreen(
                     LutControlPanel(
                         availableLuts = viewModel.availableLutList,
                         currentLutId = currentLutId,
-                        lutPreviewBitmaps = viewModel.lutPreviewBitmaps,
+                        thumbnail = viewModel.previewThumbnail,
                         onLutSelected = { viewModel.setLut(it) },
                         categoryOrder = categoryOrder,
                         modifier = Modifier.fillMaxWidth()
