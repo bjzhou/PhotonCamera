@@ -140,35 +140,27 @@ class PhotoProcessor(
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
         val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
+        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
+        val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+
         // 1. 应用 LUT
-        if (metadata.lutId != null) {
-            val lutConfig = lutManager.loadLut(metadata.lutId)
-            val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
-            if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
-                val width = input[0].toInt() and 0xFFFF
-                val height = input[1].toInt() and 0xFFFF
-                val pixelCount = width * height
-                val pixelData = ShortArray(pixelCount * 4)
-                System.arraycopy(input, 2, pixelData, 0, pixelData.size)
+        val width = input[0].toInt() and 0xFFFF
+        val height = input[1].toInt() and 0xFFFF
+        val pixelCount = width * height
+        val pixelData = ShortArray(pixelCount * 4)
+        System.arraycopy(input, 2, pixelData, 0, pixelData.size)
+        val shortBuffer = ShortBuffer.wrap(pixelData)
 
-                val shortBuffer = ShortBuffer.wrap(pixelData)
-                val lutResult = lutImageProcessor.applyLut(
-                    shortBuffer,
-                    metadata.width,
-                    metadata.height,
-                    lutConfig,
-                    colorRecipeParams,
-                    finalSharpening,
-                    finalNoiseReduction,
-                    finalChromaNoiseReduction
-                )
-                result = lutResult
-            }
-        }
-
-        if (result == null) {
-            result = YuvProcessor.rgb16ToBitmap(input)
-        }
+        result = lutImageProcessor.applyLut(
+            shortBuffer,
+            metadata.width,
+            metadata.height,
+            lutConfig,
+            colorRecipeParams,
+            finalSharpening,
+            finalNoiseReduction,
+            finalChromaNoiseReduction
+        )
 
         result = applyFrame(result, metadata)
 
@@ -198,22 +190,18 @@ class PhotoProcessor(
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
         val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
+        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
+        val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+
         // 1. 应用 LUT
-        if (metadata.lutId != null) {
-            val lutConfig = lutManager.loadLut(metadata.lutId)
-            val colorRecipeParams = lutManager.loadColorRecipeParams(metadata.lutId)
-            if (lutConfig != null && colorRecipeParams.lutIntensity > 0f) {
-                val lutResult = lutImageProcessor.applyLut(
-                    result,
-                    lutConfig,
-                    colorRecipeParams,
-                    finalSharpening,
-                    finalNoiseReduction,
-                    finalChromaNoiseReduction
-                )
-                result = lutResult
-            }
-        }
+        result = lutImageProcessor.applyLut(
+            result,
+            lutConfig,
+            colorRecipeParams,
+            finalSharpening,
+            finalNoiseReduction,
+            finalChromaNoiseReduction
+        )
 
         result = applyFrame(result, metadata)
         
