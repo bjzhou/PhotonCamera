@@ -242,8 +242,9 @@ class FrameRenderer(private val context: Context) {
 
         val height = bottom - top
 
-        val logoLineSet = visibleElements.filterIsInstance<FrameElement.Logo>().map { it.line }.toSet()
-        val lineWeights = allLines.map { if (logoLineSet.contains(it)) 2f else 1.0f }
+        val lineWeights = allLines.map { line ->
+            visibleElements.filter { it.line == line }.maxBy { it.size }.size.toFloat()
+        }
         val totalWeight = lineWeights.sum()
 
         /**
@@ -594,13 +595,12 @@ class FrameRenderer(private val context: Context) {
             val intrinsicW = drawable.intrinsicWidth
             val intrinsicH = drawable.intrinsicHeight
             return if (intrinsicW > 0 && intrinsicH > 0) {
-                val ratio = intrinsicW.toFloat() / intrinsicH.toFloat()
-                if (ratio >= 1f) {
-                    // 宽大于高，以目标 size 为高，按比例计算宽
-                    (size * ratio).toInt() to size
+                val ratio = (intrinsicW.toFloat() / intrinsicH.toFloat())
+                if (ratio > 3f) {
+                    // 超宽图标，限制最大宽度
+                    size * 3 to size
                 } else {
-                    // 高大于宽，以目标 size 为宽，按比例计算高
-                    size to (size / ratio).toInt()
+                    (size * ratio).toInt() to size
                 }
             } else {
                 // 无内在尺寸，退回到方形
@@ -668,7 +668,7 @@ class FrameRenderer(private val context: Context) {
         "redmi" to listOf(R.drawable.ic_brand_xiaomi, R.drawable.ic_brand_xiaomi),
         "poco" to listOf(R.drawable.ic_brand_xiaomi, R.drawable.ic_brand_xiaomi),
         "huawei" to listOf(R.drawable.ic_brand_huawei, R.drawable.ic_brand_huawei_light),
-        "honor" to listOf(R.drawable.ic_brand_honor, R.drawable.ic_brand_honor_light),
+        "honor" to listOf(R.drawable.ic_brand_honor, R.drawable.ic_brand_honor),
         "oppo" to listOf(R.drawable.ic_brand_oppo, R.drawable.ic_brand_oppo),
         "realme" to listOf(R.drawable.ic_brand_oppo, R.drawable.ic_brand_oppo),
         "oneplus" to listOf(R.drawable.ic_brand_oppo, R.drawable.ic_brand_oppo),
@@ -679,7 +679,7 @@ class FrameRenderer(private val context: Context) {
         "canon" to listOf(R.drawable.ic_brand_canon, R.drawable.ic_brand_canon),
         "dji" to listOf(R.drawable.ic_brand_dji, R.drawable.ic_brand_dji),
         "fujifilm" to listOf(R.drawable.ic_brand_fujifilm, R.drawable.ic_brand_fujifilm_light),
-        "hasselblad" to listOf(R.drawable.ic_brand_hasselblad, R.drawable.ic_brand_hasselblad_light),
+        "hasselblad" to listOf(R.drawable.ic_brand_hasselblad, R.drawable.ic_brand_hasselblad),
         "leica" to listOf(R.drawable.ic_brand_leica, R.drawable.ic_brand_leica),
         "nikon" to listOf(R.drawable.ic_brand_nikon, R.drawable.ic_brand_nikon),
         "panasonic" to listOf(R.drawable.ic_brand_panasonic, R.drawable.ic_brand_panasonic),

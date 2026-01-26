@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -147,20 +148,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 可用的边框列表
     var availableFrames: List<FrameInfo> by mutableStateOf(emptyList())
         private set
-
-    // 水印自定义属性（从 FrameManager 持久化加载）
-    @OptIn(ExperimentalCoroutinesApi::class)
-    var editFrameCustomProperties = editFrameId.flatMapLatest { id ->
-        if (id == null) {
-            flowOf(emptyMap())
-        } else {
-            contentRepository.frameManager.getCustomProperties(id)
-        }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyMap()
-    )
 
     // 细节处理编辑状态 (Sharpening, Noise Reduction, Chroma Noise Reduction)
     var editSharpening = MutableStateFlow(0f)
@@ -859,10 +846,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editFrameId.value = frameId
     }
 
+    suspend fun getEditCustomProperties(frameId: String): Map<String, String> {
+        return contentRepository.frameManager.loadCustomProperties(frameId)
+    }
+
     /**
      * 保存当前边框的自定义属性到持久化存储
      */
     fun saveEditCustomProperties(properties: Map<String, String>) {
+        currentPhotoMetadata = currentPhotoMetadata?.copy(
+            customProperties = properties
+        )
         viewModelScope.launch {
             editFrameId.value?.let { contentRepository.frameManager.saveCustomProperties(it, properties) }
         }
@@ -930,12 +924,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val finalNR: Float
                 val finalCNR: Float
 
+                val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
+                Log.d(TAG, "getPreviewBitmap: ${metadata.customProperties}")
+
                 if (useGlobalEdit) {
-                    finalMetadata = (photo.metadata ?: PhotoMetadata()).copy(
+                    finalMetadata = (currentPhotoMetadata ?: metadata).copy(
                         lutId = editLutId.value,
                         frameId = editFrameId.value,
                         colorRecipeParams = editLutRecipeParams.value,
-                        customProperties = editFrameCustomProperties.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value
@@ -944,7 +940,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     finalNR = editNoiseReduction.value
                     finalCNR = editChromaNoiseReduction.value
                 } else {
-                    finalMetadata = photo.metadata ?: PhotoMetadata()
+                    finalMetadata = metadata
                     finalS = finalMetadata.sharpening ?: (if (finalMetadata.isImported) 0f else sharpening.value)
                     finalNR =
                         finalMetadata.noiseReduction ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
@@ -991,7 +987,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     lutId = editLutId.value,
                     frameId = editFrameId.value,
                     colorRecipeParams = editLutRecipeParams.value,
-                    customProperties = editFrameCustomProperties.value,
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value

@@ -42,6 +42,7 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.frame.TextType
+import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.PaymentDialog
@@ -92,7 +93,7 @@ fun PhotoEditScreen(
     // 边框编辑状态
     val editFrameId by viewModel.editFrameId.collectAsState()
     val availableFrames = viewModel.availableFrames
-    val editFrameCustomProperties by viewModel.editFrameCustomProperties.collectAsState()
+    var editFrameCustomProperties by remember { mutableStateOf(emptyMap<String, String>()) }
 
     val sharpening by viewModel.editSharpening.collectAsState()
     val noiseReduction by viewModel.editNoiseReduction.collectAsState()
@@ -104,6 +105,13 @@ fun PhotoEditScreen(
     var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理
     var showControls by remember { mutableStateOf(true) }
     var isZoomed by remember { mutableStateOf(false) }
+
+
+    LaunchedEffect(currentPhoto) {
+        currentPhoto ?: return@LaunchedEffect
+        editFrameCustomProperties = currentPhoto.metadata?.customProperties
+            ?: viewModel.getEditCustomProperties(currentPhoto.id)
+    }
 
     LaunchedEffect(
         currentPhoto,
@@ -525,7 +533,10 @@ fun PhotoEditScreen(
         }
         WatermarkEditSheet(
             customProperties = editFrameCustomProperties,
-            onPropertiesChange = { viewModel.saveEditCustomProperties(it) },
+            onPropertiesChange = {
+                viewModel.saveEditCustomProperties(it)
+                editFrameCustomProperties = it
+            },
             onDismiss = { viewModel.showWatermarkSheet = false },
             originalValues = originalValues,
             onImportFont = { uri ->

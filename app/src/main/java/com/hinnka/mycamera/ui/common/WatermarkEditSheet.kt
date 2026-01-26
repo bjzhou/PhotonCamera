@@ -102,7 +102,7 @@ fun WatermarkEditSheet(
                 "ricoh" to "Ricoh"
             )
 
-            val effectiveLogo = properties["LOGO"] ?: "none"
+            val effectiveLogo = properties["LOGO"]
 
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -146,11 +146,11 @@ fun WatermarkEditSheet(
             )
 
             textTypes.forEach { (type, label) ->
-                val originalValue = originalValues[type] ?: ""
+                val originalValue = originalValues[type]
 
                 Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                     OutlinedTextField(
-                        value = properties[type.name] ?: originalValue,
+                        value = properties[type.name] ?: originalValue ?: "",
                         onValueChange = {
                             properties[type.name] = it
                             onPropertiesChange(properties.toMap())

@@ -86,7 +86,10 @@ enum class FramePosition {
 /**
  * 边框元素基类
  */
-sealed class FrameElement {
+sealed class FrameElement(
+    open val line: Int,
+    open val size: Int,
+) {
     /**
      * 文本元素
      */
@@ -100,8 +103,8 @@ sealed class FrameElement {
         val format: String? = null,
         val prefix: String? = null,
         val suffix: String? = null,
-        val line: Int = 0
-    ) : FrameElement()
+        override val line: Int = 0
+    ) : FrameElement(line = line, size = fontSizeSp)
     
     /**
      * Logo/图标元素
@@ -112,8 +115,8 @@ sealed class FrameElement {
         val sizeDp: Int = 24,
         val light: Boolean = false,
         val marginDp: Int = 8,
-        val line: Int = 0
-    ) : FrameElement()
+        override val line: Int = 0
+    ) : FrameElement(line = line, size = sizeDp)
     
     /**
      * 分隔线元素
@@ -125,16 +128,16 @@ sealed class FrameElement {
         val thicknessDp: Int = 1,
         val color: Int = Color.LTGRAY,
         val marginDp: Int = 8,
-        val line: Int = 0
-    ) : FrameElement()
+        override val line: Int = 0
+    ) : FrameElement(line, size = lengthDp)
     
     /**
      * 间距元素
      */
     data class Spacer(
         val widthDp: Int = 8,
-        val line: Int = 0
-    ) : FrameElement()
+        override val line: Int = 0
+    ) : FrameElement(line, size = widthDp)
 }
 
 /**
