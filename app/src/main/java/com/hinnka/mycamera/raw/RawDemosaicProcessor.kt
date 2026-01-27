@@ -336,18 +336,27 @@ class RawDemosaicProcessor {
 
                     // 2. 高光/阴影调整（分区调整，基于亮度 mask）
                     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    float shadowMask = smoothstep(0.4, 0.2, luma); // 暗部
-                    float highlightMask = smoothstep(0.6, 0.8, luma); // 亮部
+                    float shadowMask = smoothstep(0.5, 0.0, luma); // 暗部
+                    float highlightMask = smoothstep(0.5, 1.0, luma); // 亮部
                     
                     // --- 阴影处理 (Shadows) ---
                     float shadowIntensity = uShadows * shadowMask;
                     color.rgb += color.rgb * shadowIntensity * 0.6; 
                     
                     // --- 高光处理 (Highlights) ---
-                    float highlightIntensity = uHighlights * highlightMask;
-                    vec3 highlightTarget = mix(color.rgb, vec3(1.0), 0.5); // 提亮目标偏向一点白
-                    if (uHighlights < 0.0) highlightTarget = color.rgb * 0.8; // 压暗目标
-                    color.rgb = mix(color.rgb, highlightTarget, abs(highlightIntensity));
+                    float targetLuma = luma;
+                    if (uHighlights < 0.0) {
+                        float compressionFactor = 1.0 + (uHighlights * highlightMask * 0.2); 
+                        targetLuma = luma * compressionFactor;
+                        targetLuma = ((targetLuma - 0.5) * 1.2) + 0.5; // 可选：微调对比度
+                    } else {
+                        targetLuma = mix(luma, 1.0, uHighlights * highlightMask * 0.5);
+                    }
+                    color.rgb = color.rgb * (targetLuma / (luma + 0.00001));
+                    if (uHighlights < 0.0) {
+                        vec3 gray = vec3(luma);
+                        color.rgb = mix(gray, color.rgb, 1.0 - uHighlights * 0.2); 
+                    }
 
                     // 3. 对比度（围绕中灰点调整）
                     color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
