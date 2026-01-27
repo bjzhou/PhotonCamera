@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -49,7 +50,9 @@ data class UserPreferences(
     val filterOrder: List<String> = emptyList(),  // 滤镜排序（ID列表）
     val frameOrder: List<String> = emptyList(),    // 边框排序（ID列表）
     val categoryOrder: List<String> = emptyList(), // 分类排序
-    val defaultFocalLength: Float = 0f // 默认焦段 (mm)，0表示不设置
+    val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
+    val useMultiFrame: Boolean = false, // 是否使用多帧合成
+    val multiFrameCount: Int = 8 // 多帧合成帧数
 )
 
 /**
@@ -70,8 +73,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
         private val VOLUME_KEY_ACTION = stringPreferencesKey("volume_key_action")
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
-        private val NR_LEVEL = androidx.datastore.preferences.core.intPreferencesKey("nr_level")
-        private val EDGE_LEVEL = androidx.datastore.preferences.core.intPreferencesKey("edge_level")
+        private val NR_LEVEL = intPreferencesKey("nr_level")
+        private val EDGE_LEVEL = intPreferencesKey("edge_level")
         private val USE_RAW = booleanPreferencesKey("use_raw")
 
         // 软件处理参数 Keys
@@ -89,6 +92,10 @@ class UserPreferencesRepository(private val context: Context) {
 
         // 默认焦段 Key
         private val DEFAULT_FOCAL_LENGTH = floatPreferencesKey("default_focal_length")
+
+        // 多帧合成 Key
+        private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
+        private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
     }
 
     /**
@@ -122,7 +129,9 @@ class UserPreferencesRepository(private val context: Context) {
                 filterOrder = preferences[FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
-                defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f
+                defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
+                useMultiFrame = preferences[USE_MULTI_FRAME] ?: false,
+                multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8
             )
         }
 
@@ -373,6 +382,24 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveDefaultFocalLength(focalLength: Float) {
         context.dataStore.edit { preferences ->
             preferences[DEFAULT_FOCAL_LENGTH] = focalLength
+        }
+    }
+
+    /**
+     * 保存是否使用多帧合成
+     */
+    suspend fun saveUseMultiFrame(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_MULTI_FRAME] = enabled
+        }
+    }
+
+    /**
+     * 保存多帧合成帧数
+     */
+    suspend fun saveMultiFrameCount(count: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[MULTI_FRAME_COUNT] = count
         }
     }
 }

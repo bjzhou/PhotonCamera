@@ -6,6 +6,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -136,6 +137,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 1)
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
+    val useMultiFrame: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useMultiFrame }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
+        .map { it.multiFrameCount }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 8)
 
     // 软件处理参数 Flow
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
@@ -160,15 +167,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private var hasAppliedDefaultFocalLength = false
 
+    // Burst State
+    private var isBursting = false
+    private val burstImages = mutableListOf<Image>()
+
     init {
         cameraController.initialize()
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
-            PLog.d(
-                TAG,
-                "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
-            )
-            viewModelScope.launch {
-                saveImage(image, captureInfo, characteristics, captureResult)
+            if (isBursting) {
+                val count = multiFrameCount.value
+                PLog.d(TAG, "Burst frame received: ${burstImages.size + 1}/$count")
+                burstImages.add(image)
+                if (burstImages.size >= count) {
+                    viewModelScope.launch {
+                        processBurst(burstImages.toList(), captureInfo, characteristics)
+                        burstImages.clear()
+                    }
+                    isBursting = false
+                }
+            } else {
+                PLog.d(
+                    TAG,
+                    "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
+                )
+                viewModelScope.launch {
+                    saveImage(image, captureInfo, characteristics, captureResult)
+                }
             }
         }
 
@@ -177,6 +201,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 相机恢复应该由 CameraScreen 的 ON_RESUME 生命周期事件处理
             // 这样可以避免在相机被其他应用占用时的无限重试循环
             PLog.d(TAG, "onCameraError: code=$code, message=$message, canRetry=$canRetry")
+            isBursting = false
+            burstImages.forEach {
+                try {
+                    it.close()
+                } catch (e: Exception) {
+                }
+            }
+            burstImages.clear()
         }
 
         // 监听快门声音、震动和软件处理设置
@@ -217,6 +249,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }.collect { sortedLuts ->
                 availableLutList = sortedLuts
                 PLog.d(TAG, "CameraViewModel: availableLutList updated to ${sortedLuts.size} items (sorted)")
+            }
+        }
+
+        viewModelScope.launch {
+            multiFrameCount.collect {
+
             }
         }
 
@@ -266,6 +304,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // 应用保存的网格线设置
                 cameraController.setShowGrid(prefs.showGrid)
+
+                cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
@@ -337,13 +377,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     cameraController.setCountdownValue(i)
                     delay(1000)
                 }
+                generateThumbnail()
                 // 倒计时结束，拍照
                 cameraController.setCountdownValue(0)
                 cameraController.capture()
             }
         } else {
-            // 普通拍摄：直接拍照
-            cameraController.capture()
+            generateThumbnail()
+            // Check if we should use burst/stacking
+            // Skip raw (stacking raw not supported yet)
+            burstImages.clear()
+            if (useMultiFrame.value && !useRaw.value) {
+                isBursting = true
+                cameraController.capture()
+            } else {
+                isBursting = false
+                // 普通拍摄：直接拍照
+                cameraController.capture()
+            }
         }
     }
 
@@ -640,7 +691,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 从相机捕获预览帧并生成所有 LUT 的预览图
      */
-    fun captureAndGenerateLutPreviews() {
+    fun generateThumbnail() {
         if (isGeneratingPreviews) {
             PLog.d(TAG, "Already generating previews, skipping")
             return
@@ -750,6 +801,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // ==================== 延时拍摄和网格线相关方法 ====================
 
     /**
+     * 设置是否使用多帧合成
+     */
+    fun setUseMultiFrame(enabled: Boolean) {
+        if (enabled) {
+            cameraController.setUseRaw(false)
+            viewModelScope.launch {
+                userPreferencesRepository.saveUseRaw(false)
+            }
+        }
+        cameraController.setUseMultiFrame(enabled, multiFrameCount.value)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseMultiFrame(enabled)
+        }
+        reopenCamera()
+    }
+
+    /**
+     * 设置多帧合成帧数
+     */
+    fun setMultiFrameCount(count: Int) {
+        cameraController.setUseMultiFrame(state.value.useMultiFrame, count)
+        viewModelScope.launch {
+            userPreferencesRepository.saveMultiFrameCount(count)
+            //reopenCamera()
+        }
+    }
+
+    /**
      * 切换延时拍摄档位（0s → 3s → 5s → 10s → 0s）
      */
     fun toggleTimer() {
@@ -781,12 +860,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun toggleRaw() {
         val nextValue = !useRaw.value
-        cameraController.setUseRaw(nextValue)
-        reopenCamera()
+        setUseRaw(nextValue)
+    }
 
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseRaw(nextValue)
+    fun setUseRaw(useRaw: Boolean) {
+        if (useRaw) {
+            cameraController.setUseMultiFrame(false, multiFrameCount.value)
+            viewModelScope.launch {
+                userPreferencesRepository.saveUseMultiFrame(false)
+            }
         }
+        cameraController.setUseRaw(useRaw)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseRaw(useRaw)
+        }
+        reopenCamera()
     }
 
     // ==================== 新增设置项方法 ====================
@@ -1117,7 +1205,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         image: Image,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
-        captureResult: CaptureResult
+        captureResult: CaptureResult?
     ) {
         try {
             PLog.d(TAG, "saveImage started - dimensions: ${image.width}x${image.height}, format: ${image.format}")
@@ -1172,8 +1260,101 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             val photoId = characteristics?.let {
                 PhotoManager.savePhoto(
-                    context, image, cameraController.rawPreviewFrame, metadata, rotation, aspectRatio, it, captureResult, shouldAutoSave,
-                    photoProcessor, sharpening.value, noiseReduction.value, chromaNoiseReduction.value
+                    context,
+                    image,
+                    cameraController.rawPreviewFrame,
+                    metadata,
+                    rotation,
+                    aspectRatio,
+                    it,
+                    captureResult,
+                    shouldAutoSave,
+                    photoProcessor,
+                    sharpening.value,
+                    noiseReduction.value,
+                    chromaNoiseReduction.value
+                )
+            }
+            if (photoId != null) {
+                PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+                _imageSavedEvent.emit(Unit)
+            } else {
+                PLog.e(TAG, "Failed to save image via PhotoManager")
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save image", e)
+        }
+    }
+
+    private suspend fun processBurst(
+        images: List<Image>,
+        captureInfo: CaptureInfo,
+        characteristics: CameraCharacteristics?
+    ) {
+        try {
+            PLog.d(TAG, "processBurst started - image size ${images.size}")
+            val context = getApplication<Application>()
+
+            // 保存当前配置信息
+            val lutIdToSave = currentLutId.value
+            val aspectRatio = state.value.aspectRatio
+            val frameIdToSave = currentFrameId
+            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val sharpeningValue = sharpening.value
+            val noiseReductionValue = noiseReduction.value
+            val chromaNoiseReductionValue = chromaNoiseReduction.value
+            val currentCameraId = cameraController.getCurrentCameraId()
+
+            // 计算旋转角度
+            val sensorOrientation = cameraController.getSensorOrientation()
+            val lensFacing = cameraController.getLensFacing()
+            val deviceRotation = OrientationObserver.rotationDegrees.toInt()
+
+            // 基础旋转角度计算
+            val baseRotation = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                (sensorOrientation - deviceRotation + 360) % 360
+            } else {
+                (sensorOrientation + deviceRotation) % 360
+            }
+
+            // 获取用户配置的摄像头方向偏移
+            val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
+            val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
+
+            // 应用方向偏移
+            val rotation = (baseRotation + orientationOffset) % 360
+
+            // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
+            val metadata = PhotoMetadata(
+                lutId = lutIdToSave,
+                frameId = frameIdToSave,
+                colorRecipeParams = currentRecipeParams.value,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue,
+                deviceModel = captureInfo.model,
+                brand = captureInfo.make.replaceFirstChar { it.uppercase() },
+                dateTaken = captureInfo.captureTime,
+                iso = captureInfo.iso,
+                shutterSpeed = captureInfo.formatExposureTime(),
+                focalLength = captureInfo.formatFocalLength(),
+                focalLength35mm = captureInfo.formatFocalLength35mm(),
+                aperture = captureInfo.formatAperture(),
+            )
+
+            val photoId = characteristics?.let {
+                PhotoManager.saveStackedPhoto(
+                    context,
+                    images,
+                    cameraController.rawPreviewFrame,
+                    metadata,
+                    rotation,
+                    aspectRatio,
+                    shouldAutoSave,
+                    photoProcessor,
+                    sharpening.value,
+                    noiseReduction.value,
+                    chromaNoiseReduction.value
                 )
             }
             if (photoId != null) {

@@ -78,6 +78,7 @@ fun CameraScreen(
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
+    val useMultiFrame by viewModel.useMultiFrame.collectAsState()
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -91,7 +92,7 @@ fun CameraScreen(
     // 当打开滤镜面板时，生成预览图
     LaunchedEffect(activePanel) {
         if (activePanel == ActivePanel.FILTERS) {
-            viewModel.captureAndGenerateLutPreviews()
+            viewModel.generateThumbnail()
         }
     }
 
@@ -400,7 +401,9 @@ fun CameraScreen(
             onMoreSettingsClick = {
                 activePanel = ActivePanel.NONE
                 onSettingsClick()
-            }
+            },
+            useMultiFrame = useMultiFrame,
+            onMultiFrameToggle = { viewModel.setUseMultiFrame(it) }
         )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件

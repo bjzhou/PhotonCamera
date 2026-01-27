@@ -38,6 +38,8 @@ fun CameraTopSheet(
     onNRLevelChange: (Int) -> Unit,
     onFilterManageClick: () -> Unit,
     onMoreSettingsClick: () -> Unit,
+    useMultiFrame: Boolean,
+    onMultiFrameToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -120,6 +122,14 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Multi-Frame Stacking Toggle
+                QuickSettingToggle(
+                    title = stringResource(R.string.settings_use_multi_frame),
+                    checked = useMultiFrame,
+                    onCheckedChange = onMultiFrameToggle,
+                    modifier = Modifier.weight(1f)
+                )
+
                 // NR Level Cycle
                 val nrLevelNames = availableNrLevels.map {
                     when (it) {
@@ -141,7 +151,14 @@ fun CameraTopSheet(
                     },
                     modifier = Modifier.weight(1f)
                 )
+            }
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 // Filter Management Button
                 QuickSettingButton(
                     title = stringResource(R.string.settings_filter_management),
@@ -149,6 +166,7 @@ fun CameraTopSheet(
                     onClick = onFilterManageClick,
                     modifier = Modifier.weight(1f)
                 )
+                Spacer(modifier = Modifier.weight(1f))
             }
 
             Spacer(modifier = Modifier.height(24.dp))

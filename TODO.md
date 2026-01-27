@@ -50,14 +50,3 @@
 
 * Pixel 7 Android 16 - 拍照后预览黑屏
 * Pixel 7 Android 16 - 切换摄像头闪退
-
-
-if (warmMask > 0.0) {
-// 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
-color.b = mix(color.b, color.b * 0.85, warmMask * strength);
-// 6.2.2 密度调整
-color.g = mix(color.g, color.g * 0.95, warmMask * strength);
-// 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
-vec3 sCurve = color * color * (3.0 - 2.0 * color);
-color = mix(color, sCurve, warmMask * strength * 0.2);
-}

@@ -15,9 +15,80 @@
 #include "dng_parser.h"
 #include "jxl_utils.h"
 #include "math_utils.h"
+#include "stacking_utils.h"
 #include "yuv_utils.h"
 
 extern "C" {
+
+/**
+ * Multi-Frame Stacking JNI Interface
+ */
+JNIEXPORT jlong JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_createStackerNative(
+    JNIEnv *env, jobject /* this */, jint width, jint height) {
+  auto *stacker = new ImageStacker(width, height);
+  return reinterpret_cast<jlong>(stacker);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToStackNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject yBuffer,
+    jobject uBuffer, jobject vBuffer, jint yRowStride, jint uvRowStride,
+    jint uvPixelStride, jint format) {
+
+  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
+  if (!stacker)
+    return;
+
+  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
+  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
+  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
+
+  if (yData && uData && vData) {
+    stacker->addFrame(yData, uData, vData, yRowStride, uvRowStride,
+                      uvPixelStride, format);
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_processStackNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
+    jint rotation, jint targetWR, jint targetHR, jstring outputPath) {
+
+  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
+  if (!stacker)
+    return;
+
+  const char *path = nullptr;
+  if (outputPath) {
+    path = env->GetStringUTFChars(outputPath, nullptr);
+  }
+
+  void *bitmapPixels = nullptr;
+  if (outBitmap &&
+      AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0) {
+    if (path)
+      env->ReleaseStringUTFChars(outputPath, path);
+    return;
+  }
+
+  stacker->writeResult(static_cast<uint32_t *>(bitmapPixels), rotation,
+                       targetWR, targetHR, path);
+
+  if (outBitmap) {
+    AndroidBitmap_unlockPixels(env, outBitmap);
+  }
+  if (path) {
+    env->ReleaseStringUTFChars(outputPath, path);
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
+  delete stacker;
+}
 
 /**
  * 处理 YUV_420_888 或 P010 图像：旋转、裁切、转换为 RGBA16

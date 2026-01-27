@@ -101,6 +101,10 @@
     <string name="settings_level_description">Show horizontal level indicator while shooting</string>
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>
+    <string name="settings_use_multi_frame">Multi-Frame Stacking</string>
+    <string name="settings_use_multi_frame_description">Capture multiple frames and stack them for better quality and less noise.</string>
+    <string name="settings_multi_frame_count">Multi-frame Count</string>
+    <string name="settings_multi_frame_count_description">Number of frames for multi-frame stacking (more frames = better quality but slower).</string>
     <string name="settings_section_frame">Frame Watermark</string>
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>

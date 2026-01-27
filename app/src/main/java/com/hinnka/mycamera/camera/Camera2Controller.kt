@@ -11,9 +11,9 @@ import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Log
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
@@ -53,6 +53,7 @@ class Camera2Controller(private val context: Context) {
 
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
+        private const val STATE_WAITING_LOCK = 1 // Waiting for the focus to be locked.
         private const val STATE_WAITING_PRECAPTURE = 2 // Waiting for the exposure to be precapture state.
         private const val STATE_WAITING_NON_PRECAPTURE =
             3 // Waiting for the exposure state to be something other than precapture.
@@ -88,7 +89,6 @@ class Camera2Controller(private val context: Context) {
 
     // 锐化等级 (0=Off, 1=Fast, 2=High Quality, 3=Zero Shutter Lag/Real-time)
     private var edgeLevel = 1
-    private var useRaw = false
 
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
@@ -122,7 +122,7 @@ class Camera2Controller(private val context: Context) {
     private var lastCaptureResult: TotalCaptureResult? = null
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
-    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult) -> Unit)? = null
+    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
 
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
@@ -147,7 +147,7 @@ class Camera2Controller(private val context: Context) {
             super.onCaptureCompleted(session, request, result)
 
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-            if (timestamp != null) {
+            if (timestamp != null && state.value.useRaw && isRawSupported) {
                 val pendingImage = pendingImages.remove(timestamp)
                 if (pendingImage != null) {
                     // 找到了匹配的图像，触发回调
@@ -213,19 +213,44 @@ class Camera2Controller(private val context: Context) {
      * 处理拍照状态机的核心逻辑
      */
     private fun processCaptureState(result: CaptureResult) {
+        val afState = result.get(CaptureResult.CONTROL_AF_STATE) ?: return
         val aeState = result.get(CaptureResult.CONTROL_AE_STATE) ?: return
+
         if (aeState != lastAeState) {
             //Log.d(TAG, "processCaptureState: aeState = $aeState")
             lastAeState = aeState
         }
+
         when (internalCaptureState) {
             STATE_PREVIEW -> {
                 // 正常预览状态，不做处理
             }
 
+            STATE_WAITING_LOCK -> {
+                // 等待对焦锁定
+                if (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+                    afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
+                    afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED ||
+                    afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED ||
+                    // 部分设备可能不返回 Locked 状态，如果 AF 模式是 OFF，也可以认为对焦完成
+                    _state.value.currentAfMode == CaptureRequest.CONTROL_AF_MODE_OFF
+                ) {
+                    // 对焦完成（成功或失败），尝试预闪或拍照
+                    // CONTROL_AE_STATE can be null on some devices
+                    if (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
+                        internalCaptureState = STATE_PICTURE_TAKEN
+                        runCaptureSequence()
+                    } else {
+                        runPrecaptureSequence()
+                    }
+                }
+            }
+
             STATE_WAITING_PRECAPTURE -> {
                 // 等待 AE 预取（预闪）完成
-                if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
+                    aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
+                ) {
                     internalCaptureState = STATE_WAITING_NON_PRECAPTURE
                 }
             }
@@ -237,6 +262,39 @@ class Camera2Controller(private val context: Context) {
                     runCaptureSequence()
                 }
             }
+        }
+    }
+
+    /**
+     * 锁定对焦
+     */
+    private fun lockFocus() {
+        try {
+            previewRequestBuilder?.let { builder ->
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                internalCaptureState = STATE_WAITING_LOCK
+                captureSession?.capture(builder.build(), previewCallback, cameraHandler)
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to lock focus", e)
+        }
+    }
+
+    /**
+     * 解锁对焦
+     */
+    private fun unlockFocus() {
+        try {
+            previewRequestBuilder?.let { builder ->
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL)
+                captureSession?.capture(builder.build(), previewCallback, cameraHandler)
+
+                internalCaptureState = STATE_PREVIEW
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
+                captureSession?.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to unlock focus", e)
         }
     }
 
@@ -253,6 +311,11 @@ class Camera2Controller(private val context: Context) {
         pendingCaptureDevice = null
         pendingCaptureReader = null
     }
+
+    fun captureBurst() {
+        capture()
+    }
+
 
     /**
      * 运行预取序列（预闪）
@@ -411,8 +474,12 @@ class Camera2Controller(private val context: Context) {
                     cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                         ?: intArrayOf()
                 isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-                val outputFormats = cachedCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.outputFormats ?: intArrayOf()
-                isP010Supported = outputFormats.contains(ImageFormat.YCBCR_P010)
+                val outputFormats =
+                    cachedCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.outputFormats
+                        ?: intArrayOf()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    isP010Supported = outputFormats.contains(ImageFormat.YCBCR_P010)
+                }
 
                 PLog.i(
                     TAG, "Camera characteristics cached - ID: $cameraId, Level: $hardwareLevelName, " +
@@ -438,7 +505,7 @@ class Camera2Controller(private val context: Context) {
 
             // 创建 ImageReader 用于拍照
             // 开启 RAW 开关且设备支持时，优先使用 RAW 格式（更高质量），否则使用 YUV
-            val effectivelyUseRaw = useRaw && isRawSupported
+            val effectivelyUseRaw = state.value.useRaw && isRawSupported
             val captureSize = if (effectivelyUseRaw) {
                 CameraUtils.getRawCaptureSize(context, cameraId) ?: CameraUtils.getBestCaptureSize(
                     context,
@@ -450,7 +517,7 @@ class Camera2Controller(private val context: Context) {
             }
             val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
                 ImageFormat.RAW_SENSOR
-            } else if (isP010Supported) {
+            } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 ImageFormat.YCBCR_P010
             } else {
                 ImageFormat.YUV_420_888
@@ -465,11 +532,12 @@ class Camera2Controller(private val context: Context) {
                     }
                 }"
             )
+            val maxImages = if (state.value.useMultiFrame) state.value.multiFrameCount else 2
             imageReader = ImageReader.newInstance(
                 captureSize.width,
                 captureSize.height,
                 captureFormat,
-                2
+                maxImages
             ).apply {
                 setOnImageAvailableListener({ reader ->
                     try {
@@ -477,22 +545,25 @@ class Camera2Controller(private val context: Context) {
                         // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
                         val image = reader.acquireNextImage()
                         if (image != null) {
-                            val timestamp = image.timestamp
-                            val pendingResult = pendingResults.remove(timestamp)
-
-                            if (pendingResult != null) {
-                                // 找到了匹配的结果，触发回调
-                                processAndTriggerCapture(image, pendingResult)
-                            } else {
-                                // 还没找到结果，存入缓存
-                                pendingImages[timestamp] = image
-                                // 限制缓存大小（防御性，防止内存泄漏）
-                                if (pendingImages.size > 5) {
-                                    val oldestKey = pendingImages.keys.minOrNull()
-                                    if (oldestKey != null) {
-                                        pendingImages.remove(oldestKey)?.close()
+                            if (state.value.useRaw && isRawSupported) {
+                                val timestamp = image.timestamp
+                                val pendingResult = pendingResults.remove(timestamp)
+                                if (pendingResult != null) {
+                                    // 找到了匹配的结果，触发回调
+                                    processAndTriggerCapture(image, pendingResult)
+                                } else {
+                                    // 还没找到结果，存入缓存
+                                    pendingImages[timestamp] = image
+                                    // 限制缓存大小（防御性，防止内存泄漏）
+                                    if (pendingImages.size > 5) {
+                                        val oldestKey = pendingImages.keys.minOrNull()
+                                        if (oldestKey != null) {
+                                            pendingImages.remove(oldestKey)?.close()
+                                        }
                                     }
                                 }
+                            } else {
+                                processAndTriggerCapture(image, null)
                             }
                         } else {
                             PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
@@ -878,7 +949,10 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 // 设置连续自动对焦
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                val initialAfMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                set(CaptureRequest.CONTROL_AF_MODE, initialAfMode)
+                // 更新 State 中的 AF 模式
+                _state.value = _state.value.copy(currentAfMode = initialAfMode)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 applyBaseCameraSettings(this, isCapture = false)
@@ -945,6 +1019,9 @@ class Camera2Controller(private val context: Context) {
     private fun applyBaseCameraSettings(builder: CaptureRequest.Builder, isCapture: Boolean = false) {
         val currentState = _state.value
 
+        builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, currentState.useMultiFrame)
+        builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
+
         // 1. 曝光设置
         applyExposureSettings(builder, currentState, isCapture)
 
@@ -982,6 +1059,7 @@ class Camera2Controller(private val context: Context) {
                         if (isCapture) CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
                         else CaptureRequest.CONTROL_AE_MODE_ON
                     }
+
                     CameraMetadata.FLASH_MODE_TORCH -> CaptureRequest.CONTROL_AE_MODE_ON
                     else -> CaptureRequest.CONTROL_AE_MODE_ON
                 }
@@ -1070,9 +1148,11 @@ class Camera2Controller(private val context: Context) {
                     builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
                 }
             }
+
             CameraMetadata.FLASH_MODE_TORCH -> {
                 builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
             }
+
             else -> {
                 builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
             }
@@ -1120,7 +1200,6 @@ class Camera2Controller(private val context: Context) {
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                 )
-                PLog.d(TAG, "Enabled Optical Image Stabilization (OIS)")
             }
 
             // 2. 处理 EIS (视频/数字防抖)
@@ -1211,7 +1290,7 @@ class Camera2Controller(private val context: Context) {
      * 设置是否使用 RAW 格式拍照
      */
     fun setUseRaw(enabled: Boolean) {
-        useRaw = enabled
+        _state.value = _state.value.copy(useRaw = enabled)
         PLog.d(TAG, "RAW 格式拍照: $enabled")
     }
 
@@ -1799,8 +1878,10 @@ class Camera2Controller(private val context: Context) {
                 if (maxAeRegions > 0) {
                     set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
                 }
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                val afMode = CaptureRequest.CONTROL_AF_MODE_AUTO
+                set(CaptureRequest.CONTROL_AF_MODE, afMode)
                 set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                _state.value = _state.value.copy(currentAfMode = afMode)
                 updatePreview()
             }
 
@@ -1808,7 +1889,9 @@ class Camera2Controller(private val context: Context) {
             cameraHandler?.postDelayed({
                 previewRequestBuilder?.apply {
                     set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    val afMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                    set(CaptureRequest.CONTROL_AF_MODE, afMode)
+                    _state.value = _state.value.copy(currentAfMode = afMode)
                     updatePreview()
                 }
                 _state.value = _state.value.copy(isFocusing = false, focusSuccess = null)
@@ -1870,6 +1953,11 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(showGrid = show)
     }
 
+    fun setUseMultiFrame(useMultiFrame: Boolean, multiFrameCount: Int) {
+        _state.value = _state.value.copy(useMultiFrame = useMultiFrame, multiFrameCount = multiFrameCount)
+    }
+
+
 // ==================== 拍照 ====================
 
     /**
@@ -1925,7 +2013,12 @@ class Camera2Controller(private val context: Context) {
      */
     private fun performCapture(device: CameraDevice, reader: ImageReader) {
         try {
-            val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            val template = if (state.value.useMultiFrame) {
+                CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG
+            } else {
+                CameraDevice.TEMPLATE_STILL_CAPTURE
+            }
+            val captureBuilder = device.createCaptureRequest(template).apply {
                 addTarget(reader.surface)
 
                 previewSurface?.let { addTarget(it) }
@@ -1956,54 +2049,98 @@ class Camera2Controller(private val context: Context) {
                 )
             }
 
-            capturePreviewFrame()
-            captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureStarted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    timestamp: Long,
-                    frameNumber: Long
-                ) {
-                    // 关键修复：在 onCaptureStarted 中预先获取 request 中的参数作为 fallback
-                    // 这样即使 onCaptureCompleted 晚于 ImageReader 回调，也能提供基本的 EXIF 信息
-                    // 注意：这里不能获取到实际的 result，只能从 request 获取设置的参数
-                    PLog.d(TAG, "Capture started at frame $frameNumber")
+            if (state.value.useMultiFrame) {
+                // Burst Mode
+                val requests = ArrayList<CaptureRequest>()
+                val request = captureBuilder.build()
+                for (i in 0 until state.value.multiFrameCount) {
+                    requests.add(request)
                 }
 
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    _state.value = _state.value.copy(isCapturing = false)
-                    val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-                    if (timestamp != null) {
-                        val pendingImage = pendingImages.remove(timestamp)
-                        if (pendingImage != null) {
-                            processAndTriggerCapture(pendingImage, result)
-                        } else {
-                            pendingResults[timestamp] = result
-                        }
+                captureSession?.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureStarted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        timestamp: Long,
+                        frameNumber: Long
+                    ) {
+                        PLog.d(TAG, "Burst capture started at frame $frameNumber")
                     }
-                    lastCaptureResult = result
-                    PLog.d(
-                        TAG,
-                        "Capture completed, result saved"
-                    )
-                }
 
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    PLog.e(TAG, "Capture failed: ${failure.reason}")
-                    _state.value = _state.value.copy(isCapturing = false)
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {}
 
-                    // 拍照失败时重置预览
-                    resetPreviewAfterCapture()
-                }
-            }, cameraHandler)
+                    override fun onCaptureSequenceCompleted(
+                        session: CameraCaptureSession,
+                        sequenceId: Int,
+                        frameNumber: Long
+                    ) {
+                        super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
+                        PLog.d(TAG, "Burst sequence completed")
+                        _state.value = _state.value.copy(isCapturing = false)
+                        resetPreviewAfterCapture()
+                    }
+
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        PLog.e(TAG, "Burst Capture failed: ${failure.reason}")
+                        _state.value = _state.value.copy(isCapturing = false)
+                        resetPreviewAfterCapture()
+                    }
+                }, cameraHandler)
+
+            } else {
+                // Single Capture Mode
+                captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureStarted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        timestamp: Long,
+                        frameNumber: Long
+                    ) {
+                        PLog.d(TAG, "Capture started at frame $frameNumber")
+                    }
+
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        _state.value = _state.value.copy(isCapturing = false)
+                        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                        if (timestamp != null && state.value.useRaw && isRawSupported) {
+                            val pendingImage = pendingImages.remove(timestamp)
+                            if (pendingImage != null) {
+                                processAndTriggerCapture(pendingImage, result)
+                            } else {
+                                pendingResults[timestamp] = result
+                            }
+                        }
+                        lastCaptureResult = result
+                        PLog.d(
+                            TAG,
+                            "Capture completed, result buffered (timestamp: $timestamp). Pending images: ${pendingImages.size}, Pending results: ${pendingResults.size}"
+                        )
+                        resetPreviewAfterCapture()
+                    }
+
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        PLog.e(TAG, "Capture failed: ${failure.reason}")
+                        _state.value = _state.value.copy(isCapturing = false)
+                        resetPreviewAfterCapture()
+                    }
+                }, cameraHandler)
+            }
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to perform capture", e)
@@ -2040,8 +2177,6 @@ class Camera2Controller(private val context: Context) {
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
             )
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
-
-            PLog.d(TAG, "Preview reset completed (CANCEL -> IDLE)")
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to reset preview", e)
         }
@@ -2093,7 +2228,6 @@ class Camera2Controller(private val context: Context) {
         // 如果有实时的光圈/焦距，使用实时值
         result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
         result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
-            PLog.d(TAG, "buildCaptureInfo: $zoomRatio")
             focalLength = it * zoomRatio
             // 重新计算35mm等效焦距
             try {
@@ -2187,8 +2321,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult) {
-        val processStartTime = System.currentTimeMillis()
+    private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult?) {
         try {
             _state.value = _state.value.copy(isCapturing = false)
             val width = image.width
@@ -2204,10 +2337,6 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Error processing joined capture data", e)
             image.close()
         } finally {
-            PLog.d(
-                TAG,
-                "Capture data pairing and callback took: ${System.currentTimeMillis() - processStartTime}ms"
-            )
             resetPreviewAfterCapture()
         }
     }

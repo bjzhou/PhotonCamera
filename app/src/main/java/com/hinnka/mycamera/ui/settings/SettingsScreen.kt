@@ -36,7 +36,6 @@ import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.net.Uri
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.SliderSettingItem
@@ -73,6 +72,8 @@ fun SettingsScreen(
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
     val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
+    val useMultiFrame by viewModel.useMultiFrame.collectAsState()
+    val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -215,10 +216,10 @@ fun SettingsScreen(
                     description = stringResource(R.string.settings_nr_level_description),
                     levels = listOf(
                         0 to stringResource(R.string.settings_nr_level_off),
-                        4 to stringResource(R.string.settings_nr_level_minimal),
                         1 to stringResource(R.string.settings_nr_level_fast),
                         2 to stringResource(R.string.settings_nr_level_high_quality),
-                        3 to stringResource(R.string.settings_nr_level_zsl)
+                        3 to stringResource(R.string.settings_nr_level_minimal),
+                        4 to stringResource(R.string.settings_nr_level_zsl)
                     ),
                     currentLevel = nrLevel,
                     onLevelSelected = { viewModel.setNRLevel(it) }
@@ -326,6 +327,37 @@ fun SettingsScreen(
                     checked = autoSaveAfterCapture,
                     onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
                 )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_use_multi_frame),
+                    description = stringResource(R.string.settings_use_multi_frame_description),
+                    checked = useMultiFrame,
+                    onCheckedChange = { viewModel.setUseMultiFrame(it) }
+                )
+
+                if (useMultiFrame) {
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    QualityLevelSetting(
+                        title = stringResource(R.string.settings_multi_frame_count),
+                        description = stringResource(R.string.settings_multi_frame_count_description),
+                        levels = listOf(
+                            4 to "4",
+                            8 to "8",
+                            12 to "12",
+                        ),
+                        currentLevel = multiFrameCount,
+                        onLevelSelected = { viewModel.setMultiFrameCount(it) }
+                    )
+                }
 
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.1f),
@@ -1015,7 +1047,8 @@ fun DefaultFocalLengthSetting(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             options.forEach { (fl, label) ->
-                val isSelected = if (fl == 0f) currentFocalLength == 0f else kotlin.math.abs(currentFocalLength - fl) < 0.5f
+                val isSelected =
+                    if (fl == 0f) currentFocalLength == 0f else kotlin.math.abs(currentFocalLength - fl) < 0.5f
                 Box(
                     modifier = Modifier
                         .width(64.dp)

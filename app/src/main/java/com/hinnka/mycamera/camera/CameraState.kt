@@ -131,6 +131,7 @@ data class CameraState(
     val focusPoint: Pair<Float, Float>? = null, // normalized coordinates (0-1)
     val isFocusing: Boolean = false,
     val focusSuccess: Boolean? = null,
+    val currentAfMode: Int? = null, // 当前的 AF 模式
 
     //闪光灯
     val flashMode: Int = 0, // 0: off, 1: auto, 2: torch
@@ -170,6 +171,9 @@ data class CameraState(
     val availableNrModes: IntArray = intArrayOf(),
 
     val isRawSupported: Boolean = false,
+    val useMultiFrame: Boolean = false,
+    val multiFrameCount: Int = 0,
+    val useRaw: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

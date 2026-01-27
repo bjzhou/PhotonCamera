@@ -14,6 +14,7 @@ add_library(my-native-lib SHARED
     dng_parser.cpp
     yuv_utils.cpp
     jxl_utils.cpp
+    stacking_utils.cpp
 )
 
 # 启用优化

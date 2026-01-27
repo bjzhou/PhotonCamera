@@ -67,7 +67,7 @@ fun ZoomControlBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(16.dp)
+            .padding(8.dp)
             .height(32.dp),
         contentAlignment = Alignment.Center
     ) {
