@@ -78,4 +78,12 @@
     <string name="settings_volume_key_action_zoom">焦距切换</string>
     <string name="settings_default_focal_length">默认焦段</string>
     <string name="settings_default_focal_length_description">设置启动 App 时自动切换到的焦段</string>
+    <string name="category_management_title">分类管理</string>
+    <string name="new_category">新建分类</string>
+    <string name="category_name">分类名称</string>
+    <string name="import_to_category">导入至分类</string>
+    <string name="import_success">成功导入 %d 个项目</string>
+    <string name="import_failed">导入失败: %d 个项目</string>
+    <string name="sort_categories">分类排序</string>
+    <string name="drag_to_reorder_categories">按住右侧手柄拖动排序</string>
 </resources>

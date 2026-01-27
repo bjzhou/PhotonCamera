@@ -239,6 +239,12 @@
     <string name="drag_to_reorder_categories">Drag handles to reorder tabs</string>
     <string name="selected_count">%d Selected</string>
     <string name="category">Category</string>
+    <string name="category_management_title">Category Management</string>
+    <string name="new_category">New Category</string>
+    <string name="category_name">Category Name</string>
+    <string name="import_to_category">Import to Category</string>
+    <string name="import_success">Imported %d items</string>
+    <string name="import_failed">Import failed: %d items</string>
     <string name="common_categories">Common Categories</string>
     <string name="delete_category_title">Delete Category</string>
     <string name="delete_category_message">Are you sure you want to delete category \"%s\"? Filters under this category will be reset to uncategorized.</string>

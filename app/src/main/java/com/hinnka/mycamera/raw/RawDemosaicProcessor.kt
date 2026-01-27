@@ -336,8 +336,8 @@ class RawDemosaicProcessor {
 
                     // 2. 高光/阴影调整（分区调整，基于亮度 mask）
                     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    float shadowMask = smoothstep(0.5, 0.2, luma); // 暗部
-                    float highlightMask = smoothstep(0.5, 0.8, luma); // 亮部
+                    float shadowMask = smoothstep(0.4, 0.2, luma); // 暗部
+                    float highlightMask = smoothstep(0.6, 0.8, luma); // 亮部
                     
                     // --- 阴影处理 (Shadows) ---
                     float shadowIntensity = uShadows * shadowMask;

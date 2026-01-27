@@ -71,9 +71,10 @@ class CustomImportManager(private val context: Context) {
      *
      * @param uri 选择的 .cube 文件 URI
      * @param displayName 用户自定义的显示名称（可选）
+     * @param category 分类名称（可选）
      * @return 导入成功的 LUT ID，失败返回 null
      */
-    fun importLut(uri: Uri, displayName: String? = null): String? {
+    fun importLut(uri: Uri, displayName: String? = null, category: String? = null): String? {
         return try {
             val fileName = getFileName(uri) ?: "lut_${System.currentTimeMillis()}.cube"
             val lutId = "custom_${UUID.randomUUID()}"
@@ -98,7 +99,12 @@ class CustomImportManager(private val context: Context) {
             val name = displayName ?: fileName.substringBeforeLast('.')
 
             // 保存到配置文件
-            saveLutToConfig(lutId, name, plutFileName)
+            saveLutToConfig(lutId, name, plutFileName, category)
+
+            // 如果有分类，也同步到 overrides (保持一致性)
+            if (!category.isNullOrEmpty()) {
+                updateLutCategory(lutId, category)
+            }
 
             PLog.d(TAG, "LUT imported successfully: $lutId ($name)")
             lutId
@@ -569,7 +575,7 @@ class CustomImportManager(private val context: Context) {
     /**
      * 保存 LUT 到配置文件
      */
-    private fun saveLutToConfig(lutId: String, name: String, fileName: String) {
+    private fun saveLutToConfig(lutId: String, name: String, fileName: String, category: String? = null) {
         val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
 
         val jsonArray = if (configFile.exists()) {
@@ -585,6 +591,9 @@ class CustomImportManager(private val context: Context) {
                 put("zh", name)
             })
             put("fileName", fileName)
+            if (!category.isNullOrEmpty()) {
+                put("category", category)
+            }
         }
 
         jsonArray.put(lutObj)
