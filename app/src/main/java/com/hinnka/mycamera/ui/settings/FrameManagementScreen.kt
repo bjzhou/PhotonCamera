@@ -411,6 +411,9 @@ fun FrameManagementScreen(
             },
             onImportFont = { uri ->
                 viewModel.getCustomImportManager().importFont(uri)
+            },
+            onImportLogo = { uri ->
+                viewModel.getCustomImportManager().importLogo(uri)
             }
         )
     }

@@ -598,15 +598,21 @@ class FrameRenderer(private val context: Context) {
 
         // 获取对应的 drawable
         val logoKey = metadata?.customProperties?.get("LOGO")
-        val drawableRes = when (element.logoType) {
-            LogoType.APP -> R.mipmap.ic_launcher_round
-            LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
-        }
 
         try {
-            val drawable = context.getDrawable(drawableRes) ?: return 0 to 0
-            val intrinsicW = drawable.intrinsicWidth
-            val intrinsicH = drawable.intrinsicHeight
+            val bitmap = if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
+                BitmapFactory.decodeFile(logoKey)
+            } else {
+                val drawableRes = when (element.logoType) {
+                    LogoType.APP -> R.mipmap.ic_launcher_round
+                    LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
+                }
+                val drawable = context.getDrawable(drawableRes) ?: return 0 to 0
+                drawable.toBitmap()
+            } ?: return 0 to 0
+
+            val intrinsicW = bitmap.width
+            val intrinsicH = bitmap.height
             return if (intrinsicW > 0 && intrinsicH > 0) {
                 val ratio = (intrinsicW.toFloat() / intrinsicH.toFloat())
                 (size * ratio).toInt() to size
@@ -615,7 +621,7 @@ class FrameRenderer(private val context: Context) {
                 size to size
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to draw logo", e)
+            PLog.e(TAG, "Failed to measure logo size", e)
             return 0 to 0
         }
     }
@@ -641,20 +647,32 @@ class FrameRenderer(private val context: Context) {
         val logoKey = metadata?.customProperties?.get("LOGO")
         if (logoKey == "none") return 0f
 
-        val drawableRes = when (element.logoType) {
-            LogoType.APP -> R.mipmap.ic_launcher_round
-            LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
-        }
-
         try {
-            val drawable = context.getDrawable(drawableRes) ?: return x
             val (bmpW, bmpH) = measureLogoSize(element, metadata, scale)
-            val bitmap = drawable.toBitmap(bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1))
+            if (bmpW <= 0 || bmpH <= 0) return x
+
+            val bitmap = if (logoKey != null && (logoKey.startsWith("/") || logoKey.startsWith("content://"))) {
+                BitmapFactory.decodeFile(logoKey)
+            } else {
+                val drawableRes = when (element.logoType) {
+                    LogoType.APP -> R.mipmap.ic_launcher_round
+                    LogoType.BRAND -> getBrandLogoDrawable(logoKey ?: metadata?.brand, element.light)
+                }
+                val drawable = context.getDrawable(drawableRes) ?: return x
+                drawable.toBitmap(bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1))
+            } ?: return x
+
+            // 如果 bitmap 尺寸与 measure 不一致，则缩放
+            val drawnBitmap = if (bitmap.width != bmpW || bitmap.height != bmpH) {
+                Bitmap.createScaledBitmap(bitmap, bmpW.coerceAtLeast(1), bmpH.coerceAtLeast(1), true)
+            } else {
+                bitmap
+            }
 
             val drawX = if (leftToRight) (x + margin) else (x - bmpW - margin)
-            val drawY = centerY - bitmap.height / 2f
+            val drawY = centerY - bmpH / 2f
 
-            canvas.drawBitmap(bitmap, drawX, drawY, null)
+            canvas.drawBitmap(drawnBitmap, drawX, drawY, null)
 
             return bmpW + margin * 2 + dpToPx(8) * scale
         } catch (e: Exception) {

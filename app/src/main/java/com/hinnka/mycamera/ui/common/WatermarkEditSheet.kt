@@ -30,7 +30,8 @@ fun WatermarkEditSheet(
     onPropertiesChange: (Map<String, String>) -> Unit,
     onDismiss: () -> Unit,
     originalValues: Map<TextType, String> = emptyMap(),
-    onImportFont: (Uri) -> String? = { null } // Returns the stored font path/id
+    onImportFont: (Uri) -> String? = { null }, // Returns the stored font path/id
+    onImportLogo: (Uri) -> String? = { null } // Returns the stored logo path
 ) {
     val sheetState = rememberModalBottomSheetState()
     val properties = remember(customProperties) {
@@ -47,6 +48,18 @@ fun WatermarkEditSheet(
             val fontPath = onImportFont(it)
             if (fontPath != null) {
                 properties["DEVICE_MODEL_FONT"] = fontPath
+                onPropertiesChange(properties.toMap())
+            }
+        }
+    }
+
+    val logoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val logoPath = onImportLogo(it)
+            if (logoPath != null) {
+                properties["LOGO"] = logoPath
                 onPropertiesChange(properties.toMap())
             }
         }
@@ -82,6 +95,7 @@ fun WatermarkEditSheet(
 
             val logos = listOf(
                 "none" to stringResource(R.string.none),
+                "Custom" to stringResource(R.string.custom_import),
                 "apple" to "Apple",
                 "samsung" to "Samsung",
                 "xiaomi" to "Xiaomi",
@@ -99,7 +113,7 @@ fun WatermarkEditSheet(
                 "panasonic" to "Panasonic",
                 "olympus" to "Olympus",
                 "pentax" to "Pentax",
-                "ricoh" to "Ricoh"
+                "ricoh" to "Ricoh",
             )
 
             val effectiveLogo = properties["LOGO"]
@@ -109,18 +123,29 @@ fun WatermarkEditSheet(
                 modifier = Modifier.padding(bottom = 16.dp)
             ) {
                 items(logos) { (id, name) ->
-                    val isSelected = effectiveLogo == id
+                    val isSelected = if (id == "Custom") {
+                        effectiveLogo != null && effectiveLogo != "none" && logos.none { it.first == effectiveLogo }
+                    } else {
+                        effectiveLogo == id
+                    }
+
                     Surface(
                         onClick = {
-                            properties["LOGO"] = id
-                            onPropertiesChange(properties.toMap())
+                            if (id == "Custom") {
+                                logoPicker.launch("image/*")
+                            } else {
+                                properties["LOGO"] = id
+                                onPropertiesChange(properties.toMap())
+                            }
                         },
                         color = if (isSelected) AccentOrange.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
                         shape = RoundedCornerShape(8.dp),
                         border = if (isSelected) BorderStroke(1.dp, AccentOrange) else null
                     ) {
                         Text(
-                            text = name,
+                            text = if (id == "Custom" && isSelected) {
+                                effectiveLogo?.substringAfterLast('/') ?: name
+                            } else name,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             fontSize = 13.sp,
                             color = if (isSelected) AccentOrange else Color.White

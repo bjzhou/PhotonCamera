@@ -36,6 +36,9 @@ class CustomImportManager(private val context: Context) {
 
         // 自定义字体目录
         private const val CUSTOM_FONT_DIR = "custom_fonts"
+
+        // 自定义 Logo 目录
+        private const val CUSTOM_LOGO_DIR = "custom_logos"
     }
 
     /**
@@ -65,6 +68,9 @@ class CustomImportManager(private val context: Context) {
 
     private val customFontDir: File
         get() = File(context.filesDir, CUSTOM_FONT_DIR).apply { mkdirs() }
+
+    private val customLogoDir: File
+        get() = File(context.filesDir, CUSTOM_LOGO_DIR).apply { mkdirs() }
 
     /**
      * 导入 LUT 文件 (.cube)
@@ -277,6 +283,27 @@ class CustomImportManager(private val context: Context) {
             fontFile.absolutePath
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import font", e)
+            null
+        }
+    }
+
+    /**
+     * 导入 Logo 文件
+     */
+    fun importLogo(uri: Uri): String? {
+        return try {
+            val fileName = getFileName(uri) ?: "logo_${UUID.randomUUID()}.png"
+            val logoFile = File(customLogoDir, fileName)
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                logoFile.outputStream().use { outputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            } ?: return null
+
+            logoFile.absolutePath
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to import logo", e)
             null
         }
     }
