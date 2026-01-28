@@ -460,7 +460,7 @@ object RawShaders {
             color = mix(vec3(gray), color, 1.0);
 
             // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
-            float strength = 0.8 * 0.5;
+            float strength = 0.2;
             // --- 6.1 蓝色增强 (深邃天空/水面) ---
             float baseBlue = color.b - (color.r + color.g) * 0.5;
             float blueMask = smoothstep(0.0, 0.2, baseBlue); 

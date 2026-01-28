@@ -1338,19 +1338,22 @@ class RawDemosaicProcessor {
 
         if (valueList.isEmpty()) return 1.0f
 
-        // 获取最亮的2%像素（98th百分位数）
+        // 获取最亮的1%像素（99th百分位数）
         valueList.sort()
-        val highlightLuma = valueList[(valueList.size * 0.98).toInt().coerceAtMost(valueList.size - 1)]
+        val highlightLuma = valueList[(valueList.size * 0.99).toInt().coerceAtMost(valueList.size - 1)]
         val averageLuma = valueList.average().toFloat()
+
+        val highWeight = valueList.filter { it > 0.22f }.size
+        val avgWeight = valueList.filter { it <= 0.22f }.size
 
         // 混合测光逻辑
         val gainAvg = if (averageLuma > 0.0001f) 0.22f / averageLuma else 1.0f
-        val gainHigh = if (highlightLuma > 0.0001f) 0.90f / highlightLuma else 1.0f
+        val gainHigh = if (highlightLuma > 0.0001f) 0.99f / highlightLuma else 1.0f
 
-        // 取两者的较小值
-        val gain = min(gainAvg, gainHigh)
+        // 加权平均
+        val gain = (gainAvg * avgWeight + gainHigh * highWeight) / valueList.size
         // 硬限制防止增益过大或过小
-        return gain.coerceIn(1.0f, 2.2f)
+        return gain.coerceIn(1f, 4f)
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
