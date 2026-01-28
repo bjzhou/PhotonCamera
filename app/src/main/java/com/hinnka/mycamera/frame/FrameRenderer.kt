@@ -184,6 +184,19 @@ class FrameRenderer(private val context: Context) {
                 // 叠加模式：绘制从全透明到半透明的渐变背景
                 val overlayTop = (originalBitmap.height - frameHeight).toFloat()
 
+                // 创建线性渐变：从顶部全透明到底部半透明
+                val gradientShader = LinearGradient(
+                    0f, overlayTop,
+                    0f, outputHeight.toFloat(),
+                    Color.TRANSPARENT,
+                    layout.backgroundColor,
+                    Shader.TileMode.CLAMP
+                )
+                backgroundPaint.shader = gradientShader
+                canvas.drawRect(0f, overlayTop, outputWidth.toFloat(), outputHeight.toFloat(), backgroundPaint)
+                backgroundPaint.shader = null  // 重置 shader
+
+
                 // 绘制水印内容
                 drawFrameContent(
                     canvas, template.elements, metadata,
@@ -596,12 +609,7 @@ class FrameRenderer(private val context: Context) {
             val intrinsicH = drawable.intrinsicHeight
             return if (intrinsicW > 0 && intrinsicH > 0) {
                 val ratio = (intrinsicW.toFloat() / intrinsicH.toFloat())
-                if (ratio > 3f) {
-                    // 超宽图标，限制最大宽度
-                    size * 3 to size
-                } else {
-                    (size * ratio).toInt() to size
-                }
+                (size * ratio).toInt() to size
             } else {
                 // 无内在尺寸，退回到方形
                 size to size

@@ -35,28 +35,25 @@ fun ColorRecipePanel(
     var selectedTabIndex by remember { mutableIntStateOf(0) }
 
     val tabs = listOf(
-        R.string.recipe_tab_basic,
-        R.string.recipe_tab_color,
         R.string.recipe_tab_light,
+        R.string.recipe_tab_color,
         R.string.recipe_tab_texture,
     )
     val parameterGroups = listOf(
         listOf(
             RecipeParam.EXPOSURE,
             RecipeParam.CONTRAST,
-            RecipeParam.SATURATION
+            RecipeParam.HIGHLIGHTS,
+            RecipeParam.SHADOWS,
         ),
         listOf(
+            RecipeParam.SATURATION,
             RecipeParam.TEMPERATURE,
             RecipeParam.TINT,
             RecipeParam.COLOR
         ),
         listOf(
-            RecipeParam.HIGHLIGHTS,
-            RecipeParam.SHADOWS,
-            RecipeParam.VIGNETTE
-        ),
-        listOf(
+            RecipeParam.VIGNETTE,
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
             RecipeParam.BLEACH_BYPASS

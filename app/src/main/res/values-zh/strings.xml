@@ -198,9 +198,9 @@
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_basic">基础</string>
-    <string name="recipe_tab_color">色彩</string>
-    <string name="recipe_tab_light">光影</string>
-    <string name="recipe_tab_texture">质感</string>
+    <string name="recipe_tab_color">颜色</string>
+    <string name="recipe_tab_light">亮度</string>
+    <string name="recipe_tab_texture">效果</string>
     <string name="recipe_tab_post">细节</string>
 
     <!-- Post-Processing Parameters (Capture/Edit only) -->

@@ -310,9 +310,9 @@ object PhotoManager {
                                 ratio = aspectRatio,
                                 cropRegion = cropRegion,
                                 rotation = rotation,
-                                sharpening = 0.2f,
-                                noiseReduction = 0f,
-                                chromaNoiseReduction = 0.25f,
+                                sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
+                                noiseReduction = noiseReductionValue,
+                                chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
                             )
                             metadataFile.writeText(metadataWithInfo.toJson())
                             val dngDataBytes = ByteArrayOutputStream().use { dngData ->

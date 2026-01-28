@@ -26,10 +26,9 @@
             "type": "text",
             "textType": "DEVICE_MODEL",
             "alignment": "CENTER",
-            "fontSize": 28,
+            "fontSize": 24,
             "color": "#C6AE7A",
             "fontWeight": "BOLD",
-            "fontFamily": "SlacksideOne.ttf",
             "line": 1
         },
         {

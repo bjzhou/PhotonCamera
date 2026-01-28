@@ -126,15 +126,18 @@ fun PhotoEditScreen(
         showOrigin
     ) {
         if (currentPhoto == null) return@LaunchedEffect
-
         isLoadingPreview = previewBitmap == null
         previewBitmap = withContext(Dispatchers.IO) {
             viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true, showOrigin = showOrigin)
         }
+        isLoadingPreview = false
+    }
+
+    LaunchedEffect(currentPhoto) {
+        if (currentPhoto == null) return@LaunchedEffect
         thumbnailBitmap = withContext(Dispatchers.IO) {
             viewModel.loadThumbnail(currentPhoto)
         }
-        isLoadingPreview = false
     }
 
     LaunchedEffect(editLutId) {
@@ -233,7 +236,8 @@ fun PhotoEditScreen(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Black
-                    )
+                    ),
+                    windowInsets = WindowInsets(0, 0, 0, 0)
                 )
             }
             // 预览区域
@@ -351,19 +355,30 @@ fun PhotoEditScreen(
                         }
 
                         if (editTab == 0) {
+                            val currentInfo = availableLuts.find { it.id == editLutId }
+                            val lutTitle = currentInfo?.getName() ?: ""
 
                             Spacer(modifier = Modifier.height(16.dp))
-                            // LUT 选择器
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = stringResource(R.string.filter),
-                                    color = Color.White,
-                                    fontSize = 16.sp
-                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = stringResource(R.string.filter).uppercase(),
+                                        color = Color.White.copy(alpha = 0.4f),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp
+                                    )
+                                    Text(
+                                        text = if (lutTitle.isEmpty()) stringResource(R.string.none) else lutTitle,
+                                        color = Color.White,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
 
                                 if (editLutId != null) {
                                     Row(
@@ -371,7 +386,7 @@ fun PhotoEditScreen(
                                             .clip(RoundedCornerShape(16.dp))
                                             .background(Color.White.copy(alpha = 0.1f))
                                             .clickable { showLutEditDialog = true }
-                                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
@@ -384,7 +399,8 @@ fun PhotoEditScreen(
                                         Text(
                                             text = stringResource(R.string.color_recipe),
                                             color = Color.White,
-                                            fontSize = 11.sp
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium
                                         )
                                     }
                                 }

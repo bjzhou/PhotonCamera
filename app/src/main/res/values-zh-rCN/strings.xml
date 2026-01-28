@@ -85,7 +85,7 @@
     <string name="import_success">成功导入 %d 个项目</string>
     <string name="import_failed">导入失败: %d 个项目</string>
     <string name="sort_categories">分类排序</string>
-    <string name="drag_to_reorder_categories">按住右侧手柄拖动排序</string>
+    <string name="drag_to_reorder_categories">按住左侧手柄拖动排序</string>
     <string name="settings_use_multi_frame">多帧合成</string>
     <string name="settings_use_multi_frame_description">拍摄多张照片并合成，以获得更好的画质和更低的噪点。</string>
     <string name="settings_multi_frame_count">多帧合成帧数</string>

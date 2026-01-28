@@ -166,13 +166,19 @@ fun CameraTopSheet(
                     onClick = onFilterManageClick,
                     modifier = Modifier.weight(1f)
                 )
-                Spacer(modifier = Modifier.weight(1f))
+//                Spacer(modifier = Modifier.weight(1f))
+                QuickSettingButton(
+                    title = stringResource(R.string.settings_title),
+                    icon = Icons.Default.ChevronRight,
+                    onClick = onMoreSettingsClick,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+//            Spacer(modifier = Modifier.height(24.dp))
 
             // More Settings Button
-            Surface(
+            /*Surface(
                 onClick = onMoreSettingsClick,
                 color = Color.White.copy(alpha = 0.05f),
                 shape = RoundedCornerShape(12.dp),
@@ -212,7 +218,7 @@ fun CameraTopSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-            }
+            }*/
         }
     }
 }

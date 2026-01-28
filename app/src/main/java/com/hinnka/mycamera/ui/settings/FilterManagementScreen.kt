@@ -135,6 +135,37 @@ fun FilterManagementScreen(
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     var showCategoryManagement by remember { mutableStateOf(false) }
 
+    val allText = stringResource(R.string.category_all)
+    val customText = stringResource(R.string.custom)
+
+    var selectedTabIndex by remember { mutableIntStateOf(0) }
+    val categories = remember(localLutList, categoryOrder, allText, customText) {
+        // 动态分类提取
+        val dynamicCategories = localLutList.map { it.category }
+            .distinct()
+            .filter { it.isNotEmpty() && it != allText && it != customText }
+
+        // 合并排序中的分类（即使是空的）和数据中实际存在的分类
+        val allUniqueCategories = (categoryOrder + dynamicCategories).distinct()
+
+        // 按保存的排序排列；新分类（不在排序中的）排在后面
+        val sortedDynamic = allUniqueCategories.sortedWith(compareBy<String> { cat ->
+            val index = categoryOrder.indexOf(cat)
+            if (index == -1) Int.MAX_VALUE else index
+        }.thenBy { it })
+
+        listOf(allText, customText) + sortedDynamic
+    }
+    val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
+        if (selectedTabIndex >= categories.size) return@remember localLutList
+
+        when (selectedTabIndex) {
+            0 -> localLutList // All
+            1 -> localLutList.filter { !it.isBuiltIn } // Custom
+            else -> localLutList.filter { it.category == categories[selectedTabIndex] }
+        }
+    }
+
     // 批量文件选择器
     val lutFilePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -145,9 +176,6 @@ fun FilterManagementScreen(
             showImportCategoryDialog = true
         }
     }
-
-    val allText = stringResource(R.string.category_all)
-    val customText = stringResource(R.string.custom)
 
     // 分类删除确认对话框
     if (categoryToDelete != null) {
@@ -265,14 +293,14 @@ fun FilterManagementScreen(
                 if (isSelectionMode) {
                     // 全选按钮
                     IconButton(onClick = {
-                        if (selectedIds.size == availableLuts.size) {
-                            selectedIds = emptySet()
+                        selectedIds = if (selectedIds.size == filteredLutList.size) {
+                            emptySet()
                         } else {
-                            selectedIds = availableLuts.map { it.id }.toSet()
+                            filteredLutList.map { it.id }.toSet()
                         }
                     }) {
                         Icon(
-                            imageVector = if (selectedIds.size == availableLuts.size) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                            imageVector = if (selectedIds.size == filteredLutList.size) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
                             contentDescription = "Select All",
                             tint = Color.White
                         )
@@ -375,40 +403,10 @@ fun FilterManagementScreen(
         }
 
         Column(modifier = Modifier.weight(1f)) {
-            val categories = remember(localLutList, categoryOrder, allText, customText) {
-                // 动态分类提取
-                val dynamicCategories = localLutList.map { it.category }
-                    .distinct()
-                    .filter { it.isNotEmpty() && it != allText && it != customText }
-
-                // 合并排序中的分类（即使是空的）和数据中实际存在的分类
-                val allUniqueCategories = (categoryOrder + dynamicCategories).distinct()
-
-                // 按保存的排序排列；新分类（不在排序中的）排在后面
-                val sortedDynamic = allUniqueCategories.sortedWith(compareBy<String> { cat ->
-                    val index = categoryOrder.indexOf(cat)
-                    if (index == -1) Int.MAX_VALUE else index
-                }.thenBy { it })
-
-                listOf(allText, customText) + sortedDynamic
-            }
-
-            var selectedTabIndex by remember { mutableStateOf(0) }
-
             // 修正 Tab 越界（如果分类消失了）
             LaunchedEffect(categories.size) {
                 if (selectedTabIndex >= categories.size) {
                     selectedTabIndex = 0
-                }
-            }
-
-            val filteredLutList = remember(selectedTabIndex, localLutList, categories) {
-                if (selectedTabIndex >= categories.size) return@remember localLutList
-
-                when (selectedTabIndex) {
-                    0 -> localLutList // All
-                    1 -> localLutList.filter { !it.isBuiltIn } // Custom
-                    else -> localLutList.filter { it.category == categories[selectedTabIndex] }
                 }
             }
 
@@ -430,8 +428,10 @@ fun FilterManagementScreen(
                 categories.forEachIndexed { index, category ->
                     Tab(
                         selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
-                        modifier = Modifier.clickable { selectedTabIndex = index },
+                        onClick = {
+                            selectedTabIndex = index
+                            selectedIds = emptySet()
+                        },
                         text = {
                             Text(
                                 text = category,

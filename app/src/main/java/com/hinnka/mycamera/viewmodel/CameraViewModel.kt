@@ -122,9 +122,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
     val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
-    val volumeKeyAction: StateFlow<VolumeKeyAction> = userPreferencesRepository.userPreferences
-        .map { it.volumeKeyAction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VolumeKeyAction.CAPTURE)
+    val volumeKeyAction: StateFlow<VolumeKeyAction> = userPreferencesRepository.userPreferences.map { it.volumeKeyAction }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = VolumeKeyAction.NONE)
     val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
@@ -145,15 +144,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 8)
 
     // 软件处理参数 Flow
-    val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.sharpening }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
-    val noiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.noiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
-    val chromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.chromaNoiseReduction }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
+    val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
+    val noiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.noiseReduction }
+    val chromaNoiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.chromaNoiseReduction }
 
     private var isShutterSoundEnabled = true
     private var isVibrationEnabled = true
@@ -1210,9 +1203,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val aspectRatio = state.value.aspectRatio
             val frameIdToSave = currentFrameId
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = sharpening.value
-            val noiseReductionValue = noiseReduction.value
-            val chromaNoiseReductionValue = chromaNoiseReduction.value
+            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -1264,9 +1257,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     captureResult,
                     shouldAutoSave,
                     photoProcessor,
-                    sharpening.value,
-                    noiseReduction.value,
-                    chromaNoiseReduction.value,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
                     onProcessingComplete = { cameraController.releaseImage(image) }
                 )
             }
@@ -1295,9 +1288,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val aspectRatio = state.value.aspectRatio
             val frameIdToSave = currentFrameId
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = sharpening.value
-            val noiseReductionValue = noiseReduction.value
-            val chromaNoiseReductionValue = chromaNoiseReduction.value
+            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -1347,9 +1340,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     aspectRatio,
                     shouldAutoSave,
                     photoProcessor,
-                    sharpening.value,
-                    noiseReduction.value,
-                    chromaNoiseReduction.value,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
                     onProcessingComplete = { images.forEach { cameraController.releaseImage(it) } }
                 )
             }

@@ -193,27 +193,22 @@ object Shaders {
 
                 // 2. 高光/阴影调整（分区调整，基于亮度 mask）
                 float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                float shadowMask = smoothstep(0.5, 0.0, luma); // 暗部
-                float highlightMask = smoothstep(0.5, 1.0, luma); // 亮部
-                
-                // --- 阴影处理 (Shadows) ---
-                float shadowIntensity = uShadows * shadowMask;
-                color.rgb += color.rgb * shadowIntensity * 0.6; 
-                
-                // --- 高光处理 (Highlights) ---
-                float targetLuma = luma;
-                if (uHighlights < 0.0) {
-                    float compressionFactor = 1.0 + (uHighlights * highlightMask * 0.2); 
-                    targetLuma = luma * compressionFactor;
-                    targetLuma = ((targetLuma - 0.5) * 1.2) + 0.5; // 可选：微调对比度
+                float highlightMask = smoothstep(0.5, 1.0, luma);
+                float shadowMask = smoothstep(0.5, 0.0, luma);
+                float highlightFactor;
+                if (uHighlights > 0.0) {
+                    highlightFactor = 1.0 + uHighlights * 0.7;
                 } else {
-                    targetLuma = mix(luma, 1.0, uHighlights * highlightMask * 0.5);
+                    highlightFactor = 1.0 + uHighlights * 0.3;
                 }
-                color.rgb = color.rgb * (targetLuma / (luma + 0.00001));
-                if (uHighlights < 0.0) {
-                    vec3 gray = vec3(luma);
-                    color.rgb = mix(gray, color.rgb, 1.0 - uHighlights * 0.2); 
+                color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
+                vec3 shadowTarget;
+                if (uShadows > 0.0) {
+                    shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
+                } else {
+                    shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
                 }
+                color.rgb = mix(color.rgb, shadowTarget, shadowMask);
 
                 // 3. 对比度（围绕中灰点调整）
                 color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
