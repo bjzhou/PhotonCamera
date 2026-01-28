@@ -12,6 +12,61 @@ inline uint8_t getPixel(const GrayImage &img, int x, int y) {
   return img.data[y * img.width + x];
 }
 
+// Sub-pixel refinement using parabolic interpolation
+inline float interpolateSubpixel(long long s0, long long s_minus,
+                                 long long s_plus) {
+  long long denom = (s_plus + s_minus - 2 * s0);
+  if (denom <= 0)
+    return 0.0f;
+  return -0.5f * (float)(s_plus - s_minus) / (float)denom;
+}
+
+// Bilinear sampling for uint16_t data
+inline float sampleBilinear(const std::vector<uint16_t> &data, int width,
+                            int height, float x, float y) {
+  int x0 = (int)std::floor(x);
+  int y0 = (int)std::floor(y);
+  int x1 = x0 + 1;
+  int y1 = y0 + 1;
+
+  float dx = x - (float)x0;
+  float dy = y - (float)y0;
+
+  auto getVal = [&](int ix, int iy) {
+    ix = std::max(0, std::min(ix, width - 1));
+    iy = std::max(0, std::min(iy, height - 1));
+    return (float)data[iy * width + ix];
+  };
+
+  float v00 = getVal(x0, y0);
+  float v10 = getVal(x1, y0);
+  float v01 = getVal(x0, y1);
+  float v11 = getVal(x1, y1);
+
+  return (1.0f - dx) * (1.0f - dy) * v00 + dx * (1.0f - dy) * v10 +
+         (1.0f - dx) * dy * v01 + dx * dy * v11;
+}
+
+// Compute local variance in a 3x3 window
+inline float computeLocalVariance(const std::vector<uint16_t> &data, int width,
+                                  int height, int x, int y) {
+  float sum = 0;
+  float sumSq = 0;
+  int count = 0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      int nx = std::max(0, std::min(x + dx, width - 1));
+      int ny = std::max(0, std::min(y + dy, height - 1));
+      float val = (float)data[ny * width + nx];
+      sum += val;
+      sumSq += val * val;
+      count++;
+    }
+  }
+  float mean = sum / (float)count;
+  return (sumSq / (float)count) - (mean * mean);
+}
+
 std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
                                     int levels) {
   std::vector<GrayImage> pyramid;
@@ -135,12 +190,12 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
         long long sad = computeSAD(ref, tgt, currentDx + dx, currentDy + dy);
         if (sad < bestSAD) {
           bestSAD = sad;
-          globalOffset = {currentDx + dx, currentDy + dy};
+          globalOffset = {(float)(currentDx + dx), (float)(currentDy + dy)};
         }
       }
     }
-    currentDx = globalOffset.x;
-    currentDy = globalOffset.y;
+    currentDx = (int)globalOffset.x;
+    currentDy = (int)globalOffset.y;
   }
 
   // 2. Refine per tile using the global offset as a starting point
@@ -166,11 +221,35 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                           tSizeL1, gDxL1 + dx, gDyL1 + dy);
           if (sad < bestSAD) {
             bestSAD = sad;
-            bestOffset = {(gDxL1 + dx) * 2, (gDyL1 + dy) * 2};
+            bestOffset = {(float)((gDxL1 + dx) * 2), (float)((gDyL1 + dy) * 2)};
           }
         }
       }
-      alignment.offsets[ty * gridW + tx] = bestOffset;
+
+      // 3. Sub-pixel refinement at Level 0
+      const GrayImage &refL0 = refPyramid[0];
+      const GrayImage &tgtL0 = targetPyramid[0];
+      int bX = (int)bestOffset.x;
+      int bY = (int)bestOffset.y;
+      int rX = tx * tileSize;
+      int rY = ty * tileSize;
+
+      long long s0 =
+          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX, bY);
+      long long sx_m =
+          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX - 1, bY);
+      long long sx_p =
+          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX + 1, bY);
+      long long sy_m =
+          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX, bY - 1);
+      long long sy_p =
+          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX, bY + 1);
+
+      float subDx = interpolateSubpixel(s0, sx_m, sx_p);
+      float subDy = interpolateSubpixel(s0, sy_m, sy_p);
+
+      alignment.offsets[ty * gridW + tx] = {(float)bX + subDx,
+                                            (float)bY + subDy};
     }
   }
 
@@ -199,18 +278,18 @@ ImageStacker::ImageStacker(int width, int height)
   referenceV.resize(uvSize);
 }
 
-inline int calculateWeight(int diff) {
-  // Simple de-ghosting weight logic
-  // If diff is small (noise), weight is high.
-  // if diff is large (motion), weight is small.
-  // Using a threshold-based ramp.
-  const int threshold1 = 2000; // ~8 in 0-255 scale
-  const int threshold2 = 8000; // ~31 in 0-255 scale
-  if (diff < threshold1)
+inline int calculateWeight(int diff, float variance) {
+  // Advanced de-ghosting based on noise statistics
+  // sigma^2 = variance + base_noise
+  float sigma = std::sqrt(variance + 1600.0f); // Base noise ~40 in 16-bit
+  float threshold = 3.0f * sigma;
+
+  if (diff < (int)threshold)
     return 256;
-  if (diff > threshold2)
+  if (diff > (int)(threshold * 4.0f))
     return 0;
-  return 256 * (threshold2 - diff) / (threshold2 - threshold1);
+
+  return 256 * (int)(threshold * 4.0f - (float)diff) / (int)(threshold * 3.0f);
 }
 
 void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
@@ -302,22 +381,43 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       Point offset = alignment.getOffset(x, y);
-      int tx = x + offset.x;
-      int ty = y + offset.y;
+      float tx = (float)x + offset.x;
+      float ty = (float)y + offset.y;
 
       int destIdx = y * width + x;
-      if (tx >= 0 && tx < width && ty >= 0 && ty < height &&
+      if (tx >= 0 && tx < (float)width && ty >= 0 && ty < (float)height &&
           destIdx < (int)accumY.size()) {
-        uint16_t targetVal = currentY[ty * width + tx];
-        uint16_t refVal = referenceY[destIdx];
+        uint16_t targetVal =
+            (uint16_t)sampleBilinear(currentY, width, height, tx, ty);
+        uint16_t refVal = (uint16_t)(accumY[destIdx] / weightY[destIdx]);
+
+        float variance = computeLocalVariance(referenceY, width, height, x, y);
         int diff = std::abs((int)targetVal - (int)refVal);
-        int weight = calculateWeight(diff);
+        int weight = calculateWeight(diff, variance);
 
         accumY[destIdx] += (int32_t)targetVal * weight;
         weightY[destIdx] += weight;
+
+        // Progressive reference update (recursive filter)
+        // Only update if weight is high (no motion) to avoid ghosting in
+        // reference
+        if (weight > 128) {
+          referenceY[destIdx] =
+              (uint16_t)((referenceY[destIdx] * 7 + targetVal) / 8);
+        }
       }
     }
   }
+
+  // Update reference pyramid for next frame alignment
+  GrayImage ref8bit;
+  ref8bit.width = width;
+  ref8bit.height = height;
+  ref8bit.data.resize(width * height);
+  for (int i = 0; i < width * height; ++i) {
+    ref8bit.data[i] = static_cast<uint8_t>(referenceY[i] >> 8);
+  }
+  referencePyramid = buildPyramid(ref8bit.data.data(), width, height, 4);
 
   // UV Planes (subsampled)
   int uvWidth = width / 2;
@@ -327,45 +427,70 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
   for (int y = 0; y < uvHeight; ++y) {
     for (int x = 0; x < uvWidth; ++x) {
       Point offset = alignment.getOffset(x * 2, y * 2);
-      int tx = x + offset.x / 2;
-      int ty = y + offset.y / 2;
+      float tx = (float)x + offset.x / 2.0f;
+      float ty = (float)y + offset.y / 2.0f;
 
       int destIdx = y * uvWidth + x;
-      if (tx >= 0 && tx < uvWidth && ty >= 0 && ty < uvHeight &&
+      if (tx >= 0 && tx < (float)uvWidth && ty >= 0 && ty < (float)uvHeight &&
           destIdx < uvSize) {
-        uint16_t targetU, targetV;
-        if (isP010) {
-          targetU = readValue<uint16_t>(
-              uData + ty * uvRowStride + tx * uvPixelStride, false);
-          targetV = readValue<uint16_t>(
-              vData + ty * uvRowStride + tx * uvPixelStride, false);
-        } else {
-          targetU = static_cast<uint16_t>(
-                        uData[ty * uvRowStride + tx * uvPixelStride])
-                    << 8;
-          targetV = static_cast<uint16_t>(
-                        vData[ty * uvRowStride + tx * uvPixelStride])
-                    << 8;
-        }
 
-        uint16_t refU = referenceU[y * uvWidth + x];
-        uint16_t refV = referenceV[y * uvWidth + x];
+        // Use a temporary vector or similar for sampling U/V
+        // For efficiency, compute integer indices and weights if bilinearly
+        // sampling U/V But let's reuse sampleBilinear logic if we had
+        // currentU/V. Currently we don't have currentU/V in a vector, we read
+        // from raw. Let's create them for easier sampling.
 
-        // Use Y weight or compute independent weight?
-        // For simplicity, let's use a weight based on UV difference or just
-        // reuse Y weight from nearby. Actually, UV de-ghosting is often linked
-        // to Y. Let's compute a simple UV weight.
+        auto sampleRawUV = [&](const uint8_t *data, float sx, float sy) {
+          int x0 = (int)std::floor(sx);
+          int y0 = (int)std::floor(sy);
+          int x1 = std::min(x0 + 1, uvWidth - 1);
+          int y1 = std::min(y0 + 1, uvHeight - 1);
+          float dx = sx - (float)x0;
+          float dy = sy - (float)y0;
+
+          auto getRawVal = [&](int ix, int iy) {
+            if (isP010) {
+              return (float)readValue<uint16_t>(
+                  data + iy * uvRowStride + ix * uvPixelStride, false);
+            } else {
+              return (float)data[iy * uvRowStride + ix * uvPixelStride] *
+                     256.0f;
+            }
+          };
+
+          float v00 = getRawVal(x0, y0);
+          float v10 = getRawVal(x1, y0);
+          float v01 = getRawVal(x0, y1);
+          float v11 = getRawVal(x1, y1);
+          return (1.0f - dx) * (1.0f - dy) * v00 + dx * (1.0f - dy) * v10 +
+                 (1.0f - dx) * dy * v01 + dx * dy * v11;
+        };
+
+        uint16_t targetU = (uint16_t)sampleRawUV(uData, tx, ty);
+        uint16_t targetV = (uint16_t)sampleRawUV(vData, tx, ty);
+
+        uint16_t refU = (uint16_t)(accumU[destIdx] / weightU[destIdx]);
+        uint16_t refV = (uint16_t)(accumV[destIdx] / weightV[destIdx]);
+
         int diffU = std::abs((int)targetU - (int)refU);
         int diffV = std::abs((int)targetV - (int)refV);
-        int weight = calculateWeight(std::max(diffU, diffV));
 
-        // Note: we could also use the weight from the corresponding Y pixel to
-        // be more robust.
+        // Variance for UV is usually linked to Y. Let's use simplified
+        // variance.
+        int weight = calculateWeight(std::max(diffU, diffV),
+                                     40000.0f); // Higher base for UV
 
-        accumU[y * uvWidth + x] += (int32_t)targetU * weight;
-        weightU[y * uvWidth + x] += weight;
-        accumV[y * uvWidth + x] += (int32_t)targetV * weight;
-        weightV[y * uvWidth + x] += weight;
+        accumU[destIdx] += (int32_t)targetU * weight;
+        weightU[destIdx] += weight;
+        accumV[destIdx] += (int32_t)targetV * weight;
+        weightV[destIdx] += weight;
+
+        if (weight > 128) {
+          referenceU[destIdx] =
+              (uint16_t)((referenceU[destIdx] * 7 + targetU) / 8);
+          referenceV[destIdx] =
+              (uint16_t)((referenceV[destIdx] * 7 + targetV) / 8);
+        }
       }
     }
   }

@@ -7,8 +7,8 @@
 
 // Represents a 2D point or offset
 struct Point {
-  int x;
-  int y;
+  float x;
+  float y;
 };
 
 // Represents a 2D vector field for tile-based alignment
@@ -21,7 +21,7 @@ struct TileAlignment {
 
   Point getOffset(int x, int y) const {
     if (tileWidth <= 0 || tileHeight <= 0 || offsets.empty())
-      return {0, 0};
+      return {0.0f, 0.0f};
     int tx = std::max(0, std::min(x / tileWidth, gridW - 1));
     int ty = std::max(0, std::min(y / tileHeight, gridH - 1));
     return offsets[ty * gridW + tx];
