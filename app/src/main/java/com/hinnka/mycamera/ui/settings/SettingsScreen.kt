@@ -44,6 +44,7 @@ import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import com.hinnka.mycamera.data.RawEngine
 import kotlin.math.roundToInt
 
 /**
@@ -74,6 +75,7 @@ fun SettingsScreen(
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
+    val rawEngine by viewModel.rawEngine.collectAsState(initial = RawEngine.NATIVE)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -359,6 +361,22 @@ fun SettingsScreen(
                         onLevelSelected = { viewModel.setMultiFrameCount(it) }
                     )
                 }
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_raw_engine),
+                    description = stringResource(R.string.settings_raw_engine_description),
+                    levels = listOf(
+                        RawEngine.NATIVE.ordinal to stringResource(R.string.settings_raw_engine_native),
+                        RawEngine.SELF_DEVELOPED.ordinal to stringResource(R.string.settings_raw_engine_self_developed),
+                    ),
+                    currentLevel = rawEngine.ordinal,
+                    onLevelSelected = { viewModel.setRawEngine(RawEngine.entries[it]) }
+                )
 
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.1f),

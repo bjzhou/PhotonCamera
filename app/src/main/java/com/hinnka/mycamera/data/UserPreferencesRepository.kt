@@ -24,6 +24,11 @@ enum class VolumeKeyAction {
     ZOOM
 }
 
+enum class RawEngine {
+    NATIVE,           // 原生
+    SELF_DEVELOPED    // 自研
+}
+
 /**
  * 用户偏好设置数据类
  */
@@ -52,7 +57,8 @@ data class UserPreferences(
     val categoryOrder: List<String> = emptyList(), // 分类排序
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val useMultiFrame: Boolean = false, // 是否使用多帧合成
-    val multiFrameCount: Int = 8 // 多帧合成帧数
+    val multiFrameCount: Int = 8, // 多帧合成帧数
+    val rawEngine: RawEngine = RawEngine.NATIVE // RAW处理引擎
 )
 
 /**
@@ -96,6 +102,7 @@ class UserPreferencesRepository(private val context: Context) {
         // 多帧合成 Key
         private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
+        private val RAW_ENGINE = stringPreferencesKey("raw_engine")
     }
 
     /**
@@ -131,7 +138,10 @@ class UserPreferencesRepository(private val context: Context) {
                 categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 useMultiFrame = preferences[USE_MULTI_FRAME] ?: false,
-                multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8
+                multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8,
+                rawEngine = RawEngine.valueOf(
+                    preferences[RAW_ENGINE] ?: RawEngine.NATIVE.name
+                )
             )
         }
 
@@ -400,6 +410,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveMultiFrameCount(count: Int) {
         context.dataStore.edit { preferences ->
             preferences[MULTI_FRAME_COUNT] = count
+        }
+    }
+
+    /**
+     * 保存 RAW 处理引擎
+     */
+    suspend fun saveRawEngine(engine: RawEngine) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_ENGINE] = engine.name
         }
     }
 }

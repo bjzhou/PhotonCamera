@@ -5,10 +5,12 @@ import android.graphics.*
 import android.os.Build
 import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
@@ -93,21 +95,26 @@ class PhotoProcessor(
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
         val cropRegion = metadata.cropRegion
-//        val lutResult = RawDemosaicProcessor.getInstance().process(
-//            dngPath,
-//            metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion,
-//            lutConfig, colorRecipeParams,
-//                    finalSharpening, finalNoiseReduction, finalChromaNoiseReduction)
-        val bitmap16 = RawProcessor.process(dngPath, metadata.ratio, cropRegion, metadata.rotation)
-        result = bitmap16?.let {
-            lutImageProcessor.applyLut(
-                bitmap16,
-                lutConfig,
-                colorRecipeParams,
-                finalSharpening,
-                finalNoiseReduction,
-                finalChromaNoiseReduction
+
+        if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
+            result = RawDemosaicProcessor.getInstance().process(
+                dngPath,
+                metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion,
+                lutConfig, colorRecipeParams,
+                finalSharpening, finalNoiseReduction, finalChromaNoiseReduction
             )
+        } else {
+            val bitmap16 = RawProcessor.process(dngPath, metadata.ratio, cropRegion, metadata.rotation)
+            result = bitmap16?.let {
+                lutImageProcessor.applyLut(
+                    bitmap16,
+                    lutConfig,
+                    colorRecipeParams,
+                    finalSharpening,
+                    finalNoiseReduction,
+                    finalChromaNoiseReduction
+                )
+            }
         }
 
         result ?: return@withContext null

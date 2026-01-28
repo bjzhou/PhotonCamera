@@ -18,6 +18,7 @@ import android.provider.MediaStore
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -321,17 +322,24 @@ object PhotoManager {
                                 RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
                                 dngData.toByteArray()
                             }
-                            launch(Dispatchers.IO) {
-                                FileOutputStream(dngFile).use { outputStream ->
-                                    outputStream.write(dngDataBytes)
-                                }
+                            FileOutputStream(dngFile).use { outputStream ->
+                                outputStream.write(dngDataBytes)
                             }
-                            val bitmap = RawProcessor.processAndToBitmap(
-                                dngDataBytes,
-                                aspectRatio,
-                                cropRegion,
-                                rotation
-                            ) ?: return@launch
+
+                            val bitmap = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
+                                RawDemosaicProcessor.getInstance().process(
+                                    dngFile.absolutePath,
+                                    aspectRatio,
+                                    cropRegion
+                                )
+                            } else {
+                                RawProcessor.processAndToBitmap(
+                                    dngDataBytes,
+                                    aspectRatio,
+                                    cropRegion,
+                                    rotation
+                                )
+                            } ?: return@launch
                             if (thumbnail == null) {
                                 generateThumbnail(bitmap, thumbnailFile)
                             }
@@ -472,12 +480,19 @@ suspend fun saveStackedPhoto(
                         FileOutputStream(dngFile).use {
                             it.write(array)
                         }
-                        launch {
-                            if (shouldAutoSave) {
-                                exportDng(context, array, metadataWithInfo)
-                            }
+                        if (shouldAutoSave) {
+                            exportDng(context, array, metadataWithInfo)
                         }
-                        result = RawProcessor.process(dngFile.absolutePath, aspectRatio, cropRegion, rotation)
+
+                        result = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
+                            RawDemosaicProcessor.getInstance().process(
+                                dngFile.absolutePath,
+                                aspectRatio,
+                                cropRegion
+                            )
+                        } else {
+                            RawProcessor.process(dngFile.absolutePath, aspectRatio, cropRegion, rotation)
+                        }
                     }
                     else -> {
                         PLog.e(TAG, "Unsupported image format: $format")

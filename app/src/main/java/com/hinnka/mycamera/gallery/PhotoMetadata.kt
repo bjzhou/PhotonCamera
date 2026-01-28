@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
@@ -49,7 +50,9 @@ data class PhotoMetadata(
     // 边框水印自定义
     val customProperties: Map<String, String> = emptyMap(),
     // 导出到系统相册的 URI 列表
-    val exportedUris: List<String> = emptyList()
+    val exportedUris: List<String> = emptyList(),
+    // RAW 处理引擎
+    val rawEngine: RawEngine? = null
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -154,6 +157,8 @@ data class PhotoMetadata(
             put("customProperties", customPropsObj)
             // 导出的 URI 列表
             put("exportedUris", org.json.JSONArray(exportedUris))
+            // RAW 处理引擎
+            put("rawEngine", rawEngine?.name ?: JSONObject.NULL)
         }.toString(2)
     }
 
@@ -235,7 +240,12 @@ data class PhotoMetadata(
                             put(key, customPropsObj.getString(key))
                         }
                     },
-                    exportedUris = exportedUris
+                    exportedUris = exportedUris,
+                    rawEngine = if (obj.isNull("rawEngine")) null else try {
+                        RawEngine.valueOf(obj.getString("rawEngine"))
+                    } catch (e: Exception) {
+                        null
+                    }
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

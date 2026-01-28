@@ -104,6 +104,10 @@
     <string name="settings_use_multi_frame_description">拍摄多张照片并合成，以获得更好的画质和更低的噪点。</string>
     <string name="settings_multi_frame_count">多帧合成帧数</string>
     <string name="settings_multi_frame_count_description">多帧合成所使用的帧数（帧数越多效果越好，但合成也越慢）。</string>
+    <string name="settings_raw_engine">RAW 处理引擎</string>
+    <string name="settings_raw_engine_description">选择用于处理 RAW 数据的引擎</string>
+    <string name="settings_raw_engine_native">原生</string>
+    <string name="settings_raw_engine_self_developed">自研</string>
     <string name="settings_section_frame">边框水印</string>
     <string name="settings_frame_style">边框样式</string>
     <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>

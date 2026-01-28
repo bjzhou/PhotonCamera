@@ -105,6 +105,10 @@
     <string name="settings_use_multi_frame_description">Capture multiple frames and stack them for better quality and less noise.</string>
     <string name="settings_multi_frame_count">Multi-frame Count</string>
     <string name="settings_multi_frame_count_description">Number of frames for multi-frame stacking (more frames = better quality but slower).</string>
+    <string name="settings_raw_engine">RAW Processing Engine</string>
+    <string name="settings_raw_engine_description">Choose the engine for RAW data processing</string>
+    <string name="settings_raw_engine_native">Native</string>
+    <string name="settings_raw_engine_self_developed">Self-developed</string>
     <string name="settings_section_frame">Frame Watermark</string>
     <string name="settings_frame_style">Frame Style</string>
     <string name="settings_frame_description">Add decorative frame and watermark to photos</string>

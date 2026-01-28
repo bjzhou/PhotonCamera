@@ -15,6 +15,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
@@ -142,6 +143,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 8)
+    val rawEngine: Flow<RawEngine> = userPreferencesRepository.userPreferences
+        .map { it.rawEngine }
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -816,6 +819,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置 RAW 处理引擎
+     */
+    fun setRawEngine(engine: RawEngine) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawEngine(engine)
+        }
+    }
+
+    /**
      * 切换延时拍摄档位（0s → 3s → 5s → 10s → 0s）
      */
     fun toggleTimer() {
@@ -1243,6 +1255,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
+                rawEngine = rawEngine.firstOrNull()
             )
 
             val photoId = characteristics?.let {
@@ -1329,6 +1342,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
+                rawEngine = rawEngine.firstOrNull()
             )
 
             val photoId = characteristics?.let {
