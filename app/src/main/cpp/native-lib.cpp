@@ -106,6 +106,64 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
 }
 
 /**
+ * Raw Stacking JNI Interface
+ */
+JNIEXPORT jlong JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_createRawStackerNative(
+    JNIEnv *env, jobject /* this */, jint width, jint height) {
+  auto *stacker = new RawStacker(width, height);
+  return reinterpret_cast<jlong>(stacker);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToRawStackNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject rawData,
+    jint rowStride, jint cfaPattern) {
+
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  if (!stacker)
+    return;
+
+  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
+  if (data) {
+    stacker->addFrame(data, rowStride, cfaPattern);
+  } else {
+    LOGE("addToRawStackNative: Failed to get buffer address");
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outputBuffer) {
+
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  if (!stacker)
+    return;
+
+  auto *outData =
+      static_cast<uint16_t *>(env->GetDirectBufferAddress(outputBuffer));
+  if (!outData)
+    return;
+
+  std::vector<uint16_t> result = stacker->process();
+
+  jlong capacity = env->GetDirectBufferCapacity(outputBuffer);
+  if (capacity >= result.size() * sizeof(uint16_t)) {
+    memcpy(outData, result.data(), result.size() * sizeof(uint16_t));
+  } else {
+    LOGE("Output buffer too small: capacity=%ld, required=%ld", (long)capacity,
+         (long)(result.size() * sizeof(uint16_t)));
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseRawStackerNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  delete stacker;
+}
+
+/**
  * 处理 YUV_420_888 或 P010 图像：旋转、裁切、转换为 RGBA16
  */
 /**

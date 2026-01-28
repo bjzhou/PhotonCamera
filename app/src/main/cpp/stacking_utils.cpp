@@ -21,30 +21,50 @@ inline float interpolateSubpixel(long long s0, long long s_minus,
   return -0.5f * (float)(s_plus - s_minus) / (float)denom;
 }
 
-// Bilinear sampling for uint16_t data
-inline float sampleBilinear(const std::vector<uint16_t> &data, int width,
+// 辅助函数：计算 Bicubic 权重 (Catmull-Rom)
+inline float cubicWeight(float t) {
+    // a = -0.5
+    float a = -0.5f;
+    float absT = std::abs(t);
+    if (absT <= 1.0f) {
+        return (a + 2.0f) * absT * absT * absT - (a + 3.0f) * absT * absT + 1.0f;
+    } else if (absT < 2.0f) {
+        return a * absT * absT * absT - 5.0f * a * absT * absT + 8.0f * a * absT - 4.0f * a;
+    }
+    return 0.0f;
+}
+
+// 替换原来的 sampleBilinear
+// 注意：这会比双线性慢一点，但画质提升巨大
+inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
                             int height, float x, float y) {
-  int x0 = (int)std::floor(x);
-  int y0 = (int)std::floor(y);
-  int x1 = x0 + 1;
-  int y1 = y0 + 1;
+    int xInt = (int)std::floor(x);
+    int yInt = (int)std::floor(y);
+    float dx = x - xInt;
+    float dy = y - yInt;
 
-  float dx = x - (float)x0;
-  float dy = y - (float)y0;
+    float sum = 0.0f;
+    float weightSum = 0.0f;
 
-  auto getVal = [&](int ix, int iy) {
-    ix = std::max(0, std::min(ix, width - 1));
-    iy = std::max(0, std::min(iy, height - 1));
-    return (float)data[iy * width + ix];
-  };
+    // 4x4 邻域采样
+    for (int j = -1; j <= 2; ++j) {
+        int sy = std::max(0, std::min(height - 1, yInt + j));
+        float wy = cubicWeight((float)j - dy);
 
-  float v00 = getVal(x0, y0);
-  float v10 = getVal(x1, y0);
-  float v01 = getVal(x0, y1);
-  float v11 = getVal(x1, y1);
+        for (int i = -1; i <= 2; ++i) {
+            int sx = std::max(0, std::min(width - 1, xInt + i));
+            float wx = cubicWeight((float)i - dx);
 
-  return (1.0f - dx) * (1.0f - dy) * v00 + dx * (1.0f - dy) * v10 +
-         (1.0f - dx) * dy * v01 + dx * dy * v11;
+            float weight = wx * wy;
+            sum += (float)data[sy * width + sx] * weight;
+            // Bicubic 权重之和理论为 1，但为了浮点稳定性可以除以 weightSum
+            // weightSum += weight;
+        }
+    }
+
+    // 如果不除以 weightSum，sum 可能会轻微溢出或变暗，
+    // Catmull-Rom 的性质决定了通常不需要归一化，但为了保险可以 clamp
+    return std::max(0.0f, sum);
 }
 
 // Compute local variance in a 3x3 window
@@ -159,9 +179,11 @@ long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
                                    int maxShift) {
-  const int tileSize = 32; // Use 32x32 tiles
+  const int tileSize = 32; // Grid step size
   int width = refPyramid[0].width;
   int height = refPyramid[0].height;
+
+  // Grid dimensions
   int gridW = (width + tileSize - 1) / tileSize;
   int gridH = (height + tileSize - 1) / tileSize;
 
@@ -172,89 +194,184 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   alignment.gridH = gridH;
   alignment.offsets.resize(gridW * gridH, {0, 0});
 
-  // 1. Compute a global offset first as a base
+  // 1. Global offset (L3 -> L2 -> L1)
+  // Search deeper to ensure stability
   Point globalOffset = {0, 0};
   int currentDx = 0;
   int currentDy = 0;
 
-  for (int i = refPyramid.size() - 1; i >= 0; --i) {
+  for (int i = refPyramid.size() - 1; i >= 1; --i) {
     currentDx *= 2;
     currentDy *= 2;
     const GrayImage &ref = refPyramid[i];
     const GrayImage &tgt = targetPyramid[i];
-    int searchRadius = (i == (int)refPyramid.size() - 1) ? (maxShift >> i) : 2;
+    int searchRadius = (i >= 2) ? 4 : 2; // Larger search at top levels
 
     long long bestSAD = std::numeric_limits<long long>::max();
+    Point layerBest = {0, 0};
+
     for (int dy = -searchRadius; dy <= searchRadius; ++dy) {
       for (int dx = -searchRadius; dx <= searchRadius; ++dx) {
         long long sad = computeSAD(ref, tgt, currentDx + dx, currentDy + dy);
         if (sad < bestSAD) {
           bestSAD = sad;
-          globalOffset = {(float)(currentDx + dx), (float)(currentDy + dy)};
+          layerBest = {(float)dx, (float)dy};
         }
       }
     }
-    currentDx = (int)globalOffset.x;
-    currentDy = (int)globalOffset.y;
+    currentDx += (int)layerBest.x;
+    currentDy += (int)layerBest.y;
   }
 
-  // 2. Refine per tile using the global offset as a starting point
-  // We refine at level 1 (1/2 size) for better speed/robustness balance
+  globalOffset = {(float)currentDx, (float)currentDy};
+
+  // 2. Refine per tile at Level 1
   const GrayImage &refL1 = refPyramid[1];
   const GrayImage &tgtL1 = targetPyramid[1];
-  int tSizeL1 = tileSize / 2;
-  int gDxL1 = globalOffset.x / 2;
-  int gDyL1 = globalOffset.y / 2;
+
+  // Grid step at L1 is tileSize/2 (16 pixels)
+  int stepL1 = tileSize / 2;
+
+  // BUT we use a larger window for SAD to stabilize (Overlap)
+  // 24x24 window allows 50% overlap with neighbors
+  int matchSizeL1 = stepL1 + 8;
+
+  float gDxL1 = globalOffset.x; // Already at L1 scale from loop above
+  float gDyL1 = globalOffset.y;
+
+  // Temporary buffer for raw vectors
+  std::vector<Point> rawOffsets(gridW * gridH);
 
   for (int ty = 0; ty < gridH; ++ty) {
     for (int tx = 0; tx < gridW; ++tx) {
-      int refX = tx * tSizeL1;
-      int refY = ty * tSizeL1;
+      int refX = tx * stepL1;
+      int refY = ty * stepL1;
 
       long long bestSAD = std::numeric_limits<long long>::max();
-      Point bestOffset = {globalOffset.x, globalOffset.y};
+      int baseDx = (int)std::round(gDxL1);
+      int baseDy = (int)std::round(gDyL1);
+      int bestDx = baseDx;
+      int bestDy = baseDy;
 
-      // Search range around global offset at level 1
+      // Local search
       for (int dy = -2; dy <= 2; ++dy) {
         for (int dx = -2; dx <= 2; ++dx) {
-          long long sad = computeBlockSAD(refL1, tgtL1, refX, refY, tSizeL1,
-                                          tSizeL1, gDxL1 + dx, gDyL1 + dy);
+          int curDx = baseDx + dx;
+          int curDy = baseDy + dy;
+          // Use matchSizeL1 which is larger than stepL1 for stability
+          long long sad = computeBlockSAD(refL1, tgtL1, refX, refY, matchSizeL1,
+                                          matchSizeL1, curDx, curDy);
           if (sad < bestSAD) {
             bestSAD = sad;
-            bestOffset = {(float)((gDxL1 + dx) * 2), (float)((gDyL1 + dy) * 2)};
+            bestDx = curDx;
+            bestDy = curDy;
           }
         }
       }
 
-      // 3. Sub-pixel refinement at Level 0
-      const GrayImage &refL0 = refPyramid[0];
-      const GrayImage &tgtL0 = targetPyramid[0];
-      int bX = (int)bestOffset.x;
-      int bY = (int)bestOffset.y;
-      int rX = tx * tileSize;
-      int rY = ty * tileSize;
-
-      long long s0 =
-          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX, bY);
-      long long sx_m =
-          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX - 1, bY);
-      long long sx_p =
-          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX + 1, bY);
-      long long sy_m =
-          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX, bY - 1);
-      long long sy_p =
-          computeBlockSAD(refL0, tgtL0, rX, rY, tileSize, tileSize, bX, bY + 1);
+      // 3. Sub-pixel Refinement (L1 scale)
+      // We do subpixel at L1 to avoid noise at L0
+      long long s0 = bestSAD;
+      long long sx_m = computeBlockSAD(refL1, tgtL1, refX, refY, matchSizeL1,
+                                       matchSizeL1, bestDx - 1, bestDy);
+      long long sx_p = computeBlockSAD(refL1, tgtL1, refX, refY, matchSizeL1,
+                                       matchSizeL1, bestDx + 1, bestDy);
+      long long sy_m = computeBlockSAD(refL1, tgtL1, refX, refY, matchSizeL1,
+                                       matchSizeL1, bestDx, bestDy - 1);
+      long long sy_p = computeBlockSAD(refL1, tgtL1, refX, refY, matchSizeL1,
+                                       matchSizeL1, bestDx, bestDy + 1);
 
       float subDx = interpolateSubpixel(s0, sx_m, sx_p);
       float subDy = interpolateSubpixel(s0, sy_m, sy_p);
 
-      alignment.offsets[ty * gridW + tx] = {(float)bX + subDx,
-                                            (float)bY + subDy};
+      // Clamp subpixel to avoid wild shots on flat textures
+      subDx = std::max(-0.5f, std::min(0.5f, subDx));
+      subDy = std::max(-0.5f, std::min(0.5f, subDy));
+
+      // Scale back to L0 (multiply by 2)
+      rawOffsets[ty * gridW + tx] = {(float)(bestDx + subDx) * 2.0f,
+                                     (float)(bestDy + subDy) * 2.0f};
+    }
+  }
+
+  // 4. Vector Field Smoothing (Regularization) - KEY for removing Jello Effect
+  // Apply 3x3 Box Blur to the offset field
+  for (int y = 0; y < gridH; ++y) {
+    for (int x = 0; x < gridW; ++x) {
+      float sumX = 0, sumY = 0;
+      float wSum = 0;
+
+      // 3x3 neighborhood
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          int nx = std::max(0, std::min(x + dx, gridW - 1));
+          int ny = std::max(0, std::min(y + dy, gridH - 1));
+
+          // Optional: Give center more weight
+          float w = (dx == 0 && dy == 0) ? 2.0f : 1.0f;
+
+          sumX += rawOffsets[ny * gridW + nx].x * w;
+          sumY += rawOffsets[ny * gridW + nx].y * w;
+          wSum += w;
+        }
+      }
+      alignment.offsets[y * gridW + x] = {sumX / wSum, sumY / wSum};
     }
   }
 
   return alignment;
 }
+
+namespace { // 匿名命名空间，放置内部辅助函数
+
+// --- 核心升级 1: Catmull-Rom 双三次插值权重 ---
+// 这种曲线在保留锐度和抑制振铃之间取得了很好的平衡
+inline float cubicWeight(float t) {
+    float a = -0.5f; // Catmull-Rom spline
+    float absT = std::abs(t);
+    if (absT <= 1.0f) {
+        return (a + 2.0f) * absT * absT * absT - (a + 3.0f) * absT * absT + 1.0f;
+    } else if (absT < 2.0f) {
+        return a * absT * absT * absT - 5.0f * a * absT * absT + 8.0f * a * absT - 4.0f * a;
+    }
+    return 0.0f;
+}
+
+// --- 核心升级 1: Bicubic 采样函数 ---
+// 用于替代原本的双线性插值。能显著提升亚像素对齐后的清晰度。
+// data: 单通道数据 (Plane)
+inline float sampleBicubicPlane(const std::vector<uint16_t>& data, int width, int height, float x, float y) {
+    int xInt = (int)std::floor(x);
+    int yInt = (int)std::floor(y);
+    float dx = x - xInt;
+    float dy = y - yInt;
+
+    float sum = 0.0f;
+    // float weightSum = 0.0f; // Catmull-Rom 理论权重和为 1，通常不需要归一化，省点计算量
+
+    // 4x4 邻域采样
+    // 边界检查放到循环内虽然稍微慢点，但写起来最安全
+    for (int j = -1; j <= 2; ++j) {
+        int sy = std::max(0, std::min(height - 1, yInt + j));
+        float wy = cubicWeight((float)j - dy);
+
+        // 优化：如果 Y 权重为 0 (极少见)，跳过整行
+        if (std::abs(wy) < 1e-5f) continue;
+
+        for (int i = -1; i <= 2; ++i) {
+            int sx = std::max(0, std::min(width - 1, xInt + i));
+            float wx = cubicWeight((float)i - dx);
+
+            // 累加
+            sum += (float)data[sy * width + sx] * wx * wy;
+        }
+    }
+
+    // Bicubic 可能会产生负值（下冲），必须 Clamp 住
+    return std::max(0.0f, sum);
+}
+
+} // end namespace
 
 // --- ImageStacker Implementation ---
 
@@ -388,7 +505,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
       if (tx >= 0 && tx < (float)width && ty >= 0 && ty < (float)height &&
           destIdx < (int)accumY.size()) {
         uint16_t targetVal =
-            (uint16_t)sampleBilinear(currentY, width, height, tx, ty);
+            (uint16_t)sampleBicubic(currentY, width, height, tx, ty);
         uint16_t refVal = (uint16_t)(accumY[destIdx] / weightY[destIdx]);
 
         float variance = computeLocalVariance(referenceY, width, height, x, y);
@@ -626,4 +743,342 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
     saveJxl(fp16Pixels.data(), finalWidth, finalHeight, JXL_TYPE_UINT16,
             outputPath);
   }
+}
+
+RawStacker::RawStacker(int width, int height)
+    : width(width), height(height), isFirstFrame(true) {
+  int planeSize = (width / 2) * (height / 2);
+  for (int i = 0; i < 4; ++i) {
+    accum[i].assign(planeSize, 0);
+    weight[i].assign(planeSize, 0);
+  }
+}
+
+int RawStacker::getPlaneIndex(int x, int y, int cfaPattern) const {
+  // cfaPattern: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+  // Row 0, Col 0 maps to: R, G, G, B respectively
+  // We want output indices 0..3 for R, Gr, Gb, B
+
+  // x%2, y%2 -> 00, 10, 01, 11
+  int offset = (y % 2) * 2 + (x % 2);
+
+  // Mapping table based on pattern
+  static const int map[4][4] = {
+      {0, 1, 2, 3}, // RGGB
+      {1, 0, 3, 2}, // GRBG
+      {2, 3, 0, 1}, // GBRG
+      {3, 2, 1, 0}  // BGGR
+  };
+
+  return map[cfaPattern][offset];
+}
+
+
+// 辅助函数：安全地计算 RAW 的自动曝光缩放因子
+// 使用 stride (bytes) 进行指针移动
+inline float computeRawScaleSafe(const uint8_t* rawDataBytes, int width, int height, int rowStride) {
+    int startY = height / 4;
+    int endY = startY * 3;
+    int startX = width / 4;
+    int endX = startX * 3;
+
+    uint16_t maxVal = 1;
+
+    for (int y = startY; y < endY; y += 8) { // 步长加大，性能优先
+        const uint16_t* row = (const uint16_t*)(rawDataBytes + y * rowStride);
+        for (int x = startX; x < endX; x += 8) {
+            if (row[x] > maxVal) maxVal = row[x];
+        }
+    }
+    maxVal = std::max(maxVal, (uint16_t)255);
+    return 255.0f / (float)maxVal;
+}
+
+// 辅助函数：简单的 3x3 均值模糊，去除 RAW 噪点以利于对齐
+void smoothImage(GrayImage& img) {
+    std::vector<uint8_t> temp = img.data;
+    int w = img.width;
+    int h = img.height;
+
+    for (int y = 1; y < h - 1; ++y) {
+        for (int x = 1; x < w - 1; ++x) {
+            int sum = 0;
+            // 3x3 Box Blur
+            sum += temp[(y - 1) * w + (x - 1)];
+            sum += temp[(y - 1) * w + x];
+            sum += temp[(y - 1) * w + (x + 1)];
+            sum += temp[y * w + (x - 1)];
+            sum += temp[y * w + x];       // Center
+            sum += temp[y * w + (x + 1)];
+            sum += temp[(y + 1) * w + (x - 1)];
+            sum += temp[(y + 1) * w + x];
+            sum += temp[(y + 1) * w + (x + 1)];
+
+            img.data[y * w + x] = (uint8_t)(sum / 9);
+        }
+    }
+}
+
+void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern) {
+  frameCount++;
+  const uint8_t* rawBytes = (const uint8_t*)rawData;
+
+  // 1. 自动曝光计算 (每帧独立计算或只算第一帧，这里为了安全每帧检查，第一帧锁定)
+  if (isFirstFrame) {
+      mScale = computeRawScaleSafe(rawBytes, width, height, rowStride);
+      // 限制缩放倍数，防止纯黑图片导致数值爆炸
+      if (mScale > 100.0f) mScale = 100.0f;
+      LOGD("RawStacker: Scale factor: %f", mScale);
+  }
+
+  // 2. 准备 Proxy 和 Planes
+  int proxyW = width / 2;
+  int proxyH = height / 2;
+  GrayImage proxy;
+  proxy.width = proxyW;
+  proxy.height = proxyH;
+  proxy.data.resize(proxyW * proxyH);
+
+  // 初始化 Planes
+  std::vector<uint16_t> planes[4];
+  for (int i = 0; i < 4; ++i) planes[i].resize(proxyW * proxyH);
+
+  // CFA 偏移量逻辑 (保持之前的修正)
+  int g1_dx = 0, g1_dy = 0;
+  int g2_dx = 0, g2_dy = 0;
+
+  // RGGB(0), BGGR(3) -> G at (1,0), (0,1) relative to 2x2 block
+  // GRBG(1), GBRG(2) -> G at (0,0), (1,1) relative to 2x2 block
+  if (cfaPattern == 1 || cfaPattern == 2) {
+      g1_dx=0; g1_dy=0; g2_dx=1; g2_dy=1;
+  } else {
+      g1_dx=1; g1_dy=0; g2_dx=0; g2_dy=1;
+  }
+
+  // 3. 提取数据 (使用 Byte Stride 指针运算)
+  for (int y = 0; y < proxyH; ++y) {
+      // 预先计算当前行的指针，减少循环内乘法
+      const uint8_t* row0 = rawBytes + (y * 2) * rowStride;
+      const uint8_t* row1 = rawBytes + (y * 2 + 1) * rowStride;
+      const uint16_t* pRow0 = (const uint16_t*)row0;
+      const uint16_t* pRow1 = (const uint16_t*)row1;
+
+      for (int x = 0; x < proxyW; ++x) {
+          int ox = x * 2;
+
+          // 读取 2x2 块
+          uint16_t p00 = pRow0[ox];
+          uint16_t p10 = pRow0[ox + 1];
+          uint16_t p01 = pRow1[ox];
+          uint16_t p11 = pRow1[ox + 1];
+
+          // 提取绿色通道用于 Proxy
+          // 根据 CFA 模式选择哪两个像素是绿色
+          uint16_t g1, g2;
+
+          // 简化逻辑：利用预读的像素值，避免重复指针计算
+          if (cfaPattern == 1 || cfaPattern == 2) {
+              // G at (0,0) and (1,1)
+              g1 = p00; g2 = p11;
+          } else {
+              // G at (1,0) and (0,1)
+              g1 = p10; g2 = p01;
+          }
+
+          // 生成对齐用 Proxy 像素 (均值 + 缩放)
+          float avgG = (float)(g1 + g2) * 0.5f;
+          proxy.data[y * proxyW + x] = (uint8_t)std::max(0.0f, std::min(255.0f, avgG * mScale));
+
+          // 分发到 Planes
+          planes[getPlaneIndex(ox, 0, cfaPattern)][y * proxyW + x] = p00;
+          planes[getPlaneIndex(ox + 1, 0, cfaPattern)][y * proxyW + x] = p10;
+          planes[getPlaneIndex(ox, 1, cfaPattern)][y * proxyW + x] = p01;
+          planes[getPlaneIndex(ox + 1, 1, cfaPattern)][y * proxyW + x] = p11;
+      }
+  }
+
+  // --- 关键修正 2: Proxy 降噪 ---
+  // RAW 的单像素噪声极强，会导致 SAD 误判。对齐前进行轻微模糊是必须的。
+  if (!isFirstFrame) {
+      smoothImage(proxy);
+  }
+
+  if (isFirstFrame) {
+    mCfaPattern = cfaPattern;
+    // 第一帧也要平滑，作为干净的参考基准
+    smoothImage(proxy);
+    referencePyramid = buildPyramid(proxy.data.data(), proxyW, proxyH, 4);
+
+    for (int i = 0; i < 4; ++i) {
+      referencePlanes[i] = planes[i];
+      for (size_t j = 0; j < planes[i].size(); ++j) {
+        accum[i][j] = (int32_t)planes[i][j] * 256;
+        weight[i][j] = 256;
+      }
+    }
+    isFirstFrame = false;
+    return;
+  }
+
+  // 4. 对齐 (Alignment)
+  std::vector<GrayImage> currentPyramid =
+      buildPyramid(proxy.data.data(), proxyW, proxyH, 4);
+
+  // 搜索范围：48 (对应 RAW 像素 96)
+  TileAlignment alignment =
+      computeTileAlignment(referencePyramid, currentPyramid, 48);
+
+  // 5. 堆栈融合 (Accumulate)
+  for (int i = 0; i < 4; ++i) {
+    const auto &srcPlane = planes[i];
+    const auto &refPlane = referencePlanes[i]; // 用于方差计算的参考平面
+
+    for (int y = 0; y < proxyH; ++y) {
+      for (int x = 0; x < proxyW; ++x) {
+        Point offset = alignment.getOffset(x, y);
+        float tx = (float)x + offset.x;
+        float ty = (float)y + offset.y;
+
+        int destIdx = y * proxyW + x;
+
+        // 边界保护
+        if (tx >= 2.0f && tx < (float)proxyW - 3.0f &&
+            ty >= 2.0f && ty < (float)proxyH - 3.0f) {
+
+          // --- 核心升级 1: 调用 Bicubic 采样 ---
+          float val = sampleBicubicPlane(srcPlane, proxyW, proxyH, tx, ty);
+          int32_t sampleVal = (int32_t)val;
+
+          // De-ghosting
+          int32_t currentAvg = accum[i][destIdx] / weight[i][destIdx];
+          int diff = std::abs(sampleVal - currentAvg);
+
+          float noiseModel = 32.0f + std::sqrt((float)currentAvg) * 2.5f;
+          float thresholdHigh = noiseModel * 4.0f; // 差异大到这个程度，认为是鬼影，权重归零
+          float thresholdLow  = noiseModel * 1.5f; // 差异在这个范围内，认为是完全安全的
+
+          int w = 256;
+          if (diff > thresholdHigh) {
+             w = 0;
+          } else if (diff > thresholdLow) {
+             float t = ((float)diff - thresholdLow) / (thresholdHigh - thresholdLow);
+             float factor = 1.0f - (t * t * (3.0f - 2.0f * t)); // smoothstep flip
+             w = (int)(256.0f * factor);
+         }
+
+          if (w > 0) {
+            accum[i][destIdx] += sampleVal * w;
+            weight[i][destIdx] += w;
+          }
+        }
+      }
+    }
+  }
+}
+
+// 辅助：获取 RAW 像素 (带边界检查)
+inline uint16_t getPixelSafe(const std::vector<uint16_t>& data, int w, int h, int x, int y) {
+    int px = std::max(0, std::min(w - 1, x));
+    int py = std::max(0, std::min(h - 1, y));
+    return data[py * w + px];
+}
+
+void postProcessRaw(std::vector<uint16_t>& img, int width, int height, int cfaPattern) {
+    std::vector<uint16_t> temp = img; // 备份一份用于读取，img 用于写入
+
+    // Bayer 模式偏移表 (用于识别颜色通道)
+    // 0:RGGB, 1:GRBG, 2:GBRG, 3:BGGR
+    // 我们只需要知道当前点是 G 还是 R/B
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int offset = (y % 2) * 2 + (x % 2);
+            // 判断当前是不是 Green
+            // RGGB(0): (0,0)=R, (1,0)=G, (0,1)=G, (1,1)=B -> Offset 1,2 are G
+            // ... 通用逻辑：
+            bool isGreen = false;
+            if (cfaPattern == 0) isGreen = (offset == 1 || offset == 2);      // RGGB
+            else if (cfaPattern == 1) isGreen = (offset == 0 || offset == 3); // GRBG
+            else if (cfaPattern == 2) isGreen = (offset == 0 || offset == 3); // GBRG
+            else if (cfaPattern == 3) isGreen = (offset == 1 || offset == 2); // BGGR
+
+            uint16_t center = temp[y * width + x];
+            uint16_t resultVal = center;
+
+            if (isGreen) {
+                // === Green 通道：只做锐化 (保护纹理) ===
+
+                // 1. 采样周围同色 G (十字形, step=1 或对角 step=1 取决于位置，这里简化用 3x3 范围内的 G)
+                // 简单点，直接取菱形 4 个邻居，虽然它们是 R/B，但亮度相近可以参考？
+                // 不行，RAW 域必须取同色。Green 的同色邻居在 (x-1, y-1), (x+1, y-1)... 对角线上
+
+                int sum = 0;
+                sum += getPixelSafe(temp, width, height, x - 1, y - 1);
+                sum += getPixelSafe(temp, width, height, x + 1, y - 1);
+                sum += getPixelSafe(temp, width, height, x - 1, y + 1);
+                sum += getPixelSafe(temp, width, height, x + 1, y + 1);
+                int avg = sum / 4;
+
+                // 2. 锐化 (USM)
+                int detail = (int)center - avg;
+
+                // 限制幅度 (防黑边)
+                if (detail > 2048) detail = 2048; // 16-bit range
+                if (detail < -2048) detail = -2048;
+
+                // 施加锐化 (强度 1.5)
+                int sharpened = (int)center + (detail * 3) / 2;
+
+                resultVal = (uint16_t)std::max(0, std::min(65535, sharpened));
+
+            } else {
+                // === Red/Blue 通道：只做降噪 (消除彩噪) ===
+
+                // 取同色邻居 (步长为 2)
+                int sum = 0;
+                sum += getPixelSafe(temp, width, height, x - 2, y);
+                sum += getPixelSafe(temp, width, height, x + 2, y);
+                sum += getPixelSafe(temp, width, height, x, y - 2);
+                sum += getPixelSafe(temp, width, height, x, y + 2);
+                int avg = sum / 4;
+
+                // 强力混合 (50% 降噪)
+                resultVal = (uint16_t)((center + avg) / 2);
+            }
+
+            img[y * width + x] = resultVal;
+        }
+    }
+}
+
+std::vector<uint16_t> RawStacker::process() {
+  std::vector<uint16_t> result(width * height);
+
+  int proxyW = width / 2;
+  int proxyH = height / 2;
+
+  for (int y = 0; y < proxyH; ++y) {
+    for (int x = 0; x < proxyW; ++x) {
+      int ox = x * 2;
+      int oy = y * 2;
+
+      // Helper to retrieve value for a specific original pixel coordinate
+      auto getVal = [&](int px, int py) {
+        int planeIdx = getPlaneIndex(px, py, mCfaPattern);
+        int destIdx = y * proxyW + x;
+        if (weight[planeIdx][destIdx] > 0) {
+          return (uint16_t)(accum[planeIdx][destIdx] /
+                            weight[planeIdx][destIdx]);
+        }
+        return (uint16_t)0;
+      };
+
+      result[oy * width + ox] = getVal(ox, oy);
+      result[oy * width + ox + 1] = getVal(ox + 1, oy);
+      result[(oy + 1) * width + ox] = getVal(ox, oy + 1);
+      result[(oy + 1) * width + ox + 1] = getVal(ox + 1, oy + 1);
+    }
+  }
+  //postProcessRaw(result, width, height, mCfaPattern);
+  return result;
 }

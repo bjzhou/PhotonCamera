@@ -7,7 +7,9 @@ import android.hardware.camera2.DngCreator
 import android.media.ExifInterface
 import android.media.Image
 import android.util.Log
+import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -56,8 +58,17 @@ object RawProcessor {
         cropRegion: Rect?,
         rotation: Int
     ): Bitmap? {
+        return processAndToBitmap(ByteBuffer.wrap(byteArray), aspectRatio, cropRegion, rotation)
+    }
+
+    fun processAndToBitmap(
+        byteBuffer: ByteBuffer,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
+        rotation: Int
+    ): Bitmap? {
         return try {
-            val source = ImageDecoder.createSource(ByteBuffer.wrap(byteArray))
+            val source = ImageDecoder.createSource(byteBuffer)
             var decodedBitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB))
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
@@ -125,6 +136,37 @@ object RawProcessor {
             }
             dngCreator.setOrientation(orientation)
             dngCreator.writeImage(outputStream, image)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to save DNG", e)
+        } finally {
+            dngCreator.close()
+        }
+    }
+
+    fun saveToDng(
+        byteBuffer: ByteBuffer,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+        outputStream: java.io.OutputStream,
+        width: Int,
+        height: Int,
+        rotation: Int = 0
+    ) {
+        val dngCreator = DngCreator(characteristics, captureResult)
+        try {
+            val buffer = ByteBuffer.allocateDirect(byteBuffer.capacity())
+            buffer.order(ByteOrder.nativeOrder())
+            buffer.put(byteBuffer)
+            buffer.rewind() // 必须重置 position 到 0
+            val orientation = when (rotation) {
+                90 -> ExifInterface.ORIENTATION_ROTATE_90
+                180 -> ExifInterface.ORIENTATION_ROTATE_180
+                270 -> ExifInterface.ORIENTATION_ROTATE_270
+                else -> ExifInterface.ORIENTATION_NORMAL
+            }
+            dngCreator.setOrientation(orientation)
+            val size = Size(width, height)
+            dngCreator.writeByteBuffer(outputStream, size, buffer, 0)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save DNG", e)
         } finally {

@@ -146,112 +146,185 @@ object RawShaders {
             return getRawPixel(clamp(coord, ivec2(0), ivec2(uImageSize) - 1));
         }
         
-        vec3 demosaicHamiltonAdams(ivec2 coord) {
+        // 辅助：安全除法，计算比率 (Ratio)
+        // 防止分母为 0 (黑点)
+        float getRatio(float val, float base) {
+            // 这里的 epsilon 极小值用于防止除以零
+            // 在 RAW 域 0 是很常见的（死黑）
+            return val / (base + 0.000001);
+        }
+        
+        vec3 demosaicRCD(ivec2 coord) {
             int type = getChannelType(coord); // 0=R, 1=G, 2=B
             float C = fetch(coord);
             
             float r, g, b;
+            float eps = 1.0e-4; // 保护阈值
         
-            // ============================
-            // 1. 恢复绿色通道 (G)
-            // ============================
+            // 获取十字邻域 (1阶)
+            float N = fetch(coord + ivec2(0, -1));
+            float S = fetch(coord + ivec2(0, 1));
+            float W = fetch(coord + ivec2(-1, 0));
+            float E = fetch(coord + ivec2(1, 0));
+        
+            // 获取二阶邻域 (2阶，用于梯度和拉普拉斯校正)
+            float NN = fetch(coord + ivec2(0, -2));
+            float SS = fetch(coord + ivec2(0, 2));
+            float WW = fetch(coord + ivec2(-2, 0));
+            float EE = fetch(coord + ivec2(2, 0));
+        
+            // ==========================================
+            // 步骤 1: 恢复绿色 (Green)
+            // ==========================================
             if (type == 1) {
+                // 当前就是绿色
                 g = C;
             } else {
-                // 获取十字邻域 (N=North, S=South...)
-                float N = fetch(coord + ivec2(0, -1));
-                float S = fetch(coord + ivec2(0, 1));
-                float W = fetch(coord + ivec2(-1, 0));
-                float E = fetch(coord + ivec2(1, 0));
-        
-                // 获取二阶邻域 (用于梯度和拉普拉斯校正)
-                float NN = fetch(coord + ivec2(0, -2));
-                float SS = fetch(coord + ivec2(0, 2));
-                float WW = fetch(coord + ivec2(-2, 0));
-                float EE = fetch(coord + ivec2(2, 0));
-        
-                // 计算梯度 (一阶差分 + 二阶校正)
+                // 当前是 R 或 B，需要恢复 G
+                
+                // 1. 计算梯度 (Gradient)
+                // 结合了一阶差分和二阶拉普拉斯，判断纹理方向
                 float gradH = abs(W - E) + abs(2.0 * C - WW - EE);
                 float gradV = abs(N - S) + abs(2.0 * C - NN - SS);
         
-                // 自适应插值
-                if (gradH < gradV) {
-                    g = (W + E) * 0.5 + (2.0 * C - WW - EE) * 0.25;
-                } else if (gradV < gradH) {
-                    g = (N + S) * 0.5 + (2.0 * C - NN - SS) * 0.25;
+                // 2. 计算基于比率的估算值 (Ratio Estimates)
+                // 核心公式：G = R_center * (G_neighbor / R_neighbor)
+                // 为了防止暗部噪点导致比率爆炸，混合差值法：
+                // 亮部用比率 (乘法)，暗部用差值 (加法)。这里使用加权的“混合修正项”。
+                
+                // 水平方向估算
+                // 假设当前是 R，左右是 G。我们想求中间的 G。
+                // G_h = (G_W + G_E)/2 + Correction
+                // Ratio Correction: C * ( (G_W/WW + G_E/EE) / 2 ) <-- 这种太激进
+                // 我们用一种更稳健的线性回归近似：
+                float g_h = (W + E) * 0.5 + (2.0 * C - WW - EE) * 0.25;
+                
+                // 垂直方向估算
+                float g_v = (N + S) * 0.5 + (2.0 * C - NN - SS) * 0.25;
+        
+                // 3. 方向融合
+                // 只有当方向性非常明确时才选边，否则混合
+                float threshold = 1.5; // 梯度阈值因子
+                
+                if (gradH * threshold < gradV) {
+                    g = g_h;
+                } else if (gradV * threshold < gradH) {
+                    g = g_v;
                 } else {
-                    g = (N + S + W + E) * 0.25 + (4.0 * C - NN - SS - WW - EE) * 0.125;
+                    // 梯度相近，加权混合 (避免硬切换带来的伪影)
+                    float wH = 1.0 / (gradH + eps);
+                    float wV = 1.0 / (gradV + eps);
+                    g = (g_h * wH + g_v * wV) / (wH + wV);
                 }
+                
+                // 负值保护
+                g = max(0.0, g);
             }
         
-            // ============================
-            // 2. 恢复红/蓝通道 (R/B)
-            // ============================
-            if (type == 1) { 
-                // 中心是 Green (Gr 或 Gb)
-                int idx = getChannelIndex(coord); // 1=Gr, 2=Gb
-                bool isGr = (idx == 1); // Gr 行有红，Gb 行有蓝
+            // ==========================================
+            // 步骤 2: 恢复红/蓝 (Red / Blue)
+            // 使用“色差恒定”或“色比恒定”原理
+            // ==========================================
+            
+            // 为了彻底消除拉链纹，我们在插值 R/B 时，
+            // 不直接插值 R 或 B 的数值，而是插值 (R-G) 或 (B-G) 的差值，
+            // 然后再加回 G。这是业界标准做法。
         
-                // 获取一阶和二阶邻域数据
-                float N = fetch(coord + ivec2(0, -1));
-                float S = fetch(coord + ivec2(0, 1));
-                float W = fetch(coord + ivec2(-1, 0));
-                float E = fetch(coord + ivec2(1, 0));
-                
-                // 用于拉普拉斯色差修正的二阶数据
-                float NN = fetch(coord + ivec2(0, -2));
-                float SS = fetch(coord + ivec2(0, 2));
-                float WW = fetch(coord + ivec2(-2, 0));
-                float EE = fetch(coord + ivec2(2, 0));
-        
-                if (isGr) { 
-                    // Gr: 水平是 R, 垂直是 B
-                    r = (W + E) * 0.5 + (g - (WW + EE) * 0.5) * 0.5;
-                    b = (N + S) * 0.5 + (g - (NN + SS) * 0.5) * 0.5;
-                } else { 
-                    // Gb: 水平是 B, 垂直是 R
-                    r = (N + S) * 0.5 + (g - (NN + SS) * 0.5) * 0.5;
-                    b = (W + E) * 0.5 + (g - (WW + EE) * 0.5) * 0.5;
-                }
-            } 
-            else if (type == 0) { 
-                // 中心是 Red
+            if (type == 0) { 
+                // --- 中心是 Red ---
                 r = C;
                 
-                // 恢复 Blue (对角线)
-                float BNW = fetch(coord + ivec2(-1, -1));
-                float BNE = fetch(coord + ivec2(1, -1));
-                float BSW = fetch(coord + ivec2(-1, 1));
-                float BSE = fetch(coord + ivec2(1, 1));
+                // 1. 恢复 Blue (对角线位置)
+                // 采样 4 个对角线的 Blue，并减去它们位置上的 Green
+                // 注意：这里需要知道对角线位置的 Green。
+                // 为了性能，我们近似认为对角线的 G 就是 (C+NeighborG)/2 或者重新fetch
+                // 最好的办法是：B_val = G_center + Average(B_diag - G_diag)
                 
-                // 恢复 G (十字) - 用于色差计算
-                float GN = fetch(coord + ivec2(0, -1));
-                float GS = fetch(coord + ivec2(0, 1));
-                float GW = fetch(coord + ivec2(-1, 0));
-                float GE = fetch(coord + ivec2(1, 0));
+                float B_NW = fetch(coord + ivec2(-1, -1)); float G_NW = fetch(coord + ivec2(-1, 0)); // 简化的 G 采样
+                float B_NE = fetch(coord + ivec2(1, -1));  float G_NE = fetch(coord + ivec2(1, 0));
+                float B_SW = fetch(coord + ivec2(-1, 1));  float G_SW = fetch(coord + ivec2(-1, 0));
+                float B_SE = fetch(coord + ivec2(1, 1));   float G_SE = fetch(coord + ivec2(1, 0));
+                
+                // 更严谨的对角线 G 获取（复用双线性，防止 recursive fetch 爆炸）
+                // 实际上，对角线的 G 可以用周围 4 个 G 的平均来近似
+                float G_diag_est = (N+S+W+E) * 0.25; 
+                
+                // 计算色差的平均值
+                float b_diff = ((B_NW + B_NE + B_SW + B_SE) * 0.25) - G_diag_est;
+                b = g + b_diff;
         
-                b = (BNW + BNE + BSW + BSE) * 0.25 + (g - (GN + GS + GW + GE) * 0.25) * 0.5;
+                // 2. 恢复 Green 位置的 B (用于修正) -> 已经在 g 计算中处理了
+                
+            } else if (type == 2) { 
+                // --- 中心是 Blue ---
+                b = C;
+                
+                // 恢复 Red (原理同上)
+                float G_diag_est = (N+S+W+E) * 0.25;
+                float R_NW = fetch(coord + ivec2(-1, -1));
+                float R_NE = fetch(coord + ivec2(1, -1));
+                float R_SW = fetch(coord + ivec2(-1, 1));
+                float R_SE = fetch(coord + ivec2(1, 1));
+                
+                float r_diff = ((R_NW + R_NE + R_SW + R_SE) * 0.25) - G_diag_est;
+                r = g + r_diff;
                 
             } else { 
-                // 中心是 Blue
-                b = C;
+                // --- 中心是 Green ---
+                // 这是拉链纹最容易出现的地方！
+                // 我们在 Gr 行和 Gb 行
+                
+                int idx = getChannelIndex(coord); // 1=Gr, 2=Gb
+                
+                // 策略：双线性插值色差 (Bilinear Interpolation of Chrominance Difference)
+                // R = G + (Average(Neighbors_R) - Average(Neighbors_G_at_R_location))
+                
+                float R_est, B_est;
+                
+                // 采样十字方向
+                float valN = fetch(coord + ivec2(0, -1));
+                float valS = fetch(coord + ivec2(0, 1));
+                float valW = fetch(coord + ivec2(-1, 0));
+                float valE = fetch(coord + ivec2(1, 0));
+                
+                // 二阶平滑 (Low Pass Filter on Chroma) - 抗拉链的核心
+                // 拉链纹本质上是色差的高频震荡。我们采样更远一点的像素来平滑色差。
+                
+                if (idx == 1) { // Gr 行 (左右是 R，上下是 B)
+                    // 恢复 R (水平)
+                    float R_mean = (valW + valE) * 0.5;
+                    // 估算 R 位置的 G (即 C 左右两点的 G，其实就是 W和E位置的G)
+                    // 这是一个巧妙的近似：在 Gr 行，W 和 E 是 Red 点。
+                    // R 位置的 G 可以用 (C + WW/EE)/2 估算，或者直接用 C 近似
+                    // 更好的做法：使用色比 R/G
+                    
+                    // 简单且强力的去拉链做法：
+                    r = R_mean; // 基础双线性
+                    // 加上高频修正 (从 G 通道借细节)
+                    // R = R_mean + (C - G_mean_at_R_loc) * 0.5
+                    // 这里我们假设 R-G 是平滑的，所以 R 应该跟随 C(Green) 的变化
+                    float G_at_R_loc = (fetch(coord + ivec2(-2, 0)) + fetch(coord + ivec2(2, 0)) + C*2.0) * 0.25;
+                    r += (C - G_at_R_loc) * 0.5; // 把 G 的细节加给 R
         
-                // 恢复 Red (对角线)
-                float RNW = fetch(coord + ivec2(-1, -1));
-                float RNE = fetch(coord + ivec2(1, -1));
-                float RSW = fetch(coord + ivec2(-1, 1));
-                float RSE = fetch(coord + ivec2(1, 1));
+                    // 恢复 B (垂直)
+                    float B_mean = (valN + valS) * 0.5;
+                    float G_at_B_loc = (fetch(coord + ivec2(0, -2)) + fetch(coord + ivec2(0, 2)) + C*2.0) * 0.25;
+                    b = B_mean + (C - G_at_B_loc) * 0.5;
+                    
+                } else { // Gb 行 (左右是 B，上下是 R)
+                    // 恢复 B (水平)
+                    float B_mean = (valW + valE) * 0.5;
+                    float G_at_B_loc = (fetch(coord + ivec2(-2, 0)) + fetch(coord + ivec2(2, 0)) + C*2.0) * 0.25;
+                    b = B_mean + (C - G_at_B_loc) * 0.5;
         
-                float GN = fetch(coord + ivec2(0, -1));
-                float GS = fetch(coord + ivec2(0, 1));
-                float GW = fetch(coord + ivec2(-1, 0));
-                float GE = fetch(coord + ivec2(1, 0));
-        
-                r = (RNW + RNE + RSW + RSE) * 0.25 + (g - (GN + GS + GW + GE) * 0.25) * 0.5;
+                    // 恢复 R (垂直)
+                    float R_mean = (valN + valS) * 0.5;
+                    float G_at_R_loc = (fetch(coord + ivec2(0, -2)) + fetch(coord + ivec2(0, 2)) + C*2.0) * 0.25;
+                    r = R_mean + (C - G_at_R_loc) * 0.5;
+                }
             }
         
-            // 仅做非负保护 (物理光照不能为负)，但不限制上限以支持 HDR
-            return max(vec3(0.0), vec3(r, g, b));
+            return vec3(r, g, b);
         }
 
         // ========== 步骤 8: 输出锐化 (Unsharp Mask) ==========
@@ -524,7 +597,7 @@ object RawShaders {
             ivec2 coord = ivec2(gl_FragCoord.xy);
 
             // 解马赛克
-            vec3 rgb = demosaicHamiltonAdams(coord);
+            vec3 rgb = demosaicRCD(coord);
 
             // 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
@@ -596,4 +669,329 @@ object RawShaders {
         0, 1, 2,  // 第一个三角形
         1, 3, 2   // 第二个三角形
     )
+
+
+    /**
+     * LUT + ColorRecipe Fragment Shader
+     * 处理流程：Input Texture -> ColorRecipe -> LUT -> Output
+     */
+    val LUT_FRAGMENT_SHADER = """
+            #version 300 es
+
+            precision highp float;
+
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+
+            uniform sampler2D uInputTexture;
+            uniform mediump sampler3D uLutTexture;
+            uniform float uLutSize;
+            uniform float uLutIntensity;
+            uniform bool uLutEnabled;
+
+            // 色彩配方控制
+            uniform bool uColorRecipeEnabled;
+
+            // 色彩配方参数
+            uniform float uExposure;      // -2.0 ~ +2.0 (EV)
+            uniform float uContrast;      // 0.5 ~ 1.5
+            uniform float uSaturation;    // 0.0 ~ 2.0
+            uniform float uTemperature;   // -1.0 ~ +1.0 (暖/冷色调)
+            uniform float uTint;          // -1.0 ~ +1.0 (绿/品红偏移)
+            uniform float uFade;          // 0.0 ~ 1.0 (褪色效果)
+            uniform float uVibrance;      // 0.0 ~ 2.0 (蓝色增强)
+            uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
+            uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
+            uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
+            uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
+            uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
+            uniform vec2 uTexelSize;      // 像素尺寸（用于后处理）
+
+            // 后期处理参数
+            uniform float uSharpening;           // 0.0 ~ 1.0 (锐化强度)
+            uniform float uNoiseReduction;       // 0.0 ~ 1.0 (降噪强度)
+            uniform float uChromaNoiseReduction; // 0.0 ~ 1.0 (减少杂色强度)
+
+            // RGB 转 YCbCr
+            vec3 rgb2ycbcr(vec3 rgb) {
+                float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+                float cb = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b + 0.5;
+                float cr =  0.500 * rgb.r - 0.419 * rgb.g - 0.081 * rgb.b + 0.5;
+                return vec3(y, cb, cr);
+            }
+
+            // YCbCr 转 RGB
+            vec3 ycbcr2rgb(vec3 ycbcr) {
+                float y  = ycbcr.x;
+                float cb = ycbcr.y - 0.5;
+                float cr = ycbcr.z - 0.5;
+                float r = y + 1.402 * cr;
+                float g = y - 0.344 * cb - 0.714 * cr;
+                float b = y + 1.772 * cb;
+                return vec3(r, g, b);
+            }
+            
+            float getLuma(vec3 color) {
+                return dot(color, vec3(0.299, 0.587, 0.114));
+            }
+
+            void main() {
+                // 从输入纹理采样原始颜色
+                vec4 color = texture(uInputTexture, vTexCoord);
+
+                // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
+
+                // 1. 降噪（Bilateral Denoise for Luma + Gaussian for Chroma）
+                if (uNoiseReduction > 0.0) {
+                    vec3 centerYCbCr = rgb2ycbcr(color.rgb);
+                    float centerY = centerYCbCr.x;
+                    vec2 centerCbCr = centerYCbCr.yz;
+
+                    // 色度降噪（简单高斯平滑）
+                    vec2 sumCbCr = vec2(0.0);
+                    float sumWeightChroma = 0.0;
+                    int cRadius = 4;
+
+                    for (int x = -cRadius; x <= cRadius; x+=2) {
+                        for (int y = -cRadius; y <= cRadius; y+=2) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                            vec3 sampleRgb = texture(uInputTexture, vTexCoord + offset).rgb;
+                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
+
+                            float distSq = float(x*x + y*y);
+                            float weight = exp(-distSq / (2.0 * 4.0));
+
+                            sumCbCr += sampleCbCr * weight;
+                            sumWeightChroma += weight;
+                        }
+                    }
+
+                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
+                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
+
+                    // 亮度降噪（双边滤波保边）
+                    float sumY = 0.0;
+                    float sumWeightLuma = 0.0;
+                    int lRadius = 3;
+
+                    float sigmaSpatial = 2.0;
+                    float sigmaRange = 0.05 + uNoiseReduction * 0.15;
+
+                    for (int x = -lRadius; x <= lRadius; x++) {
+                        for (int y = -lRadius; y <= lRadius; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                            float sampleY = rgb2ycbcr(texture(uInputTexture, vTexCoord + offset).rgb).x;
+
+                            float distSq = float(x*x + y*y);
+                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
+
+                            float diff = sampleY - centerY;
+                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
+
+                            float weight = wSpatial * wRange;
+                            sumY += sampleY * weight;
+                            sumWeightLuma += weight;
+                        }
+                    }
+
+                    float finalY = sumY / sumWeightLuma;
+                    finalY = mix(finalY, centerY, 0.1);  // 细节回掺
+
+                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+
+                // 2. 强力色度降噪（Chroma Denoise）
+                if (uChromaNoiseReduction > 0.0) {
+                    vec3 yuv = rgb2ycbcr(color.rgb);
+
+                    vec2 sumUV = vec2(0.0);
+                    float sumWeight = 0.0;
+                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0;
+                    float colorThreshold = 0.15;
+                    const int RADIUS_UV = 2;
+
+                    for (int x = -RADIUS_UV; x <= RADIUS_UV; x++) {
+                        for (int y = -RADIUS_UV; y <= RADIUS_UV; y++) {
+                            vec2 offset = vec2(float(x), float(y)) * uTexelSize * maxStride;
+                            vec3 sampleRgb = texture(uInputTexture, vTexCoord + offset).rgb;
+                            vec3 sampleYuv = rgb2ycbcr(sampleRgb);
+
+                            float distSq = float(x*x + y*y);
+                            float wDist = exp(-distSq / 4.0);
+
+                            float uvDiff = distance(sampleYuv.yz, yuv.yz);
+                            float wColor = 1.0 - smoothstep(colorThreshold, colorThreshold + 0.1, uvDiff);
+
+                            float weight = wDist * wColor;
+                            sumUV += sampleYuv.yz * weight;
+                            sumWeight += weight;
+                        }
+                    }
+
+                    if (sumWeight > 0.001) {
+                        vec2 cleanUV = sumUV / sumWeight;
+                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
+                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
+                    }
+
+                    color.rgb = ycbcr2rgb(yuv);
+                }
+
+                // === 色彩配方处理（按专业后期流程顺序） ===
+                if (uColorRecipeEnabled) {
+                    // 1. 曝光调整（线性空间，最先执行避免 clipping）
+                    color.rgb *= pow(2.0, uExposure);
+
+                    // 2. 高光/阴影调整（分区调整，基于亮度 mask）
+                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    float highlightMask = smoothstep(0.5, 1.0, luma);
+                    float shadowMask = smoothstep(0.5, 0.0, luma);
+                    float highlightFactor;
+                    if (uHighlights > 0.0) {
+                        highlightFactor = 1.0 + uHighlights * 0.7;
+                    } else {
+                        highlightFactor = 1.0 + uHighlights * 0.3;
+                    }
+                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
+                    vec3 shadowTarget;
+                    if (uShadows > 0.0) {
+                        shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
+                    } else {
+                        shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
+                    }
+                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
+
+                    // 3. 对比度（围绕中灰点调整）
+                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+
+                    // 4. 白平衡调整（色温 + 色调）
+                    color.r += uTemperature * 0.1;
+                    color.b -= uTemperature * 0.1;
+                    color.g += uTint * 0.05;
+
+                    // 5. 饱和度（基于 Luma 的快速算法）
+                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    color.rgb = mix(vec3(gray), color.rgb, uSaturation);
+
+                    // 6. 色彩增强（Vibrance）
+                    float strength = uVibrance * 0.5;
+                    // --- 6.1 蓝色增强 (深邃天空/水面) ---
+                    float baseBlue = color.b - (color.r + color.g) * 0.5;
+                    float blueMask = smoothstep(0.0, 0.2, baseBlue); 
+                    if (blueMask > 0.0) {
+                        // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
+                        color.r = mix(color.r, color.r * 0.7, blueMask * strength);
+                        color.g = mix(color.g, color.g * 0.7, blueMask * strength);
+                        // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
+                        color.b = mix(color.b, color.b * 0.95, blueMask * strength);
+                        // 使用 S 曲线增加蓝色区域的对比度/通透感
+                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                        color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
+                    }
+                    // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
+                    // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
+                    // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
+                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
+                    float warmMask = smoothstep(0.05, 0.25, baseWarm);
+                    if (warmMask > 0.0) {
+                        // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
+                        color.b = mix(color.b, color.b * 0.85, warmMask * strength); 
+                        // 6.2.2 密度调整
+                        color.g = mix(color.g, color.g * 0.95, warmMask * strength); 
+                        // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
+                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
+                        color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
+                    }
+
+                    // 7. 褪色效果
+                    if (uFade > 0.0) {
+                        float fadeAmount = uFade * 0.3;
+                        color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
+                        color.rgb += fadeAmount * 0.1;
+                    }
+
+                    // 8. 留银冲洗（Bleach Bypass）
+                    if (uBleachBypass > 0.0) {
+                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                        vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
+                        desaturated = (desaturated - 0.5) * 1.3 + 0.5;
+                        desaturated.r *= 0.95;
+                        desaturated.g *= 1.02;
+                        desaturated.b *= 1.05;
+                        color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                    }
+
+                    // 9. 晕影（Vignette）
+                    if (abs(uVignette) > 0.0) {
+                        vec2 center = vec2(0.5, 0.5);
+                        float dist = distance(vTexCoord, center);
+                        float vignetteMask = smoothstep(0.8, 0.3, dist);
+                        if (uVignette < 0.0) {
+                            color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
+                        } else {
+                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
+                        }
+                    }
+
+                    // 10. 颗粒（Film Grain）
+                    if (uFilmGrain > 0.0) {
+                        float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
+                        noise = (noise - 0.5) * 2.0;
+                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                        float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
+                        grainMask = grainMask * 0.5 + 0.5;
+                        float grainStrength = uFilmGrain * 0.1 * grainMask;
+                        color.rgb += noise * grainStrength;
+                    }
+
+                    // Clamp 到合法范围
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+
+                // === LUT 处理（在色彩配方之后） ===
+                if (uLutEnabled && uLutIntensity > 0.0) {
+                    // 3D LUT 查找
+                    float scale = (uLutSize - 1.0) / uLutSize;
+                    float offset = 1.0 / (2.0 * uLutSize);
+
+                    // 将 RGB 值映射到 LUT 纹理坐标
+                    vec3 lutCoord = color.rgb * scale + offset;
+
+                    // 从 3D LUT 纹理采样
+                    vec4 lutColor = texture(uLutTexture, lutCoord);
+
+                    // 根据强度混合色彩配方处理后的颜色和 LUT 颜色
+                    color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+                }
+
+                // === 后期处理：锐化（在 LUT 之后，作为最后步骤） ===
+                if (uSharpening > 0.0) {
+                    // 使用基于亮度的 Unsharp Mask，避免色彩污染
+                    // 1. 计算原始图像的亮度
+                    vec3 inputColor = texture(uInputTexture, vTexCoord).rgb;
+                    float inputLuma = dot(inputColor, vec3(0.299, 0.587, 0.114));
+    
+                    // 2. 计算周围像素的平均亮度 (Blur Luma)
+                    float neighborsLuma = 0.0;
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+                    float blurLuma = neighborsLuma * 0.25;
+    
+                    // 3. 计算亮度高频分量 (Detail)
+                    float detail = inputLuma - blurLuma;
+    
+                    // 4. 将亮度细节叠加到最终输出颜色上
+                    float sharpenAmount = uSharpening * 1.5;
+                    color.rgb += detail * sharpenAmount;
+    
+                    // Clamp 防止过曝
+                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+
+                fragColor = color;
+            }
+        """.trimIndent()
 }

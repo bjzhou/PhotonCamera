@@ -161,330 +161,6 @@ class RawDemosaicProcessor {
                 instance ?: RawDemosaicProcessor().also { instance = it }
             }
         }
-
-        /**
-         * LUT + ColorRecipe Fragment Shader
-         * 处理流程：Input Texture -> ColorRecipe -> LUT -> Output
-         */
-        private val LUT_FRAGMENT_SHADER = """
-            #version 300 es
-
-            precision highp float;
-
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-
-            uniform sampler2D uInputTexture;
-            uniform mediump sampler3D uLutTexture;
-            uniform float uLutSize;
-            uniform float uLutIntensity;
-            uniform bool uLutEnabled;
-
-            // 色彩配方控制
-            uniform bool uColorRecipeEnabled;
-
-            // 色彩配方参数
-            uniform float uExposure;      // -2.0 ~ +2.0 (EV)
-            uniform float uContrast;      // 0.5 ~ 1.5
-            uniform float uSaturation;    // 0.0 ~ 2.0
-            uniform float uTemperature;   // -1.0 ~ +1.0 (暖/冷色调)
-            uniform float uTint;          // -1.0 ~ +1.0 (绿/品红偏移)
-            uniform float uFade;          // 0.0 ~ 1.0 (褪色效果)
-            uniform float uVibrance;      // 0.0 ~ 2.0 (蓝色增强)
-            uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
-            uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
-            uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
-            uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
-            uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
-            uniform vec2 uTexelSize;      // 像素尺寸（用于后处理）
-
-            // 后期处理参数
-            uniform float uSharpening;           // 0.0 ~ 1.0 (锐化强度)
-            uniform float uNoiseReduction;       // 0.0 ~ 1.0 (降噪强度)
-            uniform float uChromaNoiseReduction; // 0.0 ~ 1.0 (减少杂色强度)
-
-            // RGB 转 YCbCr
-            vec3 rgb2ycbcr(vec3 rgb) {
-                float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
-                float cb = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b + 0.5;
-                float cr =  0.500 * rgb.r - 0.419 * rgb.g - 0.081 * rgb.b + 0.5;
-                return vec3(y, cb, cr);
-            }
-
-            // YCbCr 转 RGB
-            vec3 ycbcr2rgb(vec3 ycbcr) {
-                float y  = ycbcr.x;
-                float cb = ycbcr.y - 0.5;
-                float cr = ycbcr.z - 0.5;
-                float r = y + 1.402 * cr;
-                float g = y - 0.344 * cb - 0.714 * cr;
-                float b = y + 1.772 * cb;
-                return vec3(r, g, b);
-            }
-            
-            float getLuma(vec3 color) {
-                return dot(color, vec3(0.299, 0.587, 0.114));
-            }
-
-            void main() {
-                // 从输入纹理采样原始颜色
-                vec4 color = texture(uInputTexture, vTexCoord);
-
-                // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
-
-                // 1. 降噪（Bilateral Denoise for Luma + Gaussian for Chroma）
-                if (uNoiseReduction > 0.0) {
-                    vec3 centerYCbCr = rgb2ycbcr(color.rgb);
-                    float centerY = centerYCbCr.x;
-                    vec2 centerCbCr = centerYCbCr.yz;
-
-                    // 色度降噪（简单高斯平滑）
-                    vec2 sumCbCr = vec2(0.0);
-                    float sumWeightChroma = 0.0;
-                    int cRadius = 4;
-
-                    for (int x = -cRadius; x <= cRadius; x+=2) {
-                        for (int y = -cRadius; y <= cRadius; y+=2) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            vec3 sampleRgb = texture(uInputTexture, vTexCoord + offset).rgb;
-                            vec2 sampleCbCr = rgb2ycbcr(sampleRgb).yz;
-
-                            float distSq = float(x*x + y*y);
-                            float weight = exp(-distSq / (2.0 * 4.0));
-
-                            sumCbCr += sampleCbCr * weight;
-                            sumWeightChroma += weight;
-                        }
-                    }
-
-                    vec2 finalCbCr = sumCbCr / sumWeightChroma;
-                    finalCbCr = mix(centerCbCr, finalCbCr, clamp(uNoiseReduction * 1.5, 0.0, 1.0));
-
-                    // 亮度降噪（双边滤波保边）
-                    float sumY = 0.0;
-                    float sumWeightLuma = 0.0;
-                    int lRadius = 3;
-
-                    float sigmaSpatial = 2.0;
-                    float sigmaRange = 0.05 + uNoiseReduction * 0.15;
-
-                    for (int x = -lRadius; x <= lRadius; x++) {
-                        for (int y = -lRadius; y <= lRadius; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize;
-                            float sampleY = rgb2ycbcr(texture(uInputTexture, vTexCoord + offset).rgb).x;
-
-                            float distSq = float(x*x + y*y);
-                            float wSpatial = exp(-distSq / (2.0 * sigmaSpatial * sigmaSpatial));
-
-                            float diff = sampleY - centerY;
-                            float wRange = exp(-(diff * diff) / (2.0 * sigmaRange * sigmaRange));
-
-                            float weight = wSpatial * wRange;
-                            sumY += sampleY * weight;
-                            sumWeightLuma += weight;
-                        }
-                    }
-
-                    float finalY = sumY / sumWeightLuma;
-                    finalY = mix(finalY, centerY, 0.1);  // 细节回掺
-
-                    color.rgb = ycbcr2rgb(vec3(finalY, finalCbCr));
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
-                }
-
-                // 2. 强力色度降噪（Chroma Denoise）
-                if (uChromaNoiseReduction > 0.0) {
-                    vec3 yuv = rgb2ycbcr(color.rgb);
-
-                    vec2 sumUV = vec2(0.0);
-                    float sumWeight = 0.0;
-                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0;
-                    float colorThreshold = 0.15;
-                    const int RADIUS_UV = 2;
-
-                    for (int x = -RADIUS_UV; x <= RADIUS_UV; x++) {
-                        for (int y = -RADIUS_UV; y <= RADIUS_UV; y++) {
-                            vec2 offset = vec2(float(x), float(y)) * uTexelSize * maxStride;
-                            vec3 sampleRgb = texture(uInputTexture, vTexCoord + offset).rgb;
-                            vec3 sampleYuv = rgb2ycbcr(sampleRgb);
-
-                            float distSq = float(x*x + y*y);
-                            float wDist = exp(-distSq / 4.0);
-
-                            float uvDiff = distance(sampleYuv.yz, yuv.yz);
-                            float wColor = 1.0 - smoothstep(colorThreshold, colorThreshold + 0.1, uvDiff);
-
-                            float weight = wDist * wColor;
-                            sumUV += sampleYuv.yz * weight;
-                            sumWeight += weight;
-                        }
-                    }
-
-                    if (sumWeight > 0.001) {
-                        vec2 cleanUV = sumUV / sumWeight;
-                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
-                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
-                    }
-
-                    color.rgb = ycbcr2rgb(yuv);
-                }
-
-                // === 色彩配方处理（按专业后期流程顺序） ===
-                if (uColorRecipeEnabled) {
-                    // 1. 曝光调整（线性空间，最先执行避免 clipping）
-                    color.rgb *= pow(2.0, uExposure);
-
-                    // 2. 高光/阴影调整（分区调整，基于亮度 mask）
-                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    float highlightMask = smoothstep(0.5, 1.0, luma);
-                    float shadowMask = smoothstep(0.5, 0.0, luma);
-                    float highlightFactor;
-                    if (uHighlights > 0.0) {
-                        highlightFactor = 1.0 + uHighlights * 0.7;
-                    } else {
-                        highlightFactor = 1.0 + uHighlights * 0.3;
-                    }
-                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
-                    vec3 shadowTarget;
-                    if (uShadows > 0.0) {
-                        shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
-                    } else {
-                        shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
-                    }
-                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
-
-                    // 3. 对比度（围绕中灰点调整）
-                    color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
-
-                    // 4. 白平衡调整（色温 + 色调）
-                    color.r += uTemperature * 0.1;
-                    color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
-
-                    // 5. 饱和度（基于 Luma 的快速算法）
-                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    color.rgb = mix(vec3(gray), color.rgb, uSaturation);
-
-                    // 6. 色彩增强（Vibrance）
-                    float strength = uVibrance * 0.5;
-                    // --- 6.1 蓝色增强 (深邃天空/水面) ---
-                    float baseBlue = color.b - (color.r + color.g) * 0.5;
-                    float blueMask = smoothstep(0.0, 0.2, baseBlue); 
-                    if (blueMask > 0.0) {
-                        // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
-                        color.r = mix(color.r, color.r * 0.7, blueMask * strength);
-                        color.g = mix(color.g, color.g * 0.7, blueMask * strength);
-                        // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
-                        color.b = mix(color.b, color.b * 0.95, blueMask * strength);
-                        // 使用 S 曲线增加蓝色区域的对比度/通透感
-                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
-                        color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
-                    }
-                    // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
-                    // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
-                    // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
-                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
-                    float warmMask = smoothstep(0.05, 0.25, baseWarm);
-                    if (warmMask > 0.0) {
-                        // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
-                        color.b = mix(color.b, color.b * 0.85, warmMask * strength); 
-                        // 6.2.2 密度调整
-                        color.g = mix(color.g, color.g * 0.95, warmMask * strength); 
-                        // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
-                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
-                        color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
-                    }
-
-                    // 7. 褪色效果
-                    if (uFade > 0.0) {
-                        float fadeAmount = uFade * 0.3;
-                        color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
-                        color.rgb += fadeAmount * 0.1;
-                    }
-
-                    // 8. 留银冲洗（Bleach Bypass）
-                    if (uBleachBypass > 0.0) {
-                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                        vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
-                        desaturated = (desaturated - 0.5) * 1.3 + 0.5;
-                        desaturated.r *= 0.95;
-                        desaturated.g *= 1.02;
-                        desaturated.b *= 1.05;
-                        color.rgb = mix(color.rgb, desaturated, uBleachBypass);
-                    }
-
-                    // 9. 晕影（Vignette）
-                    if (abs(uVignette) > 0.0) {
-                        vec2 center = vec2(0.5, 0.5);
-                        float dist = distance(vTexCoord, center);
-                        float vignetteMask = smoothstep(0.8, 0.3, dist);
-                        if (uVignette < 0.0) {
-                            color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
-                        } else {
-                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
-                        }
-                    }
-
-                    // 10. 颗粒（Film Grain）
-                    if (uFilmGrain > 0.0) {
-                        float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
-                        noise = (noise - 0.5) * 2.0;
-                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                        float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
-                        grainMask = grainMask * 0.5 + 0.5;
-                        float grainStrength = uFilmGrain * 0.1 * grainMask;
-                        color.rgb += noise * grainStrength;
-                    }
-
-                    // Clamp 到合法范围
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
-                }
-
-                // === LUT 处理（在色彩配方之后） ===
-                if (uLutEnabled && uLutIntensity > 0.0) {
-                    // 3D LUT 查找
-                    float scale = (uLutSize - 1.0) / uLutSize;
-                    float offset = 1.0 / (2.0 * uLutSize);
-
-                    // 将 RGB 值映射到 LUT 纹理坐标
-                    vec3 lutCoord = color.rgb * scale + offset;
-
-                    // 从 3D LUT 纹理采样
-                    vec4 lutColor = texture(uLutTexture, lutCoord);
-
-                    // 根据强度混合色彩配方处理后的颜色和 LUT 颜色
-                    color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
-                }
-
-                // === 后期处理：锐化（在 LUT 之后，作为最后步骤） ===
-                if (uSharpening > 0.0) {
-                    // 使用基于亮度的 Unsharp Mask，避免色彩污染
-                    // 1. 计算原始图像的亮度
-                    vec3 inputColor = texture(uInputTexture, vTexCoord).rgb;
-                    float inputLuma = dot(inputColor, vec3(0.299, 0.587, 0.114));
-    
-                    // 2. 计算周围像素的平均亮度 (Blur Luma)
-                    float neighborsLuma = 0.0;
-                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
-                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
-                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-                    neighborsLuma += dot(texture(uInputTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-                    float blurLuma = neighborsLuma * 0.25;
-    
-                    // 3. 计算亮度高频分量 (Detail)
-                    float detail = inputLuma - blurLuma;
-    
-                    // 4. 将亮度细节叠加到最终输出颜色上
-                    float sharpenAmount = uSharpening * 1.5;
-                    color.rgb += detail * sharpenAmount;
-    
-                    // Clamp 防止过曝
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
-                }
-
-                fragColor = color;
-            }
-        """.trimIndent()
     }
 
     // 单线程调度器，确保所有 EGL 操作在同一线程
@@ -641,13 +317,13 @@ class RawDemosaicProcessor {
      * @param characteristics 相机特性
      * @param captureResult 拍摄结果
      * @param aspectRatio 目标宽高比
-     * @param rotation 旋转角度 (0, 90, 180, 270)
-     * @param lutConfig LUT 配置（可选）
+     * @param rotation 旋转角度(0, 90, 180, 270)
+     * @param lutConfig LUT 配置 （ 可选 ）
      * @param colorRecipeParams 色彩配方参数（可选）
-     * @param sharpeningValue 锐化强度 (0.0-1.0)
-     * @param noiseReductionValue 降噪强度 (0.0-1.0)
-     * @param chromaNoiseReductionValue 减少杂色强度 (0.0-1.0)
-     * @return 处理后的 Bitmap，失败返回 null
+     * @param sharpeningValue 锐化强度(0.0 - 1.0)
+     * @param noiseReductionValue 降噪强度(0.0 - 1.0)
+     * @param chromaNoiseReductionValue 减少杂色强度(0.0 - 1.0)
+     * @return 处理后的 Bitmap ， 失败返回 null
      */
     suspend fun process(
         rawImage: Image,
@@ -748,7 +424,10 @@ class RawDemosaicProcessor {
         if (metadata.baselineExposure != 0f) {
             val baselineGain = pow(2.0, metadata.baselineExposure.toDouble()).toFloat()
             exposureGain = baselineGain
-            Log.d(TAG, "process: applying baselineExposure ${metadata.baselineExposure} EV, new gain=$exposureGain")
+            Log.d(
+                TAG,
+                "process: applying baselineExposure ${metadata.baselineExposure} EV, new gain=$exposureGain"
+            )
         } else {
             exposureGain = calculateExposureGainFromBuffer(rawData, width, height, rowStride, metadata)
         }
@@ -783,7 +462,13 @@ class RawDemosaicProcessor {
         // 6. 第三步：缩放、旋转、裁剪并输出 (Output Pass)
         setupOutputFramebuffer(finalWidth, finalHeight)
         val outputStart = System.currentTimeMillis()
-        renderOutputPass(metadata, rotation, aspectRatio, cropRegion, finalWidth, finalHeight, sourceTextureForOutput)
+        renderOutputPass(
+            rotation,
+            width,
+            height,
+            bounds,
+            sourceTextureForOutput
+        )
         PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
 
         // 7. 读取结果
@@ -926,7 +611,7 @@ class RawDemosaicProcessor {
         }
 
         // 2. LUT + ColorRecipe Program
-        val fShaderLut = compileShader(GLES30.GL_FRAGMENT_SHADER, LUT_FRAGMENT_SHADER)
+        val fShaderLut = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.LUT_FRAGMENT_SHADER)
         if (vShader != 0 && fShaderLut != 0) {
             lutProgram = GLES30.glCreateProgram()
             GLES30.glAttachShader(lutProgram, vShader)
@@ -1422,7 +1107,7 @@ class RawDemosaicProcessor {
     ) {
         GLES30.glUseProgram(lutProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, lutFramebufferId)
-        
+
         // 全量清除
         GLES30.glViewport(0, 0, metadata.width, metadata.height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -1475,14 +1160,20 @@ class RawDemosaicProcessor {
             val h = min(TILE_SIZE, metadata.height - y)
             for (x in 0 until metadata.width step TILE_SIZE) {
                 val w = min(TILE_SIZE, metadata.width - x)
-                
+
                 GLES30.glViewport(x, y, w, h)
                 GLES30.glScissor(x, y, w, h)
 
                 // 计算变换矩阵，确保采样正确的纹理区域
                 val tileMatrix = FloatArray(16)
                 GlMatrix.setIdentityM(tileMatrix, 0)
-                GlMatrix.translateM(tileMatrix, 0, x.toFloat() / metadata.width, y.toFloat() / metadata.height, 0f)
+                GlMatrix.translateM(
+                    tileMatrix,
+                    0,
+                    x.toFloat() / metadata.width,
+                    y.toFloat() / metadata.height,
+                    0f
+                )
                 GlMatrix.scaleM(tileMatrix, 0, w.toFloat() / metadata.width, h.toFloat() / metadata.height, 1f)
                 GLES30.glUniformMatrix4fv(uLutTexMatrixLoc, 1, false, tileMatrix, 0)
 
@@ -1491,14 +1182,14 @@ class RawDemosaicProcessor {
             }
         }
         GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
-        
+
         checkGlError("renderLutPass")
     }
 
     private fun renderDemosaicPass(metadata: RawMetadata, exposureGain: Float) {
         GLES30.glUseProgram(demosaicProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
-        
+
         // 全量清除
         GLES30.glViewport(0, 0, metadata.width, metadata.height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -1549,14 +1240,20 @@ class RawDemosaicProcessor {
             val h = min(TILE_SIZE, metadata.height - y)
             for (x in 0 until metadata.width step TILE_SIZE) {
                 val w = min(TILE_SIZE, metadata.width - x)
-                
+
                 GLES30.glViewport(x, y, w, h)
                 GLES30.glScissor(x, y, w, h)
 
                 // 虽然 demosaic 用的 gl_FragCoord 不需要矩阵，但为了规范还是设置一下
                 val tileMatrix = FloatArray(16)
                 GlMatrix.setIdentityM(tileMatrix, 0)
-                GlMatrix.translateM(tileMatrix, 0, x.toFloat() / metadata.width, y.toFloat() / metadata.height, 0f)
+                GlMatrix.translateM(
+                    tileMatrix,
+                    0,
+                    x.toFloat() / metadata.width,
+                    y.toFloat() / metadata.height,
+                    0f
+                )
                 GlMatrix.scaleM(tileMatrix, 0, w.toFloat() / metadata.width, h.toFloat() / metadata.height, 1f)
                 GLES30.glUniformMatrix4fv(uDemosaicTexMatrixLoc, 1, false, tileMatrix, 0)
 
@@ -1570,61 +1267,52 @@ class RawDemosaicProcessor {
     }
 
     private fun renderOutputPass(
-        metadata: RawMetadata,
         rotation: Int,
-        aspectRatio: AspectRatio?,
-        cropRegion: Rect?,
-        finalWidth: Int,
-        finalHeight: Int,
+        width: Int,
+        height: Int,
+        bounds: Rect,
         sourceTextureId: Int
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glViewport(0, 0, finalWidth, finalHeight)
+        GLES30.glViewport(0, 0, bounds.width(), bounds.height())
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
         GLES30.glUseProgram(passthroughProgram)
 
         // 计算变换矩阵
-        //
-        // 关键理解：
-        // 1. sourceTexture 是原始 RAW 尺寸（横向），坐标系 (0,0) 在左下角
-        // 2. 最终输出需要：先裁切到目标比例，再旋转到正确方向
-        // 3. OpenGL 矩阵变换是右乘，所以代码顺序与实际变换顺序相反
-        //    代码中先写的变换实际上最后执行
-        //
-        // 实际变换顺序（从纹理坐标到最终坐标）：
-        // 1. 先在原始纹理空间裁切（缩放）
-        // 2. 再旋转到目标方向
+        val isSwapped = rotation == 90 || rotation == 270
+        val cropW: Float
+        val cropH: Float
+        val cropCenterX: Float
+        val cropCenterY: Float
+
+        if (isSwapped) {
+            // BitmapUtils.calculateProcessedRect 在交换时返回 Rect(y, x, y+H, x+W)
+            // 所以 bounds.height = finalW, bounds.width = finalH
+            cropW = bounds.height().toFloat()
+            cropH = bounds.width().toFloat()
+            cropCenterX = (bounds.top + bounds.height() / 2f)
+            cropCenterY = (bounds.left + bounds.width() / 2f)
+        } else {
+            cropW = bounds.width().toFloat()
+            cropH = bounds.height().toFloat()
+            cropCenterX = bounds.centerX().toFloat()
+            cropCenterY = bounds.centerY().toFloat()
+        }
 
         val texMatrix = FloatArray(16)
         GlMatrix.setIdentityM(texMatrix, 0)
 
-        // === 第一步：旋转变换 ===
-        // 注意：这里先写旋转，但由于矩阵右乘，实际上旋转是在裁切之后执行的
-        //
-        // rotation 参数含义：
-        // - 0: 传感器与设备当前方向一致（通常是横屏）
-        // - 90: 需要顺时针旋转 90 度（手机竖屏拍摄，传感器仍是横向）
-        // - 180: 需要旋转 180 度
-        // - 270: 需要顺时针旋转 270 度（或逆时针 90 度）
-        //
-        // OpenGL 的 rotateM 使用逆时针为正，所以需要取负值
-        GlMatrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
+        // 1. 平移到纹理采样中心
+        GlMatrix.translateM(texMatrix, 0, cropCenterX / width, cropCenterY / height, 0f)
+
+        // 2. 缩放到裁切区域大小
+        GlMatrix.scaleM(texMatrix, 0, cropW / width, cropH / height, 1.0f)
+
+        // 3. 绕采样中心旋转 (旋转 quad 的采样向量)
         GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
-        GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
 
-        val bounds = BitmapUtils.calculateProcessedRect(metadata.width, metadata.height, aspectRatio, cropRegion)
-
-        // 计算归一化的中心点和缩放比例
-        val scaleX = bounds.width() * 1f / metadata.width
-        val scaleY = bounds.height() * 1f / metadata.height
-        val centerX = (bounds.left + bounds.width() / 2f) / metadata.width
-        val centerY = (bounds.top + bounds.height() / 2f) / metadata.height
-
-        // 应用变换矩阵
-        // 注意：这里的平移是移动到裁切区域的中心
-        GlMatrix.translateM(texMatrix, 0, centerX, centerY, 0f)
-        GlMatrix.scaleM(texMatrix, 0, scaleX, scaleY, 1.0f)
+        // 4. 将 Quad 中心 (0.5, 0.5) 移回原点
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
 
         GLES30.glUniformMatrix4fv(uPassTexMatrixLoc, 1, false, texMatrix, 0)
@@ -1670,7 +1358,7 @@ class RawDemosaicProcessor {
 
     private fun readPixels(width: Int, height: Int): Bitmap {
         val pixelSize = width * height * 4
-        
+
         // 使用 PBO 优化 glReadPixels
         if (pboId == 0) {
             val pbos = IntArray(1)
@@ -1691,9 +1379,9 @@ class RawDemosaicProcessor {
             pixelSize,
             GLES30.GL_MAP_READ_BIT
         ) as? ByteBuffer
-        
+
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        
+
         if (mappedBuffer != null) {
             val buffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
             buffer.put(mappedBuffer)
@@ -1701,7 +1389,7 @@ class RawDemosaicProcessor {
             bitmap.copyPixelsFromBuffer(buffer)
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
         }
-        
+
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
 
         return bitmap

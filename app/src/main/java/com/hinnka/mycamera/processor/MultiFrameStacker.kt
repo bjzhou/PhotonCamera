@@ -1,12 +1,14 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.Bitmap
+import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.utils.BitmapUtils
+import java.nio.ByteOrder
 
 /**
  * Multi-Frame Stacker
@@ -99,6 +101,41 @@ object MultiFrameStacker {
         }
     }
 
+    fun processBurstRaw(
+        images: List<Image>,
+        characteristics: CameraCharacteristics
+    ): ByteBuffer? {
+        var stackerPtr = 0L
+
+        val width = images[0].width
+        val height = images[0].height
+
+        val sensorCfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
+        PLog.d(TAG, "Starting multi-frame stacking for ${images.size} frames. Pattern=$sensorCfa")
+
+        stackerPtr = createRawStackerNative(width, height)
+        if (stackerPtr == 0L) {
+            PLog.e(TAG, "Failed to create raw stacker")
+            return null
+        }
+
+        // 2. Add frames
+        for (image in images) {
+            if (image.width != width || image.height != height) continue
+            val buffer = image.planes[0].buffer
+            val rowStride = image.planes[0].rowStride
+            addToRawStackNative(stackerPtr, buffer, rowStride, sensorCfa)
+        }
+
+        // 3. Process Stack
+        val stackedBuffer = ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.nativeOrder())
+        processRawStackWithBufferNative(stackerPtr, stackedBuffer)
+
+        releaseRawStackerNative(stackerPtr)
+        stackerPtr = 0L
+        return stackedBuffer
+    }
+
     // --- Native Methods ---
 
     private external fun createStackerNative(width: Int, height: Int): Long
@@ -120,4 +157,9 @@ object MultiFrameStacker {
     )
 
     private external fun releaseStackerNative(stackerPtr: Long)
+
+    private external fun createRawStackerNative(width: Int, height: Int): Long
+    private external fun addToRawStackNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
+    private external fun processRawStackWithBufferNative(stackerPtr: Long, outputBuffer: ByteBuffer)
+    private external fun releaseRawStackerNative(stackerPtr: Long)
 }

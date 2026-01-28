@@ -19,6 +19,7 @@ import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.processor.MultiFrameStacker
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
@@ -27,6 +28,7 @@ import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -384,6 +386,8 @@ suspend fun saveStackedPhoto(
     metadata: PhotoMetadata,
     rotation: Int,
     aspectRatio: AspectRatio,
+    characteristics: CameraCharacteristics?,
+    captureResult: CaptureResult?,
     shouldAutoSave: Boolean = true,
     photoProcessor: PhotoProcessor,
     sharpeningValue: Float,
@@ -399,6 +403,7 @@ suspend fun saveStackedPhoto(
         val photoFile = File(photoDir, PHOTO_FILE)
         val tempFile = File(photoDir, "temp.jpg")
         val yuvFile = File(photoDir, YUV_FILE)
+        val dngFile = File(photoDir, DNG_FILE)
         val metadataFile = File(photoDir, METADATA_FILE)
         val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
@@ -416,12 +421,33 @@ suspend fun saveStackedPhoto(
                 val finalWidth = dimensions.width()
                 val finalHeight = dimensions.height()
 
-                val result = MultiFrameStacker.processBurst(
-                    images,
-                    rotation,
-                    aspectRatio,
-                    yuvFile.absolutePath
-                )
+                val format = images[0].format
+                var result: Bitmap? = null
+
+                when (format) {
+                    ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                        result = MultiFrameStacker.processBurst(
+                            images,
+                            rotation,
+                            aspectRatio,
+                            yuvFile.absolutePath
+                        )
+                    }
+                    ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                        characteristics ?: return@launch
+                        captureResult ?: return@launch
+                        val byteBuffer = MultiFrameStacker.processBurstRaw(images, characteristics)
+                        byteBuffer ?: return@launch
+                        val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
+                        val width = images[0].width
+                        val height = images[0].height
+                        FileOutputStream(dngFile).use { outputStream ->
+                            RawProcessor.saveToDng(byteBuffer.asReadOnlyBuffer(), characteristics,
+                                captureResult, outputStream, width, height, rotation)
+                        }
+                        result = RawProcessor.process(dngFile.absolutePath, aspectRatio, cropRegion, rotation)
+                    }
+                }
 
                 result ?: return@launch
 

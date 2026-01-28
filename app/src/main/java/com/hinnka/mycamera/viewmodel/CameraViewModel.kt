@@ -173,7 +173,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 burstImages.add(image)
                 if (burstImages.size >= count) {
                     viewModelScope.launch {
-                        processBurst(burstImages.toList(), captureInfo, characteristics)
+                        processBurst(burstImages.toList(), captureInfo, characteristics, captureResult)
                         burstImages.clear()
                     }
                     isBursting = false
@@ -374,7 +374,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // Check if we should use burst/stacking
             // Skip raw (stacking raw not supported yet)
             burstImages.clear()
-            if (useMultiFrame.value && !useRaw.value) {
+            if (useMultiFrame.value) {
                 isBursting = true
                 cameraController.capture()
             } else {
@@ -791,12 +791,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否使用多帧合成
      */
     fun setUseMultiFrame(enabled: Boolean) {
-        if (enabled) {
+        /*if (enabled) {
             cameraController.setUseRaw(false)
             viewModelScope.launch {
                 userPreferencesRepository.saveUseRaw(false)
             }
-        }
+        }*/
         cameraController.setUseMultiFrame(enabled, multiFrameCount.value)
         viewModelScope.launch {
             userPreferencesRepository.saveUseMultiFrame(enabled)
@@ -851,12 +851,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setUseRaw(useRaw: Boolean) {
-        if (useRaw) {
+        /*if (useRaw) {
             cameraController.setUseMultiFrame(false, multiFrameCount.value)
             viewModelScope.launch {
                 userPreferencesRepository.saveUseMultiFrame(false)
             }
-        }
+        }*/
         cameraController.setUseRaw(useRaw)
         viewModelScope.launch {
             userPreferencesRepository.saveUseRaw(useRaw)
@@ -1277,7 +1277,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun processBurst(
         images: List<Image>,
         captureInfo: CaptureInfo,
-        characteristics: CameraCharacteristics?
+        characteristics: CameraCharacteristics?,
+        captureResult: CaptureResult?
     ) {
         try {
             PLog.d(TAG, "processBurst started - image size ${images.size}")
@@ -1338,6 +1339,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     metadata,
                     rotation,
                     aspectRatio,
+                    it,
+                    captureResult,
                     shouldAutoSave,
                     photoProcessor,
                     sharpeningValue,

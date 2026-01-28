@@ -2088,7 +2088,24 @@ class Camera2Controller(private val context: Context) {
                         session: CameraCaptureSession,
                         request: CaptureRequest,
                         result: TotalCaptureResult
-                    ) {}
+                    ) {
+                        _state.value = _state.value.copy(isCapturing = false)
+                        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                        if (timestamp != null && state.value.useRaw && isRawSupported) {
+                            val pendingImage = pendingImages.remove(timestamp)
+                            if (pendingImage != null) {
+                                processAndTriggerCapture(pendingImage, result)
+                            } else {
+                                pendingResults[timestamp] = result
+                            }
+                        }
+                        lastCaptureResult = result
+                        PLog.d(
+                            TAG,
+                            "Capture completed, result buffered (timestamp: $timestamp). Pending images: ${pendingImages.size}, Pending results: ${pendingResults.size}"
+                        )
+                        resetPreviewAfterCapture()
+                    }
 
                     override fun onCaptureSequenceCompleted(
                         session: CameraCaptureSession,
