@@ -424,16 +424,19 @@ suspend fun saveStackedPhoto(
                 val format = images[0].format
                 var result: Bitmap? = null
 
-                // 保存元数据
-                val metadataWithInfo = metadata.copy(
-                    width = finalWidth,
-                    height = finalHeight,
-                    ratio = aspectRatio,
-                )
-                metadataFile.writeText(metadataWithInfo.toJson())
-
+                val metadataWithInfo: PhotoMetadata
                 when (format) {
                     ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                        // 保存元数据
+                        metadataWithInfo = metadata.copy(
+                            width = finalWidth,
+                            height = finalHeight,
+                            ratio = aspectRatio,
+                            sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
+                            noiseReduction = noiseReductionValue,
+                            chromaNoiseReduction = chromaNoiseReductionValue,
+                        )
+                        metadataFile.writeText(metadataWithInfo.toJson())
                         result = MultiFrameStacker.processBurst(
                             images,
                             rotation,
@@ -446,6 +449,17 @@ suspend fun saveStackedPhoto(
                         captureResult ?: return@launch
                         val byteBuffer = MultiFrameStacker.processBurstRaw(images, characteristics)
                         byteBuffer ?: return@launch
+                        // 保存元数据
+                        metadataWithInfo = metadata.copy(
+                            width = finalWidth,
+                            height = finalHeight,
+                            ratio = aspectRatio,
+                            rotation = rotation,
+                            sharpening = if (sharpeningValue == 0f) 0.8f else sharpeningValue,
+                            noiseReduction = noiseReductionValue,
+                            chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                        )
+                        metadataFile.writeText(metadataWithInfo.toJson())
                         val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
                         val width = images[0].width
                         val height = images[0].height
@@ -454,16 +468,20 @@ suspend fun saveStackedPhoto(
                             RawProcessor.saveToDng(byteBuffer.asReadOnlyBuffer(), characteristics,
                                 captureResult, outputStream, width, height, rotation)
                         }
+                        val array = byteOutstream.toByteArray()
+                        FileOutputStream(dngFile).use {
+                            it.write(array)
+                        }
                         launch {
-                            val array = byteOutstream.toByteArray()
-                            FileOutputStream(dngFile).use {
-                                it.write(array)
-                            }
                             if (shouldAutoSave) {
                                 exportDng(context, array, metadataWithInfo)
                             }
                         }
                         result = RawProcessor.process(dngFile.absolutePath, aspectRatio, cropRegion, rotation)
+                    }
+                    else -> {
+                        PLog.e(TAG, "Unsupported image format: $format")
+                        return@launch
                     }
                 }
 

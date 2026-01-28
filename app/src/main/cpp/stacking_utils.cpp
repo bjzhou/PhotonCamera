@@ -62,9 +62,10 @@ inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
         }
     }
 
-    // 如果不除以 weightSum，sum 可能会轻微溢出或变暗，
-    // Catmull-Rom 的性质决定了通常不需要归一化，但为了保险可以 clamp
-    return std::max(0.0f, sum);
+    float val = sum;
+    if (val < 0.0f) val = 0.0f;
+    if (val > 65535.0f) val = 65535.0f; // 针对 16-bit RAW 必须限制上限
+    return val;
 }
 
 // Compute local variance in a 3x3 window
@@ -976,81 +977,6 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride, int cfaPattern
   }
 }
 
-// 辅助：获取 RAW 像素 (带边界检查)
-inline uint16_t getPixelSafe(const std::vector<uint16_t>& data, int w, int h, int x, int y) {
-    int px = std::max(0, std::min(w - 1, x));
-    int py = std::max(0, std::min(h - 1, y));
-    return data[py * w + px];
-}
-
-void postProcessRaw(std::vector<uint16_t>& img, int width, int height, int cfaPattern) {
-    std::vector<uint16_t> temp = img; // 备份一份用于读取，img 用于写入
-
-    // Bayer 模式偏移表 (用于识别颜色通道)
-    // 0:RGGB, 1:GRBG, 2:GBRG, 3:BGGR
-    // 我们只需要知道当前点是 G 还是 R/B
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int offset = (y % 2) * 2 + (x % 2);
-            // 判断当前是不是 Green
-            // RGGB(0): (0,0)=R, (1,0)=G, (0,1)=G, (1,1)=B -> Offset 1,2 are G
-            // ... 通用逻辑：
-            bool isGreen = false;
-            if (cfaPattern == 0) isGreen = (offset == 1 || offset == 2);      // RGGB
-            else if (cfaPattern == 1) isGreen = (offset == 0 || offset == 3); // GRBG
-            else if (cfaPattern == 2) isGreen = (offset == 0 || offset == 3); // GBRG
-            else if (cfaPattern == 3) isGreen = (offset == 1 || offset == 2); // BGGR
-
-            uint16_t center = temp[y * width + x];
-            uint16_t resultVal = center;
-
-            if (isGreen) {
-                // === Green 通道：只做锐化 (保护纹理) ===
-
-                // 1. 采样周围同色 G (十字形, step=1 或对角 step=1 取决于位置，这里简化用 3x3 范围内的 G)
-                // 简单点，直接取菱形 4 个邻居，虽然它们是 R/B，但亮度相近可以参考？
-                // 不行，RAW 域必须取同色。Green 的同色邻居在 (x-1, y-1), (x+1, y-1)... 对角线上
-
-                int sum = 0;
-                sum += getPixelSafe(temp, width, height, x - 1, y - 1);
-                sum += getPixelSafe(temp, width, height, x + 1, y - 1);
-                sum += getPixelSafe(temp, width, height, x - 1, y + 1);
-                sum += getPixelSafe(temp, width, height, x + 1, y + 1);
-                int avg = sum / 4;
-
-                // 2. 锐化 (USM)
-                int detail = (int)center - avg;
-
-                // 限制幅度 (防黑边)
-                if (detail > 2048) detail = 2048; // 16-bit range
-                if (detail < -2048) detail = -2048;
-
-                // 施加锐化 (强度 1.5)
-                int sharpened = (int)center + (detail * 3) / 2;
-
-                resultVal = (uint16_t)std::max(0, std::min(65535, sharpened));
-
-            } else {
-                // === Red/Blue 通道：只做降噪 (消除彩噪) ===
-
-                // 取同色邻居 (步长为 2)
-                int sum = 0;
-                sum += getPixelSafe(temp, width, height, x - 2, y);
-                sum += getPixelSafe(temp, width, height, x + 2, y);
-                sum += getPixelSafe(temp, width, height, x, y - 2);
-                sum += getPixelSafe(temp, width, height, x, y + 2);
-                int avg = sum / 4;
-
-                // 强力混合 (50% 降噪)
-                resultVal = (uint16_t)((center + avg) / 2);
-            }
-
-            img[y * width + x] = resultVal;
-        }
-    }
-}
-
 std::vector<uint16_t> RawStacker::process() {
   std::vector<uint16_t> result(width * height);
 
@@ -1079,6 +1005,5 @@ std::vector<uint16_t> RawStacker::process() {
       result[(oy + 1) * width + ox + 1] = getVal(ox + 1, oy + 1);
     }
   }
-  //postProcessRaw(result, width, height, mCfaPattern);
   return result;
 }
