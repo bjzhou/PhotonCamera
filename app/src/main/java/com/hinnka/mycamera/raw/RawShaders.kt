@@ -140,301 +140,118 @@ object RawShaders {
             else if (idx == 3) return 2; // B
             else return 1;               // Gr or Gb -> G
         }
-
-        // ========== 步骤 4b: 基于色差的联合双边解马赛克 ==========
-        // (Chrominance-based Joint Bilateral Demosaicing with LMMSE Green)
-        // 
-        // 核心思路：色度-亮度解耦 (Luma-Chroma Decoupling)
-        // 1. G 通道（亮度主力）：必须锐利，用 LMMSE 算
-        // 2. R/B 通道（色度主力）：必须干净，参考 G 通道的边缘来算
-        //
-        // 公式：R_out = G_lmmse + WeightedAvg(R_neighbors - G_neighbors)
-        // 权重来源：|G_center - G_neighbor| (边缘感知)
         
-        // 辅助函数：快速估计某位置的 G 值 (用于计算色差)
-        float estimateGreenAt(ivec2 coord) {
-            int type = getChannelType(coord);
-            if (type == 1) {
-                // G 位置，直接返回
-                return getRawPixel(coord);
-            } else {
-                // R/B 位置，用十字形平均估计
-                return (getRawPixel(coord + ivec2(1, 0)) +
-                        getRawPixel(coord + ivec2(-1, 0)) +
-                        getRawPixel(coord + ivec2(0, 1)) +
-                        getRawPixel(coord + ivec2(0, -1))) * 0.25;
-            }
+        // 辅助函数：带边界保护的纹理读取
+        float fetch(ivec2 coord) {
+            return getRawPixel(clamp(coord, ivec2(0), ivec2(uImageSize) - 1));
         }
         
-        // 辅助函数：计算联合双边权重
-        // 基于空间距离和亮度相似度
-        float computeBilateralWeight(float gCenter, float gNeighbor, float spatialDist) {
-            // 亮度相似度权重 (Gaussian falloff)
-            float lumaDiff = abs(gCenter - gNeighbor);
-            float sigmaLuma = 0.05; // 亮度差异容忍度
-            float lumaWeight = exp(-lumaDiff * lumaDiff / (2.0 * sigmaLuma * sigmaLuma));
-            
-            // 空间权重 (简化：距离越远权重越小)
-            float sigmaSpatial = 2.0;
-            float spatialWeight = exp(-spatialDist * spatialDist / (2.0 * sigmaSpatial * sigmaSpatial));
-            
-            return lumaWeight * spatialWeight;
-        }
-        
-        vec3 demosaicLMMSE(ivec2 coord) {
+        vec3 demosaicHamiltonAdams(ivec2 coord) {
             int type = getChannelType(coord); // 0=R, 1=G, 2=B
-            float centerRaw = getRawPixel(coord);
+            float C = fetch(coord);
             
             float r, g, b;
-            float epsilon = 0.0001;
-            
-            // ========== 第一步：用 LMMSE 算出最完美的 G (Green) ==========
-            // 绿色通道信噪比最高，是后续步骤的 Guide（向导）
-            
-            // 采样 5x5 邻域的像素值 (同色采样，步长为2)
-            float hSamples[5]; // 水平方向采样
-            float vSamples[5]; // 垂直方向采样
-            
-            for (int i = -2; i <= 2; i++) {
-                hSamples[i + 2] = getRawPixel(coord + ivec2(i * 2, 0));
-                vSamples[i + 2] = getRawPixel(coord + ivec2(0, i * 2));
-            }
-            
-            // 计算水平和垂直方向的梯度能量 (用于边缘检测)
-            float gradH = abs(hSamples[0] - hSamples[2]) + abs(hSamples[2] - hSamples[4]) + abs(hSamples[1] - hSamples[3]);
-            float gradV = abs(vSamples[0] - vSamples[2]) + abs(vSamples[2] - vSamples[4]) + abs(vSamples[1] - vSamples[3]);
-            
-            // 计算局部方差 (用于噪声估计)
-            float meanH = (hSamples[0] + hSamples[1] + hSamples[2] + hSamples[3] + hSamples[4]) * 0.2;
-            float meanV = (vSamples[0] + vSamples[1] + vSamples[2] + vSamples[3] + vSamples[4]) * 0.2;
-            
-            float varH = 0.0;
-            float varV = 0.0;
-            for (int i = 0; i < 5; i++) {
-                varH += (hSamples[i] - meanH) * (hSamples[i] - meanH);
-                varV += (vSamples[i] - meanV) * (vSamples[i] - meanV);
-            }
-            varH *= 0.2;
-            varV *= 0.2;
-            
-            // LMMSE Wiener 滤波权重
-            float noiseVar = 0.0001;
-            float wH = varH / (varH + noiseVar + epsilon);
-            float wV = varV / (varV + noiseVar + epsilon);
-            
-            // 方向自适应权重
-            float dirWeight = gradH / (gradH + gradV + epsilon);
-            
-            // G 通道插值
-            if (type != 1) {
-                // 水平方向绿色估计
-                float g0 = getRawPixel(coord + ivec2(-1, 0));
-                float g2 = getRawPixel(coord + ivec2(1, 0));
-                float gH_base = (g0 + g2) * 0.5;
-                float cH = centerRaw - (hSamples[1] + hSamples[3]) * 0.5;
-                float gH = gH_base + cH * 0.5 * wH;
-                
-                // 垂直方向绿色估计
-                float g1 = getRawPixel(coord + ivec2(0, -1));
-                float g3 = getRawPixel(coord + ivec2(0, 1));
-                float gV_base = (g1 + g3) * 0.5;
-                float cV = centerRaw - (vSamples[1] + vSamples[3]) * 0.5;
-                float gV = gV_base + cV * 0.5 * wV;
-                
-                // 自适应融合
-                g = mix(gH, gV, dirWeight);
+        
+            // ============================
+            // 1. 恢复绿色通道 (G)
+            // ============================
+            if (type == 1) {
+                g = C;
             } else {
-                g = centerRaw;
-            }
-            
-            // ========== 第二步：基于色差的联合双边滤波重建 R/B ==========
-            // 核心：R_out = G_lmmse + WeightedAvg(R_neighbors - G_neighbors)
-            // 不直接插值 R/B，而是对色差 (R-G, B-G) 进行平滑
-            
-            if (type == 0) { // Red Center
-                r = centerRaw;
-                
-                // B 通道：扩大采样范围到 5x5 (同色像素间隔为2)
-                // 采样周围所有 B 邻居，使用联合双边滤波计算色差
-                float diffSum = 0.0;
-                float weightSum = 0.0;
-                float minDiff = 1.0;
-                float maxDiff = -1.0;
-                
-                // 5x5 范围内的 B 像素 (步长为2，共9个点，中心除外共8个)
-                for (int dy = -2; dy <= 2; dy += 2) {
-                    for (int dx = -2; dx <= 2; dx += 2) {
-                        // R center 的对角线是 B，十字方向也是隔一个的 B
-                        // 对于 RGGB，R位置的对角 (-1,-1), (1,-1), (-1,1), (1,1) 是 B
-                        // 更远的 (-2,-2) 等是 R，需要跳过
-                        // 实际上采样 dx,dy 都是奇数时才是 B
-                        if ((dx & 1) != 1 && (dy & 1) != 1) continue;
-                    }
-                }
-                
-                // 对于 Red Center，B 在对角线方向 (奇数偏移)
-                // 扩展到更大范围：包括 ±1 和 ±3 的对角线
-                ivec2 bOffsets[8] = ivec2[8](
-                    ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1), ivec2(1, 1),   // 近邻
-                    ivec2(-3, -1), ivec2(3, -1), ivec2(-1, -3), ivec2(1, -3)  // 远邻 (部分)
-                );
-                
-                for (int i = 0; i < 8; i++) {
-                    ivec2 off = bOffsets[i];
-                    ivec2 neighborCoord = coord + off;
-                    
-                    float bVal = getRawPixel(neighborCoord);
-                    float gEst = estimateGreenAt(neighborCoord);
-                    float diff = bVal - gEst;
-                    
-                    // 记录 min/max 用于噪点剔除
-                    minDiff = min(minDiff, diff);
-                    maxDiff = max(maxDiff, diff);
-                    
-                    // 空间权重
-                    float distSq = float(off.x * off.x + off.y * off.y);
-                    float wSpatial = exp(-distSq / 8.0); // sigma^2 = 4
-                    
-                    // 亮度权重
-                    float lumaDiff = abs(g - gEst);
-                    float wLuma = exp(-lumaDiff * lumaDiff / 0.005); // sigma = 0.05
-                    
-                    float weight = wSpatial * wLuma;
-                    diffSum += diff * weight;
-                    weightSum += weight;
-                }
-                
-                float avgDiff = diffSum / (weightSum + epsilon);
-                
-                // 中值钳位：限制在邻居的 [min, max] 范围内 (适当放宽范围以减少边缘断层)
-                avgDiff = clamp(avgDiff, minDiff - 0.02, maxDiff + 0.02);
-                
-                // 收紧色差范围
-                avgDiff = clamp(avgDiff, -0.2, 0.2);
-                
-                b = g + avgDiff;
-                
-            } else if (type == 2) { // Blue Center
-                b = centerRaw;
-                
-                // R 通道：同样扩大采样范围
-                float diffSum = 0.0;
-                float weightSum = 0.0;
-                float minDiff = 1.0;
-                float maxDiff = -1.0;
-                
-                // 对于 Blue Center，R 在对角线方向
-                ivec2 rOffsets[8] = ivec2[8](
-                    ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1), ivec2(1, 1),
-                    ivec2(-3, -1), ivec2(3, -1), ivec2(-1, -3), ivec2(1, -3)
-                );
-                
-                for (int i = 0; i < 8; i++) {
-                    ivec2 off = rOffsets[i];
-                    ivec2 neighborCoord = coord + off;
-                    
-                    float rVal = getRawPixel(neighborCoord);
-                    float gEst = estimateGreenAt(neighborCoord);
-                    float diff = rVal - gEst;
-                    
-                    minDiff = min(minDiff, diff);
-                    maxDiff = max(maxDiff, diff);
-                    
-                    float distSq = float(off.x * off.x + off.y * off.y);
-                    float wSpatial = exp(-distSq / 8.0);
-                    
-                    float lumaDiff = abs(g - gEst);
-                    float wLuma = exp(-lumaDiff * lumaDiff / 0.005);
-                    
-                    float weight = wSpatial * wLuma;
-                    diffSum += diff * weight;
-                    weightSum += weight;
-                }
-                
-                float avgDiff = diffSum / (weightSum + epsilon);
-                // 中值钳位：限制在邻居的 [min, max] 范围内 (适当放宽范围以减少边缘断层)
-                avgDiff = clamp(avgDiff, minDiff - 0.02, maxDiff + 0.02);
-                avgDiff = clamp(avgDiff, -0.2, 0.2);
-                
-                r = g + avgDiff;
-                
-            } else { // Green Center (Gr or Gb)
-                int channelIdx = getChannelIndex(coord);
-                bool isGr = (channelIdx == 1);
-                
-                if (isGr) {
-                    // Gr 行：左右是红，上下是蓝
-                    
-                    // R 通道 (水平方向)
-                    float rVal_left = getRawPixel(coord + ivec2(-1, 0));
-                    float rVal_right = getRawPixel(coord + ivec2(1, 0));
-                    float gEst_left = estimateGreenAt(coord + ivec2(-1, 0));
-                    float gEst_right = estimateGreenAt(coord + ivec2(1, 0));
-                    
-                    float diff_left = rVal_left - gEst_left;
-                    float diff_right = rVal_right - gEst_right;
-                    
-                    float w_left = computeBilateralWeight(g, gEst_left, 1.0);
-                    float w_right = computeBilateralWeight(g, gEst_right, 1.0);
-                    
-                    float rDiff = (diff_left * w_left + diff_right * w_right) / (w_left + w_right + epsilon);
-                    rDiff = clamp(rDiff, -0.2, 0.2);
-                    r = g + rDiff;
-                    
-                    // B 通道 (垂直方向)
-                    float bVal_top = getRawPixel(coord + ivec2(0, -1));
-                    float bVal_bottom = getRawPixel(coord + ivec2(0, 1));
-                    float gEst_top = estimateGreenAt(coord + ivec2(0, -1));
-                    float gEst_bottom = estimateGreenAt(coord + ivec2(0, 1));
-                    
-                    float diff_top = bVal_top - gEst_top;
-                    float diff_bottom = bVal_bottom - gEst_bottom;
-                    
-                    float w_top = computeBilateralWeight(g, gEst_top, 1.0);
-                    float w_bottom = computeBilateralWeight(g, gEst_bottom, 1.0);
-                    
-                    float bDiff = (diff_top * w_top + diff_bottom * w_bottom) / (w_top + w_bottom + epsilon);
-                    bDiff = clamp(bDiff, -0.2, 0.2);
-                    b = g + bDiff;
-                    
+                // 获取十字邻域 (N=North, S=South...)
+                float N = fetch(coord + ivec2(0, -1));
+                float S = fetch(coord + ivec2(0, 1));
+                float W = fetch(coord + ivec2(-1, 0));
+                float E = fetch(coord + ivec2(1, 0));
+        
+                // 获取二阶邻域 (用于梯度和拉普拉斯校正)
+                float NN = fetch(coord + ivec2(0, -2));
+                float SS = fetch(coord + ivec2(0, 2));
+                float WW = fetch(coord + ivec2(-2, 0));
+                float EE = fetch(coord + ivec2(2, 0));
+        
+                // 计算梯度 (一阶差分 + 二阶校正)
+                float gradH = abs(W - E) + abs(2.0 * C - WW - EE);
+                float gradV = abs(N - S) + abs(2.0 * C - NN - SS);
+        
+                // 自适应插值
+                if (gradH < gradV) {
+                    g = (W + E) * 0.5 + (2.0 * C - WW - EE) * 0.25;
+                } else if (gradV < gradH) {
+                    g = (N + S) * 0.5 + (2.0 * C - NN - SS) * 0.25;
                 } else {
-                    // Gb 行：上下是红，左右是蓝
-                    
-                    // R 通道 (垂直方向)
-                    float rVal_top = getRawPixel(coord + ivec2(0, -1));
-                    float rVal_bottom = getRawPixel(coord + ivec2(0, 1));
-                    float gEst_top = estimateGreenAt(coord + ivec2(0, -1));
-                    float gEst_bottom = estimateGreenAt(coord + ivec2(0, 1));
-                    
-                    float diff_top = rVal_top - gEst_top;
-                    float diff_bottom = rVal_bottom - gEst_bottom;
-                    
-                    float w_top = computeBilateralWeight(g, gEst_top, 1.0);
-                    float w_bottom = computeBilateralWeight(g, gEst_bottom, 1.0);
-                    
-                    float rDiff = (diff_top * w_top + diff_bottom * w_bottom) / (w_top + w_bottom + epsilon);
-                    rDiff = clamp(rDiff, -0.2, 0.2);
-                    r = g + rDiff;
-                    
-                    // B 通道 (水平方向)
-                    float bVal_left = getRawPixel(coord + ivec2(-1, 0));
-                    float bVal_right = getRawPixel(coord + ivec2(1, 0));
-                    float gEst_left = estimateGreenAt(coord + ivec2(-1, 0));
-                    float gEst_right = estimateGreenAt(coord + ivec2(1, 0));
-                    
-                    float diff_left = bVal_left - gEst_left;
-                    float diff_right = bVal_right - gEst_right;
-                    
-                    float w_left = computeBilateralWeight(g, gEst_left, 1.0);
-                    float w_right = computeBilateralWeight(g, gEst_right, 1.0);
-                    
-                    float bDiff = (diff_left * w_left + diff_right * w_right) / (w_left + w_right + epsilon);
-                    bDiff = clamp(bDiff, -0.2, 0.2);
-                    b = g + bDiff;
+                    g = (N + S + W + E) * 0.25 + (4.0 * C - NN - SS - WW - EE) * 0.125;
                 }
             }
-            
-            return vec3(r, g, b);
+        
+            // ============================
+            // 2. 恢复红/蓝通道 (R/B)
+            // ============================
+            if (type == 1) { 
+                // 中心是 Green (Gr 或 Gb)
+                int idx = getChannelIndex(coord); // 1=Gr, 2=Gb
+                bool isGr = (idx == 1); // Gr 行有红，Gb 行有蓝
+        
+                // 获取一阶和二阶邻域数据
+                float N = fetch(coord + ivec2(0, -1));
+                float S = fetch(coord + ivec2(0, 1));
+                float W = fetch(coord + ivec2(-1, 0));
+                float E = fetch(coord + ivec2(1, 0));
+                
+                // 用于拉普拉斯色差修正的二阶数据
+                float NN = fetch(coord + ivec2(0, -2));
+                float SS = fetch(coord + ivec2(0, 2));
+                float WW = fetch(coord + ivec2(-2, 0));
+                float EE = fetch(coord + ivec2(2, 0));
+        
+                if (isGr) { 
+                    // Gr: 水平是 R, 垂直是 B
+                    r = (W + E) * 0.5 + (g - (WW + EE) * 0.5) * 0.5;
+                    b = (N + S) * 0.5 + (g - (NN + SS) * 0.5) * 0.5;
+                } else { 
+                    // Gb: 水平是 B, 垂直是 R
+                    r = (N + S) * 0.5 + (g - (NN + SS) * 0.5) * 0.5;
+                    b = (W + E) * 0.5 + (g - (WW + EE) * 0.5) * 0.5;
+                }
+            } 
+            else if (type == 0) { 
+                // 中心是 Red
+                r = C;
+                
+                // 恢复 Blue (对角线)
+                float BNW = fetch(coord + ivec2(-1, -1));
+                float BNE = fetch(coord + ivec2(1, -1));
+                float BSW = fetch(coord + ivec2(-1, 1));
+                float BSE = fetch(coord + ivec2(1, 1));
+                
+                // 恢复 G (十字) - 用于色差计算
+                float GN = fetch(coord + ivec2(0, -1));
+                float GS = fetch(coord + ivec2(0, 1));
+                float GW = fetch(coord + ivec2(-1, 0));
+                float GE = fetch(coord + ivec2(1, 0));
+        
+                b = (BNW + BNE + BSW + BSE) * 0.25 + (g - (GN + GS + GW + GE) * 0.25) * 0.5;
+                
+            } else { 
+                // 中心是 Blue
+                b = C;
+        
+                // 恢复 Red (对角线)
+                float RNW = fetch(coord + ivec2(-1, -1));
+                float RNE = fetch(coord + ivec2(1, -1));
+                float RSW = fetch(coord + ivec2(-1, 1));
+                float RSE = fetch(coord + ivec2(1, 1));
+        
+                float GN = fetch(coord + ivec2(0, -1));
+                float GS = fetch(coord + ivec2(0, 1));
+                float GW = fetch(coord + ivec2(-1, 0));
+                float GE = fetch(coord + ivec2(1, 0));
+        
+                r = (RNW + RNE + RSW + RSE) * 0.25 + (g - (GN + GS + GW + GE) * 0.25) * 0.5;
+            }
+        
+            // 仅做非负保护 (物理光照不能为负)，但不限制上限以支持 HDR
+            return max(vec3(0.0), vec3(r, g, b));
         }
 
         // ========== 步骤 8: 输出锐化 (Unsharp Mask) ==========
@@ -706,13 +523,13 @@ object RawShaders {
             // Pass 1: 1:1 解马赛克
             ivec2 coord = ivec2(gl_FragCoord.xy);
 
-            // 解马赛克 (联合双边 + 色度降噪内嵌)
-            vec3 rgb = demosaicLMMSE(coord);
+            // 解马赛克
+            vec3 rgb = demosaicHamiltonAdams(coord);
 
             // 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
             
-            //rgb = applyDoubleEndedDesaturation(rgb);
+            rgb = applyDoubleEndedDesaturation(rgb);
 
             // 应用曝光增益 (Linear HDR Space)
             rgb *= uExposureGain;
