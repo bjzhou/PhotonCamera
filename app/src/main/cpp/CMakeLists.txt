@@ -8,6 +8,9 @@ include_directories(${LIB_PATH}/include)
 
 file(GLOB JXL_LIBS "${LIB_PATH}/lib/${ANDROID_ABI}/*.a")
 
+# 启用 OpenMP
+find_package(OpenMP REQUIRED)
+
 # 6. 将你的 native 库链接到 libyuv
 add_library(my-native-lib SHARED 
     native-lib.cpp
@@ -17,12 +20,13 @@ add_library(my-native-lib SHARED
     stacking_utils.cpp
 )
 
-# 启用优化
-target_compile_options(my-native-lib PRIVATE -O3 -ffast-math)
+# 启用优化和 OpenMP
+target_compile_options(my-native-lib PRIVATE -O3 -ffast-math ${OpenMP_CXX_FLAGS})
 
 target_link_libraries(
     my-native-lib
     ${JXL_LIBS}
+    OpenMP::OpenMP_CXX
     log
     jnigraphics
     android

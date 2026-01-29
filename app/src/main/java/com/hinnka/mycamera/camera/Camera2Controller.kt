@@ -54,7 +54,6 @@ class Camera2Controller(private val context: Context) {
 
         // 拍照状态机常量
         private const val STATE_PREVIEW = 0 // Showing camera preview.
-        private const val STATE_WAITING_LOCK = 1 // Waiting for the focus to be locked.
         private const val STATE_WAITING_PRECAPTURE = 2 // Waiting for the exposure to be precapture state.
         private const val STATE_WAITING_NON_PRECAPTURE =
             3 // Waiting for the exposure state to be something other than precapture.
@@ -243,31 +242,9 @@ class Camera2Controller(private val context: Context) {
                 // 正常预览状态，不做处理
             }
 
-            STATE_WAITING_LOCK -> {
-                // 等待对焦锁定
-                if (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-                    afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
-                    afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED ||
-                    afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED ||
-                    // 部分设备可能不返回 Locked 状态，如果 AF 模式是 OFF，也可以认为对焦完成
-                    _state.value.currentAfMode == CaptureRequest.CONTROL_AF_MODE_OFF
-                ) {
-                    // 对焦完成（成功或失败），尝试预闪或拍照
-                    // CONTROL_AE_STATE can be null on some devices
-                    if (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
-                        internalCaptureState = STATE_PICTURE_TAKEN
-                        runCaptureSequence()
-                    } else {
-                        runPrecaptureSequence()
-                    }
-                }
-            }
-
             STATE_WAITING_PRECAPTURE -> {
                 // 等待 AE 预取（预闪）完成
-                if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
-                    aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
-                ) {
+                if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
                     internalCaptureState = STATE_WAITING_NON_PRECAPTURE
                 }
             }
@@ -279,39 +256,6 @@ class Camera2Controller(private val context: Context) {
                     runCaptureSequence()
                 }
             }
-        }
-    }
-
-    /**
-     * 锁定对焦
-     */
-    private fun lockFocus() {
-        try {
-            previewRequestBuilder?.let { builder ->
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
-                internalCaptureState = STATE_WAITING_LOCK
-                captureSession?.capture(builder.build(), previewCallback, cameraHandler)
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to lock focus", e)
-        }
-    }
-
-    /**
-     * 解锁对焦
-     */
-    private fun unlockFocus() {
-        try {
-            previewRequestBuilder?.let { builder ->
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL)
-                captureSession?.capture(builder.build(), previewCallback, cameraHandler)
-
-                internalCaptureState = STATE_PREVIEW
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
-                captureSession?.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to unlock focus", e)
         }
     }
 
@@ -328,11 +272,6 @@ class Camera2Controller(private val context: Context) {
         pendingCaptureDevice = null
         pendingCaptureReader = null
     }
-
-    fun captureBurst() {
-        capture()
-    }
-
 
     /**
      * 运行预取序列（预闪）
@@ -938,33 +877,9 @@ class Camera2Controller(private val context: Context) {
         val reader = imageReader ?: return
 
         try {
-            // 使用 TEMPLATE_PREVIEW 进行预览
-            // 为解决用户反馈的预览卡顿和 AE 失效问题，我们从 TEMPLATE_STILL_CAPTURE 切换回 TEMPLATE_PREVIEW
-            // 虽然 TEMPLATE_STILL_CAPTURE 优先画画质，但在设备兼容性和预览流畅度上存在问题
             previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
-                // 关键修复: 在创建 builder 时就添加 previewImageReader 的 surface
-                // 而不是在 onSessionConfigured 中动态添加
                 previewImageReader?.surface?.let { addTarget(it) }
-
-                // 优化预览 AE：允许 15-30fps 的帧率范围
-                // 这允许在低光线下快门时间最长可达 1/15s (66ms)，从而在保持预览流畅的同时获得接近拍照的画质
-                try {
-                    val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(device.id)
-                    val availableFpsRanges =
-                        characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                    // 寻找包含 30fps 且下限尽可能低的范围（如 [15, 30] 或 [10, 30]）
-                    val targetFpsRange = availableFpsRanges?.find { it.upper >= 30 && it.lower <= 15 }
-                        ?: availableFpsRanges?.find { it.upper >= 30 }
-
-                    targetFpsRange?.let {
-                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
-                        PLog.d(TAG, "Set preview AE target FPS range: $it")
-                    }
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to set preview FPS range", e)
-                }
-
                 // 设置连续自动对焦
                 val initialAfMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
                 set(CaptureRequest.CONTROL_AF_MODE, initialAfMode)
@@ -1037,7 +952,6 @@ class Camera2Controller(private val context: Context) {
         val currentState = _state.value
 
         builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, currentState.useMultiFrame)
-//        builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE)
 
         // 1. 曝光设置
         applyExposureSettings(builder, currentState, isCapture)

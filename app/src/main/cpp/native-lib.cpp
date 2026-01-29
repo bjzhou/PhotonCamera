@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <jni.h>
+#include <omp.h>
 #include <string>
 #include <vector>
 
@@ -228,7 +229,9 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   uint16_t *iV = iU + uvSize;
 
   // 转换 Y 平面
+#pragma omp parallel for
   for (int row = 0; row < height; row++) {
+
     for (int col = 0; col < width; col++) {
       if (isP010) {
         iY[row * width + col] =
@@ -241,7 +244,9 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   }
 
   // 转换 UV 平面
+#pragma omp parallel for
   for (int row = 0; row < uvHeight; row++) {
+
     for (int col = 0; col < uvWidth; col++) {
       if (isP010) {
         iU[row * uvWidth + col] = readValue<uint16_t>(
@@ -321,8 +326,10 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   // === Step 4: 转换并存储为 FP16 ===
   std::vector<uint16_t> fp16Pixels(finalWidth * finalHeight * 4);
 
+#pragma omp parallel for collapse(2)
   for (int y = 0; y < finalHeight; y++) {
     for (int x = 0; x < finalWidth; x++) {
+
       int srcY = (cropY + y) * rotatedWidth + (cropX + x);
       int srcUV = ((cropY + y) / 2) * (rotatedWidth / 2) + ((cropX + x) / 2);
 
@@ -426,7 +433,9 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
   uint16_t *iU = yuv16Data + ySize;
   uint16_t *iV = iU + uvSize;
 
+#pragma omp parallel for
   for (int row = 0; row < height; row++) {
+
     for (int col = 0; col < width; col++) {
       if (isP010) {
         iY[row * width + col] =
@@ -438,7 +447,9 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
     }
   }
 
+#pragma omp parallel for
   for (int row = 0; row < uvHeight; row++) {
+
     for (int col = 0; col < uvWidth; col++) {
       if (isP010) {
         iU[row * uvWidth + col] = readValue<uint16_t>(
@@ -512,8 +523,10 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
   uint16_t *rU = rotatedYuv16 + rotatedWidth * rotatedHeight;
   uint16_t *rV = rU + (rotatedWidth / 2) * (rotatedHeight / 2);
 
+#pragma omp parallel for collapse(2)
   for (int y = 0; y < finalHeight; y++) {
     for (int x = 0; x < finalWidth; x++) {
+
       int srcY = (cropY + y) * rotatedWidth + (cropX + x);
       int srcUV = ((cropY + y) / 2) * (rotatedWidth / 2) + ((cropX + x) / 2);
 
