@@ -54,7 +54,7 @@ object PLog {
      */
     fun v(tag: String, message: String) {
         addLog(LogLevel.VERBOSE, tag, message)
-        Log.v(tag, message)
+        Log.v("PLog_$tag", message)
     }
 
     /**
@@ -62,7 +62,7 @@ object PLog {
      */
     fun d(tag: String, message: String) {
         addLog(LogLevel.DEBUG, tag, message)
-        Log.d(tag, message)
+        Log.d("PLog_$tag", message)
     }
 
     /**
@@ -70,7 +70,7 @@ object PLog {
      */
     fun i(tag: String, message: String) {
         addLog(LogLevel.INFO, tag, message)
-        Log.i(tag, message)
+        Log.i("PLog_$tag", message)
     }
 
     /**
@@ -79,9 +79,9 @@ object PLog {
     fun w(tag: String, message: String, throwable: Throwable? = null) {
         addLog(LogLevel.WARNING, tag, message, throwable)
         if (throwable != null) {
-            Log.w(tag, message, throwable)
+            Log.w("PLog_$tag", message, throwable)
         } else {
-            Log.w(tag, message)
+            Log.w("PLog_$tag", message)
         }
     }
 
@@ -91,9 +91,9 @@ object PLog {
     fun e(tag: String, message: String, throwable: Throwable? = null) {
         addLog(LogLevel.ERROR, tag, message, throwable)
         if (throwable != null) {
-            Log.e(tag, message, throwable)
+            Log.e("PLog_$tag", message, throwable)
         } else {
-            Log.e(tag, message)
+            Log.e("PLog_$tag", message)
         }
     }
 

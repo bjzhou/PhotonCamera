@@ -59,7 +59,8 @@ data class UserPreferences(
     val useMultiFrame: Boolean = false, // 是否使用多帧合成
     val multiFrameCount: Int = 8, // 多帧合成帧数
     val useSuperResolution: Boolean = false, // 是否使用超分辨率
-    val rawEngine: RawEngine = RawEngine.NATIVE // RAW处理引擎
+    val rawEngine: RawEngine = RawEngine.NATIVE, // RAW处理引擎
+    val useLivePhoto: Boolean = false // 是否启用 Live Photo (Motion Photo)
 )
 
 /**
@@ -105,6 +106,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
         private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val RAW_ENGINE = stringPreferencesKey("raw_engine")
+        private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
     }
 
     /**
@@ -144,7 +146,8 @@ class UserPreferencesRepository(private val context: Context) {
                 useSuperResolution = preferences[USE_SUPER_RESOLUTION] ?: false,
                 rawEngine = RawEngine.valueOf(
                     preferences[RAW_ENGINE] ?: RawEngine.NATIVE.name
-                )
+                ),
+                useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false
             )
         }
 
@@ -431,6 +434,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawEngine(engine: RawEngine) {
         context.dataStore.edit { preferences ->
             preferences[RAW_ENGINE] = engine.name
+        }
+    }
+
+    /**
+     * 保存是否启用 Live Photo
+     */
+    suspend fun saveUseLivePhoto(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_LIVE_PHOTO] = enabled
         }
     }
 }

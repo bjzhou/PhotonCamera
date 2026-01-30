@@ -23,6 +23,10 @@ import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.model.ColorRecipeParams
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -113,6 +117,9 @@ class Camera2Controller(private val context: Context) {
     private val _state = MutableStateFlow(CameraState())
     val state: StateFlow<CameraState> = _state.asStateFlow()
 
+    // Live Photo 录制器
+    val livePhotoRecorder = LivePhotoRecorder(context)
+
     // 缓存 CaptureResult 和 Image 用于配对 (timestamp -> Data)
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
     private val pendingImages = ConcurrentHashMap<Long, Image>()
@@ -139,6 +146,9 @@ class Camera2Controller(private val context: Context) {
     // 预览帧捕获回调（用于 LUT 预览生成）
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
     private var shouldCapturePreviewFrame = false
+
+    // Live Photo 录制状态
+    var onLivePhotoVideoCaptured: ((java.io.File, Long) -> Unit)? = null
 
     var rawPreviewFrame: Bitmap? = null
 
@@ -2333,5 +2343,27 @@ class Camera2Controller(private val context: Context) {
         closeCamera()
         stopBackgroundThread()
         cameraDiscovery.clearCache()
+    }
+
+    /**
+     * 设置是否启用 Live Photo
+     */
+    fun setUseLivePhoto(enabled: Boolean) {
+        _state.value = _state.value.copy(useLivePhoto = enabled)
+        if (enabled) {
+            livePhotoRecorder.startRecording()
+        } else {
+            livePhotoRecorder.stopRecording()
+        }
+    }
+
+    /**
+     * 执行 Live Photo 快照并开始后台录制
+     */
+    fun captureLivePhoto(lutConfig: LutConfig?, colorRecipeParams: ColorRecipeParams?) {
+        livePhotoRecorder.snapshot()
+        livePhotoRecorder.recordVideo(lutConfig, colorRecipeParams) { file, timestamp ->
+            onLivePhotoVideoCaptured?.invoke(file, timestamp)
+        }
     }
 }

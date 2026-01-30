@@ -15,7 +15,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
 
@@ -38,6 +40,7 @@ fun CameraPreviewGL(
     onSurfaceTextureReady: (SurfaceTexture) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTap: (Float, Float, Int, Int) -> Unit,
+    livePhotoRecorder: LivePhotoRecorder? = null,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -110,6 +113,8 @@ fun CameraPreviewGL(
                             onSurfaceDestroyed()
                         }
 
+                        this.setLivePhotoRecorder(livePhotoRecorder)
+
                         // 通知 GLSurfaceView 已准备好
                         onGLSurfaceViewReady?.invoke(this)
                     }
@@ -154,6 +159,8 @@ fun CameraPreviewGL(
                         glSurfaceView.setLutEnabled(false)
                         glSurfaceView.setColorRecipeEnabled(false)
                     }
+
+                    glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                 },
                 modifier = Modifier.fillMaxSize()
             )

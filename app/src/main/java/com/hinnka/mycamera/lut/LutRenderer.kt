@@ -2,11 +2,15 @@ package com.hinnka.mycamera.lut
 
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.opengl.EGL14
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.util.Log
+import android.view.Surface
+import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -46,6 +50,18 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var texCoordBufferId: Int = 0
     private var indexBufferId: Int = 0
     private var pboId: Int = 0
+
+    // FBO 相关
+    private var fboId: Int = 0
+    private var fboTextureId: Int = 0
+
+    // Copy Shader (FBO -> Screen)
+    private var copyProgramId: Int = 0
+    private var uCopyTextureLoc: Int = 0
+    private var uCopyMVPMatrixLoc: Int = 0
+    private var uCopySTMatrixLoc: Int = 0
+    private var aCopyPositionLoc: Int = 0
+    private var aCopyTexCoordLoc: Int = 0
 
     // Uniform 位置
     private var uMVPMatrixLocation: Int = 0
@@ -159,6 +175,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     var onRequestRender: (() -> Unit)? = null
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
 
+    // Live Photo 录制器
+    var livePhotoRecorder: LivePhotoRecorder? = null
+
     // 预览帧捕获标志
     private var shouldCapturePreview = false
     private val captureSize = 128 // 预览图尺寸
@@ -209,6 +228,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 通知调用者 SurfaceTexture 已准备好
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
 
+        // 通知调用者 SurfaceTexture 已准备好
+        surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
+
         GlUtils.checkGlError("onSurfaceCreated")
     }
 
@@ -223,10 +245,55 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         GLES30.glViewport(0, 0, width, height)
 
+        // 初始化 FBO
+        initFbo(width, height)
+
         // 更新 MVP 矩阵以处理 center crop
         updateMVPMatrix()
 
         GlUtils.checkGlError("onSurfaceChanged")
+    }
+
+    private fun initFbo(width: Int, height: Int) {
+        if (fboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)
+            fboId = 0
+        }
+        if (fboTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(fboTextureId), 0)
+            fboTextureId = 0
+        }
+
+        val ids = IntArray(1)
+        GLES30.glGenFramebuffers(1, ids, 0)
+        fboId = ids[0]
+
+        GLES30.glGenTextures(1, ids, 0)
+        fboTextureId = ids[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height,
+            0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, fboTextureId, 0
+        )
+
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(TAG, "FBO init failed: $status")
+        }
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     /**
@@ -241,6 +308,87 @@ class LutRenderer : GLSurfaceView.Renderer {
                 frameAvailable = false
             }
         }
+
+        if (fboId != 0 && fboTextureId != 0) {
+            // 1. 渲染到 FBO (OES -> FBO, 应用 LUT)
+            drawInternal(fboId, viewportWidth, viewportHeight)
+
+            // FBO 纹理已经是正向的，所以传给 Recorder 时使用 Identity 矩阵
+            val identity = FloatArray(16)
+            Matrix.setIdentityM(identity, 0)
+
+            // 2. 为 Live Photo 提供预览帧 (使用 FBO 纹理, GL_TEXTURE_2D)
+            livePhotoRecorder?.onPreviewFrame(
+                textureId = fboTextureId,
+                transformMatrix = identity,
+                width = viewportWidth,
+                height = viewportHeight,
+                timestampNs = surfaceTexture?.timestamp ?: 0L,
+                lutConfig = currentLutConfig,
+                params = getCurrentRecipeParams(),
+                sharedContext = EGL14.eglGetCurrentContext()
+            )
+
+            // 3. 将 FBO 绘制到屏幕
+            drawFboToScreen(0, viewportWidth, viewportHeight)
+        } else {
+            // FBO 未就绪，直接渲染到屏幕 (Fallback)
+            drawInternal(0, viewportWidth, viewportHeight)
+        }
+    }
+
+    /**
+     * 将 FBO 纹理绘制到屏幕 (Copy Shader)
+     */
+    private fun drawFboToScreen(fboId: Int, width: Int, height: Int) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glUseProgram(copyProgramId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureId)
+        GLES30.glUniform1i(uCopyTextureLoc, 0)
+
+        // FBO 纹理已经是正向的 (经过 stMatrix/MVP 处理后)，所以这里可能不需要再变换
+        // 或者需要 Identity
+        val identity = FloatArray(16)
+        Matrix.setIdentityM(identity, 0)
+        GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, identity, 0)
+
+        // stMatrix 也设为 Identity，因为 FBO 纹理坐标是标准的
+        GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, identity, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aCopyPositionLoc)
+        GLES30.glVertexAttribPointer(aCopyPositionLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aCopyTexCoordLoc)
+        GLES30.glVertexAttribPointer(aCopyTexCoordLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
+
+        GLES30.glDisableVertexAttribArray(aCopyPositionLoc)
+        GLES30.glDisableVertexAttribArray(aCopyTexCoordLoc)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+
+        // 捕获预览帧 (如果需要)
+        if (fboId == 0 && shouldCapturePreview) {
+            shouldCapturePreview = false
+            capturePreviewFrameInternal()
+        }
+    }
+
+    /**
+     * 内部绘图逻辑，支持渲染到 FBO 或屏幕
+     */
+    private fun drawInternal(fboId: Int, width: Int, height: Int) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
+        GLES30.glViewport(0, 0, width, height)
 
         // 清屏
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -332,7 +480,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
 
         // 捕获预览帧（如果需要）
-        if (shouldCapturePreview) {
+        if (fboId == 0 && shouldCapturePreview) {
             shouldCapturePreview = false
             capturePreviewFrameInternal()
         }
@@ -385,12 +533,29 @@ class LutRenderer : GLSurfaceView.Renderer {
         uShadowsLocation = GLES30.glGetUniformLocation(programId, "uShadows")
         uFilmGrainLocation = GLES30.glGetUniformLocation(programId, "uFilmGrain")
         uVignetteLocation = GLES30.glGetUniformLocation(programId, "uVignette")
+        // ... existing initShaderProgram code ...
         uBleachBypassLocation = GLES30.glGetUniformLocation(programId, "uBleachBypass")
 
-        // 获取 Attribute 位置
+        // Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
         aTexCoordLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
 
+        // === 初始化 Copy Shader (用于 FBO 上屏) ===
+        val copyVs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
+        val copyFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_COPY_2D)
+        copyProgramId = GlUtils.linkProgram(copyVs, copyFs)
+        GLES30.glDeleteShader(copyVs)
+        GLES30.glDeleteShader(copyFs)
+
+        if (copyProgramId == 0) {
+            PLog.e(TAG, "Failed to link copy program")
+        } else {
+            uCopyTextureLoc = GLES30.glGetUniformLocation(copyProgramId, "uCameraTexture")
+            uCopyMVPMatrixLoc = GLES30.glGetUniformLocation(copyProgramId, "uMVPMatrix")
+            uCopySTMatrixLoc = GLES30.glGetUniformLocation(copyProgramId, "uSTMatrix")
+            aCopyPositionLoc = GLES30.glGetAttribLocation(copyProgramId, "aPosition")
+            aCopyTexCoordLoc = GLES30.glGetAttribLocation(copyProgramId, "aTexCoord")
+        }
 //        PLog.d(TAG, "Shader program created: $programId")
     }
 
@@ -611,7 +776,7 @@ class LutRenderer : GLSurfaceView.Renderer {
                 pixelSize,
                 GLES30.GL_MAP_READ_BIT
             ) as? ByteBuffer
-            
+
             if (mappedBuffer == null) {
                 GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
                 return
@@ -694,5 +859,26 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 重置状态
         surfaceReady = false
         pendingLutConfig = null
+    }
+
+    /**
+     * 获取当前色彩配方参数对象
+     */
+    private fun getCurrentRecipeParams(): com.hinnka.mycamera.model.ColorRecipeParams {
+        return com.hinnka.mycamera.model.ColorRecipeParams(
+            lutIntensity = lutIntensity,
+            exposure = exposure,
+            contrast = contrast,
+            saturation = saturation,
+            temperature = temperature,
+            tint = tint,
+            color = vibrance,
+            highlights = highlights,
+            shadows = shadows,
+            fade = fade,
+            filmGrain = filmGrain,
+            vignette = vignette,
+            bleachBypass = bleachBypass
+        )
     }
 }

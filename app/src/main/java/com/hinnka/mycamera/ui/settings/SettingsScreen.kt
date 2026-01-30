@@ -76,6 +76,7 @@ fun SettingsScreen(
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
+    val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val rawEngine by viewModel.rawEngine.collectAsState(initial = RawEngine.NATIVE)
     val isPurchased by viewModel.isPurchased.collectAsState()
 
@@ -372,6 +373,18 @@ fun SettingsScreen(
                         description = stringResource(R.string.settings_use_super_resolution_description),
                         checked = useSuperResolution,
                         onCheckedChange = { viewModel.setUseSuperResolution(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.settings_use_live_photo),
+                        description = stringResource(R.string.settings_use_live_photo_description),
+                        checked = useLivePhoto,
+                        onCheckedChange = { viewModel.setUseLivePhoto(it) }
                     )
                 }
 

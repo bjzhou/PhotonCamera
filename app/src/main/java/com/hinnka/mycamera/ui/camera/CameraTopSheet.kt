@@ -42,6 +42,8 @@ fun CameraTopSheet(
     onMultiFrameToggle: (Boolean) -> Unit,
     useSuperResolution: Boolean,
     onSuperResolutionToggle: (Boolean) -> Unit,
+    useLivePhoto: Boolean,
+    onLivePhotoToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -138,6 +140,23 @@ fun CameraTopSheet(
                 } else {
                     Spacer(modifier = Modifier.weight(1f))
                 }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Live Photo Toggle
+                QuickSettingToggle(
+                    title = stringResource(R.string.settings_use_live_photo),
+                    checked = useLivePhoto,
+                    onCheckedChange = onLivePhotoToggle,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Spacer(modifier = Modifier.weight(1f))
             }
 
             Spacer(modifier = Modifier.height(12.dp))

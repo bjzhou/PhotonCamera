@@ -175,6 +175,7 @@ data class CameraState(
     val multiFrameCount: Int = 0,
     val useSuperResolution: Boolean = false,
     val useRaw: Boolean = false,
+    val useLivePhoto: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

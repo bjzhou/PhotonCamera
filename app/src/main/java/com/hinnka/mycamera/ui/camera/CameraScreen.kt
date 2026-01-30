@@ -13,10 +13,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +32,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -80,6 +80,7 @@ fun CameraScreen(
     val useRaw by viewModel.useRaw.collectAsState()
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
+    val useLivePhoto by viewModel.useLivePhoto.collectAsState()
 
     val backgroundColor = Color(0xFF434A5D)
 
@@ -209,8 +210,40 @@ fun CameraScreen(
                                 viewModel.focusOnPoint(x, y, w, h)
                             }
                         },
+                        livePhotoRecorder = viewModel.livePhotoRecorder,
                         modifier = Modifier.fillMaxSize()
                     )
+
+                    // Live Photo Indicator
+                    if (useLivePhoto) {
+                        Surface(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .align(Alignment.TopStart),
+                            color = Color.Yellow.copy(alpha = 0.8f),
+                            shape = CircleShape
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Circle,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "LIVE",
+                                    color = Color.Black,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
 
                     Box(modifier = Modifier.fillMaxWidth().aspectRatio(3 / 4f).align(Alignment.Center)) {
                         // 实时直方图 (Overlaid on preview if enabled)
@@ -416,7 +449,9 @@ fun CameraScreen(
                     viewModel.setUseMultiFrame(true)
                 }
                 viewModel.setUseSuperResolution(it)
-            }
+            },
+            useLivePhoto = useLivePhoto,
+            onLivePhotoToggle = { viewModel.setUseLivePhoto(it) }
         )
 
         // LutControlPanel 显示在遮罩层之上，确保能接收点击事件
