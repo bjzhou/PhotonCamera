@@ -595,6 +595,11 @@ class FrameRenderer(private val context: Context) {
         scale: Float = 1f
     ): Pair<Int, Int> {
         val size = (dpToPx(element.sizeDp) * scale).toInt()
+        val maxWidth = if (element.maxWidth > 0) {
+            (dpToPx(element.maxWidth) * scale).toInt()
+        } else {
+            0
+        }
 
         // 获取对应的 drawable
         val logoKey = metadata?.customProperties?.get("LOGO")
@@ -615,7 +620,14 @@ class FrameRenderer(private val context: Context) {
             val intrinsicH = bitmap.height
             return if (intrinsicW > 0 && intrinsicH > 0) {
                 val ratio = (intrinsicW.toFloat() / intrinsicH.toFloat())
-                (size * ratio).toInt() to size
+                val width = (size * ratio).toInt()
+                if (maxWidth in 1..<width) {
+                    // 超过最大宽度，按最大宽度计算高度
+                    val adjustedHeight = (maxWidth / ratio).toInt()
+                    maxWidth to adjustedHeight
+                } else {
+                    width to size
+                }
             } else {
                 // 无内在尺寸，退回到方形
                 size to size
@@ -705,10 +717,10 @@ class FrameRenderer(private val context: Context) {
         "canon" to listOf(R.drawable.ic_brand_canon, R.drawable.ic_brand_canon),
         "dji" to listOf(R.drawable.ic_brand_dji, R.drawable.ic_brand_dji),
         "fujifilm" to listOf(R.drawable.ic_brand_fujifilm, R.drawable.ic_brand_fujifilm_light),
-        "hasselblad" to listOf(R.drawable.ic_brand_hasselblad, R.drawable.ic_brand_hasselblad),
+        "hasselblad" to listOf(R.drawable.ic_brand_hasselblad, R.drawable.ic_brand_hasselblad_light),
         "leica" to listOf(R.drawable.ic_brand_leica, R.drawable.ic_brand_leica),
         "nikon" to listOf(R.drawable.ic_brand_nikon, R.drawable.ic_brand_nikon),
-        "panasonic" to listOf(R.drawable.ic_brand_panasonic, R.drawable.ic_brand_panasonic),
+        "panasonic" to listOf(R.drawable.ic_brand_panasonic, R.drawable.ic_brand_panasonic_light),
         "olympus" to listOf(R.drawable.ic_brand_olympus, R.drawable.ic_brand_olympus),
         "pentax" to listOf(R.drawable.ic_brand_pentax, R.drawable.ic_brand_pentax),
         "ricoh" to listOf(R.drawable.ic_brand_ricoh, R.drawable.ic_brand_ricoh),

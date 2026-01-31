@@ -113,6 +113,7 @@ sealed class FrameElement(
         val logoType: LogoType,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
+        val maxWidth: Int = 0,
         val light: Boolean = false,
         val marginDp: Int = 8,
         override val line: Int = 0

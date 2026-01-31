@@ -38,6 +38,7 @@
       "logoType": "BRAND",
       "alignment": "START",
       "size": 32,
+      "maxWidth": 128,
       "margin": 8,
       "line": -1
     },

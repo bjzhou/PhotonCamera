@@ -210,6 +210,7 @@ object FrameTemplateParser {
             logoType = LogoType.valueOf(obj.getString("logoType")),
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
             sizeDp = obj.optInt("size", 24),
+            maxWidth = obj.optInt("maxWidth", 0),
             light = obj.optBoolean("light", false),
             marginDp = obj.optInt("margin", 8),
             line = obj.optInt("line", 0)
