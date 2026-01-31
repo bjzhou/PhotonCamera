@@ -195,7 +195,11 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     // 预览帧捕获标志
     private var shouldCapturePreview = false
-    private val captureSize = 128 // 预览图尺寸
+    private var captureWidth = 512
+    private var captureHeight = 512
+    private val maxCaptureSize = 512 // 预览图最大尺寸
+    private var lastCaptureWidth = 0
+    private var lastCaptureHeight = 0
 
     /**
      * Surface 创建时调用
@@ -646,6 +650,15 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     private fun initCaptureFbo() {
+        if (captureFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(captureFboId), 0)
+            captureFboId = 0
+        }
+        if (captureTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(captureTextureId), 0)
+            captureTextureId = 0
+        }
+
         val fbos = IntArray(1)
         GLES30.glGenFramebuffers(1, fbos, 0)
         captureFboId = fbos[0]
@@ -657,7 +670,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, captureTextureId)
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
-            captureSize, captureSize, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+            captureWidth, captureHeight, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -770,6 +783,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         surfaceTexture?.setDefaultBufferSize(width, height)
         // 更新 MVP 矩阵以处理 center crop
         updateMVPMatrix()
+        updateCaptureSize()
     }
 
     /**
@@ -779,6 +793,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         if (sensorOrientation != orientation) {
             sensorOrientation = orientation
             updateMVPMatrix()
+            updateCaptureSize()
         }
     }
 
@@ -789,6 +804,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         if (calibrationOffset != offset) {
             calibrationOffset = offset
             updateMVPMatrix()
+            updateCaptureSize()
         }
     }
 
@@ -847,6 +863,21 @@ class LutRenderer : GLSurfaceView.Renderer {
         )
     }
 
+    private fun updateCaptureSize() {
+        val isSwapped = (sensorOrientation + calibrationOffset) % 180 != 0
+        val actualWidth = if (isSwapped) previewHeight else previewWidth
+        val actualHeight = if (isSwapped) previewWidth else previewHeight
+
+        if (actualWidth > actualHeight) {
+            captureWidth = maxCaptureSize
+            captureHeight = (maxCaptureSize * actualHeight / actualWidth)
+        } else {
+            captureHeight = maxCaptureSize
+            captureWidth = (maxCaptureSize * actualWidth / actualHeight)
+        }
+        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}")
+    }
+
     /**
      * 请求捕获预览帧
      * 会在下一帧渲染后捕获并通过回调返回
@@ -861,13 +892,27 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     private fun capturePreviewFrameInternal() {
         try {
+            if (captureWidth != lastCaptureWidth || captureHeight != lastCaptureHeight) {
+                initCaptureFbo()
+                lastCaptureWidth = captureWidth
+                lastCaptureHeight = captureHeight
+            }
+
             // 1. 渲染无効果的原图到 capture FBO
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, captureFboId)
-            GLES30.glViewport(0, 0, captureSize, captureSize)
+            GLES30.glViewport(0, 0, captureWidth, captureHeight)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
             GLES30.glUseProgram(passthroughProgramId)
-            GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, mvpMatrix, 0)
+            
+            // 使用 Identity 矩阵并应用校正旋转，但不进行 center crop 缩放，保持正常比例
+            val captureMvp = FloatArray(16)
+            Matrix.setIdentityM(captureMvp, 0)
+            if (calibrationOffset != 0) {
+                Matrix.rotateM(captureMvp, 0, (-calibrationOffset).toFloat(), 0f, 0f, 1f)
+            }
+            GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, captureMvp, 0)
+            
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
             GLES30.glUniform1i(uPassCameraTextureLocation, 0)
@@ -885,7 +930,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
 
             // 2. 读取像素
-            val pixelSize = captureSize * captureSize * 4
+            val pixelSize = captureWidth * captureHeight * 4
             if (pboId == 0) {
                 val pbos = IntArray(1)
                 GLES30.glGenBuffers(1, pbos, 0)
@@ -894,7 +939,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
             GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
-            GLES30.glReadPixels(0, 0, captureSize, captureSize, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+            GLES30.glReadPixels(0, 0, captureWidth, captureHeight, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
 
             val mappedBuffer = GLES30.glMapBufferRange(
                 GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
@@ -905,14 +950,14 @@ class LutRenderer : GLSurfaceView.Renderer {
                 return
             }
 
-            val bitmap = Bitmap.createBitmap(captureSize, captureSize, Bitmap.Config.ARGB_8888)
+            val bitmap = Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
             bitmap.copyPixelsFromBuffer(mappedBuffer)
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
 
             // 翻转 Y 轴并返回
             val matrix = android.graphics.Matrix()
             matrix.preScale(1f, -1f)
-            val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, captureSize, captureSize, matrix, false)
+            val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, captureWidth, captureHeight, matrix, false)
             bitmap.recycle()
             onPreviewFrameCaptured?.invoke(finalBitmap)
 
