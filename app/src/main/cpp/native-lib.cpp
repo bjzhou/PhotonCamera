@@ -208,93 +208,12 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   }
 
   bool isP010 = (format == 0x36);
-
-  // === Step 1: 将 YUV 格式化为 16-bit I420/I010 结构 ===
-  int ySize = width * height;
-  int uvWidth = width / 2;
-  int uvHeight = height / 2;
-  int uvSize = uvWidth * uvHeight;
-  int totalSize = (ySize + uvSize * 2) * (int)sizeof(uint16_t);
-
-  auto *yuv16Data = static_cast<uint16_t *>(malloc(totalSize));
-  if (yuv16Data == nullptr) {
-    LOGE("Failed to allocate YUV16 buffer");
-    AndroidBitmap_unlockPixels(env, outBitmap8);
-    env->ReleaseStringUTFChars(outputPath, path);
-    return JNI_FALSE;
-  }
-
-  uint16_t *iY = yuv16Data;
-  uint16_t *iU = yuv16Data + ySize;
-  uint16_t *iV = iU + uvSize;
-
-  // 转换 Y 平面
-#pragma omp parallel for
-  for (int row = 0; row < height; row++) {
-
-    for (int col = 0; col < width; col++) {
-      if (isP010) {
-        iY[row * width + col] =
-            readValue<uint16_t>(yData + row * yRowStride + col * 2, false);
-      } else {
-        iY[row * width + col] =
-            static_cast<uint16_t>(yData[row * yRowStride + col]) << 8;
-      }
-    }
-  }
-
-  // 转换 UV 平面
-#pragma omp parallel for
-  for (int row = 0; row < uvHeight; row++) {
-
-    for (int col = 0; col < uvWidth; col++) {
-      if (isP010) {
-        iU[row * uvWidth + col] = readValue<uint16_t>(
-            uData + row * uvRowStride + col * uvPixelStride, false);
-        iV[row * uvWidth + col] = readValue<uint16_t>(
-            vData + row * uvRowStride + col * uvPixelStride, false);
-      } else {
-        iU[row * uvWidth + col] =
-            static_cast<uint16_t>(
-                uData[row * uvRowStride + col * uvPixelStride])
-            << 8;
-        iV[row * uvWidth + col] =
-            static_cast<uint16_t>(
-                vData[row * uvRowStride + col * uvPixelStride])
-            << 8;
-      }
-    }
-  }
-
-  // === Step 2: 旋转 YUV16 ===
   int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
   int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
-  int rotatedUvWidth = rotatedWidth / 2;
-  int rotatedUvHeight = rotatedHeight / 2;
 
-  auto *rotatedYuv16 = static_cast<uint16_t *>(malloc(totalSize));
-  if (rotatedYuv16 == nullptr) {
-    LOGE("Failed to allocate rotated YUV16 buffer");
-    free(yuv16Data);
-    AndroidBitmap_unlockPixels(env, outBitmap8);
-    env->ReleaseStringUTFChars(outputPath, path);
-    return JNI_FALSE;
-  }
-
-  uint16_t *rY = rotatedYuv16;
-  uint16_t *rU = rotatedYuv16 + rotatedWidth * rotatedHeight;
-  uint16_t *rV = rU + rotatedUvWidth * rotatedUvHeight;
-
-  RotatePlane16(iY, rY, width, height, rotation);
-  RotatePlane16(iU, rU, uvWidth, uvHeight, rotation);
-  RotatePlane16(iV, rV, uvWidth, uvHeight, rotation);
-
-  free(yuv16Data);
-
-  // === Step 3: 裁切计算 ===
+  // === 裁切计算 ===
   bool currentIsLandscape = (rotatedWidth >= rotatedHeight);
   int tw, th;
-  // 根据当前图的方向，决定是用 4:3 还是 3:4
   if (currentIsLandscape) {
     tw = (targetWR >= targetHR) ? targetWR : targetHR;
     th = (targetWR >= targetHR) ? targetHR : targetWR;
@@ -305,43 +224,71 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
 
   int finalWidth, finalHeight;
   if ((long long)rotatedWidth * th > (long long)tw * rotatedHeight) {
-    // 现有区域太“扁” -> 缩减宽度，以高度为基准
     finalHeight = (rotatedHeight / 2) * 2;
     finalWidth = (int)(((long long)finalHeight * tw / th) / 2) * 2;
   } else {
-    // 现有区域太“瘦” -> 缩减高度，以宽度为基准
     finalWidth = (rotatedWidth / 2) * 2;
     finalHeight = (int)(((long long)finalWidth * th / tw) / 2) * 2;
   }
-
-  // 安全边界检查
-  if (finalWidth > rotatedWidth)
-    finalWidth = (rotatedWidth / 2) * 2;
-  if (finalHeight > rotatedHeight)
-    finalHeight = (rotatedHeight / 2) * 2;
+  finalWidth = std::min(finalWidth, (rotatedWidth / 2) * 2);
+  finalHeight = std::min(finalHeight, (rotatedHeight / 2) * 2);
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
 
-  // === Step 4: 转换并存储为 FP16 ===
+  // === 转换并存储为 RGB ===
   std::vector<uint16_t> fp16Pixels(finalWidth * finalHeight * 4);
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for num_threads(4)
   for (int y = 0; y < finalHeight; y++) {
     for (int x = 0; x < finalWidth; x++) {
+      int rx = x + cropX;
+      int ry = y + cropY;
 
-      int srcY = (cropY + y) * rotatedWidth + (cropX + x);
-      int srcUV = ((cropY + y) / 2) * (rotatedWidth / 2) + ((cropX + x) / 2);
+      int sx, sy;
+      if (rotation == 90) {
+        sx = ry;
+        sy = height - 1 - rx;
+      } else if (rotation == 180) {
+        sx = width - 1 - rx;
+        sy = height - 1 - ry;
+      } else if (rotation == 270) {
+        sx = width - 1 - ry;
+        sy = rx;
+      } else { // 0
+        sx = rx;
+        sy = ry;
+      }
 
       float Y_val, U_val, V_val;
       if (isP010) {
-        Y_val = (float)rY[srcY] / 65535.0f;
-        U_val = (static_cast<float>(rU[srcUV]) - 32768.0f) / 65535.0f;
-        V_val = (static_cast<float>(rV[srcUV]) - 32768.0f) / 65535.0f;
+        Y_val = (float)readValue<uint16_t>(yData + sy * yRowStride + sx * 2,
+                                           false) /
+                65535.0f;
+        int uv_sx = sx / 2;
+        int uv_sy = sy / 2;
+        U_val =
+            (static_cast<float>(readValue<uint16_t>(
+                 uData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false)) -
+             32768.0f) /
+            65535.0f;
+        V_val =
+            (static_cast<float>(readValue<uint16_t>(
+                 vData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false)) -
+             32768.0f) /
+            65535.0f;
       } else {
-        Y_val = (float)rY[srcY] / 65280.0f;
-        U_val = (static_cast<float>(rU[srcUV]) - 32768.0f) / 65280.0f;
-        V_val = (static_cast<float>(rV[srcUV]) - 32768.0f) / 65280.0f;
+        Y_val = (float)yData[sy * yRowStride + sx] / 255.0f;
+        int uv_sx = sx / 2;
+        int uv_sy = sy / 2;
+        U_val = (static_cast<float>(
+                     uData[uv_sy * uvRowStride + uv_sx * uvPixelStride]) -
+                 128.0f) /
+                255.0f;
+        V_val = (static_cast<float>(
+                     vData[uv_sy * uvRowStride + uv_sx * uvPixelStride]) -
+                 128.0f) /
+                255.0f;
       }
 
       float R, G, B;
@@ -354,33 +301,29 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
         G = Y_val - 0.344136f * U_val - 0.714136f * V_val;
         B = Y_val + 1.772f * U_val;
       }
+      R = std::max(0.0f, std::min(1.0f, R));
+      G = std::max(0.0f, std::min(1.0f, G));
+      B = std::max(0.0f, std::min(1.0f, B));
 
       int idx = y * finalWidth + x;
 
       // --- 输出 A: UINT16 (保存到本地) ---
       int idx16 = idx * 4;
-      fp16Pixels[idx16 + 0] =
-          static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, R)) * 65535.0f);
-      fp16Pixels[idx16 + 1] =
-          static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, G)) * 65535.0f);
-      fp16Pixels[idx16 + 2] =
-          static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, B)) * 65535.0f);
+      fp16Pixels[idx16 + 0] = static_cast<uint16_t>(R * 65535.0f);
+      fp16Pixels[idx16 + 1] = static_cast<uint16_t>(G * 65535.0f);
+      fp16Pixels[idx16 + 2] = static_cast<uint16_t>(B * 65535.0f);
       fp16Pixels[idx16 + 3] = 65535; // Alpha
 
       // --- 输出 B: 8-bit (预览) ---
-      uint32_t r8 =
-          static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, R)) * 255.0f);
-      uint32_t g8 =
-          static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, G)) * 255.0f);
-      uint32_t b8 =
-          static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, B)) * 255.0f);
+      uint32_t r8 = static_cast<uint32_t>(R * 255.0f);
+      uint32_t g8 = static_cast<uint32_t>(G * 255.0f);
+      uint32_t b8 = static_cast<uint32_t>(B * 255.0f);
       uint32_t a8 = 255;
       ptr8[idx] = (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
     }
   }
 
   AndroidBitmap_unlockPixels(env, outBitmap8);
-  free(rotatedYuv16);
 
   // 保存为 JXL
   bool success = saveJxl(fp16Pixels.data(), finalWidth, finalHeight,
@@ -400,95 +343,31 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
     jint uvPixelStride, jint rotation, jint targetWR, jint targetHR,
     jint format, jobject outBitmap8) {
 
-  // 锁定 Bitmap 地址 (8-bit)
   void *bitmapPixels;
   if (AndroidBitmap_lockPixels(env, outBitmap8, &bitmapPixels) < 0) {
+    LOGE("Failed to lock bitmap pixels");
     return;
   }
   auto *ptr8 = static_cast<uint32_t *>(bitmapPixels);
+
+  AndroidBitmapInfo info;
+  AndroidBitmap_getInfo(env, outBitmap8, &info);
 
   auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
   auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
   auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
 
   if (yData == nullptr || uData == nullptr || vData == nullptr) {
+    LOGE("Failed to get buffer addresses");
     AndroidBitmap_unlockPixels(env, outBitmap8);
     return;
   }
 
   bool isP010 = (format == 0x36);
-  int ySize = width * height;
-  int uvWidth = width / 2;
-  int uvHeight = height / 2;
-  int uvSize = uvWidth * uvHeight;
-  int totalSize = (ySize + uvSize * 2) * (int)sizeof(uint16_t);
-
-  auto *yuv16Data = static_cast<uint16_t *>(malloc(totalSize));
-  if (yuv16Data == nullptr) {
-    AndroidBitmap_unlockPixels(env, outBitmap8);
-    return;
-  }
-
-  uint16_t *iY = yuv16Data;
-  uint16_t *iU = yuv16Data + ySize;
-  uint16_t *iV = iU + uvSize;
-
-#pragma omp parallel for
-  for (int row = 0; row < height; row++) {
-
-    for (int col = 0; col < width; col++) {
-      if (isP010) {
-        iY[row * width + col] =
-            readValue<uint16_t>(yData + row * yRowStride + col * 2, false);
-      } else {
-        iY[row * width + col] =
-            static_cast<uint16_t>(yData[row * yRowStride + col]) << 8;
-      }
-    }
-  }
-
-#pragma omp parallel for
-  for (int row = 0; row < uvHeight; row++) {
-
-    for (int col = 0; col < uvWidth; col++) {
-      if (isP010) {
-        iU[row * uvWidth + col] = readValue<uint16_t>(
-            uData + row * uvRowStride + col * uvPixelStride, false);
-        iV[row * uvWidth + col] = readValue<uint16_t>(
-            vData + row * uvRowStride + col * uvPixelStride, false);
-      } else {
-        iU[row * uvWidth + col] =
-            static_cast<uint16_t>(
-                uData[row * uvRowStride + col * uvPixelStride])
-            << 8;
-        iV[row * uvWidth + col] =
-            static_cast<uint16_t>(
-                vData[row * uvRowStride + col * uvPixelStride])
-            << 8;
-      }
-    }
-  }
-
   int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
   int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
-  auto *rotatedYuv16 = static_cast<uint16_t *>(malloc(totalSize));
-  if (rotatedYuv16 == nullptr) {
-    free(yuv16Data);
-    AndroidBitmap_unlockPixels(env, outBitmap8);
-    return;
-  }
 
-  RotatePlane16(iY, rotatedYuv16, width, height, rotation);
-  RotatePlane16(iU, rotatedYuv16 + rotatedWidth * rotatedHeight, uvWidth,
-                uvHeight, rotation);
-  RotatePlane16(iV,
-                rotatedYuv16 + rotatedWidth * rotatedHeight +
-                    (rotatedWidth / 2) * (rotatedHeight / 2),
-                uvWidth, uvHeight, rotation);
-
-  free(yuv16Data);
-
-  // === Step 3: 裁切计算 ===
+  // === 裁切计算 ===
   bool currentIsLandscape = (rotatedWidth >= rotatedHeight);
   int tw, th;
   if (currentIsLandscape) {
@@ -501,44 +380,71 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
 
   int finalWidth, finalHeight;
   if ((long long)rotatedWidth * th > (long long)tw * rotatedHeight) {
-    // 现有区域太“扁” -> 缩减宽度，以高度为基准
     finalHeight = (rotatedHeight / 2) * 2;
     finalWidth = (int)(((long long)finalHeight * tw / th) / 2) * 2;
   } else {
-    // 现有区域太“瘦” -> 缩减高度，以宽度为基准
     finalWidth = (rotatedWidth / 2) * 2;
     finalHeight = (int)(((long long)finalWidth * th / tw) / 2) * 2;
   }
 
-  // 安全边界检查
-  if (finalWidth > rotatedWidth)
-    finalWidth = (rotatedWidth / 2) * 2;
-  if (finalHeight > rotatedHeight)
-    finalHeight = (rotatedHeight / 2) * 2;
+  // 匹配 Bitmap 尺寸
+  finalWidth = std::min(finalWidth, (int)info.width);
+  finalHeight = std::min(finalHeight, (int)info.height);
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
 
-  uint16_t *rY = rotatedYuv16;
-  uint16_t *rU = rotatedYuv16 + rotatedWidth * rotatedHeight;
-  uint16_t *rV = rU + (rotatedWidth / 2) * (rotatedHeight / 2);
+  int stride = info.stride / 4;
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for num_threads(4)
   for (int y = 0; y < finalHeight; y++) {
     for (int x = 0; x < finalWidth; x++) {
-
-      int srcY = (cropY + y) * rotatedWidth + (cropX + x);
-      int srcUV = ((cropY + y) / 2) * (rotatedWidth / 2) + ((cropX + x) / 2);
+      int rx = x + cropX;
+      int ry = y + cropY;
+      int sx, sy;
+      if (rotation == 90) {
+        sx = ry;
+        sy = height - 1 - rx;
+      } else if (rotation == 180) {
+        sx = width - 1 - rx;
+        sy = height - 1 - ry;
+      } else if (rotation == 270) {
+        sx = width - 1 - ry;
+        sy = rx;
+      } else { // 0
+        sx = rx;
+        sy = ry;
+      }
 
       float Y_val, U_val, V_val;
       if (isP010) {
-        Y_val = (float)rY[srcY] / 65535.0f;
-        U_val = (static_cast<float>(rU[srcUV]) - 32768.0f) / 65535.0f;
-        V_val = (static_cast<float>(rV[srcUV]) - 32768.0f) / 65535.0f;
+        Y_val = (float)readValue<uint16_t>(yData + sy * yRowStride + sx * 2,
+                                           false) /
+                65535.0f;
+        int uv_sx = sx / 2;
+        int uv_sy = sy / 2;
+        U_val =
+            (static_cast<float>(readValue<uint16_t>(
+                 uData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false)) -
+             32768.0f) /
+            65535.0f;
+        V_val =
+            (static_cast<float>(readValue<uint16_t>(
+                 vData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false)) -
+             32768.0f) /
+            65535.0f;
       } else {
-        Y_val = (float)rY[srcY] / 65280.0f;
-        U_val = (static_cast<float>(rU[srcUV]) - 32768.0f) / 65280.0f;
-        V_val = (static_cast<float>(rV[srcUV]) - 32768.0f) / 65280.0f;
+        Y_val = (float)yData[sy * yRowStride + sx] / 255.0f;
+        int uv_sx = sx / 2;
+        int uv_sy = sy / 2;
+        U_val = (static_cast<float>(
+                     uData[uv_sy * uvRowStride + uv_sx * uvPixelStride]) -
+                 128.0f) /
+                255.0f;
+        V_val = (static_cast<float>(
+                     vData[uv_sy * uvRowStride + uv_sx * uvPixelStride]) -
+                 128.0f) /
+                255.0f;
       }
 
       float R, G, B;
@@ -558,12 +464,11 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
           static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, G)) * 255.0f);
       uint32_t b8 =
           static_cast<uint32_t>(std::max(0.0f, std::min(1.0f, B)) * 255.0f);
-      ptr8[y * finalWidth + x] = (0xFF << 24) | (b8 << 16) | (g8 << 8) | r8;
+      ptr8[y * stride + x] = (255u << 24) | (b8 << 16) | (g8 << 8) | r8;
     }
   }
 
   AndroidBitmap_unlockPixels(env, outBitmap8);
-  free(rotatedYuv16);
 }
 
 /**

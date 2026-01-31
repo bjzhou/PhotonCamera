@@ -263,6 +263,7 @@ class LivePhotoRecorder(
                     val outputBufferIndex = try {
                         encoderRef.dequeueOutputBuffer(bufferInfo, 10_000L)
                     } catch (e: IllegalStateException) {
+                        PLog.e(TAG, "Error closing camera", e)
                         break
                     }
 

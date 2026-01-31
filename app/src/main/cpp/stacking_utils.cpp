@@ -111,7 +111,7 @@ std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
     next.height = prev.height / 2;
     next.data.resize(next.width * next.height);
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < next.height; ++y) {
       for (int x = 0; x < next.width; ++x) {
 
@@ -250,7 +250,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   // Temporary buffer for raw vectors
   std::vector<Point> rawOffsets(gridW * gridH);
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
   for (int ty = 0; ty < gridH; ++ty) {
     for (int tx = 0; tx < gridW; ++tx) {
 
@@ -306,7 +306,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
   // 4. Vector Field Smoothing (Regularization) - KEY for removing Jello Effect
   // Apply 3x3 Box Blur to the offset field
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < gridH; ++y) {
     for (int x = 0; x < gridW; ++x) {
 
@@ -462,7 +462,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
   image8bit.height = height;
   image8bit.data.resize(width * height);
 
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
   for (int r = 0; r < height; ++r) {
     for (int c = 0; c < width; ++c) {
 
@@ -509,7 +509,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
     int scaledW = width * scale;
     int scaledH = height * scale;
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledH; ++y) {
       for (int x = 0; x < scaledW; ++x) {
 
@@ -529,7 +529,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
     int scaledUVWidth = scaledW / 2;
     int scaledUVHeight = scaledH / 2;
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledUVHeight; ++y) {
       for (int x = 0; x < scaledUVWidth; ++x) {
 
@@ -571,7 +571,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 
   // Merge with Robust Weighting
   // Y Plane - Iterate over Output Grid (Scaled)
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < scaledH; ++y) {
     for (int x = 0; x < scaledW; ++x) {
 
@@ -642,7 +642,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
   int uvRefWidth = width / 2;
   int uvRefHeight = height / 2;
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < scaledUVHeight; ++y) {
     for (int x = 0; x < scaledUVWidth; ++x) {
 
@@ -808,7 +808,7 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   int drawWidth = std::min(finalWidth, outWidth);
   int drawHeight = std::min(finalHeight, outHeight);
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < drawHeight; y++) {
     for (int x = 0; x < drawWidth; x++) {
 
@@ -896,7 +896,7 @@ inline float computeRawScaleSafe(const uint8_t *rawDataBytes, int width,
 
   uint16_t maxVal = 1;
 
-#pragma omp parallel for reduction(max : maxVal)
+#pragma omp parallel for reduction(max : maxVal) num_threads(4)
   for (int y = startY; y < endY; y += 8) { // 步长加大，性能优先
 
     const uint16_t *row = (const uint16_t *)(rawDataBytes + y * rowStride);
@@ -915,7 +915,7 @@ void smoothImage(GrayImage &img) {
   int w = img.width;
   int h = img.height;
 
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
   for (int y = 1; y < h - 1; ++y) {
     for (int x = 1; x < w - 1; ++x) {
 
@@ -983,7 +983,7 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
   }
 
   // 3. 提取数据 (使用 Byte Stride 指针运算)
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
   for (int y = 0; y < proxyH; ++y) {
 
     // 预先计算当前行的指针，减少循环内乘法
@@ -1045,7 +1045,7 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
 
     for (int i = 0; i < 4; ++i) {
       referencePlanes[i] = planes[i];
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
       for (int sy = 0; sy < scaledH; sy++) {
         for (int sx = 0; sx < scaledW; sx++) {
 
@@ -1078,7 +1078,7 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
   for (int i = 0; i < 4; ++i) {
     const auto &srcPlane = planes[i];
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledH; ++y) {
       for (int x = 0; x < scaledW; ++x) {
 
@@ -1144,7 +1144,7 @@ std::vector<uint16_t> RawStacker::process() {
   int planeW = width / 2 * scale;
   int planeH = height / 2 * scale;
 
-#pragma omp parallel for collapse(2)
+#pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < planeH; ++y) {
     for (int x = 0; x < planeW; ++x) {
 

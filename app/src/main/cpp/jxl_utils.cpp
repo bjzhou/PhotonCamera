@@ -12,8 +12,10 @@
 bool saveJxl(const void *pixels, int32_t width, int32_t height,
              JxlDataType dataType, const std::string &outputPath) {
   auto encoder = JxlEncoderMake(nullptr);
-  auto runner = JxlThreadParallelRunnerMake(
-      nullptr, JxlThreadParallelRunnerDefaultNumWorkerThreads());
+  size_t num_threads = JxlThreadParallelRunnerDefaultNumWorkerThreads();
+  if (num_threads > 4)
+    num_threads = 4;
+  auto runner = JxlThreadParallelRunnerMake(nullptr, num_threads);
   if (JXL_ENC_SUCCESS != JxlEncoderSetParallelRunner(encoder.get(),
                                                      JxlThreadParallelRunner,
                                                      runner.get())) {
@@ -25,7 +27,8 @@ bool saveJxl(const void *pixels, int32_t width, int32_t height,
       JxlEncoderFrameSettingsCreate(encoder.get(), nullptr);
   // Lossless encoding
   JxlEncoderSetFrameLossless(frame_settings, JXL_TRUE);
-  JxlEncoderFrameSettingsSetOption(frame_settings, JXL_ENC_FRAME_SETTING_EFFORT, 1);
+  JxlEncoderFrameSettingsSetOption(frame_settings, JXL_ENC_FRAME_SETTING_EFFORT,
+                                   1);
 
   JxlBasicInfo basic_info;
   JxlEncoderInitBasicInfo(&basic_info);
@@ -109,8 +112,10 @@ bool loadJxl(const std::string &inputPath, std::vector<uint16_t> &outPixels,
   }
 
   auto decoder = JxlDecoderMake(nullptr);
-  auto runner = JxlThreadParallelRunnerMake(
-      nullptr, JxlThreadParallelRunnerDefaultNumWorkerThreads());
+  size_t num_threads = JxlThreadParallelRunnerDefaultNumWorkerThreads();
+  if (num_threads > 4)
+    num_threads = 4;
+  auto runner = JxlThreadParallelRunnerMake(nullptr, num_threads);
   if (JXL_DEC_SUCCESS != JxlDecoderSetParallelRunner(decoder.get(),
                                                      JxlThreadParallelRunner,
                                                      runner.get())) {

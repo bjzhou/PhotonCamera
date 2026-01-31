@@ -308,6 +308,24 @@ object PhotoManager {
                             // 创建预览用的 Bitmap
                             val previewBitmap = createBitmap(finalWidth, finalHeight)
 
+                            val livePhotoResult = livePhotoVideoDeferred?.await()
+                            livePhotoResult?.first?.let { cacheVideoFile ->
+                                if (cacheVideoFile.exists()) {
+                                    val videoFile = File(photoDir, VIDEO_FILE)
+                                    try {
+                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
+                                        cacheVideoFile.delete()
+
+                                        // 更新元数据以包含时间戳
+                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
+                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
+                                    } catch (e: Exception) {
+                                        PLog.e(TAG, "Failed to move video file", e)
+                                    }
+                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
+                                }
+                            }
+
                             // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
                             val success = YuvProcessor.processAndSave(
                                 image, aspectRatio, rotation,
@@ -321,24 +339,6 @@ object PhotoManager {
                                     previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                                 }
                                 tempFile.renameTo(photoFile)
-
-                                val livePhotoResult = livePhotoVideoDeferred?.await()
-                                livePhotoResult?.first?.let { cacheVideoFile ->
-                                    if (cacheVideoFile.exists()) {
-                                        val videoFile = File(photoDir, VIDEO_FILE)
-                                        try {
-                                            cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                            cacheVideoFile.delete()
-                                            
-                                            // 更新元数据以包含时间戳
-                                            val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                            saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                        } catch (e: Exception) {
-                                            PLog.e(TAG, "Failed to move video file", e)
-                                        }
-                                        PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                    }
-                                }
                                 if (shouldAutoSave) {
                                     exportPhoto(
                                         context,
@@ -377,6 +377,25 @@ object PhotoManager {
                     processingScope.launch(Dispatchers.IO) {
                         try {
                             captureResult ?: return@launch
+
+                            val livePhotoResult = livePhotoVideoDeferred?.await()
+                            livePhotoResult?.first?.let { cacheVideoFile ->
+                                if (cacheVideoFile.exists()) {
+                                    val videoFile = File(photoDir, VIDEO_FILE)
+                                    try {
+                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
+                                        cacheVideoFile.delete()
+
+                                        // 更新元数据以包含时间戳
+                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
+                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
+                                    } catch (e: Exception) {
+                                        PLog.e(TAG, "Failed to move video file", e)
+                                    }
+                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
+                                }
+                            }
+
                             val dngDataBytes = ByteArrayOutputStream().use { dngData ->
                                 RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
                                 dngData.toByteArray()
@@ -408,23 +427,6 @@ object PhotoManager {
                             }
                             tempFile.renameTo(photoFile)
                             bitmap.recycle()
-                            val livePhotoResult = livePhotoVideoDeferred?.await()
-                            livePhotoResult?.first?.let { cacheVideoFile ->
-                                if (cacheVideoFile.exists()) {
-                                    val videoFile = File(photoDir, VIDEO_FILE)
-                                    try {
-                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                        cacheVideoFile.delete()
-
-                                        // 更新元数据以包含时间戳
-                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                    } catch (e: Exception) {
-                                        PLog.e(TAG, "Failed to move video file", e)
-                                    }
-                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                }
-                            }
                             if (shouldAutoSave) {
                                 exportDng(
                                     context,
@@ -528,6 +530,25 @@ object PhotoManager {
                     metadataFile.writeText(metadataWithInfo.toJson())
                     photoFile.createNewFile()
                     processingScope.launch(Dispatchers.IO) {
+
+                        val livePhotoResult = livePhotoVideoDeferred?.await()
+                        livePhotoResult?.first?.let { cacheVideoFile ->
+                            if (cacheVideoFile.exists()) {
+                                val videoFile = File(photoDir, VIDEO_FILE)
+                                try {
+                                    cacheVideoFile.copyTo(videoFile, overwrite = true)
+                                    cacheVideoFile.delete()
+
+                                    // 更新元数据以包含时间戳
+                                    val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
+                                    saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
+                                } catch (e: Exception) {
+                                    PLog.e(TAG, "Failed to move video file", e)
+                                }
+                                PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
+                            }
+                        }
+
                         try {
                             val result = MultiFrameStacker.processBurst(
                                 images,
@@ -547,23 +568,6 @@ object PhotoManager {
                             }
                             tempFile.renameTo(photoFile)
                             result.recycle()
-                            val livePhotoResult = livePhotoVideoDeferred?.await()
-                            livePhotoResult?.first?.let { cacheVideoFile ->
-                                if (cacheVideoFile.exists()) {
-                                    val videoFile = File(photoDir, VIDEO_FILE)
-                                    try {
-                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                        cacheVideoFile.delete()
-
-                                        // 更新元数据以包含时间戳
-                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                    } catch (e: Exception) {
-                                        PLog.e(TAG, "Failed to move video file", e)
-                                    }
-                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                }
-                            }
                             // Auto Save
                             if (shouldAutoSave) {
                                 exportPhoto(
@@ -607,6 +611,25 @@ object PhotoManager {
                         try {
                             characteristics ?: return@launch
                             captureResult ?: return@launch
+
+                            val livePhotoResult = livePhotoVideoDeferred?.await()
+                            livePhotoResult?.first?.let { cacheVideoFile ->
+                                if (cacheVideoFile.exists()) {
+                                    val videoFile = File(photoDir, VIDEO_FILE)
+                                    try {
+                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
+                                        cacheVideoFile.delete()
+
+                                        // 更新元数据以包含时间戳
+                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
+                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
+                                    } catch (e: Exception) {
+                                        PLog.e(TAG, "Failed to move video file", e)
+                                    }
+                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
+                                }
+                            }
+
                             val byteBuffer = MultiFrameStacker.processBurstRaw(
                                 images, characteristics,
                                 useSuperResolution
@@ -648,23 +671,6 @@ object PhotoManager {
                                 result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
                             }
                             tempFile.renameTo(photoFile)
-                            val livePhotoResult = livePhotoVideoDeferred?.await()
-                            livePhotoResult?.first?.let { cacheVideoFile ->
-                                if (cacheVideoFile.exists()) {
-                                    val videoFile = File(photoDir, VIDEO_FILE)
-                                    try {
-                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                        cacheVideoFile.delete()
-
-                                        // 更新元数据以包含时间戳
-                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                    } catch (e: Exception) {
-                                        PLog.e(TAG, "Failed to move video file", e)
-                                    }
-                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                }
-                            }
                             // Auto Save
                             if (shouldAutoSave) {
                                 exportPhoto(
