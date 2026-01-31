@@ -29,7 +29,7 @@ object XmpLutParser {
         }
     }
 
-    fun parse(inputStream: InputStream, outputStream: OutputStream): Boolean {
+    fun parse(inputStream: InputStream, outputStream: OutputStream, curve: LutCurve = LutCurve.SRGB): Boolean {
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
         val builder = factory.newDocumentBuilder()
@@ -81,9 +81,100 @@ object XmpLutParser {
 
         val decodedData = decodeBase85(tableDataEncoded)
         val decompressedData = decompress(decodedData)
-        val lutData = parseLutData(decompressedData)
+        var lutData = parseLutData(decompressedData)
+
+        if (curve != LutCurve.SRGB) {
+            lutData = resampleLut(lutData, curve)
+        }
 
         return writePlutFile(outputStream, lutData)
+    }
+
+    private fun resampleLut(lutData: LutData, curve: LutCurve): LutData {
+        val size = lutData.divisions
+        // 尝试使用 Native 优化
+        val nativeData = try {
+            LutProcessor.resampleLutNative(lutData.samples, size, curve.ordinal)
+        } catch (e: Throwable) {
+            null
+        }
+
+        if (nativeData != null) {
+            return LutData(size, nativeData)
+        }
+
+        val newData = ShortArray(size * size * size * 3)
+        val step = 1.0f / (size - 1)
+
+        for (bIdx in 0 until size) {
+            for (gIdx in 0 until size) {
+                for (rIdx in 0 until size) {
+                    val r = rIdx * step
+                    val g = gIdx * step
+                    val b = bIdx * step
+
+                    val rLin = LutCurve.SRGB.toLinear(r)
+                    val gLin = LutCurve.SRGB.toLinear(g)
+                    val bLin = LutCurve.SRGB.toLinear(b)
+
+                    val rLog = curve.fromLinear(rLin)
+                    val gLog = curve.fromLinear(gLin)
+                    val bLog = curve.fromLinear(bLin)
+
+                    val interpolated = trilinearSample(lutData, rLog, gLog, bLog)
+
+                    val index = ((bIdx * size + gIdx) * size + rIdx) * 3
+                    newData[index] = interpolated[0]
+                    newData[index + 1] = interpolated[1]
+                    newData[index + 2] = interpolated[2]
+                }
+            }
+        }
+        return LutData(size, newData)
+    }
+
+    private fun trilinearSample(lutData: LutData, r: Float, g: Float, b: Float): ShortArray {
+        val size = lutData.divisions
+        val data = lutData.samples
+
+        val x = (r * (size - 1)).coerceIn(0f, size - 1.0001f)
+        val y = (g * (size - 1)).coerceIn(0f, size - 1.0001f)
+        val z = (b * (size - 1)).coerceIn(0f, size - 1.0001f)
+
+        val x0 = x.toInt()
+        val x1 = x0 + 1
+        val y0 = y.toInt()
+        val y1 = y0 + 1
+        val z0 = z.toInt()
+        val z1 = z0 + 1
+
+        val dx = x - x0
+        val dy = y - y0
+        val dz = z - z0
+
+        val result = ShortArray(3)
+        for (c in 0..2) {
+            val v000 = data[((z0 * size + y0) * size + x0) * 3 + c].toInt() and 0xFFFF
+            val v100 = data[((z0 * size + y0) * size + x1) * 3 + c].toInt() and 0xFFFF
+            val v010 = data[((z0 * size + y1) * size + x0) * 3 + c].toInt() and 0xFFFF
+            val v110 = data[((z0 * size + y1) * size + x1) * 3 + c].toInt() and 0xFFFF
+            val v001 = data[((z1 * size + y0) * size + x0) * 3 + c].toInt() and 0xFFFF
+            val v101 = data[((z1 * size + y0) * size + x1) * 3 + c].toInt() and 0xFFFF
+            val v011 = data[((z1 * size + y1) * size + x0) * 3 + c].toInt() and 0xFFFF
+            val v111 = data[((z1 * size + y1) * size + x1) * 3 + c].toInt() and 0xFFFF
+
+            val v00 = v000 * (1 - dx) + v100 * dx
+            val v10 = v010 * (1 - dx) + v110 * dx
+            val v01 = v001 * (1 - dx) + v101 * dx
+            val v11 = v011 * (1 - dx) + v111 * dx
+
+            val v0 = v00 * (1 - dy) + v10 * dy
+            val v1 = v01 * (1 - dy) + v11 * dy
+
+            val v = v0 * (1 - dz) + v1 * dz
+            result[c] = (v + 0.5f).toInt().toShort()
+        }
+        return result
     }
 
     private fun decodeBase85(input: String): ByteArray {

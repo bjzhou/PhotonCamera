@@ -18,6 +18,7 @@ add_library(my-native-lib SHARED
     yuv_utils.cpp
     jxl_utils.cpp
     stacking_utils.cpp
+    lut_processor.cpp
 )
 
 # 启用优化和 OpenMP

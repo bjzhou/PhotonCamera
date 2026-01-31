@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConverter
+import com.hinnka.mycamera.lut.LutCurve
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.utils.PLog
@@ -78,9 +79,10 @@ class CustomImportManager(private val context: Context) {
      * @param uri 选择的 .cube 文件 URI
      * @param displayName 用户自定义的显示名称（可选）
      * @param category 分类名称（可选）
+     * @param curve 输入曲线类型（可选）
      * @return 导入成功的 LUT ID，失败返回 null
      */
-    fun importLut(uri: Uri, displayName: String? = null, category: String? = null): String? {
+    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, curve: LutCurve = LutCurve.SRGB): String? {
         return try {
             val fileName = getFileName(uri) ?: "lut_${System.currentTimeMillis()}.cube"
             val lutId = "custom_${UUID.randomUUID()}"
@@ -91,8 +93,8 @@ class CustomImportManager(private val context: Context) {
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(plutFile).use { outputStream ->
                     val success = if (fileName.endsWith(".xmp")) {
-                        XmpLutParser.parse(inputStream, outputStream)
-                    } else LutConverter.convertCubeToplut(inputStream, outputStream)
+                        XmpLutParser.parse(inputStream, outputStream, curve = curve)
+                    } else LutConverter.convertCubeToplut(inputStream, outputStream, curve = curve)
 
                     if (!success) {
                         plutFile.delete()

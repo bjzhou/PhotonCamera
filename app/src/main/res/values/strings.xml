@@ -264,6 +264,7 @@
     <string name="custom">Custom</string>
     <string name="no_filters">No custom filters</string>
     <string name="no_frames">No custom frames</string>
+    <string name="input_curve">Input Curve</string>
 
     <!-- Frame Import Help -->
     <string name="help">Help</string>

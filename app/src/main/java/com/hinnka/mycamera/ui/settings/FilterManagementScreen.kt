@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.lut.LutCurve
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
@@ -774,10 +775,11 @@ fun FilterManagementScreen(
 
         // 导入时分类选择对话框
         if (showImportCategoryDialog && pendingImportUris.isNotEmpty()) {
+            var selectedCurve by remember { mutableStateOf(LutCurve.SRGB) }
             AlertDialog(
                 onDismissRequest = {
-                    showImportCategoryDialog = false
-                    pendingImportUris = emptyList()
+                    //showImportCategoryDialog = false
+                    //pendingImportUris = emptyList()
                 },
                 title = { Text(stringResource(R.string.import_to_category)) },
                 text = {
@@ -828,6 +830,47 @@ fun FilterManagementScreen(
                                 }
                             }
                         }
+
+                        var expanded by remember { mutableStateOf(false) }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        ExposedDropdownMenuBox(
+                            expanded = expanded,
+                            onExpandedChange = { expanded = !expanded },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = selectedCurve.name,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.input_curve)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
+                                    focusedBorderColor = Color(0xFFFF6B35),
+                                    focusedLabelColor = Color(0xFFFF6B35),
+                                    unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier.fillMaxWidth().menuAnchor()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false },
+                                modifier = Modifier.background(Color(0xFF2C2C2C))
+                            ) {
+                                LutCurve.entries.forEach { curve ->
+                                    DropdownMenuItem(
+                                        text = { Text(curve.name) },
+                                        onClick = {
+                                            selectedCurve = curve
+                                            expanded = false
+                                        },
+                                        colors = MenuDefaults.itemColors(
+                                            textColor = if (selectedCurve == curve) Color(0xFFFF6B35) else Color.White
+                                        )
+                                    )
+                                }
+                            }
+                        }
                     }
                 },
                 confirmButton = {
@@ -835,6 +878,7 @@ fun FilterManagementScreen(
                         onClick = {
                             val targetCategory = categoryText
                             val urisToImport = pendingImportUris
+                            val curveToUse = selectedCurve // Capture state
                             showImportCategoryDialog = false
                             pendingImportUris = emptyList()
 
@@ -847,7 +891,7 @@ fun FilterManagementScreen(
                                 urisToImport.forEachIndexed { index, uri ->
                                     importProgress = Pair(index + 1, urisToImport.size)
                                     val result = withContext(Dispatchers.IO) {
-                                        customImportManager.importLut(uri, category = targetCategory)
+                                        customImportManager.importLut(uri, category = targetCategory, curve = curveToUse)
                                     }
                                     if (result != null) {
                                         successCount++
