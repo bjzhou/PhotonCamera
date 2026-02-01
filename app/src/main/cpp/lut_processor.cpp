@@ -35,29 +35,33 @@ float fromLinear(float linear, LutCurve curve) {
   case LutCurve::V_LOG:
     return (linear < 0.01f)
                ? 5.6f * linear + 0.125f
-               : 0.421248f * std::log10(5.555556f * linear + 0.047996f) +
-                     0.383577f;
+               : 0.241514f * std::log10(linear + 0.00873f) + 0.598206f;
   case LutCurve::S_LOG3:
     return (linear < 0.01125f)
-               ? (171.2102946929f * linear + 95.0f) / 1023.0f
-               : (422.0f * std::log10((linear + 0.01f) / (0.18f + 0.01f)) +
-                  616.0f) /
+               ? (linear * (171.2102946929f - 95.0f) / 0.01125f + 95.0f) /
+                     1023.0f
+               : (420.0f +
+                  std::log10((linear + 0.01f) / (0.18f + 0.01f)) * 261.5f) /
                      1023.0f;
   case LutCurve::F_LOG2:
-    return (linear < 0.00089f)
+    return (linear < 0.000889f)
                ? 8.799461f * linear + 0.092864f
                : 0.245281f * std::log10(5.555556f * linear + 0.064829f) +
                      0.384316f;
   case LutCurve::LOG_C:
     return (linear > 0.010591f)
-               ? 0.247190f * std::log10(1.702f * linear + 0.043519f) + 0.385537f
-               : 5.613235f * linear + 0.092809f;
+               ? 0.247190f * std::log10(5.555556f * linear + 0.052272f) +
+                     0.385537f
+               : 5.367655f * linear + 0.092809f;
   case LutCurve::APPLE_LOG:
-    return (linear > 0.019242594858951f)
-               ? 0.081519922730206f * std::log(47.3665233297121f * linear +
-                                               0.0028231596425514f) +
-                     0.453351173665842f
-               : 9.50854453301014f * linear + 0.063718911571732f;
+    // Apple Log formula from Apple Log Profile White Paper (September 2023)
+    if (linear >= 0.01f) {
+      return 0.08550479f * std::log2(linear + 0.00964052f) + 0.69336945f;
+    } else if (linear >= -0.05641088f) {
+      return 47.28711236f * std::pow(linear + 0.05641088f, 2.0f);
+    } else {
+      return 0.0f;
+    }
   case LutCurve::HLG: {
     const float a = 0.17883277f;
     const float b = 1.0f - 4.0f * a;
@@ -80,13 +84,12 @@ float toLinear(float value, LutCurve curve) {
   case LutCurve::V_LOG:
     return (value < 0.181f)
                ? (value - 0.125f) / 5.6f
-               : (std::pow(10.0f, (value - 0.383577f) / 0.421248f) -
-                  0.047996f) /
-                     5.555556f;
+               : std::pow(10.0f, (value - 0.598206f) / 0.241514f) - 0.00873f;
   case LutCurve::S_LOG3:
-    return (value < 171.2102946929f * 0.01125f / 1023.0f)
-               ? (value * 1023.0f - 95.0f) / 171.2102946929f
-               : std::pow(10.0f, (value * 1023.0f - 616.0f) / 422.0f) *
+    return (value < 171.2102946929f / 1023.0f)
+               ? (value * 1023.0f - 95.0f) * 0.01125f /
+                     (171.2102946929f - 95.0f)
+               : std::pow(10.0f, (value * 1023.0f - 420.0f) / 261.5f) *
                          (0.18f + 0.01f) -
                      0.01f;
   case LutCurve::F_LOG2:
@@ -96,17 +99,22 @@ float toLinear(float value, LutCurve curve) {
                   0.064829f) /
                      5.555556f;
   case LutCurve::LOG_C:
-    return (value > 5.613235f * 0.010591f + 0.092809f)
+    return (value > 0.149658f)
                ? (std::pow(10.0f, (value - 0.385537f) / 0.247190f) -
-                  0.043519f) /
-                     1.702f
-               : (value - 0.092809f) / 5.613235f;
-  case LutCurve::APPLE_LOG:
-    return (value > 0.246602353f)
-               ? (std::exp((value - 0.453351173665842f) / 0.081519922730206f) -
-                  0.0028231596425514f) /
-                     47.3665233297121f
-               : (value - 0.063718911571732f) / 9.50854453301014f;
+                  0.052272f) /
+                     5.555556f
+               : (value - 0.092809f) / 5.367655f;
+  case LutCurve::APPLE_LOG: {
+    // Pt = c * (Rt - R0)^2 = 47.28711236 * (0.01 + 0.05641088)^2 ≈ 0.2088
+    const float pt = 0.20883119f;
+    if (value >= pt) {
+      return std::pow(2.0f, (value - 0.69336945f) / 0.08550479f) - 0.00964052f;
+    } else if (value > 0.0f) {
+      return std::sqrt(value / 47.28711236f) - 0.05641088f;
+    } else {
+      return -0.05641088f;
+    }
+  }
   case LutCurve::HLG: {
     const float a = 0.17883277f;
     const float b = 1.0f - 4.0f * a;
