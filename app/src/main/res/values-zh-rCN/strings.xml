@@ -92,4 +92,7 @@
     <string name="settings_multi_frame_count_description">多帧合成所使用的帧数（帧数越多效果越好，但合成也越慢）。</string>
     <string name="settings_use_super_resolution">超分辨率</string>
     <string name="settings_use_super_resolution_description">使用 2x 多帧超分辨率以获得更多细节。（需要开启多帧合成）</string>
+    <string name="settings_background">背景设置</string>
+    <string name="settings_background_description">更改应用背景图</string>
+    <string name="settings_custom_background">自定义...</string>
 </resources>

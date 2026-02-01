@@ -6,6 +6,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -155,6 +156,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.backgroundImage }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -1496,6 +1500,45 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         return zoomStops.map { it * mainCamera.focalLength35mmEquivalent }
     }
+    /**
+     * 设置背景图
+     */
+    fun setBackgroundImage(image: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveBackgroundImage(image)
+        }
+    }
+
+    /**
+     * 保存从外部选择的背景图
+     */
+    fun saveCustomBackgroundImage(uri: Uri) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val context = getApplication<Application>()
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    if (inputStream != null) {
+                        val backgroundDir = File(context.filesDir, "backgrounds")
+                        if (!backgroundDir.exists()) {
+                            backgroundDir.mkdirs()
+                        }
+                        val fileName = "custom_bg_${System.currentTimeMillis()}.jpg"
+                        val outputFile = File(backgroundDir, fileName)
+                        inputStream.use { input ->
+                            outputFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        setBackgroundImage(outputFile.absolutePath)
+                    }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to save custom background image", e)
+                }
+            }
+        }
+    }
+
 
     override fun onCleared() {
         super.onCleared()

@@ -149,6 +149,9 @@
     <string name="settings_detail_enhancement_description">Fine-tune sharpening and noise reduction parameters</string>
     <string name="settings_photo_quality">Photo Quality</string>
     <string name="settings_photo_quality_description">Select the JPEG compression quality for photos (higher = better quality, larger file size)</string>
+    <string name="settings_background">Background</string>
+    <string name="settings_background_description">Change the app background image</string>
+    <string name="settings_custom_background">Custom...</string>
     
     <!-- LUT -->
     <string name="filter_intensity">Filter Intensity</string>

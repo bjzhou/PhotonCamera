@@ -26,12 +26,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.paint
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.net.Uri
@@ -40,6 +43,7 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LogViewerDialog
+import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -90,10 +94,11 @@ fun SettingsScreen(
 
     val backgroundColor = Color(0xFF151515)
 
+    val backgroundPainter = rememberBackgroundPainter(viewModel)
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(backgroundColor)
+            .paint(backgroundPainter, contentScale = ContentScale.Crop)
     ) {
         // 顶部标题栏
         TopAppBar(
@@ -118,7 +123,7 @@ fun SettingsScreen(
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = backgroundColor
+                containerColor = Color.Transparent
             )
         )
 
@@ -159,6 +164,17 @@ fun SettingsScreen(
 
             // 内容管理设置
             SettingsSection(title = stringResource(R.string.settings_section_management)) {
+                // 背景设置
+                BackgroundSetting(
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
                 NavigationSettingItem(
                     title = stringResource(R.string.settings_filter_management),
                     description = stringResource(R.string.settings_filter_management_description),
@@ -1129,6 +1145,162 @@ fun DefaultFocalLengthSetting(
                         textAlign = TextAlign.Center
                     )
                 }
+            }
+        }
+    }
+}
+/**
+ * 背景设置
+ */
+@Composable
+fun BackgroundSetting(
+    viewModel: CameraViewModel,
+    modifier: Modifier = Modifier
+) {
+    val currentBg by viewModel.backgroundImage.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.saveCustomBackgroundImage(it) }
+    }
+
+    val bgList = listOf("camera_bg", "camera_bg2", "camera_bg3", "camera_bg4")
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.settings_background),
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(bgList) { bgName ->
+                BackgroundItem(
+                    name = bgName,
+                    isSelected = currentBg == bgName,
+                    onClick = { viewModel.setBackgroundImage(bgName) }
+                )
+            }
+            
+            item {
+                CustomBackgroundItem(
+                    isSelected = currentBg.startsWith("/"),
+                    onClick = { launcher.launch("image/*") }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.settings_background_description),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp
+        )
+    }
+}
+
+@Composable
+private fun BackgroundItem(
+    name: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
+    
+    Box(
+        modifier = Modifier
+            .size(80.dp, 80.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .border(
+                width = 2.dp,
+                color = if (isSelected) Color(0xFFFF6B35) else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+    ) {
+        if (resId != 0) {
+            Image(
+                painter = painterResource(resId),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomBackgroundItem(
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(80.dp, 80.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.1f))
+            .border(
+                width = 2.dp,
+                color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Default.FilterNone,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.settings_custom_background),
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+        
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                )
             }
         }
     }

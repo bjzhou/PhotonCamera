@@ -44,6 +44,7 @@ import com.hinnka.mycamera.ui.components.GalleryThumbnail
 import com.hinnka.mycamera.ui.components.HistogramView
 import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.ui.components.PaymentDialog
+import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -136,10 +137,11 @@ fun CameraScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        val backgroundPainter = rememberBackgroundPainter(viewModel)
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .paint(painterResource(R.drawable.camera_bg), contentScale = ContentScale.Crop)
+                .paint(backgroundPainter, contentScale = ContentScale.Crop)
         ) {
             // 顶部控制条
             CameraTopBar(

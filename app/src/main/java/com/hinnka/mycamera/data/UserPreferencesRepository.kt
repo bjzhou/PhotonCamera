@@ -61,7 +61,8 @@ data class UserPreferences(
     val useSuperResolution: Boolean = false, // 是否使用超分辨率
     val rawEngine: RawEngine = RawEngine.NATIVE, // RAW处理引擎
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
-    val useLivePhoto: Boolean = false // 是否启用 Live Photo (Motion Photo)
+    val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
+    val backgroundImage: String = "camera_bg" // 背景图资源名或文件路径
 )
 
 /**
@@ -109,6 +110,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_ENGINE = stringPreferencesKey("raw_engine")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
+        private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
     }
 
     /**
@@ -150,7 +152,8 @@ class UserPreferencesRepository(private val context: Context) {
                     preferences[RAW_ENGINE] ?: RawEngine.NATIVE.name
                 ),
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
-                useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false
+                useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
+                backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg"
             )
         }
 
@@ -455,6 +458,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseLivePhoto(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_LIVE_PHOTO] = enabled
+        }
+    }
+
+    /**
+     * 保存背景图
+     */
+    suspend fun saveBackgroundImage(image: String) {
+        context.dataStore.edit { preferences ->
+            preferences[BACKGROUND_IMAGE] = image
         }
     }
 }
