@@ -1781,8 +1781,10 @@ class Camera2Controller(private val context: Context) {
             "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}"
         )
 
-        // 播放快门音效
-        onPlayShutterSound?.invoke()
+        if (!_state.value.useLivePhoto) {
+            // 播放快门音效
+            onPlayShutterSound?.invoke()
+        }
 
         _state.value = _state.value.copy(isCapturing = true)
 
