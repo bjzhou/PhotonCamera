@@ -1004,9 +1004,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lastVolumeKeyEventTime = currentTime
 
         return when (action) {
-            VolumeKeyAction.NONE -> false
             VolumeKeyAction.CAPTURE -> {
-                if (isUp) capture()
+                capture()
                 true
             }
 
