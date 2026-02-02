@@ -183,6 +183,8 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var previewHeight: Int = 1080
     private var sensorOrientation: Int = 0
     private var calibrationOffset: Int = 0
+    private var deviceRotation: Int = 0
+    private var lensFacing: Int = 1 // CameraCharacteristics.LENS_FACING_BACK
 
     // 回调
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
@@ -338,19 +340,33 @@ class LutRenderer : GLSurfaceView.Renderer {
             // 1. 渲染到 FBO (OES -> FBO, 应用 LUT)
             drawInternal(fboId, viewportWidth, viewportHeight)
 
-            // FBO 纹理已经是正向的，所以传给 Recorder 时使用 Identity 矩阵
-            val identity = FloatArray(16)
-            Matrix.setIdentityM(identity, 0)
-
             // 确保 FBO 内容已刷入显存 (对于多上下文共享纹理非常重要)
             GLES30.glFlush()
+
+            val applyRotation = getApplyRotation()
+            val isSwapped = applyRotation % 180 != 0
+            val targetWidth = if (isSwapped) viewportHeight else viewportWidth
+            val targetHeight = if (isSwapped) viewportWidth else viewportHeight
+
+            // 为 Live Photo 计算所需的旋转矩阵
+            // 因为输入是 GL_TEXTURE_2D 且已经通过 stMatrix 纠正过传感器方向，
+            // 只需要应用 deviceRotation 相关的增量旋转。
+            val rotationMatrix = FloatArray(16)
+            Matrix.setIdentityM(rotationMatrix, 0)
+            if (applyRotation != 0) {
+                // 旋转纹理坐标。在 OpenGL 中，顺时针旋转图像等同于逆时针旋转纹理坐标。
+                // 逆时针旋转在 Matrix.rotateM 中使用正角度。
+                Matrix.translateM(rotationMatrix, 0, 0.5f, 0.5f, 0f)
+                Matrix.rotateM(rotationMatrix, 0, applyRotation.toFloat(), 0f, 0f, 1f)
+                Matrix.translateM(rotationMatrix, 0, -0.5f, -0.5f, 0f)
+            }
 
             // 2. 为 Live Photo 提供预览帧 (使用 FBO 纹理, GL_TEXTURE_2D)
             recorder.onPreviewFrame(
                 textureId = fboTextureId,
-                transformMatrix = identity,
-                width = viewportWidth,
-                height = viewportHeight,
+                transformMatrix = rotationMatrix,
+                width = targetWidth,
+                height = targetHeight,
                 timestampNs = surfaceTexture?.timestamp ?: 0L,
                 lutConfig = currentLutConfig,
                 params = getCurrentRecipeParams(),
@@ -810,6 +826,56 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     /**
+     * 设置设备旋转方向 (0, 90, 180, 270)
+     */
+    fun setDeviceRotation(degrees: Int) {
+        if (deviceRotation != degrees) {
+            deviceRotation = degrees
+            updateMVPMatrix()
+            updateCaptureSize()
+        }
+    }
+
+    /**
+     * 设置镜头朝向
+     */
+    fun setLensFacing(facing: Int) {
+        if (lensFacing != facing) {
+            lensFacing = facing
+            updateMVPMatrix()
+            updateCaptureSize()
+        }
+    }
+
+    /**
+     * 计算相对于传感器的总旋转角度 (用于确定最终图片的宽高比)
+     * 参考 CameraViewModel.saveImage 的逻辑
+     */
+    private fun calculateTotalRotation(): Int {
+        val baseRotation = if (lensFacing == 0 /* CameraCharacteristics.LENS_FACING_FRONT */) {
+            (sensorOrientation - deviceRotation + 360) % 360
+        } else {
+            (sensorOrientation + deviceRotation) % 360
+        }
+        return (baseRotation + calibrationOffset) % 360
+    }
+
+    /**
+     * 计算相对于“竖屏正向”状态需要额外应用的旋转角度
+     * 因为 stMatrix 已经处理了 sensorOrientation，所以我们只需要根据设备旋转和校正量进行增量旋转
+     */
+    private fun getApplyRotation(): Int {
+        // 对于后置摄像头，设备旋转 90 (Landscape Left) 需要将画面顺时针旋转 90 度
+        // 对于前置摄像头，由于镜像关系，设备旋转 90 (Landscape Left) 需要将画面逆时针旋转 90 度 (即 CW 270)
+        val rotation = if (lensFacing == 0 /* FRONT */) {
+            (360 - deviceRotation) % 360
+        } else {
+            deviceRotation
+        }
+        return (rotation + calibrationOffset) % 360
+    }
+
+    /**
      * 更新 MVP 矩阵以实现 center crop 效果
      * 
      * 当预览尺寸与显示区域比例不匹配时，放大画面并裁切超出部分
@@ -865,7 +931,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     private fun updateCaptureSize() {
-        val isSwapped = (sensorOrientation + calibrationOffset) % 180 != 0
+        val totalRotation = calculateTotalRotation()
+        val isSwapped = totalRotation % 180 != 0
+        // 如果 sensorOrientation 是 90 (横置)，deviceRotation 为 0 (竖屏) 时总旋转通常是 90 (Swapped)
         val actualWidth = if (isSwapped) previewHeight else previewWidth
         val actualHeight = if (isSwapped) previewWidth else previewHeight
 
@@ -876,7 +944,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             captureHeight = maxCaptureSize
             captureWidth = (maxCaptureSize * actualWidth / actualHeight)
         }
-        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}")
+        PLog.d(TAG, "Update capture size: ${captureWidth}x${captureHeight}, totalRotation: $totalRotation")
     }
 
     /**
@@ -905,15 +973,16 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
             GLES30.glUseProgram(passthroughProgramId)
-            
-            // 使用 Identity 矩阵并应用校正旋转，但不进行 center crop 缩放，保持正常比例
+
+            // 使用最终输出旋转。由于这里是顶点变换（MVP），顺时针旋转图像使用负角度。
             val captureMvp = FloatArray(16)
             Matrix.setIdentityM(captureMvp, 0)
-            if (calibrationOffset != 0) {
-                Matrix.rotateM(captureMvp, 0, (-calibrationOffset).toFloat(), 0f, 0f, 1f)
+            val applyRotation = getApplyRotation()
+            if (applyRotation != 0) {
+                Matrix.rotateM(captureMvp, 0, (-applyRotation).toFloat(), 0f, 0f, 1f)
             }
             GLES30.glUniformMatrix4fv(uPassMVPMatrixLocation, 1, false, captureMvp, 0)
-            
+
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
             GLES30.glUniform1i(uPassCameraTextureLocation, 0)
@@ -925,7 +994,14 @@ class LutRenderer : GLSurfaceView.Renderer {
 
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
             GLES30.glEnableVertexAttribArray(aPassTexCoordLocation)
-            GLES30.glVertexAttribPointer(aPassTexCoordLocation, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+            GLES30.glVertexAttribPointer(
+                aPassTexCoordLocation,
+                TEXTURE_COORD_COMPONENT_COUNT,
+                GLES30.GL_FLOAT,
+                false,
+                0,
+                0
+            )
 
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
@@ -976,7 +1052,8 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
     }
 
-    private val meteringBuffer = ByteBuffer.allocateDirect(METERING_SIZE * METERING_SIZE * 4).order(ByteOrder.nativeOrder())
+    private val meteringBuffer =
+        ByteBuffer.allocateDirect(METERING_SIZE * METERING_SIZE * 4).order(ByteOrder.nativeOrder())
     private var lastRunMeteringTime = 0L
 
     private fun runMeteringInternal() {

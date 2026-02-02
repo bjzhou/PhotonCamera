@@ -20,6 +20,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
+import com.hinnka.mycamera.utils.OrientationObserver
 
 /**
  * 相机预览组件 - OpenGL ES 版本（Camera2 适配）
@@ -31,6 +32,7 @@ fun CameraPreviewGL(
     aspectRatio: AspectRatio,
     previewSize: Size,
     sensorOrientation: Int,
+    lensFacing: Int,
     calibrationOffset: Int,
     currentLut: LutConfig?,
     colorRecipeParams: ColorRecipeParams,
@@ -46,6 +48,7 @@ fun CameraPreviewGL(
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val rotationDegrees = OrientationObserver.rotationDegrees
     // 计算预览区域尺寸，保持目标比例
     BoxWithConstraints(
         modifier = modifier
@@ -127,6 +130,8 @@ fun CameraPreviewGL(
                     viewWidth = glSurfaceView.width
                     viewHeight = glSurfaceView.height
                     glSurfaceView.setSensorOrientation(sensorOrientation)
+                    glSurfaceView.setLensFacing(lensFacing)
+                    glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                     glSurfaceView.setCalibrationOffset(calibrationOffset)
 
                     // 如果尺寸有变化且 SurfaceTexture 已准备好，重新通知
@@ -164,7 +169,12 @@ fun CameraPreviewGL(
                         glSurfaceView.setColorRecipeEnabled(false)
                     }
 
-                    glSurfaceView.setFocusPoint(focusPoint?.let { android.graphics.PointF(it.first / viewWidth, it.second / viewHeight) })
+                    glSurfaceView.setFocusPoint(focusPoint?.let {
+                        android.graphics.PointF(
+                            it.first / viewWidth,
+                            it.second / viewHeight
+                        )
+                    })
                     glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                 },
                 modifier = Modifier.fillMaxSize()

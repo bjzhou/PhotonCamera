@@ -187,6 +187,7 @@ fun CameraScreen(
                         aspectRatio = state.aspectRatio,
                         previewSize = previewSize,
                         sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation ?: 0,
+                        lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                         calibrationOffset = calibrationOffset,
                         currentLut = viewModel.currentLutConfig,
                         colorRecipeParams = currentRecipeParams,

@@ -57,6 +57,7 @@ class LivePhotoRecorder(
 
     @Volatile
     private var videoFormat: MediaFormat? = null
+
     @Volatile
     private var audioFormat: MediaFormat? = null
 
@@ -77,6 +78,8 @@ class LivePhotoRecorder(
 
     private var lastFrameTimestampUs: Long = 0
     private var lastSharedContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var lastWidth: Int = 0
+    private var lastHeight: Int = 0
     private var pendingRelease = false
 
     /**
@@ -134,9 +137,13 @@ class LivePhotoRecorder(
 
         val matrix = transformMatrix.clone()
         scope.launch(renderDispatcher) {
-            // 如果上下文发生了变化（比如 App 重入），必须释放旧编码器并重新创建
-            if (videoEncoder != null && lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) {
-                PLog.w(TAG, "Shared EGL Context changed, forcing encoder re-init.")
+            // 如果上下文发生了变化（比如 App 重入）或者分辨率发生了变化（旋转），必须释放旧编码器并重新创建
+            if (videoEncoder != null && (
+                        (lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) ||
+                                (lastWidth != width || lastHeight != height)
+                        )
+            ) {
+                PLog.w(TAG, "Shared EGL Context or dimensions changed, forcing encoder re-init.")
                 internalRelease()
             }
 
@@ -144,9 +151,11 @@ class LivePhotoRecorder(
             if (videoEncoder == null && sharedContext != EGL14.EGL_NO_CONTEXT) {
                 initEncoder(width, height, lutConfig, params, sharedContext, sharedDisplay)
                 lastSharedContext = sharedContext
+                lastWidth = width
+                lastHeight = height
                 pendingRelease = false
             }
-            
+
             if (!isRunning) return@launch
 
             lutRenderer?.let { renderer ->
@@ -327,7 +336,7 @@ class LivePhotoRecorder(
 
                 // 中心时间点
                 val centerTs = imageTimestampUs ?: snapshotTimestampUs
-                
+
                 // 目标时间范围：[中心前 1.5s, 中心后 1.5s]
                 var startTimeUs = centerTs - bufferDurationMs * 1000
                 val endTimeUs = centerTs + postCaptureDurationMs * 1000
@@ -336,9 +345,12 @@ class LivePhotoRecorder(
                 // 则取缓冲区中最新的部分
                 val firstSampleTs = currentVideoSamples.first().info.presentationTimeUs
                 val lastSampleTs = currentVideoSamples.last().info.presentationTimeUs
-                
+
                 if (centerTs < firstSampleTs || centerTs > lastSampleTs) {
-                    PLog.w(TAG, "Center timestamp $centerTs out of buffer range [$firstSampleTs, $lastSampleTs]. Fallback to latest available.")
+                    PLog.w(
+                        TAG,
+                        "Center timestamp $centerTs out of buffer range [$firstSampleTs, $lastSampleTs]. Fallback to latest available."
+                    )
                     // 如果落后太多，取最后 3s
                     startTimeUs = lastSampleTs - (bufferDurationMs + postCaptureDurationMs) * 1000
                 }
@@ -349,8 +361,9 @@ class LivePhotoRecorder(
                 var startIndex = -1
                 for (i in currentVideoSamples.indices.reversed()) {
                     val sample = currentVideoSamples[i]
-                    if (sample.info.presentationTimeUs <= startTimeUs && 
-                        (sample.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
+                    if (sample.info.presentationTimeUs <= startTimeUs &&
+                        (sample.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                    ) {
                         startIndex = i
                         break
                     }
@@ -358,8 +371,8 @@ class LivePhotoRecorder(
 
                 // 如果没找到 startTimeUs 之前的关键帧，则寻找整个缓冲区中的第一个关键帧
                 if (startIndex == -1) {
-                    startIndex = currentVideoSamples.indexOfFirst { 
-                        (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 
+                    startIndex = currentVideoSamples.indexOfFirst {
+                        (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                     }
                 }
 
@@ -388,16 +401,22 @@ class LivePhotoRecorder(
                 val finalVideoEndTs = muxVideoSamples.last().info.presentationTimeUs
 
                 // 过滤出相同时间段的音频样本
-                val muxAudioSamples = currentAudioSamples.filter { 
+                val muxAudioSamples = currentAudioSamples.filter {
                     it.info.presentationTimeUs in finalVideoStartTs..finalVideoEndTs
                 }
 
                 if (muxAudioSamples.isEmpty() && !currentAudioSamples.isEmpty()) {
-                    PLog.w(TAG, "Audio samples exist but none match video range. Video: [$finalVideoStartTs, $finalVideoEndTs], Audio range: [${currentAudioSamples.first().info.presentationTimeUs}, ${currentAudioSamples.last().info.presentationTimeUs}]")
+                    PLog.w(
+                        TAG,
+                        "Audio samples exist but none match video range. Video: [$finalVideoStartTs, $finalVideoEndTs], Audio range: [${currentAudioSamples.first().info.presentationTimeUs}, ${currentAudioSamples.last().info.presentationTimeUs}]"
+                    )
                 }
 
                 PLog.d(TAG, "Selected ${muxVideoSamples.size} video, ${muxAudioSamples.size} audio samples")
-                PLog.d(TAG, "Selected range: [$finalVideoStartTs, $finalVideoEndTs], duration: ${(finalVideoEndTs-finalVideoStartTs)/1000}ms")
+                PLog.d(
+                    TAG,
+                    "Selected range: [$finalVideoStartTs, $finalVideoEndTs], duration: ${(finalVideoEndTs - finalVideoStartTs) / 1000}ms"
+                )
 
                 val videoFile = File(context.cacheDir, "livephoto_${System.currentTimeMillis()}.mp4")
 

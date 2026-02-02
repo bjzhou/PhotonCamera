@@ -98,6 +98,18 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setDeviceRotation(degrees: Int) {
+        queueEvent {
+            renderer.setDeviceRotation(degrees)
+        }
+    }
+
+    fun setLensFacing(facing: Int) {
+        queueEvent {
+            renderer.setLensFacing(facing)
+        }
+    }
+
     fun setFocusPoint(point: PointF?) {
         renderer.focusPoint = point
     }
