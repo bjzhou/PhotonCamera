@@ -29,7 +29,7 @@ object MotionPhotoWriter {
                 OppoLivePhotoCreator()
             manufacturer.contains("vivo") && context != null -> 
                 VivoLivePhotoCreator(context)
-            manufacturer.contains("huawei") || manufacturer.contains("honor") || manufacturer.contains("samsung") -> 
+            manufacturer.contains("huawei") || manufacturer.contains("honor") ->
                 LegacyLivePhotoCreator()
             else -> GoogleLivePhotoCreator()
         }
