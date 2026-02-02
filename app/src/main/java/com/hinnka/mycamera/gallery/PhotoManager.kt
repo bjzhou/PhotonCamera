@@ -383,6 +383,8 @@ object PhotoManager {
                                     )
                                 }
                             }
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Failed to savePhoto", e)
                         } finally {
                             onProcessingComplete?.invoke()
                         }
@@ -477,6 +479,8 @@ object PhotoManager {
                                     photoQuality
                                 )
                             }
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Failed to savePhoto", e)
                         } finally {
                             onProcessingComplete?.invoke()
                         }
@@ -617,6 +621,8 @@ object PhotoManager {
                                     photoQuality
                                 )
                             }
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Failed to savePhoto", e)
                         } finally {
                             onProcessingComplete?.invoke()
                         }
@@ -729,6 +735,8 @@ object PhotoManager {
                                     photoQuality
                                 )
                             }
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Failed to savePhoto", e)
                         } finally {
                             onProcessingComplete?.invoke()
                         }
