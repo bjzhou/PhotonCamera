@@ -6,9 +6,23 @@
 #include <vector>
 
 // Represents a 2D point or offset
+// Represents a 2D point or offset
 struct Point {
   float x;
   float y;
+};
+
+// Represents a grayscale image buffer for processing
+struct GrayImage {
+  std::vector<uint8_t> data;
+  int width;
+  int height;
+};
+
+struct StagedYuvFrame {
+  std::vector<uint16_t> y, u, v;
+  GrayImage y8;
+  int format;
 };
 
 // Represents a 2D vector field for tile-based alignment
@@ -57,11 +71,7 @@ struct TileAlignment {
 };
 
 // Represents a grayscale image buffer for processing
-struct GrayImage {
-  std::vector<uint8_t> data;
-  int width;
-  int height;
-};
+// (Already moved above Point)
 
 // Build a Gaussian pyramid (downsampled images)
 std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
@@ -82,6 +92,13 @@ public:
                 const uint8_t *vData, int yRowStride, int uvRowStride,
                 int uvPixelStride, int format);
 
+  // New methods for faster image closing
+  void stageFrame(const uint8_t *yData, const uint8_t *uData,
+                  const uint8_t *vData, int yRowStride, int uvRowStride,
+                  int uvPixelStride, int format);
+  void processFrame(int index);
+  void clearStagedFrames() { stagedFrames.clear(); }
+
   // Write the result to an ARGB8888 bitmap buffer with rotation and cropping
   void writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
                    int rotation, int targetWR, int targetHR,
@@ -97,6 +114,9 @@ private:
   int scale; // Scaling factor (1 for normal, 2 for Super Res)
   bool isFirstFrame;
   int frameCount = 0;
+
+  // Staged frame data (for fast closing of image)
+  std::vector<StagedYuvFrame> stagedFrames;
 
   // Reference frame data for de-ghosting and alignment
   // Reference is always kept at original resolution (scale=1)
@@ -117,6 +137,12 @@ private:
   std::vector<int32_t> weightV;
 };
 
+struct StagedRawFrame {
+  std::vector<uint16_t> planes[4];
+  GrayImage proxy;
+  int cfaPattern;
+};
+
 class RawStacker {
 public:
   RawStacker(int width, int height, bool enableSuperRes = false);
@@ -126,6 +152,11 @@ public:
   // rawData: 16-bit single channel Bayer data
   // cfaPattern: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
   void addFrame(const uint16_t *rawData, int rowStride, int cfaPattern);
+
+  // New methods for faster image closing
+  void stageFrame(const uint16_t *rawData, int rowStride, int cfaPattern);
+  void processFrame(int index);
+  void clearStagedFrames() { stagedFrames.clear(); }
 
   // Process and return the stacked raw image
   // Returns a vector containing the stacked 16-bit Bayer data
@@ -140,6 +171,9 @@ private:
   bool isFirstFrame;
   int frameCount = 0;
   float byteScale = 1.0f;
+
+  // Staged data
+  std::vector<StagedRawFrame> stagedFrames;
 
   // Reference pyramid for alignment (built from a downscaled grayscale version
   // of the raw data)

@@ -445,65 +445,88 @@ inline int calculateWeight(int diff, float variance) {
 void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
                             const uint8_t *vData, int yRowStride,
                             int uvRowStride, int uvPixelStride, int format) {
+  stageFrame(yData, uData, vData, yRowStride, uvRowStride, uvPixelStride,
+             format);
+  processFrame((int)stagedFrames.size() - 1);
+}
+
+void ImageStacker::stageFrame(const uint8_t *yData, const uint8_t *uData,
+                              const uint8_t *vData, int yRowStride,
+                              int uvRowStride, int uvPixelStride, int format) {
   frameCount++;
 
   if (!yData || !uData || !vData) {
-    LOGE("ImageStacker::addFrame: Received NULL buffer(s)");
+    LOGE("ImageStacker::stageFrame: Received NULL buffer(s)");
     return;
   }
+
+  StagedYuvFrame frame;
+  frame.format = format;
 
   bool isP010 = (format == 0x36);
   int yPixelStride = isP010 ? 2 : 1;
 
   // Convert current frame to internal 16-bit and 8-bit for alignment
-  std::vector<uint16_t> currentY(width * height);
-  GrayImage image8bit;
-  image8bit.width = width;
-  image8bit.height = height;
-  image8bit.data.resize(width * height);
+  frame.y.resize(width * height);
+  frame.y8.width = width;
+  frame.y8.height = height;
+  frame.y8.data.resize(width * height);
 
 #pragma omp parallel for num_threads(4)
   for (int r = 0; r < height; ++r) {
+    const uint8_t *yRowPtr = yData + r * yRowStride;
     for (int c = 0; c < width; ++c) {
-
       uint16_t val;
       if (isP010) {
-        val = readValue<uint16_t>(yData + r * yRowStride + c * yPixelStride,
-                                  false);
+        val = readValue<uint16_t>(yRowPtr + c * yPixelStride, false);
       } else {
-        val = static_cast<uint16_t>(yData[r * yRowStride + c]) << 8;
+        val = static_cast<uint16_t>(yRowPtr[c]) << 8;
       }
-      currentY[r * width + c] = val;
-      image8bit.data[r * width + c] = static_cast<uint8_t>(val >> 8);
+      frame.y[r * width + c] = val;
+      frame.y8.data[r * width + c] = static_cast<uint8_t>(val >> 8);
     }
   }
 
-  if (isFirstFrame) {
-    referenceY = currentY;
-    // Store U, V for reference as well
-    int uvRefWidth = width / 2;
-    int uvRefHeight = height / 2;
+  // Convert UV frames to internal 16-bit
+  int uvW = width / 2;
+  int uvH = height / 2;
+  frame.u.resize(uvW * uvH);
+  frame.v.resize(uvW * uvH);
 
-    // Store reference UV same as before
-    for (int r = 0; r < uvRefHeight; ++r) {
-      for (int c = 0; c < uvRefWidth; ++c) {
-        if (isP010) {
-          referenceU[r * uvRefWidth + c] = readValue<uint16_t>(
-              uData + r * uvRowStride + c * uvPixelStride, false);
-          referenceV[r * uvRefWidth + c] = readValue<uint16_t>(
-              vData + r * uvRowStride + c * uvPixelStride, false);
-        } else {
-          referenceU[r * uvRefWidth + c] =
-              static_cast<uint16_t>(uData[r * uvRowStride + c * uvPixelStride])
-              << 8;
-          referenceV[r * uvRefWidth + c] =
-              static_cast<uint16_t>(vData[r * uvRowStride + c * uvPixelStride])
-              << 8;
-        }
+#pragma omp parallel for num_threads(4)
+  for (int r = 0; r < uvH; ++r) {
+    const uint8_t *uRowPtr = uData + r * uvRowStride;
+    const uint8_t *vRowPtr = vData + r * uvRowStride;
+    for (int c = 0; c < uvW; ++c) {
+      uint16_t uVal, vVal;
+      if (isP010) {
+        uVal = readValue<uint16_t>(uRowPtr + c * uvPixelStride, false);
+        vVal = readValue<uint16_t>(vRowPtr + c * uvPixelStride, false);
+      } else {
+        uVal = static_cast<uint16_t>(uRowPtr[c * uvPixelStride]) << 8;
+        vVal = static_cast<uint16_t>(vRowPtr[c * uvPixelStride]) << 8;
       }
+      frame.u[r * uvW + c] = uVal;
+      frame.v[r * uvW + c] = vVal;
     }
+  }
+  stagedFrames.push_back(std::move(frame));
+}
 
-    referencePyramid = buildPyramid(image8bit.data.data(), width, height, 4);
+void ImageStacker::processFrame(int index) {
+  if (index < 0 || index >= (int)stagedFrames.size()) {
+    LOGE("ImageStacker::processFrame: Invalid index %d", index);
+    return;
+  }
+  const auto &staged = stagedFrames[index];
+  bool isP010 = (staged.format == 0x36);
+
+  if (isFirstFrame) {
+    referenceY = staged.y;
+    referenceU = staged.u;
+    referenceV = staged.v;
+
+    referencePyramid = buildPyramid(staged.y8.data.data(), width, height, 4);
 
     // Initialize accumulators by upscaling the first frame
     int scaledW = width * scale;
@@ -512,14 +535,13 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 #pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledH; ++y) {
       for (int x = 0; x < scaledW; ++x) {
-
         // Map scaled coordinates back to input coordinates
         float srcX = (float)x / scale;
         float srcY = (float)y / scale;
 
         // Initial frame: strict bicubic upscale
         uint16_t val =
-            (uint16_t)sampleBicubic(currentY, width, height, srcX, srcY);
+            (uint16_t)sampleBicubic(staged.y, width, height, srcX, srcY);
         accumY[y * scaledW + x] = (int32_t)val * 256;
         weightY[y * scaledW + x] = 256;
       }
@@ -528,24 +550,18 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
     // UV
     int scaledUVWidth = scaledW / 2;
     int scaledUVHeight = scaledH / 2;
+    int uvRefWidth = width / 2;
+    int uvRefHeight = height / 2;
 
 #pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledUVHeight; ++y) {
       for (int x = 0; x < scaledUVWidth; ++x) {
-
-        // Need to sample original UV.
-        // Original UV size is (width/2) x (height/2).
-        // Current scaled UV index (x, y) corresponds to (x/scale, y/scale) in
-        // original UV grid.
         float srcX = (float)x / scale;
         float srcY = (float)y / scale;
 
-        // We need a helper to sample UV from raw pointer again, or use
-        // referenceU/V since it's first frame Actually, referenceU/V are
-        // already populated above. using basic bilinear/bicubic on them.
-        uint16_t uVal = (uint16_t)sampleBicubic(referenceU, uvRefWidth,
+        uint16_t uVal = (uint16_t)sampleBicubic(staged.u, uvRefWidth,
                                                 uvRefHeight, srcX, srcY);
-        uint16_t vVal = (uint16_t)sampleBicubic(referenceV, uvRefWidth,
+        uint16_t vVal = (uint16_t)sampleBicubic(staged.v, uvRefWidth,
                                                 uvRefHeight, srcX, srcY);
 
         accumU[y * scaledUVWidth + x] = (int32_t)uVal * 256;
@@ -562,7 +578,7 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 
   // Align current frame against reference (Always at 1x scale)
   std::vector<GrayImage> currentPyramid =
-      buildPyramid(image8bit.data.data(), width, height, 4);
+      buildPyramid(staged.y8.data.data(), width, height, 4);
   TileAlignment alignment =
       computeTileAlignment(referencePyramid, currentPyramid, 64);
 
@@ -574,33 +590,19 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < scaledH; ++y) {
     for (int x = 0; x < scaledW; ++x) {
-
-      // 1. Map output pixel to input reference space
-      //    (x, y) in scaled grid -> (x/s, y/s) in 1x reference grid
       float refX = (float)x / scale;
       float refY = (float)y / scale;
 
-      // 2. Get alignment offset at this location (from 1x grid)
       Point offset = alignment.getOffset((int)refX, (int)refY);
-
-      // 3. Apply offset to find sampling point in CURRENT frame
       float tx = refX + offset.x;
       float ty = refY + offset.y;
 
       int destIdx = y * scaledW + x;
 
       if (tx >= 0 && tx < (float)width && ty >= 0 && ty < (float)height) {
-        // Sample from current frame (1x) at aligned position
         uint16_t targetVal =
-            (uint16_t)sampleBicubic(currentY, width, height, tx, ty);
-
-        // Look up accumulated value for comparison (De-ghosting)
-        // We compare against the current accumulated average
+            (uint16_t)sampleBicubic(staged.y, width, height, tx, ty);
         uint16_t refVal = (uint16_t)(accumY[destIdx] / weightY[destIdx]);
-
-        // Compute local variance on REFERENCE frame (1x)
-        // We use nearest neighbor or bilinear mapping to finding variance at
-        // refX, refY
         float variance = computeLocalVariance(referenceY, width, height,
                                               (int)refX, (int)refY);
 
@@ -610,13 +612,6 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
         accumY[destIdx] += (int32_t)targetVal * weight;
         weightY[destIdx] += weight;
 
-        // Progressive reference update (recursive filter)
-        // Update 1x reference mainly using values that map to integer
-        // coordinates? Or just don't update reference for now in SuperRes mode
-        // to simplify. Actually, updating reference is good for long bursts.
-        // But referenceY is 1x. We only have 2x data here.
-        // Simple strategy: Update reference only if we are at a "center" pixel
-        // (modulo scale == 0)
         if (x % scale == 0 && y % scale == 0 && weight > 128) {
           int refIdx = (y / scale) * width + (x / scale);
           referenceY[refIdx] =
@@ -645,61 +640,27 @@ void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < scaledUVHeight; ++y) {
     for (int x = 0; x < scaledUVWidth; ++x) {
-
-      // Map to 1x UV grid
       float refUVX = (float)x / scale;
       float refUVY = (float)y / scale;
 
-      // Get offset. Note: alignment offset matches Y plane (full res 1x).
-      // UV is half res 1x. So need to scale coordinates to Y plane for offset
-      // lookup. Y-coord = refUVX * 2.
       Point offset = alignment.getOffset(refUVX * 2, refUVY * 2);
-
-      // Target in current frame UV
       float tx = refUVX + offset.x / 2.0f;
       float ty = refUVY + offset.y / 2.0f;
 
       int destIdx = y * scaledUVWidth + x;
-      if (tx >= 0 && tx < (float)uvRefWidth && ty >= 0 &&
-          ty < (float)uvRefHeight) {
-
-        auto sampleRawUV = [&](const uint8_t *data, float sx, float sy) {
-          int x0 = (int)std::floor(sx);
-          int y0 = (int)std::floor(sy);
-          int x1 = std::min(x0 + 1, uvRefWidth - 1);
-          int y1 = std::min(y0 + 1, uvRefHeight - 1);
-          float dx = sx - (float)x0;
-          float dy = sy - (float)y0;
-
-          auto getRawVal = [&](int ix, int iy) {
-            if (isP010) {
-              return (float)readValue<uint16_t>(
-                  data + iy * uvRowStride + ix * uvPixelStride, false);
-            } else {
-              return (float)data[iy * uvRowStride + ix * uvPixelStride] *
-                     256.0f;
-            }
-          };
-
-          float v00 = getRawVal(x0, y0);
-          float v10 = getRawVal(x1, y0);
-          float v01 = getRawVal(x0, y1);
-          float v11 = getRawVal(x1, y1);
-          return (1.0f - dx) * (1.0f - dy) * v00 + dx * (1.0f - dy) * v10 +
-                 (1.0f - dx) * dy * v01 + dx * dy * v11;
-        };
-
-        uint16_t targetU = (uint16_t)sampleRawUV(uData, tx, ty);
-        uint16_t targetV = (uint16_t)sampleRawUV(vData, tx, ty);
-
+      if (tx >= 2.0f && tx < (float)uvRefWidth - 3.0f && ty >= 2.0f &&
+          ty < (float)uvRefHeight - 3.0f) {
+        // Use Bicubic for UV as well since we now have Dense 16-bit staging
+        uint16_t targetU =
+            (uint16_t)sampleBicubic(staged.u, uvRefWidth, uvRefHeight, tx, ty);
+        uint16_t targetV =
+            (uint16_t)sampleBicubic(staged.v, uvRefWidth, uvRefHeight, tx, ty);
         uint16_t refU = (uint16_t)(accumU[destIdx] / weightU[destIdx]);
         uint16_t refV = (uint16_t)(accumV[destIdx] / weightV[destIdx]);
 
         int diffU = std::abs((int)targetU - (int)refU);
         int diffV = std::abs((int)targetV - (int)refV);
-
-        int weight = calculateWeight(std::max(diffU, diffV),
-                                     40000.0f); // Higher base for UV
+        int weight = calculateWeight(std::max(diffU, diffV), 40000.0f);
 
         accumU[destIdx] += (int32_t)targetU * weight;
         weightU[destIdx] += weight;
@@ -938,55 +899,36 @@ void smoothImage(GrayImage &img) {
 
 void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
                           int cfaPattern) {
+  stageFrame(rawData, rowStride, cfaPattern);
+  processFrame((int)stagedFrames.size() - 1);
+}
+
+void RawStacker::stageFrame(const uint16_t *rawData, int rowStride,
+                            int cfaPattern) {
   frameCount++;
   const uint8_t *rawBytes = (const uint8_t *)rawData;
 
-  // 1. 自动曝光计算
-  // (每帧独立计算或只算第一帧，这里为了安全每帧检查，第一帧锁定)
   if (isFirstFrame) {
     byteScale = computeRawScaleSafe(rawBytes, width, height, rowStride);
-    // 限制缩放倍数，防止纯黑图片导致数值爆炸
     if (byteScale > 100.0f)
       byteScale = 100.0f;
     LOGD("RawStacker: Scale factor: %f", byteScale);
   }
 
-  // 2. 准备 Proxy 和 Planes
+  StagedRawFrame frame;
+  frame.cfaPattern = cfaPattern;
+
   int proxyW = width / 2;
   int proxyH = height / 2;
-  GrayImage proxy;
-  proxy.width = proxyW;
-  proxy.height = proxyH;
-  proxy.data.resize(proxyW * proxyH);
+  frame.proxy.width = proxyW;
+  frame.proxy.height = proxyH;
+  frame.proxy.data.resize(proxyW * proxyH);
 
-  // 初始化 Planes
-  std::vector<uint16_t> planes[4];
   for (int i = 0; i < 4; ++i)
-    planes[i].resize(proxyW * proxyH);
+    frame.planes[i].resize(proxyW * proxyH);
 
-  // CFA 偏移量逻辑 (保持之前的修正)
-  int g1_dx = 0, g1_dy = 0;
-  int g2_dx = 0, g2_dy = 0;
-
-  // RGGB(0), BGGR(3) -> G at (1,0), (0,1) relative to 2x2 block
-  // GRBG(1), GBRG(2) -> G at (0,0), (1,1) relative to 2x2 block
-  if (cfaPattern == 1 || cfaPattern == 2) {
-    g1_dx = 0;
-    g1_dy = 0;
-    g2_dx = 1;
-    g2_dy = 1;
-  } else {
-    g1_dx = 1;
-    g1_dy = 0;
-    g2_dx = 0;
-    g2_dy = 1;
-  }
-
-  // 3. 提取数据 (使用 Byte Stride 指针运算)
 #pragma omp parallel for num_threads(4)
   for (int y = 0; y < proxyH; ++y) {
-
-    // 预先计算当前行的指针，减少循环内乘法
     const uint8_t *row0 = rawBytes + (y * 2) * rowStride;
     const uint8_t *row1 = rawBytes + (y * 2 + 1) * rowStride;
     const uint16_t *pRow0 = (const uint16_t *)row0;
@@ -994,65 +936,67 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
 
     for (int x = 0; x < proxyW; ++x) {
       int ox = x * 2;
-
-      // 读取 2x2 块
       uint16_t p00 = pRow0[ox];
       uint16_t p10 = pRow0[ox + 1];
       uint16_t p01 = pRow1[ox];
       uint16_t p11 = pRow1[ox + 1];
 
-      // 提取绿色通道用于 Proxy
-      // 根据 CFA 模式选择哪两个像素是绿色
       uint16_t g1, g2;
-
-      // 简化逻辑：利用预读的像素值，避免重复指针计算
       if (cfaPattern == 1 || cfaPattern == 2) {
-        // G at (0,0) and (1,1)
         g1 = p00;
         g2 = p11;
       } else {
-        // G at (1,0) and (0,1)
         g1 = p10;
         g2 = p01;
       }
 
-      // 生成对齐用 Proxy 像素 (均值 + 缩放)
       float avgG = (float)(g1 + g2) * 0.5f;
-      proxy.data[y * proxyW + x] =
+      frame.proxy.data[y * proxyW + x] =
           (uint8_t)std::max(0.0f, std::min(255.0f, avgG * byteScale));
 
-      // 分发到 Planes
-      planes[getPlaneIndex(ox, 0, cfaPattern)][y * proxyW + x] = p00;
-      planes[getPlaneIndex(ox + 1, 0, cfaPattern)][y * proxyW + x] = p10;
-      planes[getPlaneIndex(ox, 1, cfaPattern)][y * proxyW + x] = p01;
-      planes[getPlaneIndex(ox + 1, 1, cfaPattern)][y * proxyW + x] = p11;
+      frame.planes[getPlaneIndex(ox, 0, cfaPattern)][y * proxyW + x] = p00;
+      frame.planes[getPlaneIndex(ox + 1, 0, cfaPattern)][y * proxyW + x] = p10;
+      frame.planes[getPlaneIndex(ox, 1, cfaPattern)][y * proxyW + x] = p01;
+      frame.planes[getPlaneIndex(ox + 1, 1, cfaPattern)][y * proxyW + x] = p11;
     }
   }
 
-  // --- 关键修正 2: Proxy 降噪 ---
-  // RAW 的单像素噪声极强，会导致 SAD 误判。对齐前进行轻微模糊是必须的。
   if (!isFirstFrame) {
-    smoothImage(proxy);
+    smoothImage(frame.proxy);
+  } else {
+    smoothImage(frame.proxy);
   }
+  stagedFrames.push_back(std::move(frame));
+}
+
+void RawStacker::processFrame(int index) {
+  if (index < 0 || index >= (int)stagedFrames.size()) {
+    LOGE("RawStacker::processFrame: Invalid index %d", index);
+    return;
+  }
+  const auto &staged = stagedFrames[index];
+
+  int proxyW = width / 2;
+  int proxyH = height / 2;
+
   if (isFirstFrame) {
-    mCfaPattern = cfaPattern;
-    // 第一帧也要平滑，作为干净的参考基准
-    smoothImage(proxy);
-    referencePyramid = buildPyramid(proxy.data.data(), proxyW, proxyH, 4);
+    mCfaPattern = staged.cfaPattern;
+    referencePyramid =
+        buildPyramid(staged.proxy.data.data(), proxyW, proxyH, 4);
 
     int scaledW = proxyW * scale;
     int scaledH = proxyH * scale;
 
     for (int i = 0; i < 4; ++i) {
-      referencePlanes[i] = planes[i];
+      referencePlanes[i] = staged.planes[i];
 #pragma omp parallel for collapse(2) num_threads(4)
       for (int sy = 0; sy < scaledH; sy++) {
         for (int sx = 0; sx < scaledW; sx++) {
-
           float refX = (float)sx / scale;
           float refY = (float)sy / scale;
 
-          float val = sampleBicubicPlane(planes[i], proxyW, proxyH, refX, refY);
+          float val =
+              sampleBicubicPlane(staged.planes[i], proxyW, proxyH, refX, refY);
           int destIdx = sy * scaledW + sx;
           accum[i][destIdx] = (int32_t)val * 256;
           weight[i][destIdx] = 256;
@@ -1063,25 +1007,20 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
     return;
   }
 
-  // 4. 对齐 (Alignment)
   std::vector<GrayImage> currentPyramid =
-      buildPyramid(proxy.data.data(), proxyW, proxyH, 4);
-
-  // 搜索范围：48 (对应 RAW 像素 96)
+      buildPyramid(staged.proxy.data.data(), proxyW, proxyH, 4);
   TileAlignment alignment =
       computeTileAlignment(referencePyramid, currentPyramid, 48);
 
-  // 5. 堆栈融合 (Accumulate)
   int scaledW = proxyW * scale;
   int scaledH = proxyH * scale;
 
   for (int i = 0; i < 4; ++i) {
-    const auto &srcPlane = planes[i];
+    const auto &srcPlane = staged.planes[i];
 
 #pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledH; ++y) {
       for (int x = 0; x < scaledW; ++x) {
-
         float refX = (float)x / scale;
         float refY = (float)y / scale;
 
@@ -1091,27 +1030,17 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
 
         int destIdx = y * scaledW + x;
 
-        // 边界保护
         if (tx >= 2.0f && tx < (float)proxyW - 3.0f && ty >= 2.0f &&
             ty < (float)proxyH - 3.0f) {
-
-          // --- 核心升级 1: 调用 Bicubic 采样 ---
           float val = sampleBicubicPlane(srcPlane, proxyW, proxyH, tx, ty);
           int32_t sampleVal = (int32_t)val;
-
-          // De-ghosting with adaptive threshold based on variance
           int32_t currentAvg = accum[i][destIdx] / weight[i][destIdx];
           int diff = std::abs(sampleVal - currentAvg);
 
-          // Compute local variance on reference plane to detect high frequency
-          // regions
           float variance = computeLocalVariance(referencePlanes[i], proxyW,
                                                 proxyH, (int)refX, (int)refY);
-
           float noiseModel = 32.0f + std::sqrt((float)currentAvg) * 2.5f;
           float thresholdLow = noiseModel * 1.5f;
-
-          // Relax thresholdHigh in high variance areas to preserve details
           float factorHigh = 4.0f + std::min(8.0f, variance / 5000.0f);
           float thresholdHigh = noiseModel * factorHigh;
 
@@ -1121,8 +1050,7 @@ void RawStacker::addFrame(const uint16_t *rawData, int rowStride,
           } else if (diff > thresholdLow) {
             float t =
                 ((float)diff - thresholdLow) / (thresholdHigh - thresholdLow);
-            float factor =
-                1.0f - (t * t * (3.0f - 2.0f * t)); // smoothstep flip
+            float factor = 1.0f - (t * t * (3.0f - 2.0f * t));
             w = (int)(256.0f * factor);
           }
 

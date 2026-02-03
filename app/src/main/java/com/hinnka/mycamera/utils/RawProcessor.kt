@@ -9,6 +9,7 @@ import android.media.Image
 import android.util.Log
 import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import java.io.File
 import java.io.FileInputStream
@@ -29,7 +30,7 @@ object RawProcessor {
     /**
      * 检查图像是否为 RAW 格式
      */
-    fun isRawImage(image: Image): Boolean {
+    fun isRawImage(image: SafeImage): Boolean {
         return image.format == ImageFormat.RAW_SENSOR ||
                 image.format == ImageFormat.RAW_PRIVATE ||
                 image.format == ImageFormat.RAW10 ||
@@ -120,7 +121,7 @@ object RawProcessor {
      * @param rotation 旋转角度 (0, 90, 180, 270)
      */
     fun saveToDng(
-        image: Image,
+        image: SafeImage,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
         outputStream: java.io.OutputStream,
@@ -139,7 +140,7 @@ object RawProcessor {
                 else -> ExifInterface.ORIENTATION_NORMAL
             }
             dngCreator.setOrientation(orientation)
-            dngCreator.writeImage(outputStream, image)
+            dngCreator.writeImage(outputStream, image.image)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save DNG", e)
         } finally {

@@ -66,6 +66,39 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToStackNative(
 }
 
 JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_stageFrameNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject yBuffer,
+    jobject uBuffer, jobject vBuffer, jint yRowStride, jint uvRowStride,
+    jint uvPixelStride, jint format) {
+  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
+  if (!stacker)
+    return;
+  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
+  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
+  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
+  if (yData && uData && vData) {
+    stacker->stageFrame(yData, uData, vData, yRowStride, uvRowStride,
+                        uvPixelStride, format);
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_processFrameNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jint index) {
+  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
+  if (stacker)
+    stacker->processFrame(index);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_clearStagedFramesNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
+  if (stacker)
+    stacker->clearStagedFrames();
+}
+
+JNIEXPORT void JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_processStackNative(
     JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
     jint rotation, jint targetWR, jint targetHR, jstring outputPath) {
@@ -140,6 +173,35 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToRawStackNative(
   } else {
     LOGE("addToRawStackNative: Failed to get buffer address");
   }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_stageRawFrameNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject rawData,
+    jint rowStride, jint cfaPattern) {
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  if (!stacker)
+    return;
+  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
+  if (data) {
+    stacker->stageFrame(data, rowStride, cfaPattern);
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawFrameNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jint index) {
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  if (stacker)
+    stacker->processFrame(index);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_clearStagedRawFramesNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
+  if (stacker)
+    stacker->clearStagedFrames();
 }
 
 JNIEXPORT void JNICALL

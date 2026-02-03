@@ -6,17 +6,18 @@ import android.content.Context
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
-import android.media.Image
 import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
+import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -30,6 +31,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.use
 
 /**
  * 照片管理器
@@ -274,6 +276,211 @@ object PhotoManager {
             }
         }
 
+    suspend fun preparePhoto(
+        context: Context,
+        metadata: PhotoMetadata,
+        captureResult: CaptureResult?,
+        thumbnail: Bitmap?,
+        useLivePhoto: Boolean,
+        useSuperResolution: Boolean
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val photoId = UUID.randomUUID().toString()
+            val photoDir = getPhotoDir(context, photoId)
+            val photoFile = File(photoDir, PHOTO_FILE)
+            val videoFile = File(photoDir, VIDEO_FILE)
+            val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+            val metadataFile = File(photoDir, METADATA_FILE)
+
+            var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
+            if (useSuperResolution && cropRegion != null) {
+                cropRegion =
+                    Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
+            }
+
+            val dimensions =
+                BitmapUtils.calculateProcessedRect(metadata.width, metadata.height, metadata.ratio, cropRegion, metadata.rotation)
+            val finalWidth = dimensions.width()
+            val finalHeight = dimensions.height()
+            // 保存元数据
+            val metadataWithInfo = metadata.copy(
+                width = finalWidth,
+                height = finalHeight,
+                cropRegion = cropRegion,
+            )
+            metadataFile.writeText(metadataWithInfo.toJson())
+
+            if (thumbnail != null && !thumbnail.isRecycled) {
+                generateThumbnail(thumbnail, thumbnailFile)
+            } else {
+                PLog.d(TAG, "Thumbnail unavailable: $thumbnail")
+            }
+            photoFile.createNewFile()
+            if (useLivePhoto) {
+                videoFile.createNewFile()
+            }
+            photoId
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to prepare photo", e)
+            null
+        }
+    }
+
+    suspend fun saveVideo(context: Context, photoId: String, livePhotoVideoDeferred: Deferred<Pair<File, Long>?>? = null) {
+        val photoDir = getPhotoDir(context, photoId)
+        val videoFile = File(photoDir, VIDEO_FILE)
+        val livePhotoResult = livePhotoVideoDeferred?.await()
+        livePhotoResult?.first?.let { cacheVideoFile ->
+            if (cacheVideoFile.exists()) {
+                try {
+                    cacheVideoFile.copyTo(videoFile, overwrite = true)
+                    cacheVideoFile.delete()
+
+                    // 更新元数据以包含时间戳
+                    val currentMeta = loadMetadata(context, photoId) ?: return
+                    saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to move video file", e)
+                }
+                PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
+            }
+        }
+    }
+
+    suspend fun saveYuvPhoto(
+        context: Context,
+        photoId: String,
+        image: SafeImage,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val photoDir = getPhotoDir(context, photoId)
+
+            // 预先准备所有文件路径
+            val photoFile = File(photoDir, PHOTO_FILE)
+            val tempFile = File(photoDir, "temp.jpg")
+            val yuvFile = File(photoDir, YUV_FILE)
+
+            val metadata = loadMetadata(context, photoId) ?: return@withContext
+
+            // 创建预览用的 Bitmap
+            val previewBitmap = createBitmap(metadata.width, metadata.height)
+
+            PLog.d(TAG, "saveYuvPhoto: ${metadata.width} ${metadata.height}")
+
+            // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
+            val success = image.use {
+                YuvProcessor.processAndSave(
+                    image, aspectRatio, rotation,
+                    yuvFile.absolutePath, previewBitmap
+                )
+            }
+            if (success) {
+                FileOutputStream(tempFile).use { outputStream ->
+                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                }
+                tempFile.renameTo(photoFile)
+                if (shouldAutoSave) {
+                    exportPhoto(
+                        context,
+                        photoId,
+                        photoProcessor,
+                        metadata,
+                        sharpeningValue,
+                        noiseReductionValue,
+                        chromaNoiseReductionValue,
+                        photoQuality
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to savePhoto", e)
+        }
+    }
+
+    suspend fun saveRawPhoto(
+        context: Context,
+        photoId: String,
+        image: SafeImage,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult?,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val photoDir = getPhotoDir(context, photoId)
+
+            // 预先准备所有文件路径
+            val photoFile = File(photoDir, PHOTO_FILE)
+            val tempFile = File(photoDir, "temp.jpg")
+            val dngFile = File(photoDir, DNG_FILE)
+
+            val metadata = loadMetadata(context, photoId) ?: return@withContext
+
+            captureResult ?: return@withContext
+            val dngDataBytes = ByteArrayOutputStream().use { dngData ->
+                image.use {
+                    RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
+                }
+                dngData.toByteArray()
+            }
+            FileOutputStream(dngFile).use { outputStream ->
+                outputStream.write(dngDataBytes)
+            }
+            val bitmap = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
+                RawDemosaicProcessor.getInstance().process(
+                    dngFile.absolutePath,
+                    aspectRatio,
+                    metadata.cropRegion,
+                    rotation
+                )
+            } else {
+                RawProcessor.processAndToBitmap(
+                    dngDataBytes,
+                    aspectRatio,
+                    metadata.cropRegion,
+                    rotation
+                )
+            } ?: return@withContext
+            FileOutputStream(tempFile).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+            }
+            tempFile.renameTo(photoFile)
+            bitmap.recycle()
+            if (shouldAutoSave) {
+                exportDng(
+                    context,
+                    dngDataBytes,
+                    metadata,
+                )
+                exportPhoto(
+                    context,
+                    photoId,
+                    photoProcessor,
+                    metadata,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality
+                )
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to savePhoto", e)
+        }
+    }
 
     /**
      * 保存新拍摄的照片
@@ -284,9 +491,8 @@ object PhotoManager {
      */
     suspend fun savePhoto(
         context: Context,
-        image: Image,
-        thumbnail: Bitmap?,
-        metadata: PhotoMetadata,
+        photoId: String,
+        image: SafeImage,
         rotation: Int,
         aspectRatio: AspectRatio,
         characteristics: CameraCharacteristics,
@@ -296,225 +502,107 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95
+    ) {
+        // 根据图像格式处理
+        when (val format = image.format) {
+            ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                saveYuvPhoto(
+                    context,
+                    photoId,
+                    image,
+                    rotation,
+                    aspectRatio,
+                    shouldAutoSave,
+                    photoProcessor,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality
+                )
+            }
+
+            ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                saveRawPhoto(
+                    context,
+                    photoId,
+                    image,
+                    rotation,
+                    aspectRatio,
+                    characteristics,
+                    captureResult,
+                    shouldAutoSave,
+                    photoProcessor,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality
+                )
+            }
+            else -> {
+                PLog.e(TAG, "Unsupported image format: $format")
+            }
+        }
+    }
+
+    suspend fun saveYuvStackedPhoto(
+        context: Context,
+        photoId: String,
+        images: List<SafeImage>,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
-        livePhotoVideoDeferred: Deferred<Pair<File, Long>?>? = null,
-        onProcessingComplete: (() -> Unit)? = null
-    ): String? = withContext(Dispatchers.IO) {
+        useSuperResolution: Boolean = false,
+    ) = withContext(Dispatchers.IO) {
         try {
-            val photoId = UUID.randomUUID().toString()
             val photoDir = getPhotoDir(context, photoId)
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
-            val videoFile = File(photoDir, VIDEO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
-            val dngFile = File(photoDir, DNG_FILE)
-            val metadataFile = File(photoDir, METADATA_FILE)
-            val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
-            val format = image.format
-
-            if (thumbnail != null && !thumbnail.isRecycled) {
-                generateThumbnail(thumbnail, thumbnailFile)
-            } else {
-                PLog.d(TAG, "Thumbnail unavailable: $thumbnail")
+            val result = MultiFrameStacker.processBurst(
+                images,
+                rotation,
+                aspectRatio,
+                yuvFile.absolutePath,
+                useSuperResolution
+            ) ?: return@withContext
+            // Save Original (Stacked Result)
+            FileOutputStream(tempFile).use { outputStream ->
+                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
             }
-
-            val cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
-
-            // 根据图像格式处理
-            when (format) {
-                ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
-                    val dimensions =
-                        BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, null, rotation)
-                    val finalWidth = dimensions.width()
-                    val finalHeight = dimensions.height()
-                    // 保存元数据
-                    val metadataWithInfo = metadata.copy(
-                        width = finalWidth,
-                        height = finalHeight,
-                        ratio = aspectRatio,
-                    )
-                    metadataFile.writeText(metadataWithInfo.toJson())
-                    photoFile.createNewFile()
-                    if (livePhotoVideoDeferred != null) {
-                        videoFile.createNewFile()
-                    }
-                    processingScope.launch(Dispatchers.IO) {
-                        try {
-                            // 创建预览用的 Bitmap
-                            val previewBitmap = createBitmap(finalWidth, finalHeight)
-
-                            val livePhotoResult = livePhotoVideoDeferred?.await()
-                            livePhotoResult?.first?.let { cacheVideoFile ->
-                                if (cacheVideoFile.exists()) {
-                                    try {
-                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                        cacheVideoFile.delete()
-
-                                        // 更新元数据以包含时间戳
-                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                    } catch (e: Exception) {
-                                        PLog.e(TAG, "Failed to move video file", e)
-                                    }
-                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                }
-                            }
-
-                            // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
-                            val success = YuvProcessor.processAndSave(
-                                image, aspectRatio, rotation,
-                                yuvFile.absolutePath, previewBitmap
-                            )
-                            if (success) {
-                                if (thumbnail == null) {
-                                    generateThumbnail(previewBitmap, thumbnailFile)
-                                }
-                                FileOutputStream(tempFile).use { outputStream ->
-                                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
-                                }
-                                tempFile.renameTo(photoFile)
-                                if (shouldAutoSave) {
-                                    exportPhoto(
-                                        context,
-                                        photoId,
-                                        photoProcessor,
-                                        metadataWithInfo,
-                                        sharpeningValue,
-                                        noiseReductionValue,
-                                        chromaNoiseReductionValue,
-                                        photoQuality
-                                    )
-                                }
-                            }
-                        } catch (e: Exception) {
-                            PLog.e(TAG, "Failed to savePhoto", e)
-                        } finally {
-                            onProcessingComplete?.invoke()
-                        }
-                    }
-                }
-
-                ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                    val dimensions =
-                        BitmapUtils.calculateProcessedRect(image.width, image.height, aspectRatio, cropRegion, rotation)
-                    // 保存元数据
-                    val metadataWithInfo = metadata.copy(
-                        width = dimensions.width(),
-                        height = dimensions.height(),
-                        ratio = aspectRatio,
-                        cropRegion = cropRegion,
-                        rotation = rotation,
-                        sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
-                        noiseReduction = noiseReductionValue,
-                        chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
-                    )
-                    metadataFile.writeText(metadataWithInfo.toJson())
-                    photoFile.createNewFile()
-                    if (livePhotoVideoDeferred != null) {
-                        videoFile.createNewFile()
-                    }
-                    processingScope.launch(Dispatchers.IO) {
-                        try {
-                            captureResult ?: return@launch
-
-                            val livePhotoResult = livePhotoVideoDeferred?.await()
-                            livePhotoResult?.first?.let { cacheVideoFile ->
-                                if (cacheVideoFile.exists()) {
-                                    try {
-                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                        cacheVideoFile.delete()
-
-                                        // 更新元数据以包含时间戳
-                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                    } catch (e: Exception) {
-                                        PLog.e(TAG, "Failed to move video file", e)
-                                    }
-                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                }
-                            }
-
-                            val dngDataBytes = ByteArrayOutputStream().use { dngData ->
-                                RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
-                                dngData.toByteArray()
-                            }
-                            FileOutputStream(dngFile).use { outputStream ->
-                                outputStream.write(dngDataBytes)
-                            }
-
-                            val bitmap = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
-                                RawDemosaicProcessor.getInstance().process(
-                                    dngFile.absolutePath,
-                                    aspectRatio,
-                                    cropRegion,
-                                    rotation
-                                )
-                            } else {
-                                RawProcessor.processAndToBitmap(
-                                    dngDataBytes,
-                                    aspectRatio,
-                                    cropRegion,
-                                    rotation
-                                )
-                            } ?: return@launch
-                            if (thumbnail == null) {
-                                generateThumbnail(bitmap, thumbnailFile)
-                            }
-                            FileOutputStream(tempFile).use { outputStream ->
-                                bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
-                            }
-                            tempFile.renameTo(photoFile)
-                            bitmap.recycle()
-                            if (shouldAutoSave) {
-                                exportDng(
-                                    context,
-                                    dngDataBytes,
-                                    metadataWithInfo,
-                                )
-                                exportPhoto(
-                                    context,
-                                    photoId,
-                                    photoProcessor,
-                                    metadataWithInfo,
-                                    sharpeningValue,
-                                    noiseReductionValue,
-                                    chromaNoiseReductionValue,
-                                    photoQuality
-                                )
-                            }
-                        } catch (e: Exception) {
-                            PLog.e(TAG, "Failed to savePhoto", e)
-                        } finally {
-                            onProcessingComplete?.invoke()
-                        }
-                    }
-                }
-
-                else -> {
-                    PLog.e(TAG, "Unsupported image format: $format")
-                    onProcessingComplete?.invoke()
-                }
+            tempFile.renameTo(photoFile)
+            result.recycle()
+            // Auto Save
+            if (shouldAutoSave) {
+                val metadata = loadMetadata(context, photoId) ?: return@withContext
+                exportPhoto(
+                    context,
+                    photoId,
+                    photoProcessor,
+                    metadata,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality
+                )
             }
-            photoId
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save photo", e)
-            onProcessingComplete?.invoke()
-            null
+            PLog.e(TAG, "Failed to savePhoto", e)
         }
     }
 
-
-    /**
-     * 保存堆栈合成后的照片
-     */
-    suspend fun saveStackedPhoto(
+    suspend fun saveRawStackedPhoto(
         context: Context,
-        images: List<Image>,
-        thumbnail: Bitmap?,
-        metadata: PhotoMetadata,
+        photoId: String,
+        images: List<SafeImage>,
         rotation: Int,
         aspectRatio: AspectRatio,
         characteristics: CameraCharacteristics?,
@@ -526,240 +614,146 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
-        livePhotoVideoDeferred: Deferred<Pair<File, Long>?>? = null,
-        onProcessingComplete: (() -> Unit)? = null
-    ): String? = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO) {
         try {
-            val photoId = UUID.randomUUID().toString()
             val photoDir = getPhotoDir(context, photoId)
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
-            val videoFile = File(photoDir, VIDEO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
-            val yuvFile = File(photoDir, YUV_FILE)
             val dngFile = File(photoDir, DNG_FILE)
-            val metadataFile = File(photoDir, METADATA_FILE)
-            val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
-            if (thumbnail != null && !thumbnail.isRecycled) {
-                generateThumbnail(thumbnail, thumbnailFile)
-            } else {
-                PLog.d(TAG, "Thumbnail unavailable: $thumbnail")
+            val metadata = loadMetadata(context, photoId) ?: return@withContext
+
+            characteristics ?: return@withContext
+            captureResult ?: return@withContext
+
+            val firstImageData = images[0].planes[0].buffer
+            val firstImageWidth = images[0].width
+            val firstImageHeight = images[0].height
+
+            val byteBuffer = MultiFrameStacker.processBurstRaw(
+                images, characteristics,
+                useSuperResolution
+            )
+            byteBuffer ?: return@withContext
+            val byteOutstream = ByteArrayOutputStream()
+            byteOutstream.use { outputStream ->
+                try {
+                    val scale = if (useSuperResolution) 2 else 1
+                    RawProcessor.saveToDng(
+                        byteBuffer.asReadOnlyBuffer(), characteristics,
+                        captureResult, outputStream, firstImageWidth * scale, firstImageHeight * scale, rotation
+                    )
+                } catch (e: Throwable) {
+                    // Fallback: If scaled DNG is not supported by hardware,
+                    // save the first original frame to maintain DNG availability.
+                    PLog.e(TAG, "SR DNG dimensions not supported, falling back to original frame DNG", e)
+                    RawProcessor.saveToDng(firstImageData, characteristics, captureResult, outputStream,
+                        firstImageWidth, firstImageHeight, rotation)
+                }
+            }
+            val array = byteOutstream.toByteArray()
+            FileOutputStream(dngFile).use {
+                it.write(array)
+            }
+            if (shouldAutoSave) {
+                exportDng(context, array, metadata)
             }
 
-            val dimensions =
-                BitmapUtils.calculateProcessedRect(
-                    images[0].width,
-                    images[0].height,
+            val result = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
+                RawDemosaicProcessor.getInstance().process(
+                    dngFile.absolutePath,
                     aspectRatio,
-                    null,
+                    metadata.cropRegion,
                     rotation
                 )
-            val finalWidth = dimensions.width()
-            val finalHeight = dimensions.height()
-
-            val format = images[0].format
-            when (format) {
-                ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
-                    // 保存元数据
-                    val metadataWithInfo = metadata.copy(
-                        width = finalWidth * if (useSuperResolution) 2 else 1,
-                        height = finalHeight * if (useSuperResolution) 2 else 1,
-                        ratio = aspectRatio,
-                        sharpening = if (sharpeningValue == 0f) (if (useSuperResolution) 0.8f else 0.4f) else sharpeningValue,
-                        noiseReduction = noiseReductionValue,
-                        chromaNoiseReduction = chromaNoiseReductionValue,
-                    )
-                    metadataFile.writeText(metadataWithInfo.toJson())
-                    photoFile.createNewFile()
-                    if (livePhotoVideoDeferred != null) {
-                        videoFile.createNewFile()
-                    }
-                    processingScope.launch(Dispatchers.IO) {
-
-                        val livePhotoResult = livePhotoVideoDeferred?.await()
-                        livePhotoResult?.first?.let { cacheVideoFile ->
-                            if (cacheVideoFile.exists()) {
-                                try {
-                                    cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                    cacheVideoFile.delete()
-
-                                    // 更新元数据以包含时间戳
-                                    val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                    saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                } catch (e: Exception) {
-                                    PLog.e(TAG, "Failed to move video file", e)
-                                }
-                                PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                            }
-                        }
-
-                        try {
-                            val result = MultiFrameStacker.processBurst(
-                                images,
-                                rotation,
-                                aspectRatio,
-                                yuvFile.absolutePath,
-                                useSuperResolution
-                            ) ?: return@launch
-
-                            // Generate Thumbnail
-                            if (thumbnail == null) {
-                                generateThumbnail(result, thumbnailFile)
-                            }
-                            // Save Original (Stacked Result)
-                            FileOutputStream(tempFile).use { outputStream ->
-                                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
-                            }
-                            tempFile.renameTo(photoFile)
-                            result.recycle()
-                            // Auto Save
-                            if (shouldAutoSave) {
-                                exportPhoto(
-                                    context,
-                                    photoId,
-                                    photoProcessor,
-                                    metadataWithInfo,
-                                    sharpeningValue,
-                                    noiseReductionValue,
-                                    chromaNoiseReductionValue,
-                                    photoQuality
-                                )
-                            }
-                        } catch (e: Exception) {
-                            PLog.e(TAG, "Failed to savePhoto", e)
-                        } finally {
-                            onProcessingComplete?.invoke()
-                        }
-                    }
-                }
-
-                ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
-                    photoFile.createNewFile()
-                    if (livePhotoVideoDeferred != null) {
-                        videoFile.createNewFile()
-                    }
-                    val scale = if (useSuperResolution) 2 else 1
-                    var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
-                    if (useSuperResolution && cropRegion != null) {
-                        cropRegion =
-                            Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
-                    }
-                    // 保存元数据
-                    val metadataWithInfo = metadata.copy(
-                        width = finalWidth * scale,
-                        height = finalHeight * scale,
-                        ratio = aspectRatio,
-                        cropRegion = cropRegion,
-                        rotation = rotation,
-                        sharpening = if (sharpeningValue == 0f) 0.8f else sharpeningValue,
-                        noiseReduction = noiseReductionValue,
-                        chromaNoiseReduction = if (chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
-                    )
-                    metadataFile.writeText(metadataWithInfo.toJson())
-                    processingScope.launch(Dispatchers.IO) {
-                        try {
-                            characteristics ?: return@launch
-                            captureResult ?: return@launch
-
-                            val livePhotoResult = livePhotoVideoDeferred?.await()
-                            livePhotoResult?.first?.let { cacheVideoFile ->
-                                if (cacheVideoFile.exists()) {
-                                    try {
-                                        cacheVideoFile.copyTo(videoFile, overwrite = true)
-                                        cacheVideoFile.delete()
-
-                                        // 更新元数据以包含时间戳
-                                        val currentMeta = loadMetadata(context, photoId) ?: metadataWithInfo
-                                        saveMetadata(context, photoId, currentMeta.copy(presentationTimestampUs = livePhotoResult.second))
-                                    } catch (e: Exception) {
-                                        PLog.e(TAG, "Failed to move video file", e)
-                                    }
-                                    PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
-                                }
-                            }
-
-                            val byteBuffer = MultiFrameStacker.processBurstRaw(
-                                images, characteristics,
-                                useSuperResolution
-                            )
-                            byteBuffer ?: return@launch
-                            val byteOutstream = ByteArrayOutputStream()
-                            byteOutstream.use { outputStream ->
-                                try {
-                                    val scaledWidth = images[0].width * scale
-                                    val scaledHeight = images[0].height * scale
-                                    RawProcessor.saveToDng(
-                                        byteBuffer.asReadOnlyBuffer(), characteristics,
-                                        captureResult, outputStream, scaledWidth, scaledHeight, rotation
-                                    )
-                                } catch (e: Throwable) {
-                                    // Fallback: If scaled DNG is not supported by hardware, 
-                                    // save the first original frame to maintain DNG availability.
-                                    PLog.i(TAG, "SR DNG dimensions not supported, falling back to original frame DNG")
-                                    RawProcessor.saveToDng(images[0], characteristics, captureResult, outputStream, rotation)
-                                }
-                            }
-                            val array = byteOutstream.toByteArray()
-                            FileOutputStream(dngFile).use {
-                                it.write(array)
-                            }
-                            if (shouldAutoSave) {
-                                exportDng(context, array, metadataWithInfo)
-                            }
-
-                            val result = if (metadataWithInfo.rawEngine == RawEngine.SELF_DEVELOPED) {
-                                RawDemosaicProcessor.getInstance().process(
-                                    dngFile.absolutePath,
-                                    aspectRatio,
-                                    cropRegion,
-                                    rotation
-                                )
-                            } else {
-                                RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)
-                            } ?: return@launch
-                            // Generate Thumbnail
-                            if (thumbnail == null) {
-                                generateThumbnail(result, thumbnailFile)
-                            }
-                            // Save Original (Stacked Result)
-                            FileOutputStream(tempFile).use { outputStream ->
-                                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
-                            }
-                            tempFile.renameTo(photoFile)
-                            // Auto Save
-                            if (shouldAutoSave) {
-                                exportPhoto(
-                                    context,
-                                    photoId,
-                                    photoProcessor,
-                                    metadataWithInfo,
-                                    sharpeningValue,
-                                    noiseReductionValue,
-                                    chromaNoiseReductionValue,
-                                    photoQuality
-                                )
-                            }
-                        } catch (e: Exception) {
-                            PLog.e(TAG, "Failed to savePhoto", e)
-                        } finally {
-                            onProcessingComplete?.invoke()
-                        }
-                    }
-                }
-
-                else -> {
-                    PLog.e(TAG, "Unsupported image format: $format")
-                    onProcessingComplete?.invoke()
-                    return@withContext null
-                }
+            } else {
+                RawProcessor.processAndToBitmap(dngFile, aspectRatio, metadata.cropRegion, rotation)
+            } ?: return@withContext
+            // Save Original (Stacked Result)
+            FileOutputStream(tempFile).use { outputStream ->
+                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
             }
-            photoId
+            tempFile.renameTo(photoFile)
+            // Auto Save
+            if (shouldAutoSave) {
+                exportPhoto(
+                    context,
+                    photoId,
+                    photoProcessor,
+                    metadata,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality
+                )
+            }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save stacked photo", e)
-            onProcessingComplete?.invoke()
-            null
+            PLog.e(TAG, "Failed to savePhoto", e)
+        }
+    }
+
+
+    /**
+     * 保存堆栈合成后的照片
+     */
+    suspend fun saveStackedPhoto(
+        context: Context,
+        photoId: String,
+        images: List<SafeImage>,
+        rotation: Int,
+        aspectRatio: AspectRatio,
+        characteristics: CameraCharacteristics?,
+        captureResult: CaptureResult?,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95,
+        useSuperResolution: Boolean = false,
+    ) = withContext(Dispatchers.IO) {
+        when (val format = images[0].format) {
+            ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
+                saveYuvStackedPhoto(
+                    context,
+                    photoId,
+                    images,
+                    rotation,
+                    aspectRatio,
+                    shouldAutoSave,
+                    photoProcessor,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality,
+                    useSuperResolution
+                )
+            }
+
+            ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
+                saveRawStackedPhoto(
+                    context,
+                    photoId,
+                    images,
+                    rotation,
+                    aspectRatio,
+                    characteristics,
+                    captureResult,
+                    shouldAutoSave,
+                    photoProcessor,
+                    sharpeningValue,
+                    noiseReductionValue,
+                    chromaNoiseReductionValue,
+                    photoQuality,
+                    useSuperResolution
+                )
+            }
+            else -> {
+                PLog.e(TAG, "Unsupported image format: $format")
+                return@withContext null
+            }
         }
     }
 

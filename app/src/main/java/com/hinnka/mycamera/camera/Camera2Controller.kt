@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.model.SafeImage
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -115,7 +116,7 @@ class Camera2Controller(private val context: Context) {
 
     // 缓存 CaptureResult 和 Image 用于配对 (timestamp -> Data)
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
-    private val pendingImages = ConcurrentHashMap<Long, Image>()
+    private val pendingImages = ConcurrentHashMap<Long, SafeImage>()
     private val pendingCloseReaders = mutableListOf<ImageReader>()
     private val openImagesCount = AtomicInteger(0)
 
@@ -124,13 +125,13 @@ class Camera2Controller(private val context: Context) {
     private var lastCaptureResult: TotalCaptureResult? = null
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
-    var onImageCaptured: ((Image, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
+    var onImageCaptured: ((SafeImage, CaptureInfo, CameraCharacteristics?, CaptureResult?) -> Unit)? = null
 
-    private fun trackImage(image: Image?): Image? {
+    private fun trackImage(image: Image?): SafeImage? {
         if (image != null) {
             openImagesCount.getAndIncrement()
         }
-        return image
+        return image?.let { SafeImage(it, this) }
     }
 
     // 快门音效播放回调
@@ -144,9 +145,9 @@ class Camera2Controller(private val context: Context) {
     // canRetry: 是否可以重试打开相机
     var onCameraError: ((errorCode: Int, message: String, canRetry: Boolean) -> Unit)? = null
 
-    fun releaseImage(image: Image) {
-        image.close()
+    fun onImageRelease() {
         if (openImagesCount.decrementAndGet() == 0) {
+            _state.value = _state.value.copy(isCapturing = false)
             checkAndClosePendingReaders()
         }
     }
@@ -515,6 +516,10 @@ class Camera2Controller(private val context: Context) {
                     try {
                         PLog.d(TAG, "ImageReader onImageAvailableListener triggered")
                         // 关键修复：使用 acquireNextImage() 而不是 acquireLatestImage()
+                        if (openImagesCount.get() >= maxImages) {
+                            PLog.w(TAG, "Too many open images ($openImagesCount), skipping acquire")
+                            return@setOnImageAvailableListener
+                        }
                         val image = trackImage(reader.acquireNextImage())
                         if (image != null) {
                             if (state.value.useRaw && isRawSupported) {
@@ -530,7 +535,7 @@ class Camera2Controller(private val context: Context) {
                                     if (pendingImages.size > 5) {
                                         val oldestKey = pendingImages.keys.minOrNull()
                                         if (oldestKey != null) {
-                                            pendingImages.remove(oldestKey)?.let { releaseImage(it) }
+                                            pendingImages.remove(oldestKey)?.close()
                                         }
                                     }
                                 }
@@ -1894,7 +1899,6 @@ class Camera2Controller(private val context: Context) {
                     ) {
                         super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
                         PLog.d(TAG, "Burst sequence completed")
-                        _state.value = _state.value.copy(isCapturing = false)
                         resetPreviewAfterCapture()
                     }
 
@@ -1926,7 +1930,6 @@ class Camera2Controller(private val context: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult
                     ) {
-                        _state.value = _state.value.copy(isCapturing = false)
                         val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
                         if (timestamp != null && state.value.useRaw && isRawSupported) {
                             val pendingImage = pendingImages.remove(timestamp)
@@ -2157,7 +2160,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun processAndTriggerCapture(image: Image, result: TotalCaptureResult?) {
+    private fun processAndTriggerCapture(image: SafeImage, result: TotalCaptureResult?) {
         try {
             val width = image.width
             val height = image.height
@@ -2171,11 +2174,11 @@ class Camera2Controller(private val context: Context) {
             if (callback != null) {
                 callback.invoke(image, captureInfo, cachedCharacteristics, result)
             } else {
-                releaseImage(image)
+                image.close()
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Error processing joined capture data", e)
-            releaseImage(image)
+            image.close()
         }
     }
 
@@ -2216,13 +2219,5 @@ class Camera2Controller(private val context: Context) {
             onCaptured?.invoke(file, timestamp)
             onLivePhotoVideoCaptured?.invoke(file, timestamp)
         }
-    }
-
-    /**
-     * 兼容性方法：执行 Live Photo 快照并立即开始后台录制
-     */
-    fun captureLivePhoto() {
-        snapshotLivePhoto()
-        recordLivePhotoVideo()
     }
 }

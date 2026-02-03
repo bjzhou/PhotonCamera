@@ -1,6 +1,9 @@
 package com.hinnka.mycamera.ui.camera
 
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -27,6 +30,8 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
@@ -509,7 +514,6 @@ fun Controls(
         // 拍照按钮 (Center)
         CaptureButton(
             isCapturing = state.isCapturing,
-            isCapturingLivePhoto = state.isCapturingLivePhoto,
             onClick = { viewModel.capture() }
         )
 
@@ -539,19 +543,22 @@ fun Controls(
 @Composable
 fun CaptureButton(
     isCapturing: Boolean,
-    isCapturingLivePhoto: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
+
     val scale by animateFloatAsState(
         targetValue = if (isCapturing) 0.9f else 1f,
         animationSpec = spring(dampingRatio = 0.5f),
         label = "captureScale"
     )
 
-    val rotation by animateFloatAsState(
-        targetValue = if (isCapturingLivePhoto) 360f else 0f,
-        animationSpec = if (isCapturingLivePhoto) tween(1500) else tween(0),
+
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1500)),
         label = "livePhotoRotation"
     )
 
@@ -559,7 +566,7 @@ fun CaptureButton(
         modifier = modifier
             .size(72.dp)
             .scale(scale)
-            .clickable(enabled = !isCapturing && !isCapturingLivePhoto) { onClick() },
+            .clickable(enabled = !isCapturing) { onClick() },
         contentAlignment = Alignment.Center
     ) {
         // Inner Yellow Ring
@@ -570,7 +577,7 @@ fun CaptureButton(
         )
 
         // Live Photo Indicator (Spinning dash)
-        if (isCapturingLivePhoto) {
+        if (isCapturing) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokeWidth = 3.dp.toPx()
                 drawArc(
@@ -578,24 +585,22 @@ fun CaptureButton(
                     startAngle = rotation - 90f,
                     sweepAngle = 90f,
                     useCenter = false,
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                    style = Stroke(
                         width = strokeWidth,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        cap = StrokeCap.Round
                     )
                 )
             }
         }
 
-        // Center Solid Button (When not capturing)
-        if (!isCapturing) {
-            Box(
-                modifier = Modifier
-                    .padding(4.dp)
-                    .fillMaxSize()
-                    .clip(CircleShape)
-                    .background(Color.White)
-            )
-        }
+        // Center Solid Button
+        Box(
+            modifier = Modifier
+                .padding(4.dp)
+                .fillMaxSize()
+                .clip(CircleShape)
+                .background(Color.White)
+        )
     }
 }
 

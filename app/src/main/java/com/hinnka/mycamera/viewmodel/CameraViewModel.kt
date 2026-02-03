@@ -26,6 +26,7 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
@@ -181,7 +182,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // Burst State
     private var isBursting = false
-    private val burstImages = mutableListOf<Image>()
+    private val burstImages = mutableListOf<SafeImage>()
 
     init {
         cameraController.initialize()
@@ -215,10 +216,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.d(TAG, "onCameraError: code=$code, message=$message, canRetry=$canRetry")
             isBursting = false
             burstImages.forEach {
-                try {
-                    cameraController.releaseImage(it)
-                } catch (e: Exception) {
-                }
+                it.close()
             }
             burstImages.clear()
         }
@@ -1284,7 +1282,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 保存图片
      */
     private suspend fun saveImage(
-        image: Image,
+        image: SafeImage,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?
@@ -1328,9 +1326,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
-                sharpening = sharpeningValue,
+                sharpening = if (useRaw.value && sharpeningValue == 0f) 0.4f else sharpeningValue,
                 noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = chromaNoiseReductionValue,
+                chromaNoiseReduction = if (useRaw.value && chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                width = image.width,
+                height = image.height,
+                ratio = aspectRatio,
+                rotation = rotation,
                 deviceModel = captureInfo.model,
                 brand = captureInfo.make.replaceFirstChar { it.uppercase() },
                 dateTaken = captureInfo.captureTime,
@@ -1350,39 +1352,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 deferred
             } else null
 
-            val photoId = characteristics?.let {
+            characteristics ?: return
+            val photoId = PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value, false)
+            if (photoId == null) {
+                PLog.e(TAG, "Failed to save image")
+                return
+            }
+            viewModelScope.launch(Dispatchers.IO) {
+                PhotoManager.saveVideo(context, photoId, livePhotoVideoDeferred)
                 PhotoManager.savePhoto(
                     context,
+                    photoId,
                     image,
-                    previewThumbnail,
-                    metadata,
                     rotation,
                     aspectRatio,
-                    it,
+                    characteristics,
                     captureResult,
                     shouldAutoSave,
                     photoProcessor,
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
-                    photoQualityValue,
-                    livePhotoVideoDeferred = livePhotoVideoDeferred,
-                    onProcessingComplete = { cameraController.releaseImage(image) }
+                    photoQualityValue
                 )
             }
-            if (photoId != null) {
-                PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-                _imageSavedEvent.emit(Unit)
-            } else {
-                PLog.e(TAG, "Failed to save image via PhotoManager")
-            }
+            PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+            _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         }
     }
 
     private suspend fun processBurst(
-        images: List<Image>,
+        images: List<SafeImage>,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?
@@ -1426,9 +1428,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
-                sharpening = sharpeningValue,
+                sharpening = if (sharpeningValue == 0f) (if (useSuperResolution.value) 0.8f else 0.4f) else sharpeningValue,
                 noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = chromaNoiseReductionValue,
+                chromaNoiseReduction = if (useRaw.value && chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                width = images[0].width * (if (useSuperResolution.value) 2 else 1),
+                height = images[0].height * (if (useSuperResolution.value) 2 else 1),
+                ratio = aspectRatio,
+                rotation = rotation,
                 deviceModel = captureInfo.model,
                 brand = captureInfo.make.replaceFirstChar { it.uppercase() },
                 dateTaken = captureInfo.captureTime,
@@ -1450,15 +1456,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 deferred
             } else null
 
-            val photoId = characteristics?.let {
+            characteristics ?: return
+            val photoId = PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail,
+                useLivePhoto.value, useSuperResolution.value)
+            if (photoId == null) {
+                PLog.e(TAG, "Failed to save burst image")
+                return
+            }
+
+            viewModelScope.launch(Dispatchers.IO) {
+                PhotoManager.saveVideo(context, photoId, livePhotoVideoDeferred)
                 PhotoManager.saveStackedPhoto(
                     context,
+                    photoId,
                     images,
-                    previewThumbnail,
-                    metadata,
                     rotation,
                     aspectRatio,
-                    it,
+                    characteristics,
                     captureResult,
                     shouldAutoSave,
                     photoProcessor,
@@ -1467,16 +1481,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     useSuperResolution = useSuperResolution.value,
-                    livePhotoVideoDeferred = livePhotoVideoDeferred,
-                    onProcessingComplete = { images.forEach { cameraController.releaseImage(it) } }
                 )
             }
-            if (photoId != null) {
-                PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
-                _imageSavedEvent.emit(Unit)
-            } else {
-                PLog.e(TAG, "Failed to save image via PhotoManager")
-            }
+            PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
+            _imageSavedEvent.emit(Unit)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         }
@@ -1549,10 +1557,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 清理未处理的连拍图片
         burstImages.forEach {
-            try {
-                cameraController.releaseImage(it)
-            } catch (e: Exception) {
-            }
+            it.close()
         }
         burstImages.clear()
     }

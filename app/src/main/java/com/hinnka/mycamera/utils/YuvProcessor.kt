@@ -6,6 +6,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
 import android.util.Half
+import com.hinnka.mycamera.model.SafeImage
 
 /**
  * YUV 图像处理器
@@ -65,7 +66,7 @@ object YuvProcessor {
      * 处理 YUV 图像并直接保存为高精度 JXL 文件 (FP16)，同时生成预览图
      */
     fun processAndSave(
-        image: Image,
+        image: SafeImage,
         aspectRatio: AspectRatio,
         rotation: Int,
         outputPath: String,

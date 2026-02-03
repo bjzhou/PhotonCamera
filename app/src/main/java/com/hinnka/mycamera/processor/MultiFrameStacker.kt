@@ -7,6 +7,7 @@ import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.utils.BitmapUtils
 import java.nio.ByteOrder
 
@@ -34,7 +35,7 @@ object MultiFrameStacker {
      * @return Stacked Bitmap (ARGB_8888), or null if failed.
      */
     fun processBurst(
-        images: List<Image>,
+        images: List<SafeImage>,
         rotation: Int,
         aspectRatio: AspectRatio?,
         outputPath: String? = null,
@@ -58,29 +59,40 @@ object MultiFrameStacker {
         }
 
         try {
+            val stagedIndices = mutableListOf<Int>()
             for ((index, image) in images.withIndex()) {
-                // Validate dimensions
-                if (image.width != width || image.height != height) {
-                    PLog.w(TAG, "Skipping frame $index due to dimension mismatch")
-                    continue
+                image.use {
+                    // Validate dimensions
+                    if (image.width != width || image.height != height) {
+                        PLog.w(TAG, "Skipping frame $index due to dimension mismatch")
+                        return@use
+                    }
+
+                    val planes = image.planes
+                    val yBuffer = planes[0].buffer
+                    val uBuffer = planes[1].buffer
+                    val vBuffer = planes[2].buffer
+
+                    val yRowStride = planes[0].rowStride
+                    val uvRowStride = planes[1].rowStride
+                    val uvPixelStride = planes[1].pixelStride
+
+                    stageFrameNative(
+                        stackerPtr,
+                        yBuffer, uBuffer, vBuffer,
+                        yRowStride, uvRowStride, uvPixelStride,
+                        image.format
+                    )
+                    stagedIndices.add(stagedIndices.size)
                 }
-
-                val planes = image.planes
-                val yBuffer = planes[0].buffer
-                val uBuffer = planes[1].buffer
-                val vBuffer = planes[2].buffer
-
-                val yRowStride = planes[0].rowStride
-                val uvRowStride = planes[1].rowStride
-                val uvPixelStride = planes[1].pixelStride
-
-                addToStackNative(
-                    stackerPtr,
-                    yBuffer, uBuffer, vBuffer,
-                    yRowStride, uvRowStride, uvPixelStride,
-                    image.format
-                )
             }
+
+            // High-latency processing happens here, after all Images are closed
+            for (idx in stagedIndices) {
+                processFrameNative(stackerPtr, idx)
+            }
+            // Optional: clear native memory when done
+            clearStagedFramesNative(stackerPtr)
 
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
 
@@ -111,7 +123,7 @@ object MultiFrameStacker {
     }
 
     fun processBurstRaw(
-        images: List<Image>,
+        images: List<SafeImage>,
         characteristics: CameraCharacteristics,
         enableSuperResolution: Boolean = false
     ): ByteBuffer? {
@@ -132,13 +144,20 @@ object MultiFrameStacker {
             return null
         }
 
-        // 2. Add frames
+        val stagedIndices = mutableListOf<Int>()
         for (image in images) {
-            if (image.width != width || image.height != height) continue
-            val buffer = image.planes[0].buffer
-            val rowStride = image.planes[0].rowStride
-            addToRawStackNative(stackerPtr, buffer, rowStride, sensorCfa)
+            image.use {
+                if (image.width != width || image.height != height) return@use
+                val buffer = image.planes[0].buffer
+                val rowStride = image.planes[0].rowStride
+                stageRawFrameNative(stackerPtr, buffer, rowStride, sensorCfa)
+                stagedIndices.add(stagedIndices.size)
+            }
         }
+        for (idx in stagedIndices) {
+            processRawFrameNative(stackerPtr, idx)
+        }
+        clearStagedRawFramesNative(stackerPtr)
 
         // 3. Process Stack
         val scale = getRawStackerScaleNative(stackerPtr)
@@ -154,12 +173,15 @@ object MultiFrameStacker {
 
     private external fun createStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
 
-    private external fun addToStackNative(
+    private external fun stageFrameNative(
         stackerPtr: Long,
         yBuffer: ByteBuffer, uBuffer: ByteBuffer, vBuffer: ByteBuffer,
         yRowStride: Int, uvRowStride: Int, uvPixelStride: Int,
         format: Int
     )
+
+    private external fun processFrameNative(stackerPtr: Long, index: Int)
+    private external fun clearStagedFramesNative(stackerPtr: Long)
 
     private external fun processStackNative(
         stackerPtr: Long,
@@ -174,7 +196,9 @@ object MultiFrameStacker {
 
     private external fun createRawStackerNative(width: Int, height: Int, useSuperRes: Boolean): Long
     private external fun getRawStackerScaleNative(stackerPtr: Long): Int
-    private external fun addToRawStackNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
+    private external fun stageRawFrameNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
+    private external fun processRawFrameNative(stackerPtr: Long, index: Int)
+    private external fun clearStagedRawFramesNative(stackerPtr: Long)
     private external fun processRawStackWithBufferNative(stackerPtr: Long, outputBuffer: ByteBuffer)
     private external fun releaseRawStackerNative(stackerPtr: Long)
 }
