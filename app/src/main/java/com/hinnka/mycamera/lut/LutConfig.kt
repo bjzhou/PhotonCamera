@@ -18,7 +18,8 @@ data class LutConfig(
     val data: FloatArray? = null,
     val byteBuffer: ByteBuffer? = null,
     val title: String = "",
-    val configDataType: Int = CONFIG_DATA_TYPE_UINT8
+    val configDataType: Int = CONFIG_DATA_TYPE_UINT8,
+    val curve: LutCurve = LutCurve.SRGB
 ) {
     companion object {
         const val CONFIG_DATA_TYPE_UINT8 = 0
@@ -37,7 +38,7 @@ data class LutConfig(
         val buffer = byteBuffer ?: throw IllegalStateException("No data available in LutConfig")
         val fb = FloatBuffer.allocate(size * size * size * 3)
         buffer.position(0)
-        
+
         if (configDataType == CONFIG_DATA_TYPE_UINT16) {
             val shortBuffer = buffer.asShortBuffer()
             while (shortBuffer.hasRemaining()) {

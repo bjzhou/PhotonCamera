@@ -16,7 +16,7 @@ import kotlin.math.min
 object LutConverter {
 
     private const val MAGIC_PLUT = "PLUT"
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val DATA_TYPE_UINT16 = 1
 
     /**
@@ -41,15 +41,11 @@ object LutConverter {
     ): Boolean {
         return try {
             // 解析 .cube 文件
-            var cubeData = parseCubeFile(cubeInputStream)
+            val cubeData = parseCubeFile(cubeInputStream)
 
-            // 如果不是 sRGB，则进行重采样
-            if (curve != LutCurve.SRGB) {
-                cubeData = resampleLut(cubeData, curve)
-            }
-
+            // 不再进行重采样，而是直接写入原始数据并记录曲线类型
             // 写入 .plut 格式
-            writePLutFile(cubeData, plutOutputStream)
+            writePLutFile(cubeData, plutOutputStream, curve)
 
             true
         } catch (e: Exception) {
@@ -188,6 +184,7 @@ object LutConverter {
                         }
                         tempDataList.clear()  // 释放临时列表内存
                     }
+
                     trimmed.startsWith("DOMAIN_MIN") -> {
                         val values = trimmed.split("\\s+".toRegex()).drop(1)
                         domainMin = floatArrayOf(
@@ -196,6 +193,7 @@ object LutConverter {
                             values[2].toFloat()
                         )
                     }
+
                     trimmed.startsWith("DOMAIN_MAX") -> {
                         val values = trimmed.split("\\s+".toRegex()).drop(1)
                         domainMax = floatArrayOf(
@@ -204,6 +202,7 @@ object LutConverter {
                             values[2].toFloat()
                         )
                     }
+
                     !trimmed.startsWith("TITLE") -> {
                         // 尝试解析 RGB 数据
                         val parts = trimmed.split("\\s+".toRegex())
@@ -245,8 +244,8 @@ object LutConverter {
     /**
      * 写入 .plut 文件
      */
-    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream) {
-        val buffer = ByteBuffer.allocate(16 + cubeData.data.size * 2)
+    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, curve: LutCurve) {
+        val buffer = ByteBuffer.allocate(20 + cubeData.data.size * 2)
             .order(ByteOrder.LITTLE_ENDIAN)
 
         // Magic
@@ -260,6 +259,9 @@ object LutConverter {
 
         // Data Type (1 = UINT16)
         buffer.putInt(DATA_TYPE_UINT16)
+
+        // Curve Type
+        buffer.putInt(curve.ordinal)
 
         // Data
         val shortBuffer = buffer.asShortBuffer()

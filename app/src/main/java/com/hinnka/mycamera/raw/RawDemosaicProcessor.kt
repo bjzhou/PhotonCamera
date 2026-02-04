@@ -220,6 +220,7 @@ class RawDemosaicProcessor {
     private var uLutSizeLoc = 0
     private var uLutIntensityLoc = 0
     private var uLutEnabledLoc = 0
+    private var uLutCurveLoc = 0
     private var uLutTexMatrixLoc = 0
 
     // ColorRecipe Uniform 位置
@@ -625,6 +626,7 @@ class RawDemosaicProcessor {
             uLutSizeLoc = GLES30.glGetUniformLocation(lutProgram, "uLutSize")
             uLutIntensityLoc = GLES30.glGetUniformLocation(lutProgram, "uLutIntensity")
             uLutEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uLutEnabled")
+            uLutCurveLoc = GLES30.glGetUniformLocation(lutProgram, "uLutCurve")
             uLutTexMatrixLoc = GLES30.glGetUniformLocation(lutProgram, "uTexMatrix")
 
             uColorRecipeEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uColorRecipeEnabled")
@@ -1127,8 +1129,8 @@ class RawDemosaicProcessor {
         GLES30.glUniform1i(uLut3DTextureLoc, 1)
         GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
         GLES30.glUniform1f(uLutIntensityLoc, lutIntensity)
-        GLES30.glUniform1i(uLutEnabledLoc, 1)
-
+        GLES30.glUniform1i(uLutEnabledLoc, if (lutConfig != null) 1 else 0)
+        GLES30.glUniform1i(uLutCurveLoc, lutConfig?.curve?.ordinal ?: 0)
         // 设置色彩配方参数
         val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
         GLES30.glUniform1i(uColorRecipeEnabledLoc, if (colorRecipeEnabled) 1 else 0)

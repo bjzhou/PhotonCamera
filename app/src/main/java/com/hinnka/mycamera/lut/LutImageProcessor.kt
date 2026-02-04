@@ -53,6 +53,7 @@ class LutImageProcessor {
     private var uLutSizeLoc = 0
     private var uLutIntensityLoc = 0
     private var uLutEnabledLoc = 0
+    private var uLutCurveLoc = 0
     private var uMVPMatrixLoc = 0
 
     // 色彩配方 Uniform 位置
@@ -360,6 +361,7 @@ class LutImageProcessor {
             if (lutConfig != null) intensity else 0f
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.ordinal ?: 0)
 
         // 设置色彩配方参数
         GLES30.glUniform1i(
@@ -598,6 +600,7 @@ class LutImageProcessor {
         uLutSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutSize")
         uLutIntensityLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutIntensity")
         uLutEnabledLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutEnabled")
+        uLutCurveLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutCurve")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
 
         // 获取色彩配方 uniform 位置
@@ -726,6 +729,7 @@ class LutImageProcessor {
             uniform float uLutSize;
             uniform float uLutIntensity;
             uniform bool uLutEnabled;
+            uniform int uLutCurve;
 
             // 色彩配方控制
             uniform bool uColorRecipeEnabled;
@@ -753,6 +757,41 @@ class LutImageProcessor {
             // 辅助函数：亮度计算
             float getLuma(vec3 color) {
                 return dot(color, vec3(0.299, 0.587, 0.114));
+            }
+
+            float log10(float x) { return log(x) * 0.4342944819; }
+            vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
+
+            vec3 srgbToLinear(vec3 c) {
+                return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+            }
+
+            vec3 applyLutCurve(vec3 rgb, int curveType) {
+                if (curveType == 0) return rgb; // SRGB
+                vec3 l = srgbToLinear(rgb);
+                if (curveType == 1) return l; // LINEAR
+                if (curveType == 2) { // V-Log
+                    return mix(5.6 * l + 0.125, 0.241514 * log10(l + 0.00873) + 0.598206, step(0.01, l));
+                }
+                if (curveType == 3) { // S-Log3
+                    return mix((l * (171.2102946929 - 95.0) / 0.01125 + 95.0) / 1023.0, (420.0 + log10((l + 0.01) / (0.18 + 0.01)) * 261.5) / 1023.0, step(0.01125, l));
+                }
+                if (curveType == 4) { // F-Log2
+                    return mix(8.799461 * l + 0.092864, 0.245281 * log10(5.555556 * l + 0.064829) + 0.384316, step(0.00089, l));
+                }
+                if (curveType == 5) { // LogC
+                    return mix(5.367655 * l + 0.092809, 0.247190 * log10(5.555556 * l + 0.052272) + 0.385537, step(0.010591, l));
+                }
+                if (curveType == 6) { // AppleLog
+                    return mix(mix(vec3(0.0), 47.28711236 * pow(l + 0.05641088, vec3(2.0)), step(-0.05641088, l)), 0.08550479 * (log(l + 0.00964052) / log(2.0)) + 0.69336945, step(0.01, l));
+                }
+                if (curveType == 7) { // HLG
+                    float ha = 0.17883277;
+                    float hb = 1.0 - 4.0 * ha;
+                    float hc = 0.5 - ha * log(4.0 * ha);
+                    return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
+                }
+                return rgb;
             }
             
             // 辅助函数：高斯权重 (预计算 sigma^2 的倒数以提升性能)
@@ -1070,9 +1109,10 @@ class LutImageProcessor {
 
                 // === LUT 处理（在色彩配方之后） ===
                 if (uLutEnabled && uLutIntensity > 0.0) {
+                    vec3 lutInColor = applyLutCurve(color.rgb, uLutCurve);
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
-                    vec3 lutCoord = color.rgb * scale + offset;
+                    vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
                     color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
                 }

@@ -40,66 +40,6 @@ object Shaders {
     """.trimIndent()
 
     /**
-     * 片元着色器 - 带 3D LUT 支持
-     * 
-     * 从相机纹理采样，应用 3D LUT 颜色变换
-     */
-    val FRAGMENT_SHADER_LUT = """
-        #version 300 es
-        #extension GL_OES_EGL_image_external_essl3 : require
-        
-        precision mediump float;
-        
-        // 从顶点着色器接收的纹理坐标
-        in vec2 vTexCoord;
-        
-        // 输出颜色
-        out vec4 fragColor;
-        
-        // 相机 OES 纹理
-        uniform samplerExternalOES uCameraTexture;
-        
-        // 3D LUT 纹理
-        uniform mediump sampler3D uLutTexture;
-        
-        // LUT 尺寸
-        uniform float uLutSize;
-        
-        // LUT 强度 (0.0 - 1.0)
-        uniform float uLutIntensity;
-        
-        // 是否启用 LUT
-        uniform bool uLutEnabled;
-        
-        void main() {
-            // 从相机纹理采样原始颜色
-            vec4 originalColor = texture(uCameraTexture, vTexCoord);
-            
-            if (!uLutEnabled || uLutIntensity <= 0.0) {
-                // LUT 未启用，直接输出原始颜色
-                fragColor = originalColor;
-                return;
-            }
-            
-            // 3D LUT 查找
-            // 计算半像素偏移以避免边缘采样问题
-            float scale = (uLutSize - 1.0) / uLutSize;
-            float offset = 1.0 / (2.0 * uLutSize);
-            
-            // 将 RGB 值映射到 LUT 纹理坐标
-            vec3 lutCoord = originalColor.rgb * scale + offset;
-            
-            // 从 3D LUT 纹理采样
-            vec4 lutColor = texture(uLutTexture, lutCoord);
-            
-            // 根据强度混合原始颜色和 LUT 颜色
-            vec3 finalColor = mix(originalColor.rgb, lutColor.rgb, uLutIntensity);
-            
-            fragColor = vec4(finalColor, originalColor.a);
-        }
-    """.trimIndent()
-
-    /**
      * 简单的直通片元着色器（无 LUT）
      *
      * 用于调试或禁用 LUT 时
@@ -170,6 +110,7 @@ object Shaders {
     uniform float uLutSize;
     uniform float uLutIntensity;
     uniform bool uLutEnabled;
+    uniform int uLutCurve; // 0=sRGB, 1=Linear, 2=V-Log, 3=S-Log3, 4=F-Log2, 5=LogC, 6=AppleLog, 7=HLG
 
     // 色彩配方控制
     uniform bool uColorRecipeEnabled;
@@ -195,6 +136,41 @@ object Shaders {
     uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
 
     const vec3 W = vec3(0.299, 0.587, 0.114);
+
+    float log10(float x) { return log(x) * 0.4342944819; }
+    vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
+
+    vec3 srgbToLinear(vec3 c) {
+        return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+    }
+
+    vec3 applyLutCurve(vec3 rgb, int curveType) {
+        if (curveType == 0) return rgb; // SRGB
+        vec3 l = srgbToLinear(rgb);
+        if (curveType == 1) return l; // LINEAR
+        if (curveType == 2) { // V-Log
+            return mix(5.6 * l + 0.125, 0.241514 * log10(l + 0.00873) + 0.598206, step(0.01, l));
+        }
+        if (curveType == 3) { // S-Log3
+            return mix((l * (171.2102946929 - 95.0) / 0.01125 + 95.0) / 1023.0, (420.0 + log10((l + 0.01) / (0.18 + 0.01)) * 261.5) / 1023.0, step(0.01125, l));
+        }
+        if (curveType == 4) { // F-Log2
+            return mix(8.799461 * l + 0.092864, 0.245281 * log10(5.555556 * l + 0.064829) + 0.384316, step(0.00089, l));
+        }
+        if (curveType == 5) { // LogC
+            return mix(5.367655 * l + 0.092809, 0.247190 * log10(5.555556 * l + 0.052272) + 0.385537, step(0.010591, l));
+        }
+        if (curveType == 6) { // AppleLog
+            return mix(mix(vec3(0.0), 47.28711236 * pow(l + 0.05641088, vec3(2.0)), step(-0.05641088, l)), 0.08550479 * (log(l + 0.00964052) / log(2.0)) + 0.69336945, step(0.01, l));
+        }
+        if (curveType == 7) { // HLG
+            float ha = 0.17883277;
+            float hb = 1.0 - 4.0 * ha;
+            float hc = 0.5 - ha * log(4.0 * ha);
+            return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
+        }
+        return rgb;
+    }
 
     void main()
     {
@@ -319,9 +295,10 @@ object Shaders {
 
         // === LUT 处理 ===
         if (uLutEnabled && uLutIntensity > 0.0) {
+            vec3 lutInColor = applyLutCurve(color.rgb, uLutCurve);
             float scale = (uLutSize - 1.0) / uLutSize;
             float offset = 1.0 / (2.0 * uLutSize);
-            vec3 lutCoord = color.rgb * scale + offset;
+            vec3 lutCoord = lutInColor * scale + offset;
             vec4 lutColor = texture(uLutTexture, lutCoord);
             color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
         }

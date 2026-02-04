@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.utils.PLog
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -37,14 +38,14 @@ object XmpLutParser {
 
         val crsNs = "http://ns.adobe.com/camera-raw-settings/1.0/"
         val descriptions = doc.getElementsByTagNameNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "Description")
-        
+
         var rgbTableId: String? = null
         var tableDataEncoded: String? = null
         var lutTitle = ""
 
         for (i in 0 until descriptions.length) {
             val desc = descriptions.item(i) as org.w3c.dom.Element
-            
+
             if (desc.hasAttributeNS(crsNs, "RGBTable")) {
                 rgbTableId = desc.getAttributeNS(crsNs, "RGBTable")
             }
@@ -81,13 +82,9 @@ object XmpLutParser {
 
         val decodedData = decodeBase85(tableDataEncoded)
         val decompressedData = decompress(decodedData)
-        var lutData = parseLutData(decompressedData)
+        val lutData = parseLutData(decompressedData)
 
-        if (curve != LutCurve.SRGB) {
-            lutData = resampleLut(lutData, curve)
-        }
-
-        return writePlutFile(outputStream, lutData)
+        return writePlutFile(outputStream, lutData, curve)
     }
 
     private fun resampleLut(lutData: LutData, curve: LutCurve): LutData {
@@ -220,37 +217,37 @@ object XmpLutParser {
     private fun decompress(data: ByteArray): ByteArray {
         val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
         val uncompressedSize = buffer.int
-        
+
         val inflater = Inflater()
         inflater.setInput(data, 4, data.size - 4)
-        
+
         val result = ByteArray(uncompressedSize)
         val count = inflater.inflate(result)
         inflater.end()
-        
+
         if (count != uncompressedSize) {
-            // Some versions might have a slightly different count, but usually it should match
+            PLog.w("XmpLutParser", "Decompress size mismatch: expected $uncompressedSize, got $count")
         }
-        
+
         return result
     }
 
     private fun parseLutData(data: ByteArray): LutData {
         val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-        
+
         val btt = buffer.int
         if (btt != BTT_RGB_TABLE) {
             throw IllegalArgumentException("Not an RGB table: $btt")
         }
-        
+
         val version = buffer.int
         if (version != RGB_TABLE_VERSION) {
             throw IllegalArgumentException("Unsupported RGB table version: $version")
         }
-        
+
         val dimensions = buffer.int
         val divisions = buffer.int
-        
+
         if (dimensions != 3) {
             throw IllegalArgumentException("Only 3D LUTs are supported, got $dimensions")
         }
@@ -262,7 +259,7 @@ object XmpLutParser {
 
         val size = divisions * divisions * divisions
         val samples = ShortArray(size * 3)
-        
+
         for (bd in 0 until divisions) {
             for (gd in 0 until divisions) {
                 for (rd in 0 until divisions) {
@@ -278,20 +275,21 @@ object XmpLutParser {
                 }
             }
         }
-        
+
         return LutData(divisions, samples)
     }
 
-    private fun writePlutFile(outputStream: OutputStream, lut: LutData): Boolean {
+    private fun writePlutFile(outputStream: OutputStream, lut: LutData, curve: LutCurve): Boolean {
         val size = lut.divisions
         val count = size * size * size * 3
         val expectedSizeInBytes = count * 2 // 16-bit
-        val buffer = ByteBuffer.allocate(16 + expectedSizeInBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val buffer = ByteBuffer.allocate(20 + expectedSizeInBytes).order(ByteOrder.LITTLE_ENDIAN)
 
         buffer.putInt(MAGIC_PLUT)
-        buffer.putInt(1) // version
+        buffer.putInt(2) // version
         buffer.putInt(size)
         buffer.putInt(1) // dataType: 1 = UINT16
+        buffer.putInt(curve.ordinal)
 
         for (s in lut.samples) {
             buffer.putShort(s)

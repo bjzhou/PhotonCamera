@@ -49,6 +49,8 @@ object LutParser {
         val version = buffer.int
         val size = buffer.int
         val dataType = buffer.int
+        val curveOrdinal = if (version >= 2) buffer.int else LutCurve.SRGB.ordinal
+        val curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB }
 
         val count = size * size * size * 3
         val bytesPerComponent = if (dataType == 1) 2 else 1
@@ -69,7 +71,8 @@ object LutParser {
                 size = size,
                 byteBuffer = directBuffer,
                 title = title,
-                configDataType = if (dataType == 1) LutConfig.CONFIG_DATA_TYPE_UINT16 else LutConfig.CONFIG_DATA_TYPE_UINT8
+                configDataType = if (dataType == 1) LutConfig.CONFIG_DATA_TYPE_UINT16 else LutConfig.CONFIG_DATA_TYPE_UINT8,
+                curve = curve
             )
         } else {
             // 未来可以支持 Float32
