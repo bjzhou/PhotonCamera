@@ -69,7 +69,7 @@ fun LutSelector(
 
         listOf(null) + sortedDynamic + listOf("Custom")
     }
-    var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var selectedCategory by remember { mutableStateOf(availableLuts.find { it.id == currentLutId }?.category) }
 
     val filteredLuts = remember(selectedCategory, availableLuts) {
         when (selectedCategory) {
