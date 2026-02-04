@@ -123,6 +123,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // 付费弹窗状态
     var showPaymentDialog by mutableStateOf(false)
 
+    var isExpanded by mutableStateOf(false)
+
     // 新增设置项 StateFlow
     val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
     val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }

@@ -68,8 +68,9 @@ import java.io.File
 @Composable
 fun PhotoDetailScreen(
     viewModel: GalleryViewModel,
-    initialIndex: Int,
-    onBack: () -> Unit,
+    initialIndex: Int = 0,
+    isExpanded: Boolean = false,
+    onBack: () -> Unit = {},
     onEdit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -123,6 +124,12 @@ fun PhotoDetailScreen(
     LaunchedEffect(pagerState.currentPage) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
     }
+
+    LaunchedEffect(photos.size, isExpanded) {
+        if (isExpanded) {
+            pagerState.scrollToPage(0)
+        }
+    }
     
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
     
@@ -137,12 +144,14 @@ fun PhotoDetailScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                            tint = Color.White
-                        )
+                    if (!isExpanded) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                                tint = Color.White
+                            )
+                        }
                     }
                 },
                 actions = {

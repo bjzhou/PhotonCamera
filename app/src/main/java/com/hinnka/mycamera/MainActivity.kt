@@ -1,7 +1,6 @@
 package com.hinnka.mycamera
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
@@ -15,13 +14,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -29,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -36,15 +32,13 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.ui.camera.CameraScreen
-import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
 import com.hinnka.mycamera.ui.gallery.PhotoDetailScreen
 import com.hinnka.mycamera.ui.gallery.PhotoEditScreen
@@ -54,11 +48,8 @@ import com.hinnka.mycamera.ui.settings.SettingsScreen
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.OrientationObserver
-import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 /**
  * 路由常量
@@ -167,6 +158,8 @@ fun NavigationHost(
     navController.addOnDestinationChangedListener { _, destination, _ ->
         BuglyHelper.setUserScene(context, destination.route.hashCode())
     }
+    val containerSize = LocalWindowInfo.current.containerSize
+    cameraViewModel.isExpanded = (containerSize.width * 1f / containerSize.height) > AspectRatio.RATIO_4_3.getValue(false)
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -186,23 +179,54 @@ fun NavigationHost(
             }
         ) {
             composable(Routes.CAMERA) {
-                CameraScreen(
-                    viewModel = cameraViewModel,
-                    galleryViewModel = galleryViewModel,
-                    onGalleryClick = {
-                        navController.navigate(Routes.GALLERY)
-                        val latestPhoto = galleryViewModel.latestPhoto.value
-                        if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
-                            navController.navigate(Routes.photoDetail(0))
-                        }
-                    },
-                    onSettingsClick = {
-                        navController.navigate(Routes.SETTINGS)
-                    },
-                    onFilterManagementClick = {
-                        navController.navigate(Routes.FILTER_MANAGEMENT)
+                if (cameraViewModel.isExpanded) {
+                    Row {
+                        CameraScreen(
+                            viewModel = cameraViewModel,
+                            galleryViewModel = galleryViewModel,
+                            onGalleryClick = {
+                                navController.navigate(Routes.GALLERY)
+                                val latestPhoto = galleryViewModel.latestPhoto.value
+                                if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                                    navController.navigate(Routes.photoDetail(0))
+                                }
+                            },
+                            onSettingsClick = {
+                                navController.navigate(Routes.SETTINGS)
+                            },
+                            onFilterManagementClick = {
+                                navController.navigate(Routes.FILTER_MANAGEMENT)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        PhotoDetailScreen(
+                            viewModel = galleryViewModel,
+                            isExpanded = true,
+                            onEdit = {
+                                navController.navigate(Routes.PHOTO_EDIT)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
-                )
+                } else {
+                    CameraScreen(
+                        viewModel = cameraViewModel,
+                        galleryViewModel = galleryViewModel,
+                        onGalleryClick = {
+                            navController.navigate(Routes.GALLERY)
+                            val latestPhoto = galleryViewModel.latestPhoto.value
+                            if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                                navController.navigate(Routes.photoDetail(0))
+                            }
+                        },
+                        onSettingsClick = {
+                            navController.navigate(Routes.SETTINGS)
+                        },
+                        onFilterManagementClick = {
+                            navController.navigate(Routes.FILTER_MANAGEMENT)
+                        }
+                    )
+                }
             }
 
             composable(Routes.GALLERY) {
