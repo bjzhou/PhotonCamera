@@ -110,11 +110,21 @@ bool VulkanBufferImporter::importHardwareBuffer(AHardwareBuffer *buffer,
     // If it's P010 (10-bit), it might actually be BT.2020.
 
     ycbcrCreateInfo.ycbcrModel = formatProps.suggestedYcbcrModel;
+    if (ycbcrCreateInfo.ycbcrModel ==
+        VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY) {
+      ycbcrCreateInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601;
+    }
     ycbcrCreateInfo.ycbcrRange = formatProps.suggestedYcbcrRange;
+    if (ycbcrCreateInfo.ycbcrRange == VK_SAMPLER_YCBCR_RANGE_ITU_FULL) {
+      // Many drivers incorrectly report FULL range for limited YUV
+      // 601 usually implies limited range for Camera2 YUV_420_888
+    }
 
-    // For 8-bit YUV 420_888, swizzle identity is usually okay,
-    // but we'll try to follow the driver's samplerYcbcrConversionComponents.
-    ycbcrCreateInfo.components = formatProps.samplerYcbcrConversionComponents;
+    // For YUV, identity swizzle is generally safer than driver suggestions,
+    // which can be buggy on some devices (e.g. Xiaomi 14/15).
+    ycbcrCreateInfo.components = {
+        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
 
     ycbcrCreateInfo.xChromaOffset = formatProps.suggestedXChromaOffset;
     ycbcrCreateInfo.yChromaOffset = formatProps.suggestedYChromaOffset;

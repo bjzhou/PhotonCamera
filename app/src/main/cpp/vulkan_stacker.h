@@ -41,6 +41,7 @@ private:
   VkPipeline accumulatePipeline = VK_NULL_HANDLE;
 
   VkSampler immutableSampler = VK_NULL_HANDLE;
+  VkSamplerYcbcrConversion ycbcrConversion = VK_NULL_HANDLE;
   VkDescriptorSetLayout normalizeSetLayout = VK_NULL_HANDLE;
   std::vector<VkDescriptorSet> normalizeSets;
   VkPipelineLayout normalizePipelineLayout = VK_NULL_HANDLE;

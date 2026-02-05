@@ -171,18 +171,18 @@ void VulkanImageStacker::initVulkanResources() {
   vm.endSingleTimeCommands(cb);
 }
 
-void VulkanImageStacker::createPipelines(VkSampler immutableSampler) {
+void VulkanImageStacker::createPipelines(VkSampler sampler) {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
   // 1. Descriptor Set Layout with Immutable Sampler
+  VkSampler samplers[1] = {sampler};
   VkDescriptorSetLayoutBinding bindings[3] = {};
   bindings[0].binding = 0;
   bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   bindings[0].descriptorCount = 1;
   bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-  bindings[0].pImmutableSamplers =
-      &immutableSampler; // CRITICAL: Link the sampler statically
+  bindings[0].pImmutableSamplers = samplers; // Link the sampler statically
 
   bindings[1].binding = 1;
   bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -311,7 +311,13 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   bool currentIsFirstFrame = isFirstFrame;
 
   if (currentIsFirstFrame) {
-    createPipelines(input.sampler);
+    // Steal the first frame's sampler and conversion for long-lived pipelines
+    this->immutableSampler = input.sampler;
+    this->ycbcrConversion = input.ycbcrConversion;
+    input.sampler = VK_NULL_HANDLE;
+    input.ycbcrConversion = VK_NULL_HANDLE;
+
+    createPipelines(this->immutableSampler);
   }
 
   // 1. Allocate and Update Descriptor Sets for each tile
@@ -755,6 +761,16 @@ void VulkanImageStacker::releaseVulkanResources() {
     vkDestroyPipelineLayout(device, normalizePipelineLayout, nullptr);
   if (normalizePipeline != VK_NULL_HANDLE)
     vkDestroyPipeline(device, normalizePipeline, nullptr);
+
+  if (immutableSampler != VK_NULL_HANDLE)
+    vkDestroySampler(device, immutableSampler, nullptr);
+
+  if (ycbcrConversion != VK_NULL_HANDLE) {
+    auto pfnDestroy = (PFN_vkDestroySamplerYcbcrConversion)vkGetDeviceProcAddr(
+        device, "vkDestroySamplerYcbcrConversion");
+    if (pfnDestroy)
+      pfnDestroy(device, ycbcrConversion, nullptr);
+  }
 
   for (size_t i = 0; i < accumBuffers.size(); ++i) {
     if (accumBuffers[i] != VK_NULL_HANDLE)
