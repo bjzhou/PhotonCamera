@@ -3,6 +3,7 @@ package com.hinnka.mycamera.processor
 import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
+import android.util.Log
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
@@ -39,84 +40,98 @@ object MultiFrameStacker {
         rotation: Int,
         aspectRatio: AspectRatio?,
         outputPath: String? = null,
-        enableSuperResolution: Boolean = false
+        enableSuperResolution: Boolean = false,
+        useVulkan: Boolean = true
     ): Bitmap? {
         if (images.isEmpty()) return null
 
         val width = images[0].width
         val height = images[0].height
 
-        // If SR is enabled, the output will be 2x size
         val scale = if (enableSuperResolution) 2 else 1
-
-        PLog.i(TAG, "Starting stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution")
         val startTime = System.currentTimeMillis()
 
-        val stackerPtr = createStackerNative(width, height, enableSuperResolution)
-        if (stackerPtr == 0L) {
-            PLog.e(TAG, "Failed to create native stacker")
-            return null
+        if (useVulkan) {
+            PLog.i(
+                TAG,
+                "Starting Vulkan stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
+            )
+            val stackerPtr = createVulkanStackerNative(width, height, enableSuperResolution)
+            if (stackerPtr != 0L) {
+                try {
+                    for (image in images) {
+                        image.use {
+                            val hardwareBuffer = it.image.hardwareBuffer
+                            if (hardwareBuffer != null) {
+                                addVulkanFrameNative(stackerPtr, hardwareBuffer)
+                            } else {
+                                PLog.w(TAG, "Image has no hardware buffer, skipping")
+                            }
+                        }
+                    }
+                    PLog.d(TAG, "Stack frames processed")
+
+                    val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
+                    val targetW = dimensions.width() * scale
+                    val targetH = dimensions.height() * scale
+                    val previewBitmap = createBitmap(targetW, targetH)
+
+                    processVulkanStackNative(stackerPtr, previewBitmap, rotation)
+
+                    PLog.i(TAG, "Vulkan stacking completed in ${System.currentTimeMillis() - startTime}ms")
+                    return previewBitmap
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Error during Vulkan stacking", e)
+                } finally {
+                    releaseVulkanStackerNative(stackerPtr)
+                }
+            }
         }
+
+        // Fallback or legacy path
+        PLog.i(
+            TAG,
+            "Starting legacy stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
+        )
+        val stackerPtr = createStackerNative(width, height, enableSuperResolution)
+        if (stackerPtr == 0L) return null
 
         try {
             val stagedIndices = mutableListOf<Int>()
-            for ((index, image) in images.withIndex()) {
+            for (image in images) {
                 image.use {
-                    // Validate dimensions
-                    if (image.width != width || image.height != height) {
-                        PLog.w(TAG, "Skipping frame $index due to dimension mismatch")
-                        return@use
-                    }
-
                     val planes = image.planes
-                    val yBuffer = planes[0].buffer
-                    val uBuffer = planes[1].buffer
-                    val vBuffer = planes[2].buffer
-
-                    val yRowStride = planes[0].rowStride
-                    val uvRowStride = planes[1].rowStride
-                    val uvPixelStride = planes[1].pixelStride
-
                     stageFrameNative(
                         stackerPtr,
-                        yBuffer, uBuffer, vBuffer,
-                        yRowStride, uvRowStride, uvPixelStride,
+                        planes[0].buffer, planes[1].buffer, planes[2].buffer,
+                        planes[0].rowStride, planes[1].rowStride, planes[1].pixelStride,
                         image.format
                     )
                     stagedIndices.add(stagedIndices.size)
                 }
             }
 
-            // High-latency processing happens here, after all Images are closed
             for (idx in stagedIndices) {
                 processFrameNative(stackerPtr, idx)
             }
-            // Optional: clear native memory when done
             clearStagedFramesNative(stackerPtr)
 
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
-
-            // Apply scale to output dimensions
             val targetW = dimensions.width() * scale
             val targetH = dimensions.height() * scale
-
             val previewBitmap = createBitmap(targetW, targetH)
 
-            val tw = aspectRatio?.widthRatio ?: width
-            val th = aspectRatio?.heightRatio ?: height
+            processStackNative(
+                stackerPtr,
+                previewBitmap,
+                rotation,
+                aspectRatio?.widthRatio ?: width,
+                aspectRatio?.heightRatio ?: height,
+                outputPath
+            )
 
-            synchronized(previewBitmap) {
-                if (!previewBitmap.isRecycled) {
-                    processStackNative(stackerPtr, previewBitmap, rotation, tw, th, outputPath)
-                }
-            }
-
-            PLog.i(TAG, "Stacking completed in ${System.currentTimeMillis() - startTime}ms")
+            PLog.i(TAG, "Legacy stacking completed in ${System.currentTimeMillis() - startTime}ms")
             return previewBitmap
-
-        } catch (e: Exception) {
-            PLog.e(TAG, "Error during stacking", e)
-            return null
         } finally {
             releaseStackerNative(stackerPtr)
         }
@@ -125,48 +140,89 @@ object MultiFrameStacker {
     fun processBurstRaw(
         images: List<SafeImage>,
         characteristics: CameraCharacteristics,
-        enableSuperResolution: Boolean = false
+        enableSuperResolution: Boolean = false,
+        useVulkan: Boolean = true
     ): ByteBuffer? {
-        var stackerPtr = 0L
-
         val width = images[0].width
         val height = images[0].height
-
         val sensorCfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
+
         PLog.d(
             TAG,
-            "Starting multi-frame stacking for ${images.size} frames. Pattern=$sensorCfa SR=$enableSuperResolution"
+            "Starting RAW stacking for ${images.size} frames. Pattern=$sensorCfa SR=$enableSuperResolution Vulkan=$useVulkan"
         )
 
-        stackerPtr = createRawStackerNative(width, height, enableSuperResolution)
+        // Try Vulkan path
+        if (useVulkan) {
+            val vulkanStackerPtr = createVulkanRawStackerNative(width, height, enableSuperResolution)
+            if (vulkanStackerPtr != 0L) {
+                PLog.i(TAG, "Using Vulkan RAW stacker")
+                try {
+                    for (image in images) {
+                        image.use {
+                            if (image.width != width || image.height != height) return@use
+                            val buffer = image.planes[0].buffer
+                            val rowStride = image.planes[0].rowStride
+                            addVulkanRawFrameNative(vulkanStackerPtr, buffer, rowStride, sensorCfa)
+                        }
+                    }
+
+                    val scale = getVulkanRawStackerScaleNative(vulkanStackerPtr)
+                    val stackedBuffer = ByteBuffer.allocateDirect(width * height * scale * scale * 2)
+                        .order(ByteOrder.nativeOrder())
+
+                    val success = processVulkanRawStackNative(vulkanStackerPtr, stackedBuffer)
+                    if (success) {
+                        PLog.i(TAG, "Vulkan RAW stacking completed successfully")
+                        return stackedBuffer
+                    } else {
+                        PLog.w(TAG, "Vulkan RAW stacking failed, falling back to CPU")
+                    }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Vulkan RAW stacking error: ${e.message}, falling back to CPU")
+                } finally {
+                    releaseVulkanRawStackerNative(vulkanStackerPtr)
+                }
+            } else {
+                PLog.w(TAG, "Failed to create Vulkan RAW stacker, falling back to CPU")
+            }
+        }
+
+        // CPU fallback
+        PLog.i(TAG, "Using CPU RAW stacker")
+        var stackerPtr = createRawStackerNative(width, height, enableSuperResolution)
         if (stackerPtr == 0L) {
-            PLog.e(TAG, "Failed to create raw stacker")
+            PLog.e(TAG, "Failed to create CPU raw stacker")
             return null
         }
 
-        val stagedIndices = mutableListOf<Int>()
-        for (image in images) {
-            image.use {
-                if (image.width != width || image.height != height) return@use
-                val buffer = image.planes[0].buffer
-                val rowStride = image.planes[0].rowStride
-                stageRawFrameNative(stackerPtr, buffer, rowStride, sensorCfa)
-                stagedIndices.add(stagedIndices.size)
+        try {
+            val stagedIndices = mutableListOf<Int>()
+            for (image in images) {
+                image.use {
+                    if (image.width != width || image.height != height) return@use
+                    val buffer = image.planes[0].buffer
+                    val rowStride = image.planes[0].rowStride
+                    stageRawFrameNative(stackerPtr, buffer, rowStride, sensorCfa)
+                    stagedIndices.add(stagedIndices.size)
+                }
             }
-        }
-        for (idx in stagedIndices) {
-            processRawFrameNative(stackerPtr, idx)
-        }
-        clearStagedRawFramesNative(stackerPtr)
+            for (idx in stagedIndices) {
+                processRawFrameNative(stackerPtr, idx)
+            }
+            clearStagedRawFramesNative(stackerPtr)
 
-        // 3. Process Stack
-        val scale = getRawStackerScaleNative(stackerPtr)
-        val stackedBuffer = ByteBuffer.allocateDirect(width * height * scale * scale * 2).order(ByteOrder.nativeOrder())
-        processRawStackWithBufferNative(stackerPtr, stackedBuffer)
+            // 3. Process Stack
+            val scale = getRawStackerScaleNative(stackerPtr)
+            val stackedBuffer = ByteBuffer.allocateDirect(width * height * scale * scale * 2)
+                .order(ByteOrder.nativeOrder())
+            processRawStackWithBufferNative(stackerPtr, stackedBuffer)
 
-        releaseRawStackerNative(stackerPtr)
-        stackerPtr = 0L
-        return stackedBuffer
+            PLog.i(TAG, "CPU RAW stacking completed successfully")
+            return stackedBuffer
+        } finally {
+            releaseRawStackerNative(stackerPtr)
+        }
     }
 
     // --- Native Methods ---
@@ -194,6 +250,15 @@ object MultiFrameStacker {
 
     private external fun releaseStackerNative(stackerPtr: Long)
 
+    private external fun createVulkanStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
+    private external fun addVulkanFrameNative(
+        stackerPtr: Long,
+        hardwareBuffer: android.hardware.HardwareBuffer
+    ): Boolean
+
+    private external fun processVulkanStackNative(stackerPtr: Long, outBitmap: Bitmap?, rotation: Int): Boolean
+    private external fun releaseVulkanStackerNative(stackerPtr: Long)
+
     private external fun createRawStackerNative(width: Int, height: Int, useSuperRes: Boolean): Long
     private external fun getRawStackerScaleNative(stackerPtr: Long): Int
     private external fun stageRawFrameNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
@@ -201,4 +266,17 @@ object MultiFrameStacker {
     private external fun clearStagedRawFramesNative(stackerPtr: Long)
     private external fun processRawStackWithBufferNative(stackerPtr: Long, outputBuffer: ByteBuffer)
     private external fun releaseRawStackerNative(stackerPtr: Long)
+
+    // Vulkan RAW Stacker
+    private external fun createVulkanRawStackerNative(width: Int, height: Int, useSuperRes: Boolean): Long
+    private external fun getVulkanRawStackerScaleNative(stackerPtr: Long): Int
+    private external fun addVulkanRawFrameNative(
+        stackerPtr: Long,
+        rawData: ByteBuffer,
+        rowStride: Int,
+        cfaPattern: Int
+    ): Boolean
+
+    private external fun processVulkanRawStackNative(stackerPtr: Long, outputBuffer: ByteBuffer): Boolean
+    private external fun releaseVulkanRawStackerNative(stackerPtr: Long)
 }

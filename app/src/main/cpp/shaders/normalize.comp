@@ -1,0 +1,58 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, scalar) buffer OutputBuffer {
+    uint pixels[];
+} outputBuffer;
+
+layout(binding = 1, scalar) buffer Accumulator {
+    vec4 data[]; // Float32
+} accumulator;
+
+layout(push_constant, scalar) uniform PushConstants {
+    float t0, t1, t2, t3, t4, t5;
+    uint outWidth;
+    uint outHeight;
+    uint sensorWidth;  // Global sensor width
+    uint sensorHeight; // Global sensor height
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+} pc;
+
+void main() {
+    uint X = gl_GlobalInvocationID.x;
+    uint Y = gl_GlobalInvocationID.y;
+
+    if (X >= pc.outWidth || Y >= pc.outHeight) return;
+
+    float fx = float(X) * pc.t0 + float(Y) * pc.t1 + pc.t2;
+    float fy = float(X) * pc.t3 + float(Y) * pc.t4 + pc.t5;
+    
+    uint sx = uint(clamp(floor(fx + 0.5), 0.0, float(pc.sensorWidth - 1)));
+    uint sy = uint(clamp(floor(fy + 0.5), 0.0, float(pc.sensorHeight - 1)));
+
+    // Check if the sampled point (sx, sy) is within THIS tile
+    if (sx >= pc.tileX && sx < pc.tileX + pc.tileW && 
+        sy >= pc.tileY && sy < pc.tileY + pc.tileH) {
+        
+        uint localX = sx - pc.tileX;
+        uint localY = sy - pc.tileY;
+        uint index = localY * pc.tileW + localX;
+        vec4 accum = accumulator.data[index];
+        
+        vec3 color = accum.rgb / max(accum.a, 0.001);
+        color = clamp(color, 0.0, 1.0);
+        
+        uint r = uint(clamp(color.r * 255.0, 0.0, 255.0));
+        uint g = uint(clamp(color.g * 255.0, 0.0, 255.0));
+        uint b = uint(clamp(color.b * 255.0, 0.0, 255.0));
+        uint a = 255;
+        
+        uint outIndex = Y * pc.outWidth + X;
+        outputBuffer.pixels[outIndex] = (a << 24) | (b << 16) | (g << 8) | r;
+    }
+}

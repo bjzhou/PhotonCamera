@@ -1,0 +1,63 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, r8) uniform readonly image2D refImage;
+layout(binding = 1, r8) uniform readonly image2D targetImage;
+
+layout(binding = 2) buffer Result {
+    ivec2 offsets[];
+} results;
+
+layout(push_constant) uniform PushConstants {
+    ivec2 gridPos; // Top-left of the tile
+    int tileSize;
+    int searchRadius;
+    int gridW;
+} pc;
+
+shared float sadCache[17][17]; // Supporting search radius up to 8
+
+void main() {
+    int dx = int(gl_LocalInvocationID.x) - pc.searchRadius;
+    int dy = int(gl_LocalInvocationID.y) - pc.searchRadius;
+
+    if (abs(dx) > pc.searchRadius || abs(dy) > pc.searchRadius) return;
+
+    float sad = 0.0;
+    int count = 0;
+
+    for (int y = 0; y < pc.tileSize; y += 2) {
+        for (int x = 0; x < pc.tileSize; x += 2) {
+            ivec2 rCoord = pc.gridPos + ivec2(x, y);
+            ivec2 tCoord = rCoord + ivec2(dx, dy);
+            
+            float r = imageLoad(refImage, rCoord).r;
+            float t = imageLoad(targetImage, tCoord).r;
+            sad += abs(r - t);
+            count++;
+        }
+    }
+
+    sadCache[dy + pc.searchRadius][dx + pc.searchRadius] = sad / max(float(count), 1.0);
+
+    barrier();
+
+    // Only one thread per tile finds the minimum
+    if (gl_LocalInvocationID.x == 0 && gl_LocalInvocationID.y == 0) {
+        float minSad = 1e10;
+        ivec2 bestOffset = ivec2(0);
+
+        for (int sy = 0; sy <= pc.searchRadius * 2; sy++) {
+            for (int sx = 0; sx <= pc.searchRadius * 2; sx++) {
+                if (sadCache[sy][sx] < minSad) {
+                    minSad = sadCache[sy][sx];
+                    bestOffset = ivec2(sx - pc.searchRadius, sy - pc.searchRadius);
+                }
+            }
+        }
+        
+        uint tileIdx = (pc.gridPos.y / pc.tileSize) * pc.gridW + (pc.gridPos.x / pc.tileSize);
+        results.offsets[tileIdx] = bestOffset;
+    }
+}

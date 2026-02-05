@@ -1,0 +1,139 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Input: RAW16 image as R16 texture
+layout(binding = 0) uniform sampler2D inputRawSampler;
+
+// Accumulator buffer storing weighted sums for one plane
+layout(binding = 1, scalar) buffer Accumulator {
+    vec2 data[]; // (sum, weight) for each pixel in the plane
+} accumulator;
+
+layout(push_constant, scalar) uniform PushConstants {
+    float offsetX, offsetY;
+    float scale;          
+    uint planeWidth;      
+    uint planeHeight;     
+    uint sensorWidth;     
+    uint sensorHeight;    
+    float baseNoise;
+    uint isFirstFrame;
+    uint planeIndex;      // 0=R, 1=Gr, 2=Gb, 3=B
+    uint cfaPattern;      // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+} pc;
+
+ivec2 getPlaneOffsets(uint planeIdx, uint cfa) {
+    const int offsets[4][4][2] = int[4][4][2](
+        int[4][2](int[2](0,0), int[2](1,0), int[2](0,1), int[2](1,1)), // RGGB
+        int[4][2](int[2](1,0), int[2](0,0), int[2](1,1), int[2](0,1)), // GRBG  
+        int[4][2](int[2](0,1), int[2](1,1), int[2](0,0), int[2](1,0)), // GBRG
+        int[4][2](int[2](1,1), int[2](0,1), int[2](1,0), int[2](0,0))  // BGGR
+    );
+    return ivec2(offsets[cfa][planeIdx][0], offsets[cfa][planeIdx][1]);
+}
+
+float cubicWeight(float t) {
+    float a = -0.5;
+    float absT = abs(t);
+    if (absT <= 1.0) return (a + 2.0) * absT * absT * absT - (a + 3.0) * absT * absT + 1.0;
+    if (absT < 2.0) return a * absT * absT * absT - 5.0 * a * absT * absT + 8.0 * a * absT - 4.0 * a;
+    return 0.0;
+}
+
+// Bayer-aware Bicubic sampling: only samples same-color neighbors
+float sampleBicubicBayer(sampler2D s, vec2 uv, vec2 size) {
+    ivec2 planeOffsets = getPlaneOffsets(pc.planeIndex, pc.cfaPattern);
+    vec2 sensorCoord = uv * size - vec2(0.5); // Adjust for 0.5 texel center
+    
+    // Convert to plane space (stride 2)
+    vec2 planeCoord = (sensorCoord - vec2(planeOffsets)) * 0.5;
+    vec2 f = fract(planeCoord);
+    vec2 planeCenter = floor(planeCoord);
+
+    float sum = 0.0;
+    for (int j = -1; j <= 2; j++) {
+        float wy = cubicWeight(float(j) - f.y);
+        for (int i = -1; i <= 2; i++) {
+            float wx = cubicWeight(float(i) - f.x);
+            
+            // Map back to sensor space
+            vec2 sampSensor = (planeCenter + vec2(i, j)) * 2.0 + vec2(planeOffsets);
+            vec2 sampUV = (sampSensor + 0.5) / size;
+            sum += texture(s, sampUV).r * wx * wy;
+        }
+    }
+    return sum;
+}
+
+// Bayer-aware local variance
+float computeLocalVarianceBayer(vec2 uv) {
+    float sum = 0.0;
+    float sumSq = 0.0;
+    vec2 invSize = 1.0 / vec2(pc.sensorWidth, pc.sensorHeight);
+    ivec2 planeOffsets = getPlaneOffsets(pc.planeIndex, pc.cfaPattern);
+    
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            vec2 sampUV = uv + vec2(dx * 2, dy * 2) * invSize;
+            float val = texture(inputRawSampler, sampUV).r;
+            sum += val;
+            sumSq += val * val;
+        }
+    }
+    float mean = sum / 9.0;
+    return (sumSq / 9.0) - (mean * mean);
+}
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+
+    uint planeX = pc.tileX + tx;
+    uint planeY = pc.tileY + ty;
+    if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
+
+    vec2 sensorSize = vec2(pc.sensorWidth, pc.sensorHeight);
+    ivec2 po = getPlaneOffsets(pc.planeIndex, pc.cfaPattern);
+    vec2 baseUV = (vec2(planeX, planeY) * (2.0 / pc.scale) + vec2(po) + 0.5) / sensorSize;
+    
+    // Apply alignment offset
+    vec2 offsetUV = baseUV + vec2(pc.offsetX, pc.offsetY) / (sensorSize / pc.scale);
+    
+    // Safe sampling
+    float targetVal = sampleBicubicBayer(inputRawSampler, offsetUV, sensorSize);
+    
+    uint accIndex = ty * pc.bufferStride + tx;
+    vec2 currentAccum = accumulator.data[accIndex];
+    
+    float weight = 1.0;
+    if (pc.isFirstFrame == 0) {
+        float refVal = currentAccum.x / max(currentAccum.y, 0.001);
+        float diff = abs(targetVal - refVal);
+        float variance = computeLocalVarianceBayer(offsetUV);
+        
+        float v16 = variance * 65535.0 * 65535.0;
+        float noiseModel = 32.0 + sqrt(max(refVal * 65535.0, 0.0)) * 2.5;
+        float thresholdLow = noiseModel * 1.5 / 65535.0;
+        float factorHigh = 4.0 + min(8.0, v16 / 5000.0);
+        float thresholdHigh = noiseModel * factorHigh / 65535.0;
+        
+        if (diff < thresholdLow) {
+            weight = 1.0;
+        } else if (diff > thresholdHigh) {
+            weight = 0.0;
+        } else {
+            float t = (diff - thresholdLow) / (thresholdHigh - thresholdLow);
+            weight = 1.0 - (t * t * (3.0 - 2.0 * t));
+        }
+    }
+    
+    accumulator.data[accIndex] += vec2(targetVal * weight, weight);
+}

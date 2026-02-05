@@ -1,0 +1,69 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Output buffer: RAW16 data in Bayer pattern (full resolution)
+layout(binding = 0, scalar) buffer OutputBuffer {
+    uint16_t data[];
+} outputBuffer;
+
+// Input: Accumulator for ONE plane
+layout(binding = 1, scalar) buffer Accumulator {
+    vec2 data[]; // (sum, weight)
+} accumulator;
+
+layout(push_constant, scalar) uniform PushConstants {
+    float offsetX, offsetY;
+    float scale;
+    uint planeWidth;      
+    uint planeHeight;     
+    uint sensorWidth;     
+    uint sensorHeight;    
+    float baseNoise;
+    uint isFirstFrame;
+    uint planeIndex;      
+    uint cfaPattern;      
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+} pc;
+
+ivec2 getSensorCoords(uint planeX, uint planeY) {
+    const int offsets[4][4][2] = int[4][4][2](
+        int[4][2](int[2](0,0), int[2](1,0), int[2](0,1), int[2](1,1)), // RGGB
+        int[4][2](int[2](1,0), int[2](0,0), int[2](1,1), int[2](0,1)), // GRBG  
+        int[4][2](int[2](0,1), int[2](1,1), int[2](0,0), int[2](1,0)), // GBRG
+        int[4][2](int[2](1,1), int[2](0,1), int[2](1,0), int[2](0,0))  // BGGR
+    );
+    int dx = offsets[pc.cfaPattern][pc.planeIndex][0];
+    int dy = offsets[pc.cfaPattern][pc.planeIndex][1];
+    return ivec2(int(planeX) * 2 + dx, int(planeY) * 2 + dy);
+}
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+
+    uint planeX = pc.tileX + tx;
+    uint planeY = pc.tileY + ty;
+    if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
+
+    uint accIndex = ty * pc.bufferStride + tx;
+    vec2 accum = accumulator.data[accIndex];
+
+    float result = 0.0;
+    if (accum.y > 0.001) {
+        result = accum.x / accum.y;
+    }
+
+    uint16_t outVal = uint16_t(clamp(result * 65535.0, 0.0, 65535.0));
+    ivec2 sensorCoords = getSensorCoords(planeX, planeY);
+    uint outIndex = sensorCoords.y * pc.sensorWidth + sensorCoords.x;
+    outputBuffer.data[outIndex] = outVal;
+}

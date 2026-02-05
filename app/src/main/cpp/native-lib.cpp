@@ -17,7 +17,9 @@
 #include "jxl_utils.h"
 #include "math_utils.h"
 #include "stacking_utils.h"
-#include "yuv_utils.h"
+#include "vulkan_raw_stacker.h"
+#include "vulkan_stacker.h"
+#include <android/hardware_buffer_jni.h>
 
 extern "C" {
 
@@ -141,6 +143,66 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
 }
 
 /**
+ * Vulkan Stacking JNI Interface
+ */
+JNIEXPORT jlong JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanStackerNative(
+    JNIEnv *env, jobject /* this */, jint width, jint height,
+    jboolean enableSuperRes) {
+  auto *stacker = new VulkanImageStacker(width, height, enableSuperRes);
+  return reinterpret_cast<jlong>(stacker);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_addVulkanFrameNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject hardwareBuffer) {
+  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
+  if (!stacker || !hardwareBuffer)
+    return JNI_FALSE;
+
+  AHardwareBuffer *buffer =
+      AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
+  if (!buffer)
+    return JNI_FALSE;
+
+  bool success = stacker->addFrame(buffer);
+  return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_processVulkanStackNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
+    jint rotation) {
+  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
+  if (!stacker)
+    return JNI_FALSE;
+
+  AndroidBitmapInfo info;
+  void *bitmapPixels = nullptr;
+  if (outBitmap &&
+      (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
+       AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0)) {
+    return JNI_FALSE;
+  }
+
+  bool success =
+      stacker->processStack(static_cast<uint32_t *>(bitmapPixels), info.width,
+                            info.height, info.stride, rotation);
+
+  if (outBitmap) {
+    AndroidBitmap_unlockPixels(env, outBitmap);
+  }
+  return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanStackerNative(
+    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
+  delete stacker;
+}
+
+/**
  * Raw Stacking JNI Interface
  */
 JNIEXPORT jlong JNICALL
@@ -226,6 +288,67 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
     LOGE("Output buffer too small: capacity=%ld, required=%ld", (long)capacity,
          (long)(result.size() * sizeof(uint16_t)));
   }
+}
+
+/**
+ * Vulkan Raw Stacking JNI Interface
+ */
+JNIEXPORT jlong JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNative(
+    JNIEnv *env, jobject, jint width, jint height, jboolean useSuperRes) {
+  auto *stacker = new VulkanRawStacker(width, height, (bool)useSuperRes);
+  return reinterpret_cast<jlong>(stacker);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_getVulkanRawStackerScaleNative(
+    JNIEnv *env, jobject, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
+  return stacker ? stacker->getScale() : 1;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_addVulkanRawFrameNative(
+    JNIEnv *env, jobject, jlong stackerPtr, jobject rawData, jint rowStride,
+    jint cfaPattern) {
+  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
+  if (!stacker)
+    return JNI_FALSE;
+
+  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
+  if (!data) {
+    LOGE("addVulkanRawFrameNative: Failed to get buffer address");
+    return JNI_FALSE;
+  }
+
+  bool success = stacker->addFrame(data, rowStride, cfaPattern);
+  return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_processVulkanRawStackNative(
+    JNIEnv *env, jobject, jlong stackerPtr, jobject outputBuffer) {
+  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
+  if (!stacker)
+    return JNI_FALSE;
+
+  auto *outData =
+      static_cast<uint16_t *>(env->GetDirectBufferAddress(outputBuffer));
+  if (!outData) {
+    LOGE("processVulkanRawStackNative: Failed to get buffer address");
+    return JNI_FALSE;
+  }
+
+  jlong capacity = env->GetDirectBufferCapacity(outputBuffer);
+  bool success = stacker->processStack(outData, (size_t)capacity);
+  return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanRawStackerNative(
+    JNIEnv *env, jobject, jlong stackerPtr) {
+  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
+  delete stacker;
 }
 
 JNIEXPORT void JNICALL

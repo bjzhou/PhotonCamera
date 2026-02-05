@@ -1,0 +1,22 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, r8) uniform readonly image2D inputImage;
+layout(binding = 1, r8) uniform writeonly image2D outputImage;
+
+void main() {
+    ivec2 outSize = imageSize(outputImage);
+    ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (outCoord.x >= outSize.x || outCoord.y >= outSize.y) return;
+
+    ivec2 inCoord = outCoord * 2;
+    
+    float sum = imageLoad(inputImage, inCoord).r;
+    sum += imageLoad(inputImage, inCoord + ivec2(1, 0)).r;
+    sum += imageLoad(inputImage, inCoord + ivec2(0, 1)).r;
+    sum += imageLoad(inputImage, inCoord + ivec2(1, 1)).r;
+    
+    imageStore(outputImage, outCoord, vec4(sum * 0.25));
+}
