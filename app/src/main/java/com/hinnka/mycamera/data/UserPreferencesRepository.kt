@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import com.hinnka.mycamera.utils.DeviceUtil
 
 /**
  * DataStore 扩展属性
@@ -63,7 +64,7 @@ data class UserPreferences(
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
-    val useGpuAcceleration: Boolean = true // 多帧合成是否使用 GPU 加速
+    val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration // 多帧合成是否使用 GPU 加速
 )
 
 /**
@@ -156,7 +157,7 @@ class UserPreferencesRepository(private val context: Context) {
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
-                useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: true
+                useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration
             )
         }
 

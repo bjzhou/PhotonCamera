@@ -28,6 +28,7 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.ShutterSoundPlayer
@@ -164,7 +165,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
     val useGpuAcceleration: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useGpuAcceleration }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUtil.defaultGpuAcceleration)
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
