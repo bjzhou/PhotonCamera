@@ -20,6 +20,7 @@ import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
@@ -635,45 +636,79 @@ object PhotoManager {
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
 
+            val rawMetadata = RawMetadata.create(firstImageWidth, firstImageHeight, characteristics, captureResult)
+
             val byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
                 useSuperResolution,
-                useGpuAcceleration
-            )
-            byteBuffer ?: return@withContext
-            val byteOutstream = ByteArrayOutputStream()
-            byteOutstream.use { outputStream ->
-                try {
-                    val scale = if (useSuperResolution) 2 else 1
-                    RawProcessor.saveToDng(
-                        byteBuffer.asReadOnlyBuffer(), characteristics,
-                        captureResult, outputStream, firstImageWidth * scale, firstImageHeight * scale, rotation
-                    )
-                } catch (e: Throwable) {
-                    // Fallback: If scaled DNG is not supported by hardware,
-                    // save the first original frame to maintain DNG availability.
-                    PLog.e(TAG, "SR DNG dimensions not supported, falling back to original frame DNG", e)
-                    RawProcessor.saveToDng(firstImageData, characteristics, captureResult, outputStream,
-                        firstImageWidth, firstImageHeight, rotation)
-                }
-            }
-            val array = byteOutstream.toByteArray()
-            FileOutputStream(dngFile).use {
-                it.write(array)
-            }
-            if (shouldAutoSave) {
-                exportDng(context, array, metadata)
-            }
+                useGpuAcceleration,
+                masterBlackLevel = rawMetadata.blackLevel,
+                whiteLevel = rawMetadata.whiteLevel.toInt(),
+                whiteBalanceGains = rawMetadata.whiteBalanceGains,
+                noiseModel = rawMetadata.noiseProfile
+            ) ?: return@withContext
+//            val byteOutstream = ByteArrayOutputStream()
+//            byteOutstream.use { outputStream ->
+//                try {
+//                    val scale = if (useSuperResolution) 2 else 1
+//                    RawProcessor.saveToDng(
+//                        byteBuffer.asReadOnlyBuffer(), characteristics,
+//                        captureResult, outputStream, firstImageWidth * scale, firstImageHeight * scale, rotation
+//                    )
+//                } catch (e: Throwable) {
+//                    // Fallback: If scaled DNG is not supported by hardware,
+//                    // save the first original frame to maintain DNG availability.
+//                    PLog.e(TAG, "SR DNG dimensions not supported, falling back to original frame DNG", e)
+//                    RawProcessor.saveToDng(firstImageData, characteristics, captureResult, outputStream,
+//                        firstImageWidth, firstImageHeight, rotation)
+//                }
+//            }
+//            val array = byteOutstream.toByteArray()
+//            FileOutputStream(dngFile).use {
+//                it.write(array)
+//            }
+//            if (shouldAutoSave) {
+//                exportDng(context, array, metadata)
+//            }
 
-            val result = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
+            val result: Bitmap = run {
+                val scale = if (useSuperResolution) 2 else 1
+                val stackedWidth = firstImageWidth * scale
+                val stackedHeight = firstImageHeight * scale
+
+                // Scale crop region if needed
+                val scaledCropRegion = if (useSuperResolution && metadata.cropRegion != null) {
+                    Rect(
+                        metadata.cropRegion.left * scale,
+                        metadata.cropRegion.top * scale,
+                        metadata.cropRegion.right * scale,
+                        metadata.cropRegion.bottom * scale
+                    )
+                } else {
+                    metadata.cropRegion
+                }
+
+                // Construct metadata for Linear RGB
+                val linearMetadata = rawMetadata.copy(
+                    width = stackedWidth,
+                    height = stackedHeight,
+                    cfaPattern = RawMetadata.CFA_LINEAR_RGB,
+                    blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
+                    whiteLevel = 65535f,
+                    whiteBalanceGains = floatArrayOf(1f, 1f, 1f, 1f),
+                    // Keep original CCM and other params
+                )
+
                 RawDemosaicProcessor.getInstance().process(
-                    dngFile.absolutePath,
+                    byteBuffer,
+                    stackedWidth,
+                    stackedHeight,
+                    stackedWidth * 6, // 3 channels * 2 bytes
+                    linearMetadata,
                     aspectRatio,
-                    metadata.cropRegion,
+                    scaledCropRegion,
                     rotation
                 )
-            } else {
-                RawProcessor.processAndToBitmap(dngFile, aspectRatio, metadata.cropRegion, rotation)
             } ?: return@withContext
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->

@@ -3,29 +3,28 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-// Input: RAW16 image as R16 texture
-layout(binding = 0) uniform sampler2D inputRawSampler;
-
-// Accumulator buffer storing weighted sums for one plane
-layout(binding = 1, scalar) buffer Accumulator {
-    vec2 data[]; // (sum, weight) for each pixel in the plane
-} accumulator;
-
-layout(binding = 2, scalar) buffer AlignmentGrid {
-    vec2 offsets[];
-} alignmentGrid;
-
+// Push Constants
 layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    
     float offsetX, offsetY;
-    float scale;          
-    uint planeWidth;      
-    uint planeHeight;     
-    uint sensorWidth;     
-    uint sensorHeight;    
-    float baseNoise;
+    float scale;
+    
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    float noiseModel[2];
+    
     uint isFirstFrame;
-    uint planeIndex;      // 0=R, 1=Gr, 2=Gb, 3=B
-    uint cfaPattern;      // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    
     uint tileX;
     uint tileY;
     uint tileW;
@@ -34,157 +33,186 @@ layout(push_constant, scalar) uniform PushConstants {
     uint gridW;
     uint gridH;
     uint tileSize;
+    
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
 } pc;
 
-ivec2 getPlaneOffsets(uint planeIdx, uint cfa) {
-    const int offsets[4][4][2] = int[4][4][2](
-        int[4][2](int[2](0,0), int[2](1,0), int[2](0,1), int[2](1,1)), // RGGB
-        int[4][2](int[2](1,0), int[2](0,0), int[2](1,1), int[2](0,1)), // GRBG  
-        int[4][2](int[2](0,1), int[2](1,1), int[2](0,0), int[2](1,0)), // GBRG
-        int[4][2](int[2](1,1), int[2](0,1), int[2](1,0), int[2](0,0))  // BGGR
-    );
-    return ivec2(offsets[cfa][planeIdx][0], offsets[cfa][planeIdx][1]);
-}
+// Bindings
+layout(set = 0, binding = 0) uniform sampler2D inputRawSampler; // The current frame RAW
 
-float cubicWeight(float t) {
-    // Catmull-Rom with tuning for sharpness (RAW needs more)
-    // a = -0.5 is standard Catmull-Rom
-    // a = -0.75 is moderate sharpening
-    // a = -1.0 is aggressive sharpening
-    float a = -0.75; 
-    float absT = abs(t);
-    if (absT <= 1.0) return (a + 2.0) * absT * absT * absT - (a + 3.0) * absT * absT + 1.0;
-    if (absT < 2.0) return a * absT * absT * absT - 5.0 * a * absT * absT + 8.0 * a * absT - 4.0 * a;
-    return 0.0;
-}
+// Accumulator: Stores (val * weight, weight)
+layout(set = 0, binding = 1, scalar) buffer Accumulator {
+    vec2 data[]; 
+} accumulator;
 
-// Bayer-aware Bicubic sampling: only samples same-color neighbors
-float sampleBicubicBayer(sampler2D s, vec2 uv, vec2 size) {
-    ivec2 planeOffsets = getPlaneOffsets(pc.planeIndex, pc.cfaPattern);
-    vec2 sensorCoord = uv * size - vec2(0.5); // Adjust for 0.5 texel center
+// Alignment: Offsets per tile (Plane Resolution)
+layout(set = 0, binding = 2, scalar) buffer AlignBuffer {
+    vec2 offsets[]; 
+} alignBuffer;
+
+// Kernel: k1, k2, cos2t, sin2t (Plane Resolution)
+layout(set = 0, binding = 3, scalar) buffer KernelParams {
+    vec4 data[];
+} kernelParams;
+
+// Robustness: R value (Plane Resolution)
+layout(set = 0, binding = 4, scalar) buffer RobustnessBuffer {
+    float data[]; 
+} outRobustness;
+
+// Helper to get inverse kernel matrix from parameters
+// Params: k1, k2, cos2t, sin2t
+// Output: Inverse Covariance Matrix components (a, b, c) -> [a b; b c]
+vec3 getKernelMatrix(vec4 params) {
+    float k1 = params.x;
+    float k2 = params.y;
+    float c2 = params.z; // cos(2theta)
+    float s2 = params.w; // sin(2theta)
     
-    // Convert to plane space (stride 2)
-    vec2 planeCoord = (sensorCoord - vec2(planeOffsets)) * 0.5;
-    vec2 f = fract(planeCoord);
-    vec2 planeCenter = floor(planeCoord);
-
-    float sum = 0.0;
-    for (int j = -1; j <= 2; j++) {
-        float wy = cubicWeight(float(j) - f.y);
-        for (int i = -1; i <= 2; i++) {
-            float wx = cubicWeight(float(i) - f.x);
-            
-            // Map back to sensor space
-            vec2 sampSensor = (planeCenter + vec2(i, j)) * 2.0 + vec2(planeOffsets);
-            vec2 sampUV = (sampSensor + 0.5) / size;
-            sum += texture(s, sampUV).r * wx * wy;
-        }
-    }
-    return sum;
-}
-
-// Bayer-aware local variance
-float computeLocalVarianceBayer(vec2 uv) {
-    float sum = 0.0;
-    float sumSq = 0.0;
-    vec2 invSize = 1.0 / vec2(pc.sensorWidth, pc.sensorHeight);
-    ivec2 planeOffsets = getPlaneOffsets(pc.planeIndex, pc.cfaPattern);
+    float k_sum = k1 + k2;
+    float k_diff = k1 - k2;
     
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            vec2 sampUV = uv + vec2(dx * 2, dy * 2) * invSize;
-            float val = texture(inputRawSampler, sampUV).r;
-            sum += val;
-            sumSq += val * val;
-        }
-    }
-    float mean = sum / 9.0;
-    return (sumSq / 9.0) - (mean * mean);
+    float a = 0.5 * (k_sum + k_diff * c2);
+    float c_val = 0.5 * (k_sum - k_diff * c2);
+    float b = 0.5 * k_diff * s2;
+    
+    return vec3(a, b, c_val);
 }
 
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
-    if (tx >= pc.tileW || ty >= pc.tileH) return;
-
-    uint planeX = pc.tileX + tx;
-    uint planeY = pc.tileY + ty;
-    if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
-
-    vec2 sensorSize = vec2(pc.sensorWidth, pc.sensorHeight);
-    ivec2 po = getPlaneOffsets(pc.planeIndex, pc.cfaPattern);
-    vec2 baseUV = (vec2(planeX, planeY) * (2.0 / pc.scale) + vec2(po) + 0.5) / sensorSize;
     
-    // Apply alignment offset
-    vec2 offsetUV = baseUV;
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+    
+    // Output Coordinate (RGB Pixel)
+    uint outX = pc.tileX + tx;
+    uint outY = pc.tileY + ty;
+    
+    if (outX >= pc.width || outY >= pc.height) return;
+    
+    // 1. Fetch Kernel Parameters from Base Frame (Structure Tensor)
+    // Structure Tensor is computed at Half-Res (Plane Resolution)
+    uint planeX = outX / 2;
+    uint planeY = outY / 2;
+    planeX = clamp(planeX, 0, pc.planeWidth - 1);
+    planeY = clamp(planeY, 0, pc.planeHeight - 1);
+    
+    // Fetch Kernel Params from Buffer
+    uint kIdx = planeY * pc.planeWidth + planeX;
+    vec4 kParams = kernelParams.data[kIdx];
+    
+    // Compute Inverse Covariance Matrix
+    vec3 OmegaInv = getKernelMatrix(kParams);
+    
+    // 2. Accumulate Contributions
+    vec2 accumVal = vec2(0.0);
+    
+    // This shader processes a specific Output Channel (pc.outputChannel).
+    int targetCFA = int(pc.outputChannel); // 0=R, 1=G, 2=B
+    
+    // Get Alignment Flow (from map)
+    vec2 flow = vec2(0.0);
     if (pc.isFirstFrame == 0) {
-        // Find corresponding tile in alignment grid
-        // The grid is based on the plane resolution (sensorWidth / 2)
-        float px = float(planeX) / pc.scale;
-        float py = float(planeY) / pc.scale;
-        
-        uint gx = uint(px / float(pc.tileSize));
-        uint gy = uint(py / float(pc.tileSize));
+        uint gx = uint(float(planeX) / float(pc.tileSize)); // tileSize is in plane pixels
+        uint gy = uint(float(planeY) / float(pc.tileSize));
         gx = clamp(gx, 0, pc.gridW - 1);
         gy = clamp(gy, 0, pc.gridH - 1);
-        
-        vec2 tileOffset = alignmentGrid.offsets[gy * pc.gridW + gx];
-        
-        // tileOffset is in plane-pixel units (stride 2 on physical sensor)
-        // Convert to UV shift: tileOffset / (sensorSize / 2.0)
-        offsetUV += tileOffset / (sensorSize * 0.5);
+        flow = alignBuffer.offsets[gy * pc.gridW + gx]; // In plane-pixels
     }
     
-    // safe sampling with Bayer-aware bicubic
-    float targetVal = sampleBicubicBayer(inputRawSampler, offsetUV, sensorSize);
+    vec2 flowRaw = flow * 2.0; // In raw pixels
     
-    // Static pixel suppression on reference
-    if (pc.isFirstFrame == 1) {
-        vec2 invSize = 1.0 / sensorSize;
-        float n1 = texture(inputRawSampler, offsetUV + vec2(-2.0, 0.0) * invSize).r;
-        float n2 = texture(inputRawSampler, offsetUV + vec2( 2.0, 0.0) * invSize).r;
-        float n3 = texture(inputRawSampler, offsetUV + vec2( 0.0,-2.0) * invSize).r;
-        float n4 = texture(inputRawSampler, offsetUV + vec2( 0.0, 2.0) * invSize).r;
-        float maxN = max(max(n1, n2), max(n3, n4));
-        if (targetVal > maxN + 0.1) targetVal = maxN;
-    }
+    // Projected Center in Input Frame
+    vec2 centerPos = vec2(outX, outY) + flowRaw;
     
-    uint accIndex = ty * pc.bufferStride + tx;
-    vec2 currentAccum = accumulator.data[accIndex];
+    // Window search in Current Frame (Bayer)
+    // 3x3 Window (radius 1) around the center
+    ivec2 iCenter = ivec2(round(centerPos));
     
-    float weight = 1.0;
-    if (pc.isFirstFrame == 0) {
-        // --- Robust Weighting Merge (Match CPU version logic) ---
-        float refVal = currentAccum.x / max(currentAccum.y, 0.001);
-        float diff = abs(targetVal - refVal);
-        
-        // Calculate local variance for noise model
-        float variance = computeLocalVarianceBayer(offsetUV);
-        
-        // sigma^2 = variance + base_noise
-        // Adjusted noise sigma for RAW16 range
-        float noiseSigma = 24.0 / 65535.0 + sqrt(max(refVal, 0.0)) * 2.0 / 256.0;
-        float thresholdLow = 2.0 * noiseSigma; // More generous base threshold
-        
-        // Relax threshold in busy areas (similar to CPU ImageStacker)
-        float vScale = (variance * 65535.0 * 65535.0);
-        float factorHigh = 3.5 + min(6.5, vScale / 10000.0);
-        float thresholdHigh = thresholdLow * factorHigh;
-        
-        if (diff < thresholdLow) {
-            weight = 1.0;
-        } else if (diff > thresholdHigh) {
-            weight = 0.0;
-        } else {
-            // Quadratic falloff for smoother blending
-            float t = (diff - thresholdLow) / (thresholdHigh - thresholdLow);
-            weight = 1.0 - t * t; 
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+             ivec2 samplePos = iCenter + ivec2(dx, dy);
+             
+             // Check Bounds
+             if (samplePos.x < 0 || samplePos.y < 0 || 
+                 samplePos.x >= int(pc.sensorWidth) || samplePos.y >= int(pc.sensorHeight)) continue;
+             
+             // Check Color Channel of Sample
+             // Bayer Pattern Logic
+             int samplePhase = (samplePos.y % 2) * 2 + (samplePos.x % 2);
+             
+             int sampleColor = -1;
+             // Simplified CFA check
+             if (pc.cfaPattern == 0) { // RGGB
+                 if (samplePhase == 0) sampleColor = 0; // R
+                 else if (samplePhase == 3) sampleColor = 2; // B
+                 else sampleColor = 1; // G
+             } else if (pc.cfaPattern == 1) { // GRBG
+                 if (samplePhase == 1) sampleColor = 0; // R
+                 else if (samplePhase == 2) sampleColor = 2; // B
+                 else sampleColor = 1; // G
+             } else if (pc.cfaPattern == 2) { // GBRG
+                 if (samplePhase == 2) sampleColor = 0; // R
+                 else if (samplePhase == 1) sampleColor = 2; // B
+                 else sampleColor = 1; // G
+             } else { // BGGR
+                 if (samplePhase == 3) sampleColor = 0; // R
+                 else if (samplePhase == 0) sampleColor = 2; // B
+                 else sampleColor = 1; // G
+             }
+             
+             if (sampleColor != targetCFA) continue;
+             
+             // --- Strict Weight Calculation ---
+             
+             // Spatial Distance d = x_input - x_projected
+             vec2 d = vec2(samplePos) - centerPos;
+             
+             // Kernel Weight: exp( -0.5 * d^T * Omega^-1 * d )
+             // OmegaInv packed as vec3(a, b, c) -> [a b; b c]
+             float mahalanobis = OmegaInv.x * d.x * d.x + 
+                                 (OmegaInv.y * d.x * d.y) * 2.0 + 
+                                 OmegaInv.z * d.y * d.y;
+             
+             // Fetch Value
+             float val = texelFetch(inputRawSampler, samplePos, 0).r;
+             
+             // Fetch Robustness R
+             // Robustness is at Half-Res (Plane)
+             int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth)-1);
+             int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight)-1);
+             
+             float R = 1.0;
+             if (pc.isFirstFrame == 0) {
+                 float minR = 1.0;
+                 for (int ry = -2; ry <= 2; ry++) {
+                     for (int rx = -2; rx <= 2; rx++) {
+                         int nx = clamp(rX + rx, 0, int(pc.planeWidth)-1);
+                         int ny = clamp(rY + ry, 0, int(pc.planeHeight)-1);
+                         float rVal = outRobustness.data[ny * pc.planeWidth + nx];
+                         minR = min(minR, rVal);
+                     }
+                 }
+                 R = minR;
+             }
+             
+             // Final Weight
+             float w = exp(-0.5 * max(mahalanobis, 0.0)) * R;
+             
+             // Accumulate (Value * Weight, Weight)
+             accumVal += vec2(val * w, w);
         }
-        
-        accumulator.data[accIndex] += vec2(targetVal * weight, weight);
-        return;
     }
     
-    // Fallback for first frame (reference)
-    accumulator.data[accIndex] += vec2(targetVal * weight, weight);
+    // Write to Accumulator
+    uint accIdx = ty * pc.bufferStride + tx;
+    
+    // We add to existing value (atomic/race managed by careful dispatch or just atomic add? 
+    // Here we are single-threaded per output pixel. No race if we just add.)
+    // But buffer is "coherent".
+    // We strictly accumulate.
+    accumulator.data[accIdx] += accumVal;
 }

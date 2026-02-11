@@ -1,0 +1,243 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Inputs
+layout(binding = 0) uniform sampler2D refImg;   // Base Frame (Raw)
+layout(binding = 1) uniform sampler2D trgImg;   // Current Frame (Raw)
+layout(binding = 2, scalar) buffer AlignmentBuffer {
+    vec2 offsets[];
+} alignBuffer;
+
+// Output: Robustness Map (R8 or R16F, single channel)
+// Stored in a buffer or image. Let's use image for easier sampling later?
+// Or buffer. Existing pipeline uses buffers. Paper uses texture gather.
+// Let's use buffer for now.
+layout(binding = 3, scalar) buffer RobustnessBuffer {
+    float data[];
+} outRobustness;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    
+    float offsetX, offsetY;
+    float scale;
+    
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    float noiseModel[2];
+    
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+} pc;
+
+float cubicWeight(float t) {
+    float a = -0.5;
+    float absT = abs(t);
+    if (absT <= 1.0) return (a + 2.0) * absT * absT * absT - (a + 3.0) * absT * absT + 1.0;
+    if (absT < 2.0) return a * absT * absT * absT - 5.0 * a * absT * absT + 8.0 * a * absT - 4.0 * a;
+    return 0.0;
+}
+
+// Helper to sample 2x2 block and convert to Guide RGB (Half-Res)
+// Returns vec3(R, G_avg, B)
+vec3 getGuideRGB(sampler2D tex, vec2 uv, vec2 pixelSize) {
+    // UV points to the center of the 2x2 Bayer Block
+    // Top-Left pixel of the block
+    vec2 tl = uv - 0.5 * pixelSize; 
+    
+    // Fetch 4 neighbors (TL, TR, BL, BR)
+    // Using textureGather for single channel R16 texture
+    // textureGather(sampler, P, comp) returns (w, z, y, x) = (01, 11, 10, 00)
+    // uv needs to be aligned such that we gather the 4 pixels of the Bayer quad.
+    // If uv is exactly on the cross-hair of 4 pixels, gather works deterministically.
+    
+    vec4 vals = textureGather(tex, uv, 0); 
+    // vals: w=01 (Top-Left?), z=11, y=10, x=00
+    // Standard GL gather offsets relative to sampling center:
+    // (0,1), (1,1), (1,0), (0,0)
+    // Let's assume standard layout.
+    
+    // Map to CFA
+    // RGGB: 
+    // Row 0: R G -> (0,0)=R, (1,0)=G
+    // Row 1: G B -> (0,1)=G, (1,1)=B
+    // Gather returns: 
+    // x (0,1) = G
+    // y (1,1) = B
+    // z (1,0) = G
+    // w (0,0) = R
+    
+    float R, G, B;
+    
+    if (pc.cfaPattern == 0) { // RGGB
+        R = vals.w;
+        G = (vals.z + vals.x) * 0.5;
+        B = vals.y;
+    } else if (pc.cfaPattern == 1) { // GRBG
+        // (0,0)G, (1,0)R, (0,1)B, (1,1)G
+        G = (vals.w + vals.y) * 0.5;
+        R = vals.z;
+        B = vals.x;
+    } else if (pc.cfaPattern == 2) { // GBRG
+        // (0,0)G, (1,0)B, (0,1)R, (1,1)G
+        G = (vals.w + vals.y) * 0.5;
+        B = vals.z;
+        R = vals.x;
+    } else { // BGGR
+        // (0,0)B, (1,0)G, (0,1)G, (1,1)R
+        B = vals.w;
+        G = (vals.z + vals.x) * 0.5;
+        R = vals.y;
+    }
+    
+    return vec3(R, G, B);
+}
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    
+    // 5x5 Tile Window for Morphological Refinement
+    // We compute Robustness for the specific output pixel, 
+    // BUT the paper says "We compute a robustness mask... then refine it with a min-filter in 5x5 window".
+    // Doing 5x5 min-filter in a single pass requires computing R for 5x5 neighbors?
+    // That's 25 full robustness calculations per pixel. Expensive.
+    // Optimization: Separate pass, or use Shared Memory (Group 16x16 + border).
+    // Given 12MP image, shared memory approach is best.
+    // Let's implement Shared Memory caching for efficient 5x5 gather.
+    
+    // Shared Memory size: (16 + 4) * (16 + 4) = 20 * 20 = 400 floats. Fits easily.
+    // Apron of 2 pixels on each side for 5x5 window (radius 2).
+    
+    // However, computing R itself is not trivial (Guide construction).
+    // Let's skip shared memory opt for readability first and implement per-pixel calculation with loop.
+    // Actually, "min-filter" implies we assign the pixel the min value of its neighbors.
+    // So we loop dy=-2..2, dx=-2..2.
+    
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+    uint planeX = pc.tileX + tx;
+    uint planeY = pc.tileY + ty;
+    if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
+
+    vec2 pixelSize = vec2(1.0) / vec2(pc.sensorWidth, pc.sensorHeight);
+    vec2 planeDims = vec2(pc.planeWidth, pc.planeHeight);
+    
+    float minRobustness = 1.0;
+    
+    // Morphological Min Filter Loop (Radius 2)
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+             int nx = clamp(int(planeX) + dx, 0, int(pc.planeWidth) - 1);
+             int ny = clamp(int(planeY) + dy, 0, int(pc.planeHeight) - 1);
+             
+             // --- Compute Robustness R for neighbor (nx, ny) ---
+             
+             // 1. Get Alignment at (nx, ny)
+             uint gx = uint(float(nx) / float(pc.tileSize));
+             uint gy = uint(float(ny) / float(pc.tileSize));
+             gx = clamp(gx, 0, pc.gridW - 1);
+             gy = clamp(gy, 0, pc.gridH - 1);
+             vec2 flow = alignBuffer.offsets[gy * pc.gridW + gx];
+             
+             // 2. Guide Colors
+             vec2 uv = (vec2(nx, ny) + 0.5) / planeDims; // Center of 2x2 block
+             
+             // Ref Guide (Exact)
+             vec3 guideRef = getGuideRGB(refImg, uv, pixelSize);
+             
+             // Trg Guide (Aligned) - Bilinear Sample
+             vec2 targetUV = uv + (flow / planeDims); // Flow is in plane pixels? Yes.
+             
+             // 3. Difference
+             // Calculate Trg Guide using Bilinear Interpolation
+             vec2 tPos = targetUV * planeDims - 0.5;
+             ivec2 base = ivec2(floor(tPos));
+             vec2 f = fract(tPos);
+             
+             vec3 g00 = getGuideRGB(trgImg, (vec2(base) + 0.5) / planeDims, pixelSize);
+             vec3 g10 = getGuideRGB(trgImg, (vec2(base + ivec2(1,0)) + 0.5) / planeDims, pixelSize);
+             vec3 g01 = getGuideRGB(trgImg, (vec2(base + ivec2(0,1)) + 0.5) / planeDims, pixelSize);
+             vec3 g11 = getGuideRGB(trgImg, (vec2(base + ivec2(1,1)) + 0.5) / planeDims, pixelSize);
+             
+             vec3 guideTrg = mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
+             
+             vec3 diffVec = guideRef - guideTrg;
+             float distSq = dot(diffVec, diffVec);
+             
+             // 4. Noise Statistics
+             // Local Variance of Ref Guide (3x3)
+             vec3 s1 = vec3(0.0);
+             vec3 s2 = vec3(0.0);
+             for(int ky=-1; ky<=1; ky++) {
+                 for(int kx=-1; kx<=1; kx++) {
+                     vec3 val = getGuideRGB(refImg, uv + vec2(kx, ky)/planeDims, pixelSize);
+                     s1 += val;
+                     s2 += val*val;
+                 }
+             }
+             vec3 mean = s1 / 9.0;
+             vec3 var = (s2 / 9.0) - (mean * mean);
+             float sigmaLocal2 = max(var.x, max(var.y, var.z));
+             
+             // Model Variance
+             // Var = alpha * Intensity + beta
+             float intensity = dot(mean, vec3(0.3333));
+             float sigmaModel2 = pc.noiseAlpha * intensity + pc.noiseBeta;
+             
+             // Noise Correction
+             float sigma2 = max(sigmaLocal2, sigmaModel2);
+             
+             // 5. Robustness Formula
+             // R = exp( - distSq / (k^2 * sigma2) )
+             float S = 2.0; // Sensitivity 
+             float val = distSq / (max(sigma2, 1e-8) * S * S);
+             float R = exp(-val);
+             
+             // 6. Motion Prior (Local Flow Consistency)
+             // Check 3x3 flow neighbors
+             vec2 f_min = flow;
+             vec2 f_max = flow;
+             for(int fy=-1; fy<=1; fy++){
+                 for(int fx=-1; fx<=1; fx++){
+                     uint fgx = clamp(gx + fx, 0, pc.gridW - 1);
+                     uint fgy = clamp(gy + fy, 0, pc.gridH - 1);
+                     vec2 f_neigh = alignBuffer.offsets[fgy * pc.gridW + fgx];
+                     f_min = min(f_min, f_neigh);
+                     f_max = max(f_max, f_neigh);
+                 }
+             }
+             if (length(f_max - f_min) > 1.0) {
+                 R = 0.0;
+             }
+             
+             minRobustness = min(minRobustness, R);
+        }
+    }
+    
+    // Output
+    uint outIdx = planeY * pc.planeWidth + planeX;
+    outRobustness.data[outIdx] = minRobustness;
+}

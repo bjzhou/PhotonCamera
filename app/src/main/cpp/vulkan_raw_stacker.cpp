@@ -1,7 +1,10 @@
 #include "vulkan_raw_stacker.h"
 #include "accumulate_raw.comp.h"
+#include "align_lk.comp.h"
 #include "common.h"
 #include "normalize_raw.comp.h"
+#include "raw_structure_tensor.comp.h"
+#include "robustness_raw.comp.h"
 #include <algorithm>
 #include <cstring>
 #include <sys/resource.h>
@@ -15,16 +18,36 @@
     }                                                                          \
   } while (0)
 
-VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool sr)
-    : width(w), height(h), enableSuperRes(sr) {
+VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool sr,
+                                   const float *blackLevel, float whiteLevel,
+                                   const float *wbGains,
+                                   const float *noiseModel)
+    : width(w), height(h), enableSuperRes(sr), mWhiteLevel(whiteLevel) {
 
-  if (enableSuperRes) {
-    numTilesX = 2;
-    numTilesY = 2;
-  } else {
-    numTilesX = 1;
-    numTilesY = 1;
-  }
+  if (blackLevel)
+    memcpy(mBlackLevel, blackLevel, 4 * sizeof(float));
+  if (wbGains)
+    memcpy(mWbGains, wbGains, 4 * sizeof(float));
+  if (noiseModel)
+    memcpy(mNoiseModel, noiseModel, 2 * sizeof(float));
+
+  // Force tiles to 1x1 for now if needed, or keep 2x2.
+  // SuperRes accumulation logic changed.
+  // Force tiles to 1x1 for now.
+  // The processStack implementation currently dispatches for the full image
+  // (non-tiled). Allocating tiled buffers would cause overflow/crash. Modern
+  // GPUs can handle full resolution buffers (approx 300MB for 12MP float16/32).
+  numTilesX = 1;
+  numTilesY = 1;
+  /*
+    if (enableSuperRes) {
+      numTilesX = 2;
+      numTilesY = 2;
+    } else {
+      numTilesX = 1;
+      numTilesY = 1;
+    }
+  */
 
   VulkanManager::getInstance().init();
   initVulkanResources();
@@ -41,8 +64,15 @@ void VulkanRawStacker::initVulkanResources() {
   VkDevice device = vm.getDevice();
 
   uint32_t scale = enableSuperRes ? 2 : 1;
-  uint32_t planeW = (width / 2) * scale;
-  uint32_t planeH = (height / 2) * scale;
+  uint32_t outW = width * scale;
+  uint32_t outH = height * scale;
+
+  uint32_t planeW = outW;
+  uint32_t planeH = outH;
+
+  // Input dimensions (for Kernel/Robustness/Alignment)
+  uint32_t inputW = width / 2;
+  uint32_t inputH = height / 2;
 
   uint32_t tileW = (planeW + numTilesX - 1) / numTilesX;
   uint32_t tileH = (planeH + numTilesY - 1) / numTilesY;
@@ -50,11 +80,20 @@ void VulkanRawStacker::initVulkanResources() {
   VkDeviceSize accumBufferSize =
       (VkDeviceSize)stride * (tileH + 16) * sizeof(float) * 2;
 
+  // We accumulate R, G, B planes separately now?
+  // Or stay with 4 bayer planes if compatible?
+  // Our accumulate shader supports picking output channel.
+  // We allocate buffers for 3 channels (RGB) or 4 (RGGB).
+  // Let's stick to 4 buffers per tile for RGGB for now,
+  // but if we output RGB, we use 0,1,2.
+
   int totalBuffers = numTilesX * numTilesY * 4;
   accumBuffers.resize(totalBuffers);
   accumMemories.resize(totalBuffers);
   accumSets.resize(totalBuffers);
   normalizeSets.resize(totalBuffers);
+  alignLkSets.resize(totalBuffers);
+  robustnessSets.resize(totalBuffers);
 
   for (int i = 0; i < totalBuffers; ++i) {
     VkBufferCreateInfo bufferInfo{};
@@ -79,7 +118,9 @@ void VulkanRawStacker::initVulkanResources() {
     vkBindBufferMemory(device, accumBuffers[i], accumMemories[i], 0);
   }
 
-  VkDeviceSize stagingSize = (VkDeviceSize)width * height * scale * scale * 2;
+  // Staging Buffer for Planar RGB (3 channels * 16-bit)
+  VkDeviceSize stagingSize =
+      (VkDeviceSize)width * height * scale * scale * 3 * sizeof(uint16_t);
   VkBufferCreateInfo stagingInfo{};
   stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   stagingInfo.size = stagingSize;
@@ -102,39 +143,26 @@ void VulkanRawStacker::initVulkanResources() {
   VK_CHECK(vkAllocateMemory(device, &stagingAlloc, nullptr, &stagingMemory));
   vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
 
+  // Descriptor Pool
   VkDescriptorPoolSize poolSizes[2] = {};
   poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  poolSizes[0].descriptorCount = (uint32_t)totalBuffers * 16;
+  poolSizes[0].descriptorCount = (uint32_t)totalBuffers * 32; // Increased
   poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  poolSizes[1].descriptorCount = (uint32_t)totalBuffers * 16;
+  poolSizes[1].descriptorCount = (uint32_t)totalBuffers * 32;
 
   VkDescriptorPoolCreateInfo poolInfo{};
   poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  poolInfo.maxSets = (uint32_t)totalBuffers * 16;
+  poolInfo.maxSets = (uint32_t)totalBuffers * 32;
   poolInfo.poolSizeCount = 2;
   poolInfo.pPoolSizes = poolSizes;
   VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool));
 
-  // Clear Accumulator Buffers
-  VkCommandBuffer cb = vm.beginSingleTimeCommands();
-  for (int i = 0; i < totalBuffers; ++i) {
-    vkCmdFillBuffer(cb, accumBuffers[i], 0, accumBufferSize, 0);
-    VkBufferMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask =
-        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.buffer = accumBuffers[i];
-    barrier.size = accumBufferSize;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
-                         &barrier, 0, nullptr);
-  }
+  // --- Alignment Buffer (Coarse) ---
+  tileSize = 32; // Default
+  gridW = (inputW + tileSize - 1) / tileSize;
+  gridH = (inputH + tileSize - 1) / tileSize; // Grid on Plane Resolution
 
-  // Initialize Alignment Grid Buffer early (at plane scale)
-  gridW = (width / 2 + tileSize - 1) / tileSize;
-  gridH = (height / 2 + tileSize - 1) / tileSize;
   VkDeviceSize alignBufferSize = (VkDeviceSize)gridW * gridH * sizeof(Point);
   VkBufferCreateInfo alignInfo{};
   alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -154,6 +182,58 @@ void VulkanRawStacker::initVulkanResources() {
   VK_CHECK(vkAllocateMemory(device, &alignAlloc, nullptr, &alignmentMemory));
   vkBindBufferMemory(device, alignmentBuffer, alignmentMemory, 0);
 
+  // --- Intermediate Buffers for Handheld Super-Res ---
+
+  // 1. Kernel Buffer (vec4 per plane pixel)
+  VkDeviceSize kernelSize = (VkDeviceSize)inputW * inputH * sizeof(float) * 4;
+  VkBufferCreateInfo kInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  kInfo.size = kernelSize;
+  kInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  kInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &kInfo, nullptr, &kernelBuffer));
+
+  VkMemoryRequirements kReqs;
+  vkGetBufferMemoryRequirements(device, kernelBuffer, &kReqs);
+  VkMemoryAllocateInfo kAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  kAlloc.allocationSize = kReqs.size;
+  kAlloc.memoryTypeIndex = vm.findMemoryType(
+      kReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device, &kAlloc, nullptr, &kernelMemory));
+  vkBindBufferMemory(device, kernelBuffer, kernelMemory, 0);
+
+  // 2. Robustness Buffer (float per plane pixel)
+  VkDeviceSize rSize = (VkDeviceSize)inputW * inputH * sizeof(float);
+  VkBufferCreateInfo rInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  rInfo.size = rSize;
+  rInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  rInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &rInfo, nullptr, &robustnessBuffer));
+
+  VkMemoryRequirements rReqs;
+  vkGetBufferMemoryRequirements(device, robustnessBuffer, &rReqs);
+  VkMemoryAllocateInfo rAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  rAlloc.allocationSize = rReqs.size;
+  rAlloc.memoryTypeIndex = vm.findMemoryType(
+      rReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device, &rAlloc, nullptr, &robustnessMemory));
+  vkBindBufferMemory(device, robustnessBuffer, robustnessMemory, 0);
+
+  // Clear Accumulator Buffers
+  VkCommandBuffer cb = vm.beginSingleTimeCommands();
+  for (int i = 0; i < totalBuffers; ++i) {
+    vkCmdFillBuffer(cb, accumBuffers[i], 0, accumBufferSize, 0);
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.buffer = accumBuffers[i];
+    barrier.size = accumBufferSize;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                         &barrier, 0, nullptr);
+  }
+
   // Initial Clear for Alignment Buffer
   void *ptr;
   vkMapMemory(device, alignmentMemory, 0, alignBufferSize, 0, &ptr);
@@ -163,39 +243,141 @@ void VulkanRawStacker::initVulkanResources() {
   vm.endSingleTimeCommands(cb);
 }
 
+// Helper to create compute pipeline
+VkPipeline createComputePipeline(VkDevice device, VkPipelineLayout layout,
+                                 const uint32_t *shaderCode, size_t size) {
+  VkShaderModule shaderModule = VulkanManager::getInstance().createShaderModule(
+      std::vector<uint32_t>(shaderCode, shaderCode + size / 4));
+  VkComputePipelineCreateInfo pipelineInfo{};
+  pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  pipelineInfo.layout = layout;
+  pipelineInfo.stage.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  pipelineInfo.stage.module = shaderModule;
+  pipelineInfo.stage.pName = "main";
+  VkPipeline pipeline;
+  vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                           &pipeline);
+  vkDestroyShaderModule(device, shaderModule, nullptr);
+  return pipeline;
+}
+
 void VulkanRawStacker::createPipelines() {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  // Descriptor set layout for accumulation
-  VkDescriptorSetLayoutBinding bindings[3] = {};
-  bindings[0].binding = 0;
-  bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  bindings[0].descriptorCount = 1;
-  bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-  bindings[1].binding = 1;
-  bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  bindings[1].descriptorCount = 1;
-  bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-  bindings[2].binding = 2;
-  bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  bindings[2].descriptorCount = 1;
-  bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-  VkDescriptorSetLayoutCreateInfo layoutInfo{};
-  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 3;
-  layoutInfo.pBindings = bindings;
-  vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                              &descriptorSetLayout);
-
-  // Pipeline layout with push constants
+  // Push constants (Shared)
   VkPushConstantRange pushConstantRange{};
   pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   pushConstantRange.offset = 0;
   pushConstantRange.size = sizeof(PushConstants);
+
+  // --- 1. Structure Tensor Pipeline ---
+  VkDescriptorSetLayoutBinding stBindings[2] = {};
+  stBindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Input
+  stBindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Output Kernel
+
+  VkDescriptorSetLayoutCreateInfo stLayoutInfo{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  stLayoutInfo.bindingCount = 2;
+  stLayoutInfo.pBindings = stBindings;
+  vkCreateDescriptorSetLayout(device, &stLayoutInfo, nullptr,
+                              &structureTensorSetLayout);
+
+  VkPipelineLayoutCreateInfo stPLInfo{
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  stPLInfo.setLayoutCount = 1;
+  stPLInfo.pSetLayouts = &structureTensorSetLayout;
+  stPLInfo.pushConstantRangeCount = 1;
+  stPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &stPLInfo, nullptr,
+                         &structureTensorPipelineLayout);
+
+  structureTensorPipeline = createComputePipeline(
+      device, structureTensorPipelineLayout, raw_structure_tensor_comp_spv,
+      raw_structure_tensor_comp_spv_size);
+
+  // --- 2. LK Alignment Pipeline ---
+  VkDescriptorSetLayoutBinding lkBindings[3] = {};
+  lkBindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Ref
+  lkBindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Trg
+  lkBindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT,
+                   nullptr}; // Align Buffer (In/Out)
+
+  VkDescriptorSetLayoutCreateInfo lkLayoutInfo{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  lkLayoutInfo.bindingCount = 3;
+  lkLayoutInfo.pBindings = lkBindings;
+  vkCreateDescriptorSetLayout(device, &lkLayoutInfo, nullptr,
+                              &alignLkSetLayout);
+
+  VkPipelineLayoutCreateInfo lkPLInfo{
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  lkPLInfo.setLayoutCount = 1;
+  lkPLInfo.pSetLayouts = &alignLkSetLayout;
+  lkPLInfo.pushConstantRangeCount = 1;
+  lkPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &lkPLInfo, nullptr, &alignLkPipelineLayout);
+
+  alignLkPipeline = createComputePipeline(
+      device, alignLkPipelineLayout, align_lk_comp_spv, align_lk_comp_spv_size);
+
+  // --- 3. Robustness Pipeline ---
+  VkDescriptorSetLayoutBinding rbBindings[4] = {};
+  rbBindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Ref
+  rbBindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Trg
+  rbBindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Alignment
+  rbBindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Output Map
+
+  VkDescriptorSetLayoutCreateInfo rbLayoutInfo{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  rbLayoutInfo.bindingCount = 4;
+  rbLayoutInfo.pBindings = rbBindings;
+  vkCreateDescriptorSetLayout(device, &rbLayoutInfo, nullptr,
+                              &robustnessSetLayout);
+
+  VkPipelineLayoutCreateInfo rbPLInfo{
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  rbPLInfo.setLayoutCount = 1;
+  rbPLInfo.pSetLayouts = &robustnessSetLayout;
+  rbPLInfo.pushConstantRangeCount = 1;
+  rbPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &rbPLInfo, nullptr, &robustnessPipelineLayout);
+
+  robustnessPipeline = createComputePipeline(device, robustnessPipelineLayout,
+                                             robustness_raw_comp_spv,
+                                             robustness_raw_comp_spv_size);
+
+  // --- 4. Accumulate Pipeline ---
+  // Updated with 5 bindings: 0=Input, 1=Accum, 2=Align, 3=Kernel, 4=Robustness
+  VkDescriptorSetLayoutBinding bindings[5] = {};
+  bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+
+  VkDescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 5;
+  layoutInfo.pBindings = bindings;
+  vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+                              &descriptorSetLayout);
 
   VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
   pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -205,26 +387,14 @@ void VulkanRawStacker::createPipelines() {
   pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
   vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
 
-  // Create accumulation pipeline
-  std::vector<uint32_t> shaderCode(accumulate_raw_comp_spv,
-                                   accumulate_raw_comp_spv +
-                                       (accumulate_raw_comp_spv_size / 4));
-  VkShaderModule shaderModule = vm.createShaderModule(shaderCode);
+  accumulatePipeline =
+      createComputePipeline(device, pipelineLayout, accumulate_raw_comp_spv,
+                            accumulate_raw_comp_spv_size);
 
-  VkComputePipelineCreateInfo pipelineInfo{};
-  pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-  pipelineInfo.layout = pipelineLayout;
-  pipelineInfo.stage.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-  pipelineInfo.stage.module = shaderModule;
-  pipelineInfo.stage.pName = "main";
+  // --- Normalization Pipeline (Unchanged bindings, but recreate layout usage
+  // if needed) ---
+  // ... (keeping existing normalization init)
 
-  vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
-                           &accumulatePipeline);
-  vkDestroyShaderModule(device, shaderModule, nullptr);
-
-  // Create normalization pipeline
   VkDescriptorSetLayoutBinding normalizeBindings[2] = {};
   normalizeBindings[0].binding = 0; // Output buffer
   normalizeBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -254,23 +424,9 @@ void VulkanRawStacker::createPipelines() {
   vkCreatePipelineLayout(device, &normalizePipelineLayoutInfo, nullptr,
                          &normalizePipelineLayout);
 
-  std::vector<uint32_t> normShaderCode(normalize_raw_comp_spv,
-                                       normalize_raw_comp_spv +
-                                           (normalize_raw_comp_spv_size / 4));
-  VkShaderModule normShaderModule = vm.createShaderModule(normShaderCode);
-
-  VkComputePipelineCreateInfo normPipelineInfo{};
-  normPipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-  normPipelineInfo.layout = normalizePipelineLayout;
-  normPipelineInfo.stage.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  normPipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-  normPipelineInfo.stage.module = normShaderModule;
-  normPipelineInfo.stage.pName = "main";
-
-  vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &normPipelineInfo,
-                           nullptr, &normalizePipeline);
-  vkDestroyShaderModule(device, normShaderModule, nullptr);
+  normalizePipeline = createComputePipeline(device, normalizePipelineLayout,
+                                            normalize_raw_comp_spv,
+                                            normalize_raw_comp_spv_size);
 
   LOGD("Pipelines created");
 }
@@ -302,514 +458,463 @@ bool VulkanRawStacker::addFrame(const uint16_t *rawData, int rowStride,
   return true;
 }
 
-bool VulkanRawStacker::processFrame(const uint16_t *rawData, int rowStride,
-                                    int cfaPattern) {
-  VulkanManager &vm = VulkanManager::getInstance();
-  VkDevice device = vm.getDevice();
+// Helper to update descriptor set for image
+void updateImageDescriptorSet(VkDevice device, VkDescriptorSet set,
+                              VkImageView imageView, VkSampler sampler,
+                              uint32_t binding) {
+  VkDescriptorImageInfo imageInfo{};
+  imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  imageInfo.imageView = imageView;
+  imageInfo.sampler = sampler;
 
-  bool currentIsFirstFrame = isFirstFrame;
-  if (currentIsFirstFrame) {
-    createPipelines();
-    mCfaPattern = cfaPattern;
-  }
+  VkWriteDescriptorSet descriptorWrite{};
+  descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  descriptorWrite.dstSet = set;
+  descriptorWrite.dstBinding = binding;
+  descriptorWrite.dstArrayElement = 0;
+  descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  descriptorWrite.descriptorCount = 1;
+  descriptorWrite.pImageInfo = &imageInfo;
 
-  VkImage rawImage;
-  VkDeviceMemory rawMemory;
-  VkImageView rawImageView;
-  VkSampler rawSampler;
-
-  VkImageCreateInfo imageInfo{};
-  imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-  imageInfo.imageType = VK_IMAGE_TYPE_2D;
-  imageInfo.format = VK_FORMAT_R16_UNORM;
-  imageInfo.extent = {width, height, 1};
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-  imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-  imageInfo.usage =
-      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-  VK_CHECK(vkCreateImage(device, &imageInfo, nullptr, &rawImage));
-
-  VkMemoryRequirements memReqs;
-  vkGetImageMemoryRequirements(device, rawImage, &memReqs);
-
-  VkMemoryAllocateInfo allocInfo{};
-  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = vm.findMemoryType(
-      memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-  VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &rawMemory));
-  VK_CHECK(vkBindImageMemory(device, rawImage, rawMemory, 0));
-
-  VkDeviceSize uploadSize = (VkDeviceSize)width * height * 2;
-  VkBuffer uploadBuffer;
-  VkDeviceMemory uploadMemory;
-
-  VkBufferCreateInfo bufferInfo{};
-  bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  bufferInfo.size = uploadSize;
-  bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-  VK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &uploadBuffer));
-
-  VkMemoryRequirements uploadMemReqs;
-  vkGetBufferMemoryRequirements(device, uploadBuffer, &uploadMemReqs);
-
-  VkMemoryAllocateInfo uploadAllocInfo{};
-  uploadAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  uploadAllocInfo.allocationSize = uploadMemReqs.size;
-  uploadAllocInfo.memoryTypeIndex = vm.findMemoryType(
-      uploadMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-  VK_CHECK(vkAllocateMemory(device, &uploadAllocInfo, nullptr, &uploadMemory));
-  VK_CHECK(vkBindBufferMemory(device, uploadBuffer, uploadMemory, 0));
-
-  void *data;
-  vkMapMemory(device, uploadMemory, 0, uploadSize, 0, &data);
-  if (rowStride == width * 2) {
-    memcpy(data, rawData, uploadSize);
-  } else {
-    uint8_t *dst = (uint8_t *)data;
-    const uint8_t *src = (const uint8_t *)rawData;
-    for (uint32_t y = 0; y < height; ++y) {
-      memcpy(dst + y * width * 2, src + y * rowStride, width * 2);
-    }
-  }
-  vkUnmapMemory(device, uploadMemory);
-
-  VkCommandBuffer cb = vm.beginSingleTimeCommands();
-
-  VkImageMemoryBarrier barrier{};
-  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  barrier.image = rawImage;
-  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  barrier.subresourceRange.baseMipLevel = 0;
-  barrier.subresourceRange.levelCount = 1;
-  barrier.subresourceRange.baseArrayLayer = 0;
-  barrier.subresourceRange.layerCount = 1;
-  barrier.srcAccessMask = 0;
-  barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                       nullptr, 1, &barrier);
-
-  VkBufferImageCopy region{};
-  region.bufferOffset = 0;
-  region.bufferRowLength = 0;
-  region.bufferImageHeight = 0;
-  region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  region.imageSubresource.mipLevel = 0;
-  region.imageSubresource.baseArrayLayer = 0;
-  region.imageSubresource.layerCount = 1;
-  region.imageOffset = {0, 0, 0};
-  region.imageExtent = {width, height, 1};
-
-  vkCmdCopyBufferToImage(cb, uploadBuffer, rawImage,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
-                       nullptr, 1, &barrier);
-
-  vm.endSingleTimeCommands(cb);
-
-  vkDestroyBuffer(device, uploadBuffer, nullptr);
-  vkFreeMemory(device, uploadMemory, nullptr);
-
-  VkImageViewCreateInfo viewInfo{};
-  viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-  viewInfo.image = rawImage;
-  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  viewInfo.format = VK_FORMAT_R16_UNORM;
-  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &rawImageView));
-
-  VkSamplerCreateInfo samplerInfo{};
-  samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-  samplerInfo.magFilter = VK_FILTER_NEAREST;
-  samplerInfo.minFilter = VK_FILTER_NEAREST;
-  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-  samplerInfo.anisotropyEnable = VK_FALSE;
-  samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-  samplerInfo.unnormalizedCoordinates = VK_FALSE;
-  samplerInfo.compareEnable = VK_FALSE;
-  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-
-  VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &rawSampler));
-
-  float offsetX = 0.0f, offsetY = 0.0f;
-
-  // Calculate byteScale for proxy normalization (similar to CPU version)
-  uint16_t maxVal = 1;
-  for (uint32_t y = height / 4; y < 3 * height / 4; y += 8) {
-    for (uint32_t x = width / 4; x < 3 * width / 4; x += 8) {
-      maxVal = std::max(maxVal, rawData[y * width + x]);
-    }
-  }
-  float byteScale = 255.0f / std::max((float)maxVal, 255.0f);
-
-  GrayImage currentGray;
-  currentGray.width = width / 2;
-  currentGray.height = height / 2;
-  currentGray.data.resize(currentGray.width * currentGray.height);
-  for (uint32_t y = 0; y < height / 2; ++y) {
-    for (uint32_t x = 0; x < width / 2; ++x) {
-      // Use one of the green channels for grayscale proxy
-      // For RGGB, Gr is at (1, 0), Gb is at (0, 1)
-      int gy, gx;
-      if (mCfaPattern == 0 || mCfaPattern == 1) { // RGGB or GRBG
-        gy = y * 2;
-        gx = x * 2 + 1;
-      } else { // GBRG or BGGR
-        gy = y * 2 + 1;
-        gx = x * 2;
-      }
-      currentGray.data[y * (width / 2) + x] = static_cast<uint8_t>(std::max(
-          0.0f, std::min(255.0f, (float)rawData[gy * width + gx] * byteScale)));
-    }
-  }
-
-  std::vector<GrayImage> currentPyramid = buildPyramid(
-      currentGray.data.data(), currentGray.width, currentGray.height, 4);
-
-  if (currentIsFirstFrame) {
-    referencePyramid = currentPyramid;
-  } else {
-    TileAlignment alignment =
-        computeTileAlignment(referencePyramid, currentPyramid, 64);
-
-    // Update grid dimensions from alignment result
-    gridW = alignment.gridW;
-    gridH = alignment.gridH;
-    tileSize = alignment.tileWidth;
-
-    // Safety check: ensure we don't exceed allocated buffer size
-    uint32_t allocatedGridW = (width / 2 + tileSize - 1) / tileSize;
-    uint32_t allocatedGridH = (height / 2 + tileSize - 1) / tileSize;
-    uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
-
-    size_t copyCount =
-        std::min((size_t)alignment.offsets.size(), (size_t)maxAllocatedPoints);
-
-    if (copyCount > 0) {
-      void *mapPtr = nullptr;
-      // Map the entire allocated memory range to be safe and avoid
-      // driver-specific alignment issues
-      VkResult res =
-          vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
-      if (res == VK_SUCCESS && mapPtr != nullptr) {
-        memcpy(mapPtr, alignment.offsets.data(), copyCount * sizeof(Point));
-        vkUnmapMemory(device, alignmentMemory);
-      } else {
-        LOGE("VulkanRawStacker: Failed to map alignment memory: %d", res);
-      }
-    }
-
-    float sumX = 0, sumY = 0;
-    for (size_t i = 0; i < copyCount; ++i) {
-      sumX += alignment.offsets[i].x;
-      sumY += alignment.offsets[i].y;
-    }
-    if (copyCount > 0) {
-      offsetX = sumX / copyCount;
-      offsetY = sumY / copyCount;
-    }
-  }
-
-  uint32_t scale = enableSuperRes ? 2 : 1;
-  uint32_t planeW = (width / 2) * scale;
-  uint32_t planeH = (height / 2) * scale;
-  uint32_t tileW = (planeW + numTilesX - 1) / numTilesX;
-  uint32_t tileH = (planeH + numTilesY - 1) / numTilesY;
-
-  cb = vm.beginSingleTimeCommands();
-  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, accumulatePipeline);
-
-  int totalBuffers = numTilesX * numTilesY * 4;
-  for (uint32_t planeIdx = 0; planeIdx < 4; ++planeIdx) {
-    for (int y = 0; y < numTilesY; ++y) {
-      for (int x = 0; x < numTilesX; ++x) {
-        int bufferIdx = (y * numTilesX + x) * 4 + planeIdx;
-
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = descriptorPool;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts = &descriptorSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo,
-                                          &accumSets[bufferIdx]));
-
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = rawImageView;
-        imageInfo.sampler = rawSampler;
-
-        VkDescriptorBufferInfo accumBufferInfo{};
-        accumBufferInfo.buffer = accumBuffers[bufferIdx];
-        accumBufferInfo.offset = 0;
-        accumBufferInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo alignBufferInfo{};
-        alignBufferInfo.buffer = alignmentBuffer;
-        alignBufferInfo.offset = 0;
-        alignBufferInfo.range = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet descriptorWrites[3] = {};
-        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[0].dstSet = accumSets[bufferIdx];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].descriptorType =
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pImageInfo = &imageInfo;
-
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = accumSets[bufferIdx];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pBufferInfo = &accumBufferInfo;
-
-        descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[2].dstSet = accumSets[bufferIdx];
-        descriptorWrites[2].dstBinding = 2;
-        descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[2].descriptorCount = 1;
-        descriptorWrites[2].pBufferInfo = &alignBufferInfo;
-
-        vkUpdateDescriptorSets(device, 3, descriptorWrites, 0, nullptr);
-
-        PushConstants pc{};
-        pc.offsetX = offsetX;
-        pc.offsetY = offsetY;
-        pc.scale = (float)scale;
-        pc.planeWidth = planeW;
-        pc.planeHeight = planeH;
-        pc.sensorWidth = width;
-        pc.sensorHeight = height;
-        pc.baseNoise = 0.001f;
-        pc.isFirstFrame = currentIsFirstFrame ? 1 : 0;
-        pc.planeIndex = planeIdx;
-        pc.cfaPattern = cfaPattern;
-        pc.tileX = x * tileW;
-        pc.tileY = y * tileH;
-        pc.tileW = std::min(tileW, planeW - pc.tileX);
-        pc.tileH = std::min(tileH, planeH - pc.tileY);
-        pc.bufferStride = tileW + 16;
-        pc.gridW = gridW;
-        pc.gridH = gridH;
-        pc.tileSize = tileSize;
-
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipelineLayout, 0, 1, &accumSets[bufferIdx], 0,
-                                nullptr);
-        vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                           sizeof(pc), &pc);
-        vkCmdDispatch(cb, (pc.tileW + 15) / 16, (pc.tileH + 15) / 16, 1);
-      }
-    }
-  }
-
-  vm.endSingleTimeCommands(cb);
-  vkQueueWaitIdle(vm.getComputeQueue());
-
-  vkFreeDescriptorSets(device, descriptorPool, totalBuffers, accumSets.data());
-
-  vkDestroyImageView(device, rawImageView, nullptr);
-  vkDestroySampler(device, rawSampler, nullptr);
-  vkDestroyImage(device, rawImage, nullptr);
-  vkFreeMemory(device, rawMemory, nullptr);
-
-  isFirstFrame = false;
-  return true;
+  vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
 }
 
-float calculateFrameScore(const uint16_t *rawData, uint32_t width,
-                          uint32_t height, int cfaPattern) {
-  long long score = 0;
-  // Use a green channel for sharpness proxy
-  int startY, startX;
-  if (cfaPattern == 0 || cfaPattern == 1) { // RGGB or GRBG
-    startY = 0;
-    startX = 1;
-  } else { // GBRG or BGGR
-    startY = 1;
-    startX = 0;
-  }
+// Helper to update descriptor set for buffer
+void updateBufferDescriptorSet(VkDevice device, VkDescriptorSet set,
+                               VkBuffer buffer, VkDeviceSize range,
+                               uint32_t binding, VkDeviceSize offset = 0) {
+  VkDescriptorBufferInfo bufferInfo{};
+  bufferInfo.buffer = buffer;
+  bufferInfo.offset = offset;
+  bufferInfo.range = range;
 
-  // Jump pixels for speed, but cover enough of the image
-  const int step = 8;
+  VkWriteDescriptorSet descriptorWrite{};
+  descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  descriptorWrite.dstSet = set;
+  descriptorWrite.dstBinding = binding;
+  descriptorWrite.dstArrayElement = 0;
+  descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  descriptorWrite.descriptorCount = 1;
+  descriptorWrite.pBufferInfo = &bufferInfo;
+
+  vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+}
+
+// Helper for sharpness/contrast scoring (Green channel)
+static float calculateFrameScore(const uint16_t *rawData, uint32_t width,
+                                 uint32_t height, int cfaPattern) {
+  long long score = 0;
+  int startY = (cfaPattern == 0 || cfaPattern == 1) ? 0 : 1;
+  int startX = (cfaPattern == 0 || cfaPattern == 3)
+                   ? 1
+                   : 0; // G is usually at (0,1) or (1,0) in RGGB
+  // RGGB: R G / G B. G at (0,1) and (1,0).
+  // Let's pick Gr line.
+  if (cfaPattern == 0) {
+    startX = 1;
+    startY = 0;
+  } // RGGB -> Gr is at (1,0)
+  else if (cfaPattern == 1) {
+    startX = 0;
+    startY = 0;
+  } // GRBG -> G is at (0,0)
+  else if (cfaPattern == 2) {
+    startX = 1;
+    startY = 1;
+  } // GBRG -> Gb is at (1,1) (Bottom right) ... wait.
+  // Simple approximation: Check gradients on raw data directly, stride 2.
+
+  const int step = 4;
   for (uint32_t y = step; y < height - step; y += step) {
-    // Ensure we stay on the same green channel
-    int gy = (y / 2) * 2 + startY;
     for (uint32_t x = step; x < width - step; x += step) {
-      int gx = (x / 2) * 2 + startX;
-      int idx = gy * width + gx;
-      int right = gy * width + gx + 2;
-      int bottom = (gy + 2) * width + gx;
-      score += std::abs((int)rawData[idx] - (int)rawData[right]);
-      score += std::abs((int)rawData[idx] - (int)rawData[bottom]);
+      int idx = y * width + x;
+      int val = rawData[idx];
+      // Local contrast
+      score += std::abs(val - rawData[idx + 2]) +
+               std::abs(val - rawData[idx + width * 2]);
     }
   }
   return (float)score;
 }
 
 bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
-  // Lower CPU priority for this thread during heavy processing
-  setpriority(PRIO_PROCESS, 0, 10);
-
-  if (pendingFrames.empty() && isFirstFrame) {
+  if (pendingFrames.empty())
     return false;
-  }
 
-  // 1. Calculate scores for all pending frames
+  LOGI("Processing stack with %zu frames", pendingFrames.size());
+
+  // 1. Calculate scores and sort (Highest score first = Reference)
   for (auto &frame : pendingFrames) {
-    frame.score = calculateFrameScore(frame.rawData.data(), width, height,
-                                      frame.cfaPattern);
+    if (frame.score == 0.0f) {
+      frame.score = calculateFrameScore(frame.rawData.data(), width, height,
+                                        frame.cfaPattern);
+    }
   }
-
-  // 2. Sort pendingFrames by score descending
-  // The frame with the highest score will be processed first and become the
-  // reference frame.
   std::sort(
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
 
-  if (!pendingFrames.empty()) {
-    LOGI("Reference frame score: %.2f, last frame score: %.2f",
-         pendingFrames.front().score, pendingFrames.back().score);
-  }
-
-  for (const auto &frame : pendingFrames) {
-    processFrame(frame.rawData.data(), width * 2, frame.cfaPattern);
-  }
-  pendingFrames.clear();
-
-  if (isFirstFrame) {
-    LOGE("processStack: Failed to process any frames");
-    return false;
-  }
+  LOGI("Best frame score: %.2f", pendingFrames[0].score);
 
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  uint32_t scale = enableSuperRes ? 2 : 1;
-  uint32_t outW = width * scale;
-  uint32_t outH = height * scale;
-  size_t requiredSize = outW * outH * sizeof(uint16_t);
-
-  if (bufferSize < requiredSize) {
-    LOGE("processStack: Output buffer too small: %zu < %zu", bufferSize,
-         requiredSize);
-    return false;
+  if (accumulatePipeline == VK_NULL_HANDLE) {
+    createPipelines();
   }
 
-  uint32_t planeW = (width / 2) * scale;
-  uint32_t planeH = (height / 2) * scale;
-  uint32_t tileW = (planeW + numTilesX - 1) / numTilesX;
-  uint32_t tileH = (planeH + numTilesY - 1) / numTilesY;
+  uint32_t scale = enableSuperRes ? 2 : 1;
+  uint32_t outputW = width * scale;
+  uint32_t outputH = height * scale;
+  uint32_t inputW = width / 2;
+  uint32_t inputH = height / 2;
 
-  VkCommandBuffer cb = vm.beginSingleTimeCommands();
-  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, normalizePipeline);
+  // Global Sampler
+  VkSampler sampler;
+  VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+  samplerInfo.magFilter = VK_FILTER_NEAREST;
+  samplerInfo.minFilter = VK_FILTER_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &sampler));
 
-  int totalBuffers = numTilesX * numTilesY * 4;
-  for (uint32_t planeIdx = 0; planeIdx < 4; ++planeIdx) {
-    for (int y = 0; y < numTilesY; ++y) {
-      for (int x = 0; x < numTilesX; ++x) {
-        int bufferIdx = (y * numTilesX + x) * 4 + planeIdx;
+  // Allocate Descriptor Sets
+  VkDescriptorSetAllocateInfo allocInfo{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  allocInfo.descriptorPool = descriptorPool;
+  allocInfo.descriptorSetCount = 1;
 
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = descriptorPool;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts = &normalizeSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo,
-                                          &normalizeSets[bufferIdx]));
+  allocInfo.pSetLayouts = &structureTensorSetLayout;
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &structureTensorSet));
 
-        VkDescriptorBufferInfo outputBufferInfo{};
-        outputBufferInfo.buffer = stagingBuffer;
-        outputBufferInfo.offset = 0;
-        outputBufferInfo.range = VK_WHOLE_SIZE;
+  allocInfo.pSetLayouts = &alignLkSetLayout;
+  VK_CHECK(vkAllocateDescriptorSets(
+      device, &allocInfo,
+      &alignLkSets[0])); // Use 0 for now or per-tile? Allocating 1 set.
+  // Reuse same set for all frames or re-bind?
+  // Use one set, update bindings per frame.
+  VkDescriptorSet alignSet = alignLkSets[0];
 
-        VkDescriptorBufferInfo accumBufferInfo{};
-        accumBufferInfo.buffer = accumBuffers[bufferIdx];
-        accumBufferInfo.offset = 0;
-        accumBufferInfo.range = VK_WHOLE_SIZE;
+  allocInfo.pSetLayouts = &robustnessSetLayout;
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &robustnessSets[0]));
+  VkDescriptorSet robustSet = robustnessSets[0];
 
-        VkWriteDescriptorSet descriptorWrites[2] = {};
-        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[0].dstSet = normalizeSets[bufferIdx];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &outputBufferInfo;
+  // Pre-allocate descriptor sets for each channel to avoid re-allocation in
+  // loop
+  allocInfo.pSetLayouts = &descriptorSetLayout; // Accumulate
+  for (int i = 0; i < 3; ++i) {
+    VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &accumSets[i]));
+    // Constant bindings for this channel
+    updateBufferDescriptorSet(device, accumSets[i], accumBuffers[i],
+                              VK_WHOLE_SIZE, 1);
+    updateBufferDescriptorSet(device, accumSets[i], alignmentBuffer,
+                              VK_WHOLE_SIZE, 2);
+    updateBufferDescriptorSet(device, accumSets[i], kernelBuffer, VK_WHOLE_SIZE,
+                              3);
+    updateBufferDescriptorSet(device, accumSets[i], robustnessBuffer,
+                              VK_WHOLE_SIZE, 4);
+  }
 
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = normalizeSets[bufferIdx];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pBufferInfo = &accumBufferInfo;
+  // Pre-update constant bindings (Buffers) for other pipelines
+  updateBufferDescriptorSet(device, structureTensorSet, kernelBuffer,
+                            VK_WHOLE_SIZE, 1);
+  updateBufferDescriptorSet(device, alignSet, alignmentBuffer, VK_WHOLE_SIZE,
+                            2);
+  updateBufferDescriptorSet(device, robustSet, alignmentBuffer, VK_WHOLE_SIZE,
+                            2);
+  updateBufferDescriptorSet(device, robustSet, robustnessBuffer, VK_WHOLE_SIZE,
+                            3);
 
-        vkUpdateDescriptorSets(device, 2, descriptorWrites, 0, nullptr);
+  for (int i = 0; i < 3; ++i) {
+    updateBufferDescriptorSet(device, accumSets[i], accumBuffers[i],
+                              VK_WHOLE_SIZE, 1);
+    updateBufferDescriptorSet(device, accumSets[i], alignmentBuffer,
+                              VK_WHOLE_SIZE, 2);
+    updateBufferDescriptorSet(device, accumSets[i], kernelBuffer, VK_WHOLE_SIZE,
+                              3);
+    updateBufferDescriptorSet(device, accumSets[i], robustnessBuffer,
+                              VK_WHOLE_SIZE, 4);
+  }
 
-        PushConstants pc{};
-        pc.scale = (float)scale;
-        pc.planeWidth = planeW;
-        pc.planeHeight = planeH;
-        pc.sensorWidth = outW;
-        pc.sensorHeight = outH;
-        pc.planeIndex = planeIdx;
-        pc.cfaPattern = mCfaPattern;
-        pc.tileX = x * tileW;
-        pc.tileY = y * tileH;
-        pc.tileW = std::min(tileW, planeW - pc.tileX);
-        pc.tileH = std::min(tileH, planeH - pc.tileY);
-        pc.bufferStride = tileW + 16;
+  VkImage refImage = VK_NULL_HANDLE;
+  VkImageView refView = VK_NULL_HANDLE;
+  VkDeviceMemory refMem = VK_NULL_HANDLE;
 
+  // Process Frames
+  for (size_t i = 0; i < pendingFrames.size(); ++i) {
+    bool isRef = (i == 0);
+    const auto &frame = pendingFrames[i];
+
+    // Upload Frame
+    VkImage currImage;
+    VkImageView currView;
+    VkDeviceMemory currMem;
+    // ... (Inline upload logic for brevity in this replace block, similar to
+    // previous)
+    {
+      VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      imgInfo.imageType = VK_IMAGE_TYPE_2D;
+      imgInfo.format = VK_FORMAT_R16_UNORM;
+      imgInfo.extent = {width, height, 1};
+      imgInfo.mipLevels = 1;
+      imgInfo.arrayLayers = 1;
+      imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+      imgInfo.usage =
+          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+      vkCreateImage(device, &imgInfo, nullptr, &currImage);
+      VkMemoryRequirements reqs;
+      vkGetImageMemoryRequirements(device, currImage, &reqs);
+      VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+      alloc.allocationSize = reqs.size;
+      alloc.memoryTypeIndex = vm.findMemoryType(
+          reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      vkAllocateMemory(device, &alloc, nullptr, &currMem);
+      vkBindImageMemory(device, currImage, currMem, 0);
+
+      VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      viewInfo.image = currImage;
+      viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      viewInfo.format = VK_FORMAT_R16_UNORM;
+      viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      vkCreateImageView(device, &viewInfo, nullptr, &currView);
+
+      VkDeviceSize size = width * height * 2;
+      void *map;
+      vkMapMemory(device, stagingMemory, 0, size, 0, &map);
+      memcpy(map, frame.rawData.data(), size);
+      vkUnmapMemory(device, stagingMemory);
+
+      VkCommandBuffer cb = vm.beginSingleTimeCommands();
+      VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      barrier.image = currImage;
+      barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                           nullptr, 1, &barrier);
+
+      VkBufferImageCopy copyReg{};
+      copyReg.imageExtent = {width, height, 1};
+      copyReg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      vkCmdCopyBufferToImage(cb, stagingBuffer, currImage,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyReg);
+
+      barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                           0, nullptr, 1, &barrier);
+
+      vm.endSingleTimeCommands(cb);
+    }
+
+    PushConstants pc{};
+    pc.width = outputW;
+    pc.height = outputH;
+    pc.planeWidth = inputW;
+    pc.planeHeight = inputH;
+    pc.sensorWidth = width;
+    pc.sensorHeight = height;
+    pc.offsetX = 0.0f;
+    pc.offsetY = 0.0f;
+    pc.scale = (float)scale;
+    pc.cfaPattern = (uint32_t)frame.cfaPattern;
+    memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
+    pc.whiteLevel = mWhiteLevel;
+    memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
+    memcpy(pc.noiseModel, mNoiseModel, 2 * sizeof(float));
+    pc.gridW = gridW;
+    pc.gridH = gridH;
+    pc.tileSize = (uint32_t)tileSize;
+    pc.bufferStride = outputW + 16;
+    pc.noiseAlpha = mNoiseModel[0];
+    pc.noiseBeta = mNoiseModel[1];
+    pc.baseNoise = 0.01f; // TBD
+
+    if (isRef) {
+      refImage = currImage;
+      refView = currView;
+      refMem = currMem;
+
+      VkCommandBuffer cb = vm.beginSingleTimeCommands();
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        structureTensorPipeline);
+      updateImageDescriptorSet(device, structureTensorSet, refView, sampler, 0);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              structureTensorPipelineLayout, 0, 1,
+                              &structureTensorSet, 0, nullptr);
+      vkCmdPushConstants(cb, structureTensorPipelineLayout,
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+      vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
+
+      VkBufferMemoryBarrier bMem{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+      bMem.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      bMem.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      bMem.buffer = kernelBuffer;
+      bMem.size = VK_WHOLE_SIZE;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                           1, &bMem, 0, nullptr);
+      vm.endSingleTimeCommands(cb);
+
+    } else {
+      VkCommandBuffer cb = vm.beginSingleTimeCommands();
+
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, alignLkPipeline);
+      updateImageDescriptorSet(device, alignSet, refView, sampler, 0);
+      updateImageDescriptorSet(device, alignSet, currView, sampler, 1);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              alignLkPipelineLayout, 0, 1, &alignSet, 0,
+                              nullptr);
+      vkCmdPushConstants(cb, alignLkPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                         0, sizeof(pc), &pc);
+      vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
+
+      VkBufferMemoryBarrier bMem{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+      bMem.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      bMem.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      bMem.buffer = alignmentBuffer;
+      bMem.size = VK_WHOLE_SIZE;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                           1, &bMem, 0, nullptr);
+
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, robustnessPipeline);
+      updateImageDescriptorSet(device, robustSet, refView, sampler, 0);
+      updateImageDescriptorSet(device, robustSet, currView, sampler, 1);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              robustnessPipelineLayout, 0, 1, &robustSet, 0,
+                              nullptr);
+      vkCmdPushConstants(cb, robustnessPipelineLayout,
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+      vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
+
+      bMem.buffer = robustnessBuffer;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                           1, &bMem, 0, nullptr);
+      vm.endSingleTimeCommands(cb);
+    }
+
+    {
+      VkCommandBuffer cb = vm.beginSingleTimeCommands();
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, accumulatePipeline);
+
+      for (int c = 0; c < 3; ++c) {
+        updateImageDescriptorSet(device, accumSets[c], currView, sampler, 0);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                normalizePipelineLayout, 0, 1,
-                                &normalizeSets[bufferIdx], 0, nullptr);
-        vkCmdPushConstants(cb, normalizePipelineLayout,
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        vkCmdDispatch(cb, (pc.tileW + 15) / 16, (pc.tileH + 15) / 16, 1);
+                                pipelineLayout, 0, 1, &accumSets[c], 0,
+                                nullptr);
+
+        pc.isFirstFrame = isRef ? 1 : 0;
+        pc.outputChannel = c; // 0=R, 1=G, 2=B
+        pc.width = outputW;
+        pc.height = outputH;
+        pc.planeWidth = inputW;
+        pc.planeHeight = inputH;
+        pc.sensorWidth = width;
+        pc.sensorHeight = height;
+        pc.scale = (float)scale;
+        pc.cfaPattern = (uint32_t)frame.cfaPattern;
+        pc.tileSize = (uint32_t)tileSize;
+        pc.gridW = gridW;
+        pc.gridH = gridH;
+        pc.bufferStride = outputW + 16;
+        pc.tileW = outputW;
+        pc.tileH = outputH;
+
+        vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(pc), &pc);
+        vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
       }
+      vm.endSingleTimeCommands(cb);
+    }
+
+    if (!isRef) {
+      vkDestroyImageView(device, currView, nullptr);
+      vkDestroyImage(device, currImage, nullptr);
+      vkFreeMemory(device, currMem, nullptr);
     }
   }
 
-  vm.endSingleTimeCommands(cb);
-  vkQueueWaitIdle(vm.getComputeQueue());
+  if (refImage) {
+    vkDestroyImageView(device, refView, nullptr);
+    vkDestroyImage(device, refImage, nullptr);
+    vkFreeMemory(device, refMem, nullptr);
+  }
 
-  vkFreeDescriptorSets(device, descriptorPool, totalBuffers,
-                       normalizeSets.data());
+  // Normalize
+  {
+    VkCommandBuffer cb = vm.beginSingleTimeCommands();
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, normalizePipeline);
 
-  void *mapData;
-  vkMapMemory(device, stagingMemory, 0, requiredSize, 0, &mapData);
-  memcpy(outBuffer, mapData, requiredSize);
-  vkUnmapMemory(device, stagingMemory);
+    VkDeviceSize planeSize = (VkDeviceSize)outputW * outputH * sizeof(uint16_t);
+    // Staging buffer is 3 * planeSize (RGB Planar)
 
+    VkDescriptorSetAllocateInfo dAlloc{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dAlloc.descriptorPool = descriptorPool;
+    dAlloc.descriptorSetCount = 1;
+    dAlloc.pSetLayouts = &normalizeSetLayout;
+
+    for (int c = 0; c < 3; ++c) {
+      VK_CHECK(vkAllocateDescriptorSets(device, &dAlloc, &normalizeSets[c]));
+      updateBufferDescriptorSet(device, normalizeSets[c], stagingBuffer,
+                                VK_WHOLE_SIZE, 0, 0);
+      updateBufferDescriptorSet(device, normalizeSets[c], accumBuffers[c],
+                                VK_WHOLE_SIZE, 1);
+
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              normalizePipelineLayout, 0, 1, &normalizeSets[c],
+                              0, nullptr);
+
+      PushConstants pc{}; // Reset for normalize
+      pc.width = outputW;
+      pc.height = outputH;
+      pc.planeWidth = outputW;
+      pc.planeHeight = outputH;
+      pc.bufferStride = outputW + 16;
+      pc.tileX = 0;
+      pc.tileY = 0;
+      pc.tileW = outputW;
+      pc.tileH = outputH;
+      pc.planeIndex = (uint32_t)c;
+      pc.cfaPattern = (uint32_t)mCfaPattern;
+      pc.whiteLevel = mWhiteLevel;
+      memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
+      memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
+
+      vkCmdPushConstants(cb, normalizePipelineLayout,
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+      vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+    }
+    vm.endSingleTimeCommands(cb);
+
+    void *mapData;
+    VK_CHECK(vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, &mapData));
+    size_t reqSize = (size_t)outputW * outputH * 3 * sizeof(uint16_t);
+    if (bufferSize >= reqSize) {
+      memcpy(outBuffer, mapData, reqSize);
+      // Debug: Log first few pixels
+      uint16_t *outShorts = (uint16_t *)mapData;
+      LOGI("First pixel (mapped): %u, %u, %u", outShorts[0], outShorts[1],
+           outShorts[2]);
+      LOGI("Mid pixel (mapped): %u, %u, %u", outShorts[reqSize / 4],
+           outShorts[reqSize / 4 + 1], outShorts[reqSize / 4 + 2]);
+    } else {
+      LOGE("Buffer too small! Req: %zu, Has: %zu", reqSize, bufferSize);
+    }
+    vkUnmapMemory(device, stagingMemory);
+  }
+
+  LOGI("Stacking complete, output size: %ux%u", outputW, outputH);
+
+  vkDestroySampler(device, sampler, nullptr);
   return true;
 }
 
@@ -834,6 +939,28 @@ void VulkanRawStacker::releaseVulkanResources() {
   if (normalizePipeline != VK_NULL_HANDLE)
     vkDestroyPipeline(device, normalizePipeline, nullptr);
 
+  // New Pipelines
+  if (structureTensorSetLayout)
+    vkDestroyDescriptorSetLayout(device, structureTensorSetLayout, nullptr);
+  if (structureTensorPipelineLayout)
+    vkDestroyPipelineLayout(device, structureTensorPipelineLayout, nullptr);
+  if (structureTensorPipeline)
+    vkDestroyPipeline(device, structureTensorPipeline, nullptr);
+
+  if (alignLkSetLayout)
+    vkDestroyDescriptorSetLayout(device, alignLkSetLayout, nullptr);
+  if (alignLkPipelineLayout)
+    vkDestroyPipelineLayout(device, alignLkPipelineLayout, nullptr);
+  if (alignLkPipeline)
+    vkDestroyPipeline(device, alignLkPipeline, nullptr);
+
+  if (robustnessSetLayout)
+    vkDestroyDescriptorSetLayout(device, robustnessSetLayout, nullptr);
+  if (robustnessPipelineLayout)
+    vkDestroyPipelineLayout(device, robustnessPipelineLayout, nullptr);
+  if (robustnessPipeline)
+    vkDestroyPipeline(device, robustnessPipeline, nullptr);
+
   for (size_t i = 0; i < accumBuffers.size(); ++i) {
     if (accumBuffers[i] != VK_NULL_HANDLE)
       vkDestroyBuffer(device, accumBuffers[i], nullptr);
@@ -850,4 +977,14 @@ void VulkanRawStacker::releaseVulkanResources() {
     vkDestroyBuffer(device, alignmentBuffer, nullptr);
   if (alignmentMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, alignmentMemory, nullptr);
+
+  if (kernelBuffer)
+    vkDestroyBuffer(device, kernelBuffer, nullptr);
+  if (kernelMemory)
+    vkFreeMemory(device, kernelMemory, nullptr);
+
+  if (robustnessBuffer)
+    vkDestroyBuffer(device, robustnessBuffer, nullptr);
+  if (robustnessMemory)
+    vkFreeMemory(device, robustnessMemory, nullptr);
 }

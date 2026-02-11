@@ -141,7 +141,11 @@ object MultiFrameStacker {
         images: List<SafeImage>,
         characteristics: CameraCharacteristics,
         enableSuperResolution: Boolean = false,
-        useVulkan: Boolean = true
+        useVulkan: Boolean = true,
+        masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
+        whiteLevel: Int = 1023,
+        whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
+        noiseModel: FloatArray = floatArrayOf(0f, 0f)
     ): ByteBuffer? {
         val width = images[0].width
         val height = images[0].height
@@ -149,12 +153,15 @@ object MultiFrameStacker {
 
         PLog.d(
             TAG,
-            "Starting RAW stacking for ${images.size} frames. Pattern=$sensorCfa SR=$enableSuperResolution Vulkan=$useVulkan"
+            "Starting RAW stacking for ${images.size} frames. Pattern=$sensorCfa SR=$enableSuperResolution Vulkan=$useVulkan WL=$whiteLevel"
         )
 
         // Try Vulkan path
         if (useVulkan) {
-            val vulkanStackerPtr = createVulkanRawStackerNative(width, height, enableSuperResolution)
+            val vulkanStackerPtr = createVulkanRawStackerNative(
+                width, height, enableSuperResolution, 
+                masterBlackLevel, whiteLevel, whiteBalanceGains, noiseModel
+            )
             if (vulkanStackerPtr != 0L) {
                 PLog.i(TAG, "Using Vulkan RAW stacker")
                 try {
@@ -168,7 +175,8 @@ object MultiFrameStacker {
                     }
 
                     val scale = getVulkanRawStackerScaleNative(vulkanStackerPtr)
-                    val stackedBuffer = ByteBuffer.allocateDirect(width * height * scale * scale * 2)
+                    // RGB output (3 channels * 16-bit = 6 bytes per pixel)
+                    val stackedBuffer = ByteBuffer.allocateDirect(width * height * scale * scale * 6)
                         .order(ByteOrder.nativeOrder())
 
                     val success = processVulkanRawStackNative(vulkanStackerPtr, stackedBuffer)
@@ -268,7 +276,10 @@ object MultiFrameStacker {
     private external fun releaseRawStackerNative(stackerPtr: Long)
 
     // Vulkan RAW Stacker
-    private external fun createVulkanRawStackerNative(width: Int, height: Int, useSuperRes: Boolean): Long
+    private external fun createVulkanRawStackerNative(
+        width: Int, height: Int, useSuperRes: Boolean,
+        blackLevel: FloatArray, whiteLevel: Int, wbGains: FloatArray, noiseModel: FloatArray
+    ): Long
     private external fun getVulkanRawStackerScaleNative(stackerPtr: Long): Int
     private external fun addVulkanRawFrameNative(
         stackerPtr: Long,

@@ -15,7 +15,9 @@
  */
 class VulkanRawStacker {
 public:
-  VulkanRawStacker(uint32_t width, uint32_t height, bool enableSuperRes);
+  VulkanRawStacker(uint32_t width, uint32_t height, bool enableSuperRes,
+                   const float *blackLevel, float whiteLevel,
+                   const float *wbGains, const float *noiseModel);
   ~VulkanRawStacker();
 
   // Add a frame from CPU memory (uint16_t RAW data)
@@ -45,45 +47,92 @@ private:
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
   VkPipeline accumulatePipeline = VK_NULL_HANDLE;
 
-  // Normalization pipeline
+  // New Pipelines for Handheld Super-Res
+  VkPipelineLayout alignLkPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline alignLkPipeline = VK_NULL_HANDLE;
+  VkDescriptorSetLayout alignLkSetLayout = VK_NULL_HANDLE;
+  std::vector<VkDescriptorSet> alignLkSets; // Per-tile sets
+
+  VkPipelineLayout structureTensorPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline structureTensorPipeline = VK_NULL_HANDLE;
+  VkDescriptorSetLayout structureTensorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSet structureTensorSet = VK_NULL_HANDLE; // One for base frame
+
+  VkPipelineLayout robustnessPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline robustnessPipeline = VK_NULL_HANDLE;
+  VkDescriptorSetLayout robustnessSetLayout = VK_NULL_HANDLE;
+  std::vector<VkDescriptorSet> robustnessSets; // Per-frame sets
+
+  // Normalization
   VkDescriptorSetLayout normalizeSetLayout = VK_NULL_HANDLE;
-  std::vector<VkDescriptorSet> normalizeSets;
   VkPipelineLayout normalizePipelineLayout = VK_NULL_HANDLE;
   VkPipeline normalizePipeline = VK_NULL_HANDLE;
+  std::vector<VkDescriptorSet> normalizeSets;
 
-  // Staging buffer for result copy
+  // Intermediate Buffers
+  VkBuffer kernelBuffer = VK_NULL_HANDLE; // Structure Tensor Output
+  VkDeviceMemory kernelMemory = VK_NULL_HANDLE;
+
+  VkBuffer alignmentBuffer = VK_NULL_HANDLE; // LK Alignment Output
+  VkDeviceMemory alignmentMemory = VK_NULL_HANDLE;
+
+  VkBuffer robustnessBuffer = VK_NULL_HANDLE; // Robustness Mask Output
+  VkDeviceMemory robustnessMemory = VK_NULL_HANDLE;
+
   VkBuffer stagingBuffer = VK_NULL_HANDLE;
   VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
-  // Alignment grid
-  uint32_t gridW = 0;
-  uint32_t gridH = 0;
-  VkBuffer alignmentBuffer = VK_NULL_HANDLE;
-  VkDeviceMemory alignmentMemory = VK_NULL_HANDLE;
-  uint32_t tileSize = 32;
+  int tileSize = 16;
+  int gridW = 0;
+  int gridH = 0;
 
-  std::vector<GrayImage> referencePyramid;
+  // Accumulated RGB buffers (3 planes: R, G, B) instead of Bayer
+  // We reuse accumBuffers but maybe need to change count/size logic?
+  // Current logic: numTilesX * numTilesY * 4.
+  // We will likely use indices 0, 1, 2 for R, G, B.
 
   struct PushConstants {
-    float offsetX, offsetY;
-    float scale;
-    uint32_t planeWidth;   // Plane width (sensor_width/2 * scale)
-    uint32_t planeHeight;  // Plane height (sensor_height/2 * scale)
-    uint32_t sensorWidth;  // Full sensor width
-    uint32_t sensorHeight; // Full sensor height
-    float baseNoise;
-    uint32_t isFirstFrame;
-    uint32_t planeIndex; // Which plane: 0=R, 1=Gr, 2=Gb, 3=B
-    uint32_t cfaPattern;
-    uint32_t tileX;
-    uint32_t tileY;
-    uint32_t tileW;
-    uint32_t tileH;
-    uint32_t bufferStride;
-    uint32_t gridW;
-    uint32_t gridH;
-    uint32_t tileSize;
+    uint32_t width;        // 0
+    uint32_t height;       // 4
+    uint32_t planeWidth;   // 8
+    uint32_t planeHeight;  // 12
+    uint32_t sensorWidth;  // 16
+    uint32_t sensorHeight; // 20
+
+    float offsetX; // 24
+    float offsetY; // 28
+    float scale;   // 32
+
+    // Metadata
+    float blackLevel[4]; // 36, 40, 44, 48
+    float whiteLevel;    // 52
+    float wbGains[4];    // 56, 60, 64, 68
+    float noiseModel[2]; // 72, 76
+
+    uint32_t isFirstFrame;  // 80
+    uint32_t outputChannel; // 84
+    uint32_t cfaPattern;    // 88
+    uint32_t planeIndex;    // 92
+
+    uint32_t tileX;        // 96
+    uint32_t tileY;        // 100
+    uint32_t tileW;        // 104
+    uint32_t tileH;        // 108
+    uint32_t bufferStride; // 112
+    uint32_t gridW;        // 116
+    uint32_t gridH;        // 120
+    uint32_t tileSize;     // 124
+
+    float noiseAlpha; // 128
+    float noiseBeta;  // 132
+    float baseNoise;  // 136
   };
+
+  // Metadata storage
+  float mBlackLevel[4] = {0, 0, 0, 0};
+  float mWhiteLevel = 1023.0f;
+  float mWbGains[4] = {1, 1, 1, 1};
+  float mNoiseModel[2] = {0, 0};
 
   struct FrameData {
     std::vector<uint16_t> rawData;
@@ -95,5 +144,4 @@ private:
   void initVulkanResources();
   void releaseVulkanResources();
   void createPipelines();
-  bool processFrame(const uint16_t *rawData, int rowStride, int cfaPattern);
 };

@@ -6,6 +6,7 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
+import com.hinnka.mycamera.utils.PLog
 
 /**
  * RAW 图像处理所需的元数据
@@ -59,7 +60,8 @@ data class RawMetadata(
      * 数字增益 (Post RAW Boost)
      */
     val postRawSensitivityBoost: Float = 1.0f,
-    val baselineExposure: Float = 0.0f
+    val baselineExposure: Float = 0.0f,
+    val noiseProfile: FloatArray = floatArrayOf(0f, 0f)
 ) {
     companion object {
         private const val TAG = "RawMetadata"
@@ -69,6 +71,7 @@ data class RawMetadata(
         const val CFA_GRBG = 1
         const val CFA_GBRG = 2
         const val CFA_BGGR = 3
+        const val CFA_LINEAR_RGB = -1
 
         /**
          * 从 CameraCharacteristics 和 CaptureResult 创建 RawMetadata
@@ -229,6 +232,9 @@ data class RawMetadata(
             // Log.d(TAG, "create: boost=$boost")
             val postRawSensitivityBoost = boost / 100.0f
 
+            // 8. 获取噪声模型
+            val noiseProfile = extractNoiseProfile(captureResult)
+
             return RawMetadata(
                 width = width,
                 height = height,
@@ -241,8 +247,28 @@ data class RawMetadata(
                 lensShadingMapWidth = shadingWidth,
                 lensShadingMapHeight = shadingHeight,
                 postRawSensitivityBoost = postRawSensitivityBoost,
-                baselineExposure = 0f
+                baselineExposure = 0f,
+                noiseProfile = noiseProfile
             )
+        }
+
+        private fun extractNoiseProfile(captureResult: CaptureResult): FloatArray {
+            val noiseProfile = captureResult.get(CaptureResult.SENSOR_NOISE_PROFILE)
+            return if (noiseProfile != null && noiseProfile.isNotEmpty()) {
+                // SENSOR_NOISE_PROFILE is an array of pairs (S, O) for each CFA channel
+                // We will average them to get a single global model for the structure tensor / robustness
+                var sumS = 0.0
+                var sumO = 0.0
+                for (pair in noiseProfile) {
+                    sumS += pair.first
+                    sumO += pair.second
+                }
+                val count = noiseProfile.size.toDouble()
+                floatArrayOf((sumS / count).toFloat(), (sumO / count).toFloat())
+            } else {
+                // Default fallback
+                floatArrayOf(0.0f, 0.0f)
+            }
         }
 
         /**

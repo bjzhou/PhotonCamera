@@ -16,54 +16,79 @@ layout(binding = 1, scalar) buffer Accumulator {
 } accumulator;
 
 layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    
     float offsetX, offsetY;
     float scale;
-    uint planeWidth;      
-    uint planeHeight;     
-    uint sensorWidth;     
-    uint sensorHeight;    
-    float baseNoise;
+    
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    float noiseModel[2];
+    
     uint isFirstFrame;
-    uint planeIndex;      
-    uint cfaPattern;      
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    
     uint tileX;
     uint tileY;
     uint tileW;
     uint tileH;
     uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
 } pc;
-
-ivec2 getSensorCoords(uint planeX, uint planeY) {
-    const int offsets[4][4][2] = int[4][4][2](
-        int[4][2](int[2](0,0), int[2](1,0), int[2](0,1), int[2](1,1)), // RGGB
-        int[4][2](int[2](1,0), int[2](0,0), int[2](1,1), int[2](0,1)), // GRBG  
-        int[4][2](int[2](0,1), int[2](1,1), int[2](0,0), int[2](1,0)), // GBRG
-        int[4][2](int[2](1,1), int[2](0,1), int[2](1,0), int[2](0,0))  // BGGR
-    );
-    int dx = offsets[pc.cfaPattern][pc.planeIndex][0];
-    int dy = offsets[pc.cfaPattern][pc.planeIndex][1];
-    return ivec2(int(planeX) * 2 + dx, int(planeY) * 2 + dy);
-}
 
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
-    if (tx >= pc.tileW || ty >= pc.tileH) return;
-
-    uint planeX = pc.tileX + tx;
-    uint planeY = pc.tileY + ty;
-    if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
-
+    
+    // Bounds check
+    if (tx >= pc.width || ty >= pc.height) return;
+    
+    // Read Accumulator
     uint accIndex = ty * pc.bufferStride + tx;
     vec2 accum = accumulator.data[accIndex];
 
-    float result = 0.0;
-    if (accum.y > 0.001) {
-        result = accum.x / accum.y;
+    float bl = 0.0;
+    float gain = 1.0;
+    
+    // Map planeIndex (R=0, G=1, B=2) to Bayer offsets for black level and WB gains
+    // RGGB/Metadata/mWbGains: 0=R, 1=Gr, 2=Gb, 3=B
+    if (pc.planeIndex == 0) { // Red
+        bl = pc.blackLevel[0];
+        gain = pc.wbGains[0];
+    } else if (pc.planeIndex == 1) { // Green (Average of Gr/Gb)
+        bl = (pc.blackLevel[1] + pc.blackLevel[2]) * 0.5;
+        gain = (pc.wbGains[1] + pc.wbGains[2]) * 0.5; 
+    } else { // Blue (planeIndex == 2)
+        bl = pc.blackLevel[3];
+        gain = pc.wbGains[3];
     }
 
-    uint16_t outVal = uint16_t(clamp(result * 65535.0, 0.0, 65535.0));
-    ivec2 sensorCoords = getSensorCoords(planeX, planeY);
-    uint outIndex = sensorCoords.y * pc.sensorWidth + sensorCoords.x;
+    float resLinear = 0.0;
+    if (accum.y > 1e-5) {
+        float val = accum.x / accum.y; // [0, 1] from sensor
+        // Normalize: (val - bl/65535) / ((white-bl)/65535) * gain
+        // More stable: (val * 65535 - bl) / (white - bl) * gain
+        resLinear = (val * 65535.0 - bl) / (pc.whiteLevel - bl) * gain;
+    }
+
+    // Write Interleaved RGB (R, G, B, R, G, B...)
+    uint outIndex = (ty * pc.width + tx) * 3 + pc.planeIndex;
+    
+    // Scale to full uint16 range for the Linear RGB processor in Kotlin
+    uint16_t outVal = uint16_t(clamp(resLinear * 65535.0, 0.0, 65535.0));
     outputBuffer.data[outIndex] = outVal;
 }

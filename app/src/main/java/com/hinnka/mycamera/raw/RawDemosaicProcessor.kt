@@ -183,9 +183,13 @@ class RawDemosaicProcessor {
 
     private var demosaicFramebufferId = 0
     private var demosaicTextureId = 0
+    private var demosaicWidth = 0
+    private var demosaicHeight = 0
 
     private var lutFramebufferId = 0      // 新增：LUT 处理帧缓冲
     private var lutTextureId = 0          // 新增：LUT 输出纹理
+    private var lutWidth = 0
+    private var lutHeight = 0
     private var lut3DTextureId = 0        // 新增：3D LUT 纹理
 
     private var outputFramebufferId = 0
@@ -209,6 +213,15 @@ class RawDemosaicProcessor {
     private var uOutputSharpAmountLoc = 0
     private var uDemosaicTexMatrixLoc = 0
     private var uLensShadingMapLoc = 0
+
+    // Linear Program (New)
+    private var linearProgram = 0
+    private var uLinearRawTextureLoc = 0
+    private var uLinearImageSizeLoc = 0
+    private var uLinearColorCorrectionMatrixLoc = 0
+    private var uLinearExposureGainLoc = 0
+    private var uLinearOutputSharpAmountLoc = 0
+    private var uLinearTexMatrixLoc = 0
 
     // Passthrough Uniform 位置
     private var uPassTextureLoc = 0
@@ -378,6 +391,53 @@ class RawDemosaicProcessor {
     }
 
     /**
+     * 处理 RAW Buffer (例如来自 MultiFrameStacker 的输出)
+     */
+    suspend fun process(
+        rawData: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        metadata: RawMetadata,
+        aspectRatio: AspectRatio,
+        cropRegion: Rect?,
+        rotation: Int,
+        lutConfig: LutConfig? = null,
+        colorRecipeParams: ColorRecipeParams? = null,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f
+    ): Bitmap? = withContext(glDispatcher) {
+        try {
+            if (!isInitialized) {
+                if (!initializeOnGlThread()) {
+                    PLog.e(TAG, "Failed to initialize processor")
+                    return@withContext null
+                }
+            }
+
+            processInternal(
+                rawData = rawData,
+                width = width,
+                height = height,
+                rowStride = rowStride,
+                metadata = metadata,
+                aspectRatio = aspectRatio,
+                cropRegion = cropRegion,
+                rotation = rotation,
+                lutConfig = lutConfig,
+                colorRecipeParams = colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to process RAW buffer", e)
+            null
+        }
+    }
+
+    /**
      * 内部处理方法（共享的核心处理逻辑）
      */
     private suspend fun processInternal(
@@ -414,7 +474,7 @@ class RawDemosaicProcessor {
 
         // 上传 RAW 数据到纹理
         val uploadStart = System.currentTimeMillis()
-        uploadRawTextureFromBuffer(rawData, width, height, rowStride)
+        uploadRawTextureFromBuffer(rawData, width, height, rowStride, metadata.cfaPattern)
         PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
 
         val bounds = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, cropRegion, rotation)
@@ -442,25 +502,20 @@ class RawDemosaicProcessor {
         renderDemosaicPass(metadata, exposureGain)
         PLog.d(TAG, "Demosaic Pass took: ${System.currentTimeMillis() - demosaicStart}ms")
 
-        // 5. 第二步：LUT + ColorRecipe 处理 (LUT Pass)
-        val useLut = lutConfig != null || (colorRecipeParams != null && !colorRecipeParams.isDefault())
-        val sourceTextureForOutput: Int
-        if (useLut) {
-            setupLutFramebuffer(width, height)
-            val lutStart = System.currentTimeMillis()
-            renderLutPass(
-                metadata,
-                lutConfig,
-                colorRecipeParams,
-                sharpeningValue,
-                noiseReductionValue,
-                chromaNoiseReductionValue
-            )
-            PLog.d(TAG, "LUT Pass took: ${System.currentTimeMillis() - lutStart}ms")
-            sourceTextureForOutput = lutTextureId
-        } else {
-            sourceTextureForOutput = demosaicTextureId
-        }
+        // 5. 第二步：LUT + ColorRecipe 处理 (Color Pass / LLF Tonemapping)
+        // 即使没有选择 LUT，也始终运行此 pass 以进行 LLF 色调映射和 sRGB 转换
+        setupLutFramebuffer(width, height)
+        val lutStart = System.currentTimeMillis()
+        renderLutPass(
+            metadata,
+            lutConfig,
+            colorRecipeParams,
+            sharpeningValue,
+            noiseReductionValue,
+            chromaNoiseReductionValue
+        )
+        PLog.d(TAG, "Color Pass took: ${System.currentTimeMillis() - lutStart}ms")
+        val sourceTextureForOutput = lutTextureId
 
         // 6. 第三步：缩放、旋转、裁剪并输出 (Output Pass)
         setupOutputFramebuffer(finalWidth, finalHeight)
@@ -613,6 +668,24 @@ class RawDemosaicProcessor {
             GLES30.glDeleteShader(fShaderDemosaic)
         }
 
+        // 1.5 Linear Program (For Stacked RGB)
+        val fShaderLinear = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.FRAGMENT_SHADER_LINEAR)
+        if (vShader != 0 && fShaderLinear != 0) {
+            linearProgram = GLES30.glCreateProgram()
+            GLES30.glAttachShader(linearProgram, vShader)
+            GLES30.glAttachShader(linearProgram, fShaderLinear)
+            GLES30.glLinkProgram(linearProgram)
+            
+            uLinearRawTextureLoc = GLES30.glGetUniformLocation(linearProgram, "uRawTexture")
+            uLinearImageSizeLoc = GLES30.glGetUniformLocation(linearProgram, "uImageSize")
+            uLinearColorCorrectionMatrixLoc = GLES30.glGetUniformLocation(linearProgram, "uColorCorrectionMatrix")
+            uLinearExposureGainLoc = GLES30.glGetUniformLocation(linearProgram, "uExposureGain")
+            uLinearOutputSharpAmountLoc = GLES30.glGetUniformLocation(linearProgram, "uOutputSharpAmount")
+            uLinearTexMatrixLoc = GLES30.glGetUniformLocation(linearProgram, "uTexMatrix")
+
+            GLES30.glDeleteShader(fShaderLinear)
+        }
+
         // 2. LUT + ColorRecipe Program
         val fShaderLut = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.LUT_FRAGMENT_SHADER)
         if (vShader != 0 && fShaderLut != 0) {
@@ -715,7 +788,7 @@ class RawDemosaicProcessor {
     /**
      * 从 ByteBuffer 上传 RAW 数据到纹理
      */
-    private fun uploadRawTextureFromBuffer(buffer: ByteBuffer, width: Int, height: Int, rowStride: Int) {
+    private fun uploadRawTextureFromBuffer(buffer: ByteBuffer, width: Int, height: Int, rowStride: Int, cfaPattern: Int) {
         if (rawTextureId == 0) {
             val textures = IntArray(1)
             GLES30.glGenTextures(1, textures, 0)
@@ -732,8 +805,12 @@ class RawDemosaicProcessor {
         buffer.position(0)
 
         // 关键优化：使用 GL_UNPACK_ROW_LENGTH 处理 padding
-        val bytesPerPixel = 2 // 16-bit
+        val isLinearRGB = cfaPattern == RawMetadata.CFA_LINEAR_RGB
+        val bytesPerPixel = if (isLinearRGB) 6 else 2 // 16-bit (x3 for RGB)
         val rowLength = rowStride / bytesPerPixel
+        
+        val internalFormat = if (isLinearRGB) GLES30.GL_RGB16UI else GLES30.GL_R16UI
+        val format = if (isLinearRGB) GLES30.GL_RGB_INTEGER else GLES30.GL_RED_INTEGER
 
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowLength)
@@ -741,11 +818,11 @@ class RawDemosaicProcessor {
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D,
             0,
-            GLES30.GL_R16UI,
+            internalFormat,
             width,
             height,
             0,
-            GLES30.GL_RED_INTEGER,
+            format,
             GLES30.GL_UNSIGNED_SHORT,
             buffer
         )
@@ -852,9 +929,17 @@ class RawDemosaicProcessor {
 
     private fun setupFullResFramebuffer(width: Int, height: Int) {
         if (demosaicFramebufferId != 0 && demosaicTextureId != 0) {
-            // 假设尺寸不变，可复用。如果可能变化，需检查重置
-            return
+            // Check if size matches, if not, recreate
+            if (demosaicWidth == width && demosaicHeight == height) {
+                return
+            }
+            // Size mismatch, destroy and recreate
+            GLES30.glDeleteTextures(1, intArrayOf(demosaicTextureId), 0)
+            GLES30.glDeleteFramebuffers(1, intArrayOf(demosaicFramebufferId), 0)
         }
+
+        demosaicWidth = width
+        demosaicHeight = height
 
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
@@ -890,9 +975,15 @@ class RawDemosaicProcessor {
 
     private fun setupLutFramebuffer(width: Int, height: Int) {
         if (lutFramebufferId != 0 && lutTextureId != 0) {
-            // 假设尺寸不变，可复用
-            return
+            if (lutWidth == width && lutHeight == height) {
+                return
+            }
+            GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
+            GLES30.glDeleteFramebuffers(1, intArrayOf(lutFramebufferId), 0)
         }
+
+        lutWidth = width
+        lutHeight = height
 
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
@@ -974,20 +1065,22 @@ class RawDemosaicProcessor {
         rowStride: Int,
         metadata: RawMetadata
     ): Float {
-        val pixelStride = 2 // 16-bit RAW
 
         // 采样参数 - 128采样
         val sampleSize = 128
         val stepX = (width / sampleSize).coerceAtLeast(1)
         val stepY = (height / sampleSize).coerceAtLeast(1)
 
+        val isLinearRGB = metadata.cfaPattern == RawMetadata.CFA_LINEAR_RGB
+        val pixelStride = if (isLinearRGB) 6 else 2
+
         // 安全获取黑电平（使用绿色通道或第一个可用值）
-        val black = when {
+        val black = if (isLinearRGB) 0f else when {
             metadata.blackLevel.size > 1 -> metadata.blackLevel[1]  // 优先使用 Gr
             metadata.blackLevel.isNotEmpty() -> metadata.blackLevel[0]  // 次选使用 R
             else -> 0f  // 默认值
         }
-        val range = metadata.whiteLevel - black
+        val range = if (isLinearRGB) 65535f else (metadata.whiteLevel - black)
 
         val valueList = ArrayList<Float>(sampleSize * sampleSize)
 
@@ -1000,21 +1093,22 @@ class RawDemosaicProcessor {
             for (y in 0 until height step stepY) {
                 val rowOffset = y * rowStride
                 for (x in 0 until width step stepX) {
-                    // 确保选中绿色通道
-                    var targetX = x
-                    if ((targetX + y) % 2 == 0) {
-                        targetX += 1
-                        if (targetX >= width) targetX -= 2
+                    val offset = if (isLinearRGB) {
+                        rowOffset + x * pixelStride + 2 // Sample G (green is 2nd short)
+                    } else {
+                        // Bayer pattern: try to find green channel
+                        var targetX = x
+                        if ((targetX + y) % 2 == 0) {
+                            targetX += 1
+                            if (targetX >= width) targetX -= 2
+                        }
+                        rowOffset + targetX * pixelStride
                     }
 
-                    if (targetX >= 0 && targetX < width) {
-                        val offset = rowOffset + targetX * pixelStride
-                        if (offset + 1 < buffer.limit()) {
-                            val value = buffer.getShort(offset).toInt() and 0xFFFF
-                            // 归一化并 Clamp，防止坏点
-                            val normalized = ((value - black) / range).coerceIn(0f, 1f)
-                            valueList.add(normalized)
-                        }
+                    if (offset + 1 < buffer.limit()) {
+                        val value = buffer.getShort(offset).toInt() and 0xFFFF
+                        val normalized = ((value - black) / range).coerceIn(0f, 1f)
+                        valueList.add(normalized)
                     }
                 }
             }
@@ -1191,6 +1285,50 @@ class RawDemosaicProcessor {
     }
 
     private fun renderDemosaicPass(metadata: RawMetadata, exposureGain: Float) {
+        if (metadata.cfaPattern == RawMetadata.CFA_LINEAR_RGB) {
+            // Linear RGB Path (For Stacked RAW)
+            GLES30.glUseProgram(linearProgram)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
+            GLES30.glViewport(0, 0, metadata.width, metadata.height)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId) // This is now RGB16UI
+            GLES30.glUniform1i(uLinearRawTextureLoc, 0)
+            
+            GLES30.glUniform2f(uLinearImageSizeLoc, metadata.width.toFloat(), metadata.height.toFloat())
+            
+            val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
+            GLES30.glUniformMatrix3fv(uLinearColorCorrectionMatrixLoc, 1, false, transposedCCM, 0)
+            
+            GLES30.glUniform1f(uLinearExposureGainLoc, exposureGain)
+            GLES30.glUniform1f(uLinearOutputSharpAmountLoc, 0.3f)
+            
+            val identity = FloatArray(16)
+            android.opengl.Matrix.setIdentityM(identity, 0)
+            GLES30.glUniformMatrix4fv(uLinearTexMatrixLoc, 1, false, identity, 0)
+
+            // Draw Full Quad (No tiling needed for simple pass, but consistent with tile logic)
+            // Actually Linear Path is simpler, we can just draw full quad if texture fits max texture size.
+            // But let's reuse tiling loop for safety if image is huge?
+            // Wait, tiling loop is for large textures. Yes keep it.
+            
+            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+            for (y in 0 until metadata.height step TILE_SIZE) {
+                val h = min(TILE_SIZE, metadata.height - y)
+                for (x in 0 until metadata.width step TILE_SIZE) {
+                    val w = min(TILE_SIZE, metadata.width - x)
+                    GLES30.glViewport(x, y, w, h)
+                    GLES30.glScissor(x, y, w, h)
+                    drawQuad(linearProgram)
+                }
+            }
+            GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+            
+            checkGlError("renderDemosaicPass_Linear")
+            return
+        }
+
         GLES30.glUseProgram(demosaicProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
 

@@ -295,8 +295,33 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNative(
-    JNIEnv *env, jobject, jint width, jint height, jboolean useSuperRes) {
-  auto *stacker = new VulkanRawStacker(width, height, (bool)useSuperRes);
+    JNIEnv *env, jobject, jint width, jint height, jboolean useSuperRes,
+    jfloatArray blackLevel, jint whiteLevel, jfloatArray wbGains,
+    jfloatArray noiseModel) {
+
+  float bl[4] = {0, 0, 0, 0};
+  if (blackLevel) {
+    jfloat *body = env->GetFloatArrayElements(blackLevel, nullptr);
+    memcpy(bl, body, 4 * sizeof(float));
+    env->ReleaseFloatArrayElements(blackLevel, body, 0);
+  }
+
+  float wb[4] = {1, 1, 1, 1};
+  if (wbGains) {
+    jfloat *body = env->GetFloatArrayElements(wbGains, nullptr);
+    memcpy(wb, body, 4 * sizeof(float));
+    env->ReleaseFloatArrayElements(wbGains, body, 0);
+  }
+
+  float noise[2] = {0, 0};
+  if (noiseModel) {
+    jfloat *body = env->GetFloatArrayElements(noiseModel, nullptr);
+    memcpy(noise, body, 2 * sizeof(float));
+    env->ReleaseFloatArrayElements(noiseModel, body, 0);
+  }
+
+  auto *stacker = new VulkanRawStacker(width, height, (bool)useSuperRes, bl,
+                                       (float)whiteLevel, wb, noise);
   return reinterpret_cast<jlong>(stacker);
 }
 

@@ -31,6 +31,9 @@ set(SHADER_SOURCES
     shaders/accumulate_raw.comp
     shaders/normalize_raw.comp
     shaders/structure_tensor.comp
+    shaders/align_lk.comp
+    shaders/raw_structure_tensor.comp
+    shaders/robustness_raw.comp
 )
 
 set(GENERATED_SHADER_HEADERS "")

@@ -1,0 +1,197 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Push Constants
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    
+    float offsetX, offsetY;
+    float scale;
+    
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    float noiseModel[2];
+    
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+} pc;
+
+// Bindings
+layout(binding = 0) uniform sampler2D refImg;   // Base Frame (Raw)
+layout(binding = 1) uniform sampler2D trgImg;   // Current Frame (Raw)
+
+layout(binding = 2, scalar) buffer AlignmentBuffer {
+    vec2 offsets[]; // Alignment (u,v) per tile
+} alignBuffer;
+
+// Helper to sample image gradient and time derivative
+// I(x,y)
+float getPixelVal(sampler2D tex, vec2 uv) {
+    return texture(tex, uv).r; 
+}
+
+void main() {
+    uint tileIdx = gl_GlobalInvocationID.x;
+    if (tileIdx >= pc.gridW * pc.gridH) return;
+    
+    uint gx = tileIdx % pc.gridW;
+    uint gy = tileIdx / pc.gridW;
+    
+    // Current Estimate of Flow for this tile
+    vec2 currentFlow = alignBuffer.offsets[tileIdx];
+    
+    // Paper: "We use the Lucas-Kanade algorithm to refine the alignment."
+    // "We minimize E = sum ( I(W(x; p)) - T(x) )^2"
+    // I = Current Frame (warped), T = Reference/Base Frame
+    // Error = I(x + p) - T(x)
+    // Taylor: I(x+p) ~ I(x+p0) + gradI * dp
+    // diff = T(x) - I(x+p0)
+    // Solve: sum [ gradI * gradI^T ] dp = sum [ gradI * diff ]
+    // A dp = b
+    
+    // Window Size: Tile Size (e.g. 16x16 or 32x32)
+    // We iterate over the tile pixels in the Base Frame.
+    
+    float sIxIx = 0.0;
+    float sIyIy = 0.0;
+    float sIxIy = 0.0;
+    float sIxIt = 0.0;
+    float sIyIt = 0.0;
+    
+    uint tileW = pc.tileSize; // e.g. 16 (in plane pixels, so 32 raw pixels)
+    uint tileH = pc.tileSize;
+    
+    // Top-Left of the tile in Plane Coordinates
+    uint startX = gx * tileW;
+    uint startY = gy * tileH;
+    
+    vec2 planeDims = vec2(pc.planeWidth, pc.planeHeight);
+    vec2 pixelSize = 1.0 / vec2(pc.sensorWidth, pc.sensorHeight); // Raw Pixel Size
+    
+    // Iterate over the tile
+    // Note: LK usually runs largely on gradients of the WARPED image I?
+    // Inverse Compositional vs Forward Additive.
+    // Inverse Compositional: Gradients of T (Base), constant A.
+    // Forward Additive: Gradients of I (Warped), recompute A every iter.
+    // Paper implies Forward Additive ("Iterative LK").
+    // But Inverse Compositional is much faster (precompute A).
+    // However, since we re-run this shader, we can recompute A.
+    // Let's implement Forward Additive for standard correctness.
+    // Gradients of I evaluated at x + p.
+    
+    for (uint y = 0; y < tileH; y++) {
+        for (uint x = 0; x < tileW; x++) {
+             // Coordinate in Plane
+             uint px = startX + x;
+             uint py = startY + y;
+             if (px >= pc.planeWidth || py >= pc.planeHeight) continue;
+             
+             vec2 baseUV = (vec2(px, py) + 0.5) / planeDims;
+             
+             // 1. Sample Base Frame T(x)
+             // Base Frame is Ref (index 0). Assuming bound as refImg?
+             // Or passed as texture.
+             // Actually `refImg` is bound as texture 3? No `inputRawSampler` is bound.
+             // Usually we align Current to Base.
+             // Base is fixed.
+             // `refImg` sampler should be available.
+             // Existing code uses `refImg`.
+             
+             float T = texture(refImg, baseUV).r;
+             
+             // 2. Sample Current Frame I(x + p)
+             // Point in Current Frame
+             vec2 currentValPoint = baseUV + (currentFlow / planeDims);
+             float I = texture(trgImg, currentValPoint).r;
+             
+             // 3. Compute Gradient of I at (x + p)
+             // Central Difference
+             // Requires sampling I at (x+p+1, y) etc.
+             // Step size? 1 Raw pixel? or 1 Plane pixel?
+             // Flow is in Plane Pixels. We usually align Plane Structures.
+             // Let's use Plane Pixel step size for gradient.
+             // 1.0 / planeDims
+             vec2 dX = vec2(1.0 / planeDims.x, 0.0);
+             vec2 dY = vec2(0.0, 1.0 / planeDims.y);
+             
+             float I_x = (texture(trgImg, currentValPoint + dX).r - texture(trgImg, currentValPoint - dX).r) * 0.5;
+             float I_y = (texture(trgImg, currentValPoint + dY).r - texture(trgImg, currentValPoint - dY).r) * 0.5;
+             
+             // 4. Temporal Derivative / Error
+             // It = I(x+p) - T(x)
+             float It = I - T;
+             
+             // 5. Accumulate System Matrix components
+             sIxIx += I_x * I_x;
+             sIyIy += I_y * I_y;
+             sIxIy += I_x * I_y;
+             
+             // b = - sum ( gradI^T * It )
+             sIxIt += I_x * It;
+             sIyIt += I_y * It;
+        }
+    }
+    
+    // Solve 2x2 System (A dp = -b => dp = - A^-1 b)
+    // b_accum is sum(grad * It).
+    // We want dp s.t. A dp = - b_accum
+    // Wait, b vector in standard LK is sum(grad^T * (T - I)).
+    // Here we used It = I - T. So sum(grad * It) = -b.
+    // So A dp = - (sum(grad * It)) = - sIxIt
+    // So dp = - A^-1 * [sIxIt, sIyIt]^T
+    
+    // Determinant
+    float det = sIxIx * sIyIy - sIxIy * sIxIy;
+    
+    vec2 delta = vec2(0.0);
+    
+    // Regularization (Ridge Regression) for stability in flat areas
+    float lambda = 0.01; 
+    
+    if (det > 1e-7) {
+        // Inverse A
+        // [ IyIy  -IxIy ] / det
+        // [ -IxIy  IxIx ]
+        
+        delta.x = (sIyIy * sIxIt - sIxIy * sIyIt) / det;
+        delta.y = (sIxIx * sIyIt - sIxIy * sIxIt) / det;
+        
+        // Negative sign?
+        // A * dp = - [sIxIt]. 
+        // So dp has a minus sign.
+        delta = -delta;
+    }
+    
+    // Clamp Motion (Trust Region)
+    float maxJump = 1.0; // Max 1 pixel update per iteration
+    float len = length(delta);
+    if (len > maxJump) {
+        delta *= (maxJump / len);
+    }
+    
+    // Update Alignment
+    alignBuffer.offsets[tileIdx] = currentFlow + delta;
+}

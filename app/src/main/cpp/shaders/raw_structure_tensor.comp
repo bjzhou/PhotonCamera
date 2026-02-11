@@ -1,0 +1,181 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Input: RAW16 image
+layout(binding = 0) uniform sampler2D inputRawSampler;
+
+// Output: Kernel Parameters (k1, k2, cos2theta, sin2theta) packed in vec4
+// k1 = major axis length (inverse), k2 = minor axis length (inverse)
+// angle info encoded as cos(2*theta), sin(2*theta)
+layout(binding = 1, scalar) writeonly buffer KernelParams {
+    vec4 data[];
+} kernelParams;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    
+    float offsetX, offsetY;
+    float scale;
+    
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    float noiseModel[2];
+    
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+} pc;
+
+ivec2 getPlaneOffsets(uint planeIdx, uint cfa) {
+    const int offsets[4][4][2] = int[4][4][2](
+        int[4][2](int[2](0,0), int[2](1,0), int[2](0,1), int[2](1,1)), // RGGB
+        int[4][2](int[2](1,0), int[2](0,0), int[2](1,1), int[2](0,1)), // GRBG  
+        int[4][2](int[2](0,1), int[2](1,1), int[2](0,0), int[2](1,0)), // GBRG
+        int[4][2](int[2](1,1), int[2](0,1), int[2](1,0), int[2](0,0))  // BGGR
+    );
+    return ivec2(offsets[cfa][planeIdx][0], offsets[cfa][planeIdx][1]);
+}
+
+// Convert Bayer to Grayscale (Luma approximation)
+// We use a simple average of the 2x2 block for the half-res structure tensor
+// This runs on half-res (plane resolution), so one thread per 2x2 Bayer block output?
+// No, the paper says "compute structure tensor on half-resolution luminance".
+// Let's assume this shader runs on the plane resolution (W/2 x H/2).
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+
+    uint planeX = pc.tileX + tx;
+    uint planeY = pc.tileY + ty;
+    
+    if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
+    
+    vec2 pixelSize = vec2(1.0) / vec2(pc.sensorWidth, pc.sensorHeight);
+
+    // 1. Compute Gradients Ix, Iy on Half-Resolution Luma
+    // Luma is defined as average of the 2x2 Bayer block (simplification for robustness).
+    // Gradient is computed via Central Difference on this Luma field.
+    
+    float sIxIx = 0.0;
+    float sIyIy = 0.0;
+    float sIxIy = 0.0;
+    
+    // 3x3 Window Sum (Smoothing the tensor)
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+             int nx = clamp(int(planeX) + dx, 0, int(pc.planeWidth) - 1);
+             int ny = clamp(int(planeY) + dy, 0, int(pc.planeHeight) - 1);
+             
+             // Compute Luma and Gradient at (nx, ny) on the fly
+             // Ideally this should be a separate pass, but we do it here to save BW.
+             
+             // Helper to fetch Luma at (cx, cy)
+             #define FETCH_LUMA(cx, cy) \
+                 dot(textureGather(inputRawSampler, (vec2(cx, cy) * 2.0 + 1.0) * pixelSize, 0), vec4(0.25))
+
+             // Gradient at (nx, ny)
+             float xp = FETCH_LUMA(clamp(nx + 1, 0, int(pc.planeWidth)-1), ny);
+             float xm = FETCH_LUMA(clamp(nx - 1, 0, int(pc.planeWidth)-1), ny);
+             float yp = FETCH_LUMA(nx, clamp(ny + 1, 0, int(pc.planeHeight)-1));
+             float ym = FETCH_LUMA(nx, clamp(ny - 1, 0, int(pc.planeHeight)-1));
+             
+             float Ix = (xp - xm) * 0.5;
+             float Iy = (yp - ym) * 0.5;
+             
+             sIxIx += Ix * Ix;
+             sIyIy += Iy * Iy;
+             sIxIy += Ix * Iy;
+        }
+    }
+    
+    // 2. Eigendecomposition of Structure Tensor J
+    float trace = sIxIx + sIyIy;
+    float det = sIxIx * sIyIy - sIxIy * sIxIy;
+    float discriminant = sqrt(max(trace * trace * 0.25 - det, 0.0));
+    
+    float lambda1 = trace * 0.5 + discriminant; // Large eigenvalue
+    float lambda2 = trace * 0.5 - discriminant; // Small eigenvalue
+    
+    // 3. Kernel Parameters Formulation (Paper Supp. Mat.)
+    // A = Anisotropy
+    float A = 0.0;
+    if (trace > 1e-9) A = (lambda1 - lambda2) / trace;
+    
+    // k_detail determination
+    // Base scale based on signal strength (lambda1) vs Noise
+    // Signal > Noise -> Edge -> Small Kernel (High k)
+    // Signal < Noise -> Flat -> Large Kernel (Low k)
+    float signalMetric = lambda1; 
+    // Heuristic: Scale signal by noise floor to get "SNR-like" metric
+    float noiseFloor = max(pc.baseNoise, 1e-6);
+    float SNR = signalMetric / noiseFloor;
+    
+    // Tunable constants
+    const float k_flat = 0.5;  // Wide kernel for flat areas
+    const float k_edge = 4.0;  // Narrow kernel for edges
+    float k_iso = mix(k_flat, k_edge, smoothstep(2.0, 10.0, SNR));
+    
+    // Anisotropic scaling
+    // Stretch along the edge (minor eigenvector direction e2)
+    // Shrink across the edge (major eigenvector direction e1)
+    const float k_stretch_max = 4.0;
+    
+    // The "k" in exp(-0.5 * k * d^2) is Inverse Variance.
+    // Large k -> Small Variance -> Narrow.
+    // Small k -> Large Variance -> Wide.
+    
+    // Across Edge (Direction e1, Gradient): We want Narrow kernel to preserve edge. 
+    // So k1 should be High.
+    // k1 = k_iso * stretch
+    
+    // Along Edge (Direction e2): We want Wide kernel to smooth.
+    // So k2 should be Low.
+    // k2 = k_iso / stretch
+    
+    float stretch = 1.0 + (k_stretch_max - 1.0) * A;
+    
+    float k1 = k_iso * stretch; 
+    float k2 = k_iso / stretch;
+    
+    // 4. Orientation (cos2theta, sin2theta)
+    // Main eigenvector angle e1 (Gradient Direction)
+    // vector (lambda1 - Jyy, Jxy) or (Jxy, lambda1 - Jxx)
+    // Easier: Double angle directly from J components
+    // tan(2theta) = 2*Ixy / (Ixx - Iyy)
+    float diff = sIxIx - sIyIy;
+    float hyp = sqrt(diff*diff + 4.0*sIxIy*sIxIy);
+    float cos2t = 1.0; 
+    float sin2t = 0.0;
+    if (hyp > 1e-9) {
+        cos2t = diff / hyp;
+        sin2t = 2.0 * sIxIy / hyp;
+    }
+    
+    uint outIdx = planeY * pc.planeWidth + planeX;
+    kernelParams.data[outIdx] = vec4(k1, k2, cos2t, sin2t);
+}
