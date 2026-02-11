@@ -1,6 +1,7 @@
 #include "vulkan_stacker.h"
 #include "accumulate.comp.h"
 #include "normalize.comp.h"
+#include "structure_tensor.comp.h"
 #include <android/log.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -169,6 +170,61 @@ void VulkanImageStacker::initVulkanResources() {
                          &barrier, 0, nullptr);
   }
   vm.endSingleTimeCommands(cb);
+
+  // Phase 2: Kernel Params Buffer (Native Resolution - much safer for VRAM)
+  VkDeviceSize kpSize =
+      (VkDeviceSize)width * height * sizeof(float) * 4; // vec4
+
+  VkBufferCreateInfo kpInfo{};
+  kpInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  kpInfo.size = kpSize;
+  kpInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  kpInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &kpInfo, nullptr, &kernelParamsBuffer));
+
+  VkMemoryRequirements kpReqs;
+  vkGetBufferMemoryRequirements(device, kernelParamsBuffer, &kpReqs);
+
+  VkMemoryAllocateInfo kpAlloc{};
+  kpAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  kpAlloc.allocationSize = kpReqs.size;
+  kpAlloc.memoryTypeIndex = vm.findMemoryType(
+      kpReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device, &kpAlloc, nullptr, &kernelParamsMemory));
+  vkBindBufferMemory(device, kernelParamsBuffer, kernelParamsMemory, 0);
+
+  // Allocate Descriptor Sets for Structure Tensor (One per tile? No, global
+  // pass or tile based?) For simplicity, let's make Structure Tensor a global
+  // pass or tile based. The shader uses inputSampler and kernelParams. Let's
+  // use 1 descriptor set for the whole image if possible, or per tile. Since we
+  // run ST on full image (or tiles), let's allocate 'numTiles' sets for it too
+  // to be consistent with dispatch pattern.
+  tensorSets.resize(numTiles);
+
+  // Phase 3: Motion Prior Buffer (Grid resolution, float)
+  // Grid size: max (width+31)/32 * (height+31)/32
+  // We reuse the 'gridW * gridH' logic, but max possible grid size is
+  // alignedW/32 * alignedH/32
+  VkDeviceSize mpSize = (VkDeviceSize)gridW * gridH * sizeof(float);
+
+  VkBufferCreateInfo mpInfo{};
+  mpInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  mpInfo.size = mpSize;
+  mpInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  mpInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &mpInfo, nullptr, &motionPriorBuffer));
+
+  VkMemoryRequirements mpReqs;
+  vkGetBufferMemoryRequirements(device, motionPriorBuffer, &mpReqs);
+
+  VkMemoryAllocateInfo mpAlloc{};
+  mpAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  mpAlloc.allocationSize = mpReqs.size;
+  mpAlloc.memoryTypeIndex = vm.findMemoryType(
+      mpReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device, &mpAlloc, nullptr, &motionPriorMemory));
+  vkBindBufferMemory(device, motionPriorBuffer, motionPriorMemory, 0);
 }
 
 void VulkanImageStacker::createPipelines(VkSampler sampler) {
@@ -177,7 +233,7 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
 
   // 1. Descriptor Set Layout with Immutable Sampler
   VkSampler samplers[1] = {sampler};
-  VkDescriptorSetLayoutBinding bindings[3] = {};
+  VkDescriptorSetLayoutBinding bindings[4] = {}; // Increased to 4
   bindings[0].binding = 0;
   bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   bindings[0].descriptorCount = 1;
@@ -194,10 +250,28 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
   bindings[2].descriptorCount = 1;
   bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+  bindings[3].binding = 3; // KernelParams (Read Only)
+  bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  bindings[3].descriptorCount = 1;
+  bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+  VkDescriptorSetLayoutBinding motionPriorBinding{};
+  motionPriorBinding.binding = 4; // Motion Prior
+  motionPriorBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  motionPriorBinding.descriptorCount = 1;
+  motionPriorBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+  VkDescriptorSetLayoutBinding bindingsFinal[5];
+  bindingsFinal[0] = bindings[0];
+  bindingsFinal[1] = bindings[1];
+  bindingsFinal[2] = bindings[2];
+  bindingsFinal[3] = bindings[3];
+  bindingsFinal[4] = motionPriorBinding;
+
   VkDescriptorSetLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 3;
-  layoutInfo.pBindings = bindings;
+  layoutInfo.bindingCount = 5;
+  layoutInfo.pBindings = bindingsFinal;
   vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                               &descriptorSetLayout);
 
@@ -284,6 +358,53 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
   vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &normPipelineInfo,
                            nullptr, &normalizePipeline);
   vkDestroyShaderModule(device, normShaderModule, nullptr);
+
+  // 5. Create Structure Tensor Pipeline
+  // Layout: Binding 0 (Sampler), Binding 1 (KernelParams Out)
+  VkDescriptorSetLayoutBinding tensorBindings[2] = {};
+  tensorBindings[0].binding = 0;
+  tensorBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  tensorBindings[0].descriptorCount = 1;
+  tensorBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  tensorBindings[0].pImmutableSamplers = samplers; // Setup immutable sampler
+
+  tensorBindings[1].binding = 1;
+  tensorBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  tensorBindings[1].descriptorCount = 1;
+  tensorBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+  VkDescriptorSetLayoutCreateInfo tensorLayoutInfo{};
+  tensorLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  tensorLayoutInfo.bindingCount = 2;
+  tensorLayoutInfo.pBindings = tensorBindings;
+  vkCreateDescriptorSetLayout(device, &tensorLayoutInfo, nullptr,
+                              &tensorSetLayout);
+
+  VkPipelineLayoutCreateInfo tensorPLInfo{};
+  tensorPLInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  tensorPLInfo.setLayoutCount = 1;
+  tensorPLInfo.pSetLayouts = &tensorSetLayout;
+  tensorPLInfo.pushConstantRangeCount = 1;
+  tensorPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &tensorPLInfo, nullptr, &tensorPipelineLayout);
+
+  std::vector<uint32_t> stCode(structure_tensor_comp_spv,
+                               structure_tensor_comp_spv +
+                                   (structure_tensor_comp_spv_size / 4));
+  VkShaderModule stModule = vm.createShaderModule(stCode);
+
+  VkComputePipelineCreateInfo stPipelineInfo{};
+  stPipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  stPipelineInfo.layout = tensorPipelineLayout;
+  stPipelineInfo.stage.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stPipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  stPipelineInfo.stage.module = stModule;
+  stPipelineInfo.stage.pName = "main";
+
+  vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &stPipelineInfo, nullptr,
+                           &tensorPipeline);
+  vkDestroyShaderModule(device, stModule, nullptr);
 }
 
 bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
@@ -296,31 +417,38 @@ bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
 
 bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   VulkanImage input;
-  if (!VulkanBufferImporter::importHardwareBuffer(buffer, input)) {
+  // Use existing conversion if available (from first frame) to compatible with
+  // immutable sampler
+  if (!VulkanBufferImporter::importHardwareBuffer(buffer, input,
+                                                  this->ycbcrConversion)) {
     LOGE("processFrame: Failed to import hardware buffer");
     return false;
   }
 
+  bool currentIsFirstFrame = isFirstFrame;
+  LOGI("processFrame: Start. isFirstFrame=%d", currentIsFirstFrame);
+
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
-
-  // On the first frame, we MUST create the pipelines using this frame's sampler
-  // as an IMMUTABLE sampler. This is required for Android YUV external formats
-  // to work correctly.
-  // Capture first frame state before we potentially update it
-  bool currentIsFirstFrame = isFirstFrame;
 
   if (currentIsFirstFrame) {
     // Steal the first frame's sampler and conversion for long-lived pipelines
     this->immutableSampler = input.sampler;
     this->ycbcrConversion = input.ycbcrConversion;
     input.sampler = VK_NULL_HANDLE;
-    input.ycbcrConversion = VK_NULL_HANDLE;
+    input.ycbcrConversion = VK_NULL_HANDLE; // Steal ownership
 
     createPipelines(this->immutableSampler);
+  } else {
+    // If not first frame, we reused the conversion.
+    // We must NOT let input.release() destroy it, because
+    // 'this->ycbcrConversion' owns it now.
+    input.ycbcrConversion = VK_NULL_HANDLE;
   }
 
   // 1. Allocate and Update Descriptor Sets for each tile
+  // Need to increase pool size? initVulkanResources allocation was "Generous"
+  // (32 per tile). We added tensor sets.
   int numTiles = numTilesX * numTilesY;
 
   for (int i = 0; i < numTiles; ++i) {
@@ -346,7 +474,17 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
     alignBufferInfo.offset = 0;
     alignBufferInfo.range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet descriptorWrites[3] = {};
+    VkDescriptorBufferInfo kpBufferInfo{};
+    kpBufferInfo.buffer = kernelParamsBuffer;
+    kpBufferInfo.offset = 0;
+    kpBufferInfo.range = VK_WHOLE_SIZE;
+
+    VkDescriptorBufferInfo mpBufferInfo{};
+    mpBufferInfo.buffer = motionPriorBuffer;
+    mpBufferInfo.offset = 0;
+    mpBufferInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet descriptorWrites[5] = {}; // Increased to 5
     descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[0].dstSet = accumSets[i];
     descriptorWrites[0].dstBinding = 0;
@@ -369,7 +507,46 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
     descriptorWrites[2].descriptorCount = 1;
     descriptorWrites[2].pBufferInfo = &alignBufferInfo;
 
-    vkUpdateDescriptorSets(device, 3, descriptorWrites, 0, nullptr);
+    descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[3].dstSet = accumSets[i];
+    descriptorWrites[3].dstBinding = 3;
+    descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[3].descriptorCount = 1;
+    descriptorWrites[3].pBufferInfo = &kpBufferInfo;
+
+    descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[4].dstSet = accumSets[i];
+    descriptorWrites[4].dstBinding = 4;
+    descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[4].descriptorCount = 1;
+    descriptorWrites[4].pBufferInfo = &mpBufferInfo;
+
+    vkUpdateDescriptorSets(device, 5, descriptorWrites, 0, nullptr);
+
+    // Also Allocate Tensor Sets
+    VkDescriptorSetAllocateInfo tensorAlloc{};
+    tensorAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    tensorAlloc.descriptorPool = descriptorPool;
+    tensorAlloc.descriptorSetCount = 1;
+    tensorAlloc.pSetLayouts = &tensorSetLayout;
+    VK_CHECK(vkAllocateDescriptorSets(device, &tensorAlloc, &tensorSets[i]));
+
+    VkWriteDescriptorSet tensorWrites[2] = {};
+    tensorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    tensorWrites[0].dstSet = tensorSets[i];
+    tensorWrites[0].dstBinding = 0;
+    tensorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    tensorWrites[0].descriptorCount = 1;
+    tensorWrites[0].pImageInfo = &imageInfo; // Same input image
+
+    tensorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    tensorWrites[1].dstSet = tensorSets[i];
+    tensorWrites[1].dstBinding = 1;
+    tensorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    tensorWrites[1].descriptorCount = 1;
+    tensorWrites[1].pBufferInfo = &kpBufferInfo; // Output to Kernel Params
+
+    vkUpdateDescriptorSets(device, 2, tensorWrites, 0, nullptr);
   }
   // 2. Alignment logic on CPU (to get offsets)
   float offsetX = 0.0f, offsetY = 0.0f;
@@ -434,6 +611,21 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
         } else {
           LOGE("VulkanImageStacker: Failed to map alignment memory: %d", res);
         }
+
+        void *mpMapPtr = nullptr;
+        VkResult resMP = vkMapMemory(device, motionPriorMemory, 0,
+                                     VK_WHOLE_SIZE, 0, &mpMapPtr);
+        if (resMP == VK_SUCCESS && mpMapPtr != nullptr) {
+          if (alignment.errorMap.size() >= copyCount) {
+            memcpy(mpMapPtr, alignment.errorMap.data(),
+                   copyCount * sizeof(float));
+          } else {
+            LOGE("VulkanImageStacker: Error Map size mismatch!");
+          }
+          vkUnmapMemory(device, motionPriorMemory);
+        } else {
+          LOGE("VulkanImageStacker: Failed to map MP memory: %d", resMP);
+        }
       }
 
       // Calculate global average offset for fallback (redundant but kept for
@@ -469,9 +661,133 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   pc.isFirstFrame = currentIsFirstFrame ? 1 : 0;
   pc.gridW = gridW;
   pc.gridH = gridH;
+  // Phase 6: High-ISO Capable Noise Model
+  pc.noiseAlpha = 0.12f;
+  pc.noiseBeta = 0.10f;
+
+  LOGI("processFrame: Dispatching. Alpha=%f, Beta=%f, Scale=%f, Grid=%dx%d",
+       pc.noiseAlpha, pc.noiseBeta, pc.scale, gridW, gridH);
 
   // 3. Command Buffer Recording
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
+
+  // Transition Input Image Layout
+  VkImageMemoryBarrier imageBarrier{};
+  imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  imageBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  imageBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  imageBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  imageBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  imageBarrier.image = input.image;
+  imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  imageBarrier.subresourceRange.baseMipLevel = 0;
+  imageBarrier.subresourceRange.levelCount = 1;
+  imageBarrier.subresourceRange.baseArrayLayer = 0;
+  imageBarrier.subresourceRange.layerCount = 1;
+  imageBarrier.srcAccessMask = 0;
+  imageBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &imageBarrier);
+
+  // Clear Accumulators if first frame
+  if (pc.isFirstFrame) {
+    for (int i = 0; i < numTiles; ++i) {
+      vkCmdFillBuffer(cb, accumBuffers[i], 0, VK_WHOLE_SIZE, 0);
+    }
+    // Barrier to ensure clear is done before usage?
+    // SingleTimeCommands end with a queue submission which has implicit
+    // ordering if we record linearly? No, we need a barrier if we use it in the
+    // SAME command buffer as Dispatch. Yes, we are in the same CB.
+
+    VkMemoryBarrier memBarrier = {};
+    memBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    memBarrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                         &memBarrier, 0, nullptr, 0, nullptr);
+  }
+
+  // Phase 2: Compute Structure Tensor (Pass 1)
+
+  // Phase 2: Compute Structure Tensor (Pass 1)
+  // Only if first frame? Or every frame?
+  // Paper says: Structure tensor is computed on the image being merged
+  // (Target). So we must compute it for EVERY frame.
+
+  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tensorPipeline);
+
+  // Use pc.scale and global width/height from PC
+  // pc was prepared above, let's use it.
+
+  // Dispatch over the image logic (tiled or global?)
+  // We allocated per-tile descriptor sets.
+
+  for (int y = 0; y < numTilesY; ++y) {
+    for (int x = 0; x < numTilesX; ++x) {
+      int i = y * numTilesX + x;
+      // Reuse PC logic for tiling, but Structure Tensor covers full target
+      // frame. Actually Structure Tensor is 1:1 with Upscaled Output if we want
+      // per-pixel kernel. Shader uses inputSampler and writes to kpBuffer. We
+      // can dispatch over tiles logic.
+
+      // Calculate tile rect (Using NATIVE resolution for ST calculation)
+      uint32_t stFullW = width;
+      uint32_t stFullH = height;
+      uint32_t stTileW = (stFullW + numTilesX - 1) / numTilesX;
+      uint32_t stTileH = (stFullH + numTilesY - 1) / numTilesY;
+
+      PushConstants stPC = pc;
+      stPC.tileX = x * stTileW;
+      stPC.tileY = y * stTileH;
+      stPC.tileW = std::min(stTileW, stFullW - stPC.tileX);
+      stPC.tileH = std::min(stTileH, stFullH - stPC.tileY);
+      // Ensure shader sees native dimensions for indexing
+      stPC.width = stFullW;
+      stPC.height = stFullH;
+
+      // Bind ST Set
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              tensorPipelineLayout, 0, 1, &tensorSets[i], 0,
+                              nullptr);
+      vkCmdPushConstants(cb, tensorPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                         0, sizeof(stPC), &stPC);
+
+      // Dispatch
+      vkCmdDispatch(cb, (stPC.tileW + 15) / 16, (stPC.tileH + 15) / 16, 1);
+    }
+  }
+
+  // Barrier between ST and Accumulate
+  VkBufferMemoryBarrier stBarrier{};
+  stBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  stBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  stBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  stBarrier.buffer = kernelParamsBuffer;
+  stBarrier.size = VK_WHOLE_SIZE;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                       &stBarrier, 0, nullptr);
+
+  // Barrier between frames to ensure Accumulator writes are finished
+  for (int i = 0; i < numTiles; ++i) {
+    VkBufferMemoryBarrier postBarrier{};
+    postBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    postBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    postBarrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    postBarrier.buffer = accumBuffers[i];
+    postBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                         &postBarrier, 0, nullptr);
+  }
+
+  // Pass 2: Accumulate
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, accumulatePipeline);
 
   uint32_t fullW = pc.width;
@@ -496,10 +812,22 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
     }
   }
 
+  // Global barrier between frames to ensure ALL accumulator tiles are finished
+  // writing before the next frame begins reading or before normalization
+  VkMemoryBarrier postBarrier{};
+  postBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+  postBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  postBarrier.dstAccessMask =
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &postBarrier,
+                       0, nullptr, 0, nullptr);
+
   vm.endSingleTimeCommands(cb);
   vkQueueWaitIdle(vm.getComputeQueue());
 
   vkFreeDescriptorSets(device, descriptorPool, numTiles, accumSets.data());
+  vkFreeDescriptorSets(device, descriptorPool, numTiles, tensorSets.data());
   isFirstFrame = false;
   input.release(device);
   return true;
@@ -541,7 +869,8 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   setpriority(PRIO_PROCESS, 0, 10);
 
   // Process all queued frames first
-  if (pendingFrames.empty() && isFirstFrame) {
+  isFirstFrame = true;
+  if (pendingFrames.empty()) {
     return false;
   }
 
@@ -555,14 +884,18 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
 
-  if (!pendingFrames.empty()) {
-    LOGI("VulkanImageStacker: Reference frame score: %.2f",
-         pendingFrames.front().score);
-  }
+  LOGI("processStack: Processing %zu frames", pendingFrames.size());
 
+  int frameIdx = 0;
   for (auto &frame : pendingFrames) {
-    processFrame(frame.buffer);
+    LOGI("processStack: Processing frame %d, score %f", frameIdx, frame.score);
+    if (!processFrame(frame.buffer)) {
+      LOGE("processStack: Failed to process frame %d", frameIdx);
+    } else {
+      LOGI("processStack: Successfully processed frame %d", frameIdx);
+    }
     AHardwareBuffer_release(frame.buffer);
+    frameIdx++;
   }
   pendingFrames.clear();
 
@@ -788,4 +1121,21 @@ void VulkanImageStacker::releaseVulkanResources() {
     vkDestroyBuffer(device, alignmentBuffer, nullptr);
   if (alignmentMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, alignmentMemory, nullptr);
+
+  if (kernelParamsBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, kernelParamsBuffer, nullptr);
+  if (kernelParamsMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, kernelParamsMemory, nullptr);
+
+  if (motionPriorBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, motionPriorBuffer, nullptr);
+  if (motionPriorMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, motionPriorMemory, nullptr);
+
+  if (tensorSetLayout != VK_NULL_HANDLE)
+    vkDestroyDescriptorSetLayout(device, tensorSetLayout, nullptr);
+  if (tensorPipelineLayout != VK_NULL_HANDLE)
+    vkDestroyPipelineLayout(device, tensorPipelineLayout, nullptr);
+  if (tensorPipeline != VK_NULL_HANDLE)
+    vkDestroyPipeline(device, tensorPipeline, nullptr);
 }

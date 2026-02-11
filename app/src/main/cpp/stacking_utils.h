@@ -33,6 +33,8 @@ struct TileAlignment {
   int gridW;
   int gridH;
   std::vector<Point> offsets;
+  // Motion Prior (Error Map): Stores local variance/instability of the flow
+  std::vector<float> errorMap;
 
   Point getOffset(int x, int y) const {
     if (tileWidth <= 0 || tileHeight <= 0 || offsets.empty())
@@ -68,6 +70,20 @@ struct TileAlignment {
     result.y = (1.0f - dx) * (1.0f - dy) * p00.y + dx * (1.0f - dy) * p10.y +
                (1.0f - dx) * dy * p01.y + dx * dy * p11.y;
     return result;
+  }
+
+  float getError(int x, int y) const {
+    if (tileWidth <= 0 || tileHeight <= 0 || errorMap.empty())
+      return 0.0f;
+
+    // Nearest neighbor or bilinear? Nearest is enough for error map
+    int gx = (int)((float)x / (float)tileWidth);
+    int gy = (int)((float)y / (float)tileHeight);
+
+    gx = std::max(0, std::min(gx, gridW - 1));
+    gy = std::max(0, std::min(gy, gridH - 1));
+
+    return errorMap[gy * gridW + gx];
   }
 };
 

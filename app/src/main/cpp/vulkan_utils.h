@@ -44,6 +44,7 @@ struct VulkanImage {
 
 class VulkanBufferImporter {
 public:
-  static bool importHardwareBuffer(AHardwareBuffer *buffer,
-                                   VulkanImage &outImage);
+  static bool importHardwareBuffer(
+      AHardwareBuffer *buffer, VulkanImage &outImage,
+      VkSamplerYcbcrConversion existingConversion = VK_NULL_HANDLE);
 };

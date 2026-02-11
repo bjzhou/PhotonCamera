@@ -14,6 +14,29 @@ inline uint8_t getPixel(const GrayImage &img, int x, int y) {
   return img.data[y * img.width + x];
 }
 
+// Float version of getPixel for LK optical flow
+inline float getPixelF(const GrayImage &img, int x, int y) {
+  x = std::max(0, std::min(x, img.width - 1));
+  y = std::max(0, std::min(y, img.height - 1));
+  return (float)img.data[y * img.width + x];
+}
+
+// Bilinear interpolation on grayscale image for LK optical flow
+inline float sampleBilinearGray(const GrayImage &img, float x, float y) {
+  int x0 = (int)std::floor(x);
+  int y0 = (int)std::floor(y);
+  float fx = x - x0;
+  float fy = y - y0;
+
+  float v00 = getPixelF(img, x0, y0);
+  float v10 = getPixelF(img, x0 + 1, y0);
+  float v01 = getPixelF(img, x0, y0 + 1);
+  float v11 = getPixelF(img, x0 + 1, y0 + 1);
+
+  return (1.0f - fx) * (1.0f - fy) * v00 + fx * (1.0f - fy) * v10 +
+         (1.0f - fx) * fy * v01 + fx * fy * v11;
+}
+
 // Sub-pixel refinement using parabolic interpolation
 // (Consolidated definition)
 inline float interpolateSubpixel(long long s0, long long s_minus,
@@ -282,8 +305,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
         }
       }
 
-      // 3. Sub-pixel Refinement (L1 scale)
-      // We do subpixel at L1 to avoid noise at L0
+      // 3. Sub-pixel Refinement: Parabolic initial estimate at L1
       long long s0 = bestSAD;
       long long sx_m = computeBlockSAD(refL1, tgtL1, refX, refY, matchSizeL1,
                                        matchSizeL1, bestDx - 1, bestDy);
@@ -296,14 +318,67 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
       float subDx = interpolateSubpixel(s0, sx_m, sx_p);
       float subDy = interpolateSubpixel(s0, sy_m, sy_p);
-
-      // Clamp subpixel to avoid wild shots on flat textures
       subDx = std::max(-0.5f, std::min(0.5f, subDx));
       subDy = std::max(-0.5f, std::min(0.5f, subDy));
 
-      // Scale back to L0 (multiply by 2)
-      rawOffsets[ty * gridW + tx] = {(float)(bestDx + subDx) * 2.0f,
-                                     (float)(bestDy + subDy) * 2.0f};
+      // 4. Lucas-Kanade refinement at L0 for sub-pixel accuracy
+      // Scale L1 result to L0 as initial estimate
+      const GrayImage &refL0 = refPyramid[0];
+      const GrayImage &tgtL0 = targetPyramid[0];
+      float lkDx = (float)(bestDx + subDx) * 2.0f;
+      float lkDy = (float)(bestDy + subDy) * 2.0f;
+
+      int cx = tx * tileSize + tileSize / 2;
+      int cy = ty * tileSize + tileSize / 2;
+      int lkHalfWin = 8; // 16x16 LK window
+
+      for (int iter = 0; iter < 3; ++iter) {
+        float sumIxIx = 0, sumIyIy = 0, sumIxIy = 0;
+        float sumIxIt = 0, sumIyIt = 0;
+
+        for (int wy = -lkHalfWin; wy < lkHalfWin; ++wy) {
+          for (int wx = -lkHalfWin; wx < lkHalfWin; ++wx) {
+            int rx = cx + wx;
+            int ry = cy + wy;
+            if (rx < 1 || rx >= width - 1 || ry < 1 || ry >= height - 1)
+              continue;
+
+            float Ix =
+                (getPixelF(refL0, rx + 1, ry) - getPixelF(refL0, rx - 1, ry)) *
+                0.5f;
+            float Iy =
+                (getPixelF(refL0, rx, ry + 1) - getPixelF(refL0, rx, ry - 1)) *
+                0.5f;
+            float It = sampleBilinearGray(tgtL0, rx + lkDx, ry + lkDy) -
+                       getPixelF(refL0, rx, ry);
+
+            sumIxIx += Ix * Ix;
+            sumIyIy += Iy * Iy;
+            sumIxIy += Ix * Iy;
+            sumIxIt += Ix * It;
+            sumIyIt += Iy * It;
+          }
+        }
+
+        float det = sumIxIx * sumIyIy - sumIxIy * sumIxIy;
+        if (std::abs(det) < 1e-6f)
+          break;
+
+        float dvx = (sumIyIy * sumIxIt - sumIxIy * sumIyIt) / det;
+        float dvy = (sumIxIx * sumIyIt - sumIxIy * sumIxIt) / det;
+
+        // Clamp per-iteration update to prevent divergence
+        dvx = std::max(-1.0f, std::min(1.0f, dvx));
+        dvy = std::max(-1.0f, std::min(1.0f, dvy));
+
+        lkDx -= dvx;
+        lkDy -= dvy;
+
+        if (dvx * dvx + dvy * dvy < 0.001f)
+          break;
+      }
+
+      rawOffsets[ty * gridW + tx] = {lkDx, lkDy};
     }
   }
 
@@ -333,6 +408,55 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       alignment.offsets[y * gridW + x] = {sumX / wSum, sumY / wSum};
     }
   }
+
+  // 5. Compute Motion Prior (Error Map)
+  // Variance of the flow indicates reliability.
+  alignment.errorMap.resize(gridW * gridH);
+#pragma omp parallel for collapse(2) num_threads(4)
+  for (int y = 0; y < gridH; ++y) {
+    for (int x = 0; x < gridW; ++x) {
+      Point smooth = alignment.offsets[y * gridW + x];
+      float sumSqDiff = 0;
+      float wSum = 0;
+
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          int nx = std::max(0, std::min(x + dx, gridW - 1));
+          int ny = std::max(0, std::min(y + dy, gridH - 1));
+
+          Point raw = rawOffsets[ny * gridW + nx];
+          float diffX = raw.x - smooth.x;
+          float diffY = raw.y - smooth.y;
+          float distSq = diffX * diffX + diffY * diffY;
+
+          float w = (dx == 0 && dy == 0) ? 2.0f : 1.0f;
+          sumSqDiff += distSq * w;
+          wSum += w;
+        }
+      }
+      // Scale error for display/usage? Keep it as variance in pixels^2
+      alignment.errorMap[y * gridW + x] = sumSqDiff / wSum;
+    }
+  }
+
+  // 6. Dilate Error Map (Morphological Dilation) - 3x3 Max Filter
+  // This extends the "unsafe" regions slightly to be conservative.
+  std::vector<float> errorMapDilated = alignment.errorMap;
+#pragma omp parallel for collapse(2) num_threads(4)
+  for (int y = 0; y < gridH; ++y) {
+    for (int x = 0; x < gridW; ++x) {
+      float maxErr = 0;
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          int nx = std::max(0, std::min(x + dx, gridW - 1));
+          int ny = std::max(0, std::min(y + dy, gridH - 1));
+          maxErr = std::max(maxErr, alignment.errorMap[ny * gridW + nx]);
+        }
+      }
+      errorMapDilated[y * gridW + x] = maxErr;
+    }
+  }
+  alignment.errorMap = std::move(errorMapDilated);
 
   return alignment;
 }

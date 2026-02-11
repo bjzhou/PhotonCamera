@@ -1,8 +1,9 @@
 #include "vulkan_utils.h"
 #include "common.h"
 
-bool VulkanBufferImporter::importHardwareBuffer(AHardwareBuffer *buffer,
-                                                VulkanImage &outImage) {
+bool VulkanBufferImporter::importHardwareBuffer(
+    AHardwareBuffer *buffer, VulkanImage &outImage,
+    VkSamplerYcbcrConversion existingConversion) {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
@@ -94,37 +95,52 @@ bool VulkanBufferImporter::importHardwareBuffer(AHardwareBuffer *buffer,
                 formatProps.format >= 1000156000); // Check for YCbCr formats
 
   if (isYUV) {
-    VkSamplerYcbcrConversionCreateInfo ycbcrCreateInfo{};
-    ycbcrCreateInfo.sType =
-        VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO;
-    ycbcrCreateInfo.format = formatProps.format;
+    if (existingConversion != VK_NULL_HANDLE) {
+      outImage.ycbcrConversion = existingConversion;
+      // Important: If we use existing conversion, we do NOT own it, so we
+      // shouldn't destroy it? But VulkanImage.release() will destroy it. We
+      // need a mechanism to signal ownership or modify release(). For
+      // simplicity: VulkanImageStacker manages the lifecycle of the *first*
+      // conversion (in immutableSampler/ycbcrConversion members). The temporary
+      // input images just borrow it. So we should NOT set
+      // outImage.ycbcrConversion if we want to avoid double free? NO, we need
+      // it set for ImageView creation below. We must update
+      // VulkanImage.release() to NOT destroy it if it's borrowed, OR simply set
+      // it to NULL before release() in the caller. Let's set it here, and
+      // caller (vulkan_stacker) must define logic.
+    } else {
+      VkSamplerYcbcrConversionCreateInfo ycbcrCreateInfo{};
+      ycbcrCreateInfo.sType =
+          VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO;
+      ycbcrCreateInfo.format = formatProps.format;
 
-    ycbcrCreateInfo.ycbcrModel = formatProps.suggestedYcbcrModel;
-    ycbcrCreateInfo.ycbcrRange = formatProps.suggestedYcbcrRange;
+      ycbcrCreateInfo.ycbcrModel = formatProps.suggestedYcbcrModel;
+      ycbcrCreateInfo.ycbcrRange = formatProps.suggestedYcbcrRange;
 
-    ycbcrCreateInfo.components = {
-      VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
-      VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
+      ycbcrCreateInfo.components = {
+          VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
+          VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
 
-    ycbcrCreateInfo.xChromaOffset = formatProps.suggestedXChromaOffset;
-    ycbcrCreateInfo.yChromaOffset = formatProps.suggestedYChromaOffset;
-    ycbcrCreateInfo.chromaFilter = VK_FILTER_LINEAR;
-    ycbcrCreateInfo.forceExplicitReconstruction = VK_FALSE;
+      ycbcrCreateInfo.xChromaOffset = formatProps.suggestedXChromaOffset;
+      ycbcrCreateInfo.yChromaOffset = formatProps.suggestedYChromaOffset;
+      ycbcrCreateInfo.chromaFilter = VK_FILTER_LINEAR;
+      ycbcrCreateInfo.forceExplicitReconstruction = VK_FALSE;
 
-    VkExternalFormatANDROID extFormat{};
-    extFormat.sType = VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID;
-    extFormat.externalFormat = formatProps.externalFormat;
-    if (formatProps.format == VK_FORMAT_UNDEFINED) {
-      ycbcrCreateInfo.pNext = &extFormat;
-    }
+      VkExternalFormatANDROID extFormat{};
+      extFormat.sType = VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID;
+      extFormat.externalFormat = formatProps.externalFormat;
+      if (formatProps.format == VK_FORMAT_UNDEFINED) {
+        ycbcrCreateInfo.pNext = &extFormat;
+      }
 
-    auto pfnCreate = (PFN_vkCreateSamplerYcbcrConversion)vkGetDeviceProcAddr(
-        device, "vkCreateSamplerYcbcrConversion");
-    if (pfnCreate) {
-      if (pfnCreate(device, &ycbcrCreateInfo, nullptr,
-                    &outImage.ycbcrConversion) != VK_SUCCESS) {
-        LOGE("Failed to create YCbCr conversion");
-        return false;
+      auto pfnCreate = (PFN_vkCreateSamplerYcbcrConversion)vkGetDeviceProcAddr(
+          device, "vkCreateSamplerYcbcrConversion");
+      if (pfnCreate) {
+        if (pfnCreate(device, &ycbcrCreateInfo, nullptr,
+                      &outImage.ycbcrConversion) != VK_SUCCESS) {
+          LOGE("Failed to create YCbCr conversion");
+          return false;
+        }
       }
     }
   }

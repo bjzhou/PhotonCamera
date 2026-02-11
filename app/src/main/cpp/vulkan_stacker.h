@@ -72,6 +72,9 @@ private:
     uint32_t gridW;
     uint32_t gridH;
     uint32_t bufferStride;
+    // Phase 2/3: Noise Model
+    float noiseAlpha;
+    float noiseBeta;
   };
 
   struct FrameData {
@@ -79,6 +82,19 @@ private:
     float score = 0.0f;
   };
   std::vector<FrameData> pendingFrames;
+
+  // Phase 2: Structure Tensor Resources
+  VkBuffer kernelParamsBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory kernelParamsMemory = VK_NULL_HANDLE;
+
+  VkDescriptorSetLayout tensorSetLayout = VK_NULL_HANDLE;
+  VkPipelineLayout tensorPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline tensorPipeline = VK_NULL_HANDLE;
+  std::vector<VkDescriptorSet> tensorSets;
+
+  // Phase 3: Motion Prior Buffer (Grid Resolution)
+  VkBuffer motionPriorBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory motionPriorMemory = VK_NULL_HANDLE;
 
   void initVulkanResources();
   void releaseVulkanResources();

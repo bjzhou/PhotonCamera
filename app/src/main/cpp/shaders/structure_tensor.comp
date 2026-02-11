@@ -1,0 +1,112 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D inputSampler;
+layout(binding = 1, scalar) writeonly buffer KernelParams {
+    vec4 data[];  // (k1, k2, cos2theta, sin2theta)
+} kernelParams;
+
+layout(push_constant, scalar) uniform PushConstants {
+    float t0, t1, t2, t3, t4, t5;
+    float offsetX, offsetY;
+    float scale;
+    uint width;   // Global width
+    uint height;  // Global height
+    float baseNoise; // Unused legacy
+    uint isFirstFrame;
+    uint tileX;   // Tile start X
+    uint tileY;   // Tile start Y
+    uint tileW;   // Tile width
+    uint tileH;   // Tile height
+    uint gridW;
+    uint gridH;
+    uint bufferStride;
+    float noiseAlpha; // Sensor noise model slope
+    float noiseBeta;  // Sensor noise model intercept
+} pc;
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+
+    uint x = pc.tileX + tx;
+    uint y = pc.tileY + ty;
+    
+    // Safety check for global bounds
+    if (x >= pc.width || y >= pc.height) return;
+
+    // Convert output coordinate to UV
+    vec2 pixelSize = vec2(1.0) / vec2(pc.width, pc.height);
+    vec2 uv = (vec2(x, y) + 0.5) * pixelSize;
+
+    // Calculate Gradients and Smooth J (Structure Tensor Elements) using a 5x5 window
+    // Larger window is MUCH more robust against high-ISO noise
+    float sIxIx = 0.0;
+    float sIyIy = 0.0;
+    float sIxIy = 0.0;
+    
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            vec2 offset = vec2(float(dx), float(dy)) * pixelSize;
+            vec2 sampleUV = uv + offset;
+            
+            float cxp = texture(inputSampler, sampleUV + vec2(pixelSize.x, 0.0)).r;
+            float cxm = texture(inputSampler, sampleUV - vec2(pixelSize.x, 0.0)).r;
+            float cyp = texture(inputSampler, sampleUV + vec2(0.0, pixelSize.y)).r;
+            float cym = texture(inputSampler, sampleUV - vec2(0.0, pixelSize.y)).r;
+            
+            float Ix_ = (cxp - cxm) * 0.5 * 255.0;
+            float Iy_ = (cyp - cym) * 0.5 * 255.0;
+            
+            sIxIx += Ix_ * Ix_;
+            sIyIy += Iy_ * Iy_;
+            sIxIy += Ix_ * Iy_;
+        }
+    }
+    
+    // Eigen Analysis of J
+    // Reasonable noise floor (10.0)
+    float noiseFloor = 10.0;
+    float IxIx = max(sIxIx / 25.0 - noiseFloor, 0.0);
+    float IyIy = max(sIyIy / 25.0 - noiseFloor, 0.0);
+    float IxIy = sIxIy / 25.0; 
+    
+    float trace = IxIx + IyIy;
+    float disc = sqrt(max((IxIx - IyIy)*(IxIx - IyIy) + 4.0 * IxIy*IxIy, 0.0));
+    
+    float lambda1 = 0.5 * (trace + disc);
+    float lambda2 = 0.5 * (trace - disc); 
+    
+    // Feature amplitude
+    float C = sqrt(max(lambda1, 0.0));
+    float A = (lambda1 - lambda2) / (lambda1 + lambda2 + 0.01);
+    
+    // Logic: Balanced Denoising
+    float k_base = mix(8.0, 0.5, clamp(C / 100.0, 0.0, 1.0));
+    float stretch = 1.0 + 3.0 * A; 
+    
+    float k1 = k_base / stretch; 
+    float k2 = k_base * stretch;
+    
+    k1 = max(k1, 0.5);
+    k2 = min(k2, 16.0); 
+    
+    // 2*theta logic for orientation
+    float diff = IxIx - IyIy;
+    float length = sqrt(diff * diff + 4.0 * IxIy * IxIy);
+    
+    float cos2t, sin2t;
+    if (length < 0.001) {
+        cos2t = 1.0;
+        sin2t = 0.0;
+    } else {
+        cos2t = diff / length;
+        sin2t = 2.0 * IxIy / length;
+    }
+    
+    kernelParams.data[y * pc.width + x] = vec4(k1, k2, cos2t, sin2t);
+}
