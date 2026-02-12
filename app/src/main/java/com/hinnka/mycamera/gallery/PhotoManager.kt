@@ -435,6 +435,7 @@ object PhotoManager {
             FileOutputStream(dngFile).use { outputStream ->
                 outputStream.write(dngDataBytes)
             }
+            RawDemosaicProcessor.getInstance().loadToneCurveFromAssets(context)
             val bitmap = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
                 RawDemosaicProcessor.getInstance().process(
                     dngFile.absolutePath,
@@ -677,6 +678,7 @@ object PhotoManager {
                     // Keep original CCM and other params
                 )
 
+                RawDemosaicProcessor.getInstance().loadToneCurveFromAssets(context)
                 RawDemosaicProcessor.getInstance().process(
                     byteBuffer,
                     firstImageWidth,
@@ -686,9 +688,6 @@ object PhotoManager {
                     aspectRatio,
                     metadata.cropRegion,
                     rotation,
-                    sharpeningValue = 0.4f,
-                    noiseReductionValue = 0.2f,
-                    chromaNoiseReductionValue = 0.25f,
                     previewLuma = previewLuma
                 )
             } ?: return@withContext

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
@@ -278,6 +279,11 @@ class RawDemosaicProcessor {
     private var uToneMapParamsLoc = 0
     private var uToneMapInputTextureLoc = 0
     private var uToneMapTexMatrixLoc = 0
+    private var uToneCurveLoc = 0
+    private var uToneMapTexelSizeLoc = 0
+
+    // ToneCurve 数据 (256 点线性 LUT)
+    private val toneCurve = FloatArray(256) { it / 255.0f } // 默认为线性
     private var isInitialized = false
 
     /**
@@ -756,6 +762,8 @@ class RawDemosaicProcessor {
             uToneMapInputTextureLoc = GLES30.glGetUniformLocation(tonemapProgram, "uInputTexture")
             uToneMapParamsLoc = GLES30.glGetUniformLocation(tonemapProgram, "uToneMapParams")
             uToneMapTexMatrixLoc = GLES30.glGetUniformLocation(tonemapProgram, "uTexMatrix")
+            uToneCurveLoc = GLES30.glGetUniformLocation(tonemapProgram, "uToneCurve")
+            uToneMapTexelSizeLoc = GLES30.glGetUniformLocation(tonemapProgram, "uTexelSize")
 
             GLES30.glDeleteShader(fShaderToneMap)
         }
@@ -1335,6 +1343,12 @@ class RawDemosaicProcessor {
             sceneStats.whitePoint
         )
 
+        // 设置 ToneCurve
+        GLES30.glUniform1fv(uToneCurveLoc, 256, toneCurve, 0)
+
+        // 设置 TexelSize
+        GLES30.glUniform2f(uToneMapTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
+
         // 绘制全屏四边形
         val identity = FloatArray(16)
         GlMatrix.setIdentityM(identity, 0)
@@ -1342,6 +1356,69 @@ class RawDemosaicProcessor {
 
         drawQuad(tonemapProgram)
         checkGlError("renderToneMapPass")
+    }
+
+    /**
+     * 加载并解析自定义 ToneCurve (XML 格式)
+     * @param xmlContent XML 文件内容
+     */
+    fun loadToneCurve(xmlContent: String) {
+        try {
+            val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+            val builder = factory.newDocumentBuilder()
+            val doc = builder.parse(java.io.ByteArrayInputStream(xmlContent.toByteArray()))
+            val elements = doc.getElementsByTagName("Element")
+            
+            val hValues = mutableListOf<Float>()
+            val vValues = mutableListOf<Float>()
+            
+            for (i in 0 until elements.length) {
+                val node = elements.item(i) as org.w3c.dom.Element
+                hValues.add(node.getAttribute("h").toFloat())
+                vValues.add(node.getAttribute("v").toFloat())
+            }
+
+            // 重新采样到 256 点线性 LUT
+            for (i in 0 until 256) {
+                val targetH = i / 255.0f
+                toneCurve[i] = interpolateCurve(targetH, hValues, vValues)
+            }
+            PLog.d(TAG, "ToneCurve loaded: ${hValues.size} points")
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load ToneCurve: ${e.message}")
+        }
+    }
+
+    /**
+     * 从 Assets 加载 ToneCurve
+     */
+    fun loadToneCurveFromAssets(context: Context, fileName: String = "tonecurve.xml") {
+        try {
+            val xmlContent = context.assets.open(fileName).bufferedReader().use { it.readText() }
+            loadToneCurve(xmlContent)
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load ToneCurve from assets: ${e.message}")
+        }
+    }
+
+    private fun interpolateCurve(x: Float, h: List<Float>, v: List<Float>): Float {
+        if (x <= h.first()) return v.first()
+        if (x >= h.last()) return v.last()
+        
+        // 二分查找
+        var low = 0
+        var high = h.size - 2
+        while (low <= high) {
+            val mid = (low + high) / 2
+            if (x < h[mid]) high = mid - 1
+            else if (x > h[mid + 1]) low = mid + 1
+            else {
+                // 线性插值
+                val ratio = (x - h[mid]) / (h[mid + 1] - h[mid])
+                return v[mid] + ratio * (v[mid + 1] - v[mid])
+            }
+        }
+        return v.first()
     }
 
     /**

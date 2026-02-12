@@ -142,7 +142,7 @@ void main() {
              // Robustness: single channel, diff of 2 noisy observations
              // Expected noise distSq = 2 * sigma²
              // R = exp(-distSq / (S² * 2 * sigma²))
-             float S = 2.0;
+             float S = 3.0;
              float denom = sigma2 * 2.0 * S * S;
              float R = exp(-distSq / denom);
              

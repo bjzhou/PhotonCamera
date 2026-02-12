@@ -696,15 +696,56 @@ object RawShaders {
         
         uniform sampler2D uInputTexture;
         uniform vec4 uToneMapParams; // (ExposureGain, DRC_Strength, BlackPoint, WhitePoint)
+        uniform float uToneCurve[256];
+        uniform vec2 uTexelSize;
         
-        // ACES Tone Mapping (Narkowicz 2015)
-        vec3 ACESFilm(vec3 x) {
-            float a = 2.51;
-            float b = 0.03;
-            float c = 2.43;
-            float d = 0.59;
-            float e = 0.14;
-            return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+        float getLuma(vec3 color) {
+            return dot(color, vec3(0.2126, 0.7152, 0.0722));
+        }
+        
+        vec3 simpleLocalToneMap(vec3 color, vec2 uv) {
+            float luma = getLuma(color);
+            
+            // --- 参数 ---
+            float blurRadius = 3.0;
+            float sigmaColor = 0.3;
+            float detailStrength = 1.5;
+            float betaEdge = 0.6;
+            float threshold = 0.1;
+
+            // --- 1. 计算 Base (双边滤波近似) ---
+            float baseLuma = 0.0;
+            float totalWeight = 0.0;
+            
+            for (int x = -2; x <= 2; x++) {
+                for (int y = -2; y <= 2; y++) {
+                    vec2 offset = vec2(float(x), float(y)) * uTexelSize * blurRadius;
+                    vec3 rawSample = texture(uInputTexture, uv + offset).rgb;
+                    float sampleLuma = getLuma(rawSample);
+                    
+                    float wSpatial = exp(-(float(x*x + y*y)) / 4.0);
+                    float diff = abs(sampleLuma - luma);
+                    float wRange = exp(-(diff * diff) / (2.0 * sigmaColor * sigmaColor));
+                    
+                    float weight = wSpatial * wRange;
+                    baseLuma += sampleLuma * weight;
+                    totalWeight += weight;
+                }
+            }
+            baseLuma /= max(0.001, totalWeight);
+            baseLuma = max(baseLuma, 0.0001);
+
+            // --- 2. 细节分离与重映射 ---
+            float detail = luma - baseLuma;
+            float remappedDetail = (abs(detail) < threshold) ? 
+                                   (detail * detailStrength) : 
+                                   (sign(detail) * (threshold * detailStrength + (abs(detail) - threshold) * betaEdge));
+
+            float newLuma = max(0.0, baseLuma + remappedDetail);            
+
+            float noiseGuard = 0.001;
+            float lGain = (newLuma + noiseGuard) / (luma + noiseGuard);
+            return color * lGain;
         }
         
         vec3 linearToSRGB(vec3 linear) {
@@ -714,33 +755,56 @@ object RawShaders {
                 step(0.0031308, linear)
             );
         }
+
+        float applyCurve(float x) {
+            float index = clamp(x, 0.0, 1.0) * 255.0;
+            int i = int(floor(index));
+            float f = fract(index);
+            return mix(uToneCurve[i], uToneCurve[min(i + 1, 255)], f);
+        }
+
+        vec3 applyCurve(vec3 rgb) {
+            return vec3(applyCurve(rgb.r), applyCurve(rgb.g), applyCurve(rgb.b));
+        }
+        
+        vec3 ACESFilm(vec3 x) {
+            float a = 2.51;
+            float b = 0.03;
+            float c = 2.43;
+            float d = 0.59;
+            float e = 0.14;
+            return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+        }
         
         void main() {
-            vec3 color = texture(uInputTexture, vTexCoord).rgb;
+            vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
             
             float gain = uToneMapParams.x;
-            float drc = uToneMapParams.y;
             float blackPoint = uToneMapParams.z;
             float whitePoint = uToneMapParams.w;
             
-            // 1. 黑白点重校准 (Normalization)
-            // 消除由于 RAW 底噪导致的“底灰”，让黑的地方真正黑下去
-            color = (color - blackPoint) / max(0.0001, (whitePoint - blackPoint));
-            color = max(vec3(0.0), color);
+            float softBlack = blackPoint * 0.95;
+            float normScale = gain * 1.4;
             
-            // 2. 应用环境曝光增益
-            color *= gain;
+            // 映射到曝光后的线性空间
+            vec3 color = max(vec3(0.0), (rawColor - softBlack) * normScale);
             
-            // 3. 全局色调映射 (ACES Filmic)
-            // 线性增益后的数据可能超过 1.0，ACES 将其优雅地压回 0-1 并增加电影感对比度
+            // 2. 局部细节增强
+            color = simpleLocalToneMap(color, vTexCoord);
+            
             color = ACESFilm(color);
+
+            // 4. 应用自定义 ToneCurve
+            color = mix(color, applyCurve(color), 0.5);
             
-            // 4. 应用 sRGB Gamma (解决“灰蒙蒙”的最关键步骤)
+            // 5. 应用 sRGB Gamma
             color = linearToSRGB(color);
             
             fragColor = vec4(color, 1.0);
         }
     """.trimIndent()
+
+
 
     /**
      * 绘制顺序索引
