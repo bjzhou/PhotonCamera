@@ -721,7 +721,6 @@ class RawDemosaicProcessor {
             uLutEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uLutEnabled")
             uLutCurveLoc = GLES30.glGetUniformLocation(lutProgram, "uLutCurve")
             uLutTexMatrixLoc = GLES30.glGetUniformLocation(lutProgram, "uTexMatrix")
-            uToneMapParamsLoc = GLES30.glGetUniformLocation(lutProgram, "uToneMapParams")
 
             uColorRecipeEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uColorRecipeEnabled")
             uExposureLoc = GLES30.glGetUniformLocation(lutProgram, "uExposure")
@@ -1259,10 +1258,12 @@ class RawDemosaicProcessor {
             else -> 1.0f - ((drStops - 6.0f) / 6.0f) * 0.4f
         }
 
-        // D. 修正黑点
-        val finalBlack = (exposedMin * 0.8f).coerceIn(0.0f, 0.05f)
+        // D. 修正黑白点 (返回 RAW 尺度 0.0-1.0，不带曝光增益)
+        // 降低黑点，稍微压低底噪
+        val finalBlack = (robustMin * 0.9f).coerceIn(0.0f, 0.1f)
+        val finalWhite = robustMax.coerceIn(0.1f, 1.0f)
 
-        return SceneStats(exposureGain, drcStrength, finalBlack, robustMax)
+        return SceneStats(exposureGain, drcStrength, finalBlack, finalWhite)
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)

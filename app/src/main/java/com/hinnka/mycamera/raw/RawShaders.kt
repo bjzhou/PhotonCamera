@@ -723,16 +723,19 @@ object RawShaders {
             float blackPoint = uToneMapParams.z;
             float whitePoint = uToneMapParams.w;
             
-            // 1. 扣除自动黑点 (彻底解决“灰蒙蒙”)
-            // 我们在每个场景中找到物理最小值，将其映射回 0.0
+            // 1. 黑白点重校准 (Normalization)
+            // 消除由于 RAW 底噪导致的“底灰”，让黑的地方真正黑下去
             color = (color - blackPoint) / max(0.0001, (whitePoint - blackPoint));
             color = max(vec3(0.0), color);
             
-            // 2. 应用 ACES Filmic 曲线
-            // 它是 HDR 到 SDR 的黄金准则，提供自然的对比度和高光保护
+            // 2. 应用环境曝光增益
+            color *= gain;
+            
+            // 3. 全局色调映射 (ACES Filmic)
+            // 线性增益后的数据可能超过 1.0，ACES 将其优雅地压回 0-1 并增加电影感对比度
             color = ACESFilm(color);
             
-            // 3. 应用 sRGB Gamma (RAW 图像必须有这个，否则必然灰蒙蒙)
+            // 4. 应用 sRGB Gamma (解决“灰蒙蒙”的最关键步骤)
             color = linearToSRGB(color);
             
             fragColor = vec4(color, 1.0);
@@ -789,7 +792,6 @@ object RawShaders {
             uniform float uSharpening;           // 0.0 ~ 1.0 (锐化强度)
             uniform float uNoiseReduction;       // 0.0 ~ 1.0 (降噪强度)
             uniform float uChromaNoiseReduction; // 0.0 ~ 1.0 (减少杂色强度)
-            uniform vec4 uToneMapParams;         // (ExposureGain, DRC_Strength, BlackPoint, WhitePoint)
 
             // RGB 转 YCbCr
             vec3 rgb2ycbcr(vec3 rgb) {
