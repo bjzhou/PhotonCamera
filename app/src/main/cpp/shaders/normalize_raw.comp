@@ -23,13 +23,11 @@ layout(push_constant, scalar) uniform PushConstants {
     uint sensorWidth;
     uint sensorHeight;
     
-    float offsetX, offsetY;
     float scale;
     
     float blackLevel[4];
     float whiteLevel;
     float wbGains[4];
-    float noiseModel[2];
     
     uint isFirstFrame;
     uint outputChannel;
@@ -61,28 +59,26 @@ void main() {
     uint accIndex = ty * pc.bufferStride + tx;
     vec2 accum = accumulator.data[accIndex];
 
-    float bl = 0.0;
     float gain = 1.0;
     
     // Map planeIndex (R=0, G=1, B=2) to Bayer offsets for black level and WB gains
     // RGGB/Metadata/mWbGains: 0=R, 1=Gr, 2=Gb, 3=B
     if (pc.planeIndex == 0) { // Red
-        bl = pc.blackLevel[0];
         gain = pc.wbGains[0];
     } else if (pc.planeIndex == 1) { // Green (Average of Gr/Gb)
-        bl = (pc.blackLevel[1] + pc.blackLevel[2]) * 0.5;
         gain = (pc.wbGains[1] + pc.wbGains[2]) * 0.5; 
     } else { // Blue (planeIndex == 2)
-        bl = pc.blackLevel[3];
         gain = pc.wbGains[3];
     }
 
     float resLinear = 0.0;
     if (accum.y > 1e-5) {
-        float val = accum.x / accum.y; // [0, 1] from sensor
-        // Normalize: (val - bl/65535) / ((white-bl)/65535) * gain
-        // More stable: (val * 65535 - bl) / (white - bl) * gain
-        resLinear = (val * 65535.0 - bl) / (pc.whiteLevel - bl) * gain;
+        float val = accum.x / accum.y; // Already [0, 1] net signal per sample
+        // Scale and apply WB gain
+        // Net signal range is [0, (white - black)]
+        // We want to map it back to [0, 1.0] for the processor
+        float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
+        resLinear = (val * 65535.0) / (pc.whiteLevel - bl_avg) * gain;
     }
 
     // Write Interleaved RGB (R, G, B, R, G, B...)

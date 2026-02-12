@@ -59,7 +59,6 @@ data class UserPreferences(
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val useMultiFrame: Boolean = false, // 是否使用多帧合成
     val multiFrameCount: Int = 8, // 多帧合成帧数
-    val useSuperResolution: Boolean = false, // 是否使用超分辨率
     val rawEngine: RawEngine = RawEngine.NATIVE, // RAW处理引擎
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
@@ -108,7 +107,6 @@ class UserPreferencesRepository(private val context: Context) {
         // 多帧合成 Key
         private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
-        private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val RAW_ENGINE = stringPreferencesKey("raw_engine")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
@@ -150,7 +148,6 @@ class UserPreferencesRepository(private val context: Context) {
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 useMultiFrame = preferences[USE_MULTI_FRAME] ?: false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8,
-                useSuperResolution = preferences[USE_SUPER_RESOLUTION] ?: false,
                 rawEngine = RawEngine.valueOf(
                     preferences[RAW_ENGINE] ?: RawEngine.NATIVE.name
                 ),
@@ -426,15 +423,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveMultiFrameCount(count: Int) {
         context.dataStore.edit { preferences ->
             preferences[MULTI_FRAME_COUNT] = count
-        }
-    }
-
-    /**
-     * 保存是否使用超分辨率
-     */
-    suspend fun saveUseSuperResolution(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_SUPER_RESOLUTION] = enabled
         }
     }
 

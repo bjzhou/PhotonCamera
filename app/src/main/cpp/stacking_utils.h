@@ -101,7 +101,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
 class ImageStacker {
 public:
-  ImageStacker(int width, int height, bool enableSuperRes = false);
+  ImageStacker(int width, int height);
   ~ImageStacker() = default;
 
   // Add a frame to the stack. The first frame becomes the reference.
@@ -122,13 +122,10 @@ public:
                    const char *outputPath = nullptr, int *outFinalW = nullptr,
                    int *outFinalH = nullptr);
 
-  // Getter for the current scale
-  int getScale() const { return scale; }
-
 private:
   int width;
   int height;
-  int scale; // Scaling factor (1 for normal, 2 for Super Res)
+
   bool isFirstFrame;
   int frameCount = 0;
 
@@ -163,7 +160,7 @@ struct StagedRawFrame {
 
 class RawStacker {
 public:
-  RawStacker(int width, int height, bool enableSuperRes = false);
+  RawStacker(int width, int height);
   ~RawStacker() = default;
 
   // Add a raw frame to the stack
@@ -180,12 +177,10 @@ public:
   // Returns a vector containing the stacked 16-bit Bayer data
   std::vector<uint16_t> process();
 
-  int getScale() const { return scale; }
-
 private:
   int width;
   int height;
-  int scale;
+
   bool isFirstFrame;
   int frameCount = 0;
   float byteScale = 1.0f;

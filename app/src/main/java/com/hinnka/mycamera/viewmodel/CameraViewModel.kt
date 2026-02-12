@@ -152,9 +152,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
-    val useSuperResolution: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useSuperResolution }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val rawEngine: Flow<RawEngine> = userPreferencesRepository.userPreferences
         .map { it.rawEngine }
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -193,24 +190,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     init {
         cameraController.initialize()
         cameraController.onImageCaptured = { image, captureInfo, characteristics, captureResult ->
-            if (isBursting) {
-                val count = state.value.multiFrameCount
-                PLog.d(TAG, "Burst frame received: ${burstImages.size + 1}/$count")
-                burstImages.add(image)
-                if (burstImages.size >= count) {
-                    viewModelScope.launch {
-                        processBurst(burstImages.toList(), captureInfo, characteristics, captureResult)
+            synchronized(burstImages) {
+                if (isBursting) {
+                    val count = state.value.multiFrameCount
+                    PLog.d(TAG, "Burst frame received: ${burstImages.size + 1}/$count")
+                    burstImages.add(image)
+                    if (burstImages.size >= count) {
+                        val imagesToProcess = burstImages.toList()
                         burstImages.clear()
+                        isBursting = false
+                        viewModelScope.launch {
+                            processBurst(imagesToProcess, captureInfo, characteristics, captureResult)
+                        }
                     }
-                    isBursting = false
-                }
-            } else {
-                PLog.d(
-                    TAG,
-                    "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
-                )
-                viewModelScope.launch {
-                    saveImage(image, captureInfo, characteristics, captureResult)
+                } else {
+                    PLog.d(
+                        TAG,
+                        "onImageCaptured callback triggered - image: ${image.width}x${image.height}, format: ${image.format}"
+                    )
+                    viewModelScope.launch {
+                        saveImage(image, captureInfo, characteristics, captureResult)
+                    }
                 }
             }
         }
@@ -322,7 +322,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setShowGrid(prefs.showGrid)
 
                 cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
-                cameraController.setUseSuperResolution(prefs.useSuperResolution)
                 cameraController.setUseLivePhoto(prefs.useLivePhoto)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
@@ -877,17 +876,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置是否使用超分辨率
-     */
-    fun setUseSuperResolution(enabled: Boolean) {
-        cameraController.setUseSuperResolution(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseSuperResolution(enabled)
-        }
-        reopenCamera()
-    }
-
-    /**
      * 设置 RAW 处理引擎
      */
     fun setRawEngine(engine: RawEngine) {
@@ -1359,7 +1347,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else null
 
             characteristics ?: return
-            val photoId = PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value, false)
+            val photoId =
+                PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value)
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save image")
                 return
@@ -1434,11 +1423,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
-                sharpening = if (sharpeningValue == 0f) (if (useSuperResolution.value) 0.8f else 0.4f) else sharpeningValue,
+                sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = if (useRaw.value && chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
-                width = images[0].width * (if (useSuperResolution.value) 2 else 1),
-                height = images[0].height * (if (useSuperResolution.value) 2 else 1),
+                width = images[0].width,
+                height = images[0].height,
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
@@ -1463,8 +1452,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else null
 
             characteristics ?: return
-            val photoId = PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail,
-                useLivePhoto.value, useSuperResolution.value)
+            val photoId = PhotoManager.preparePhoto(
+                context, metadata, captureResult, previewThumbnail,
+                useLivePhoto.value
+            )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save burst image")
                 return
@@ -1486,8 +1477,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQualityValue,
-                    useSuperResolution = useSuperResolution.value,
                     useGpuAcceleration = useGpuAcceleration.value,
+                    previewLuma = state.value.getAvgLuma()
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -1514,6 +1505,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         return zoomStops.map { it * mainCamera.focalLength35mmEquivalent }
     }
+
     /**
      * 设置背景图
      */

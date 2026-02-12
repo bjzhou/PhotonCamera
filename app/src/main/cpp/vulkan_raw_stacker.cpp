@@ -18,11 +18,14 @@
     }                                                                          \
   } while (0)
 
-VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool sr,
+VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h,
                                    const float *blackLevel, float whiteLevel,
                                    const float *wbGains,
-                                   const float *noiseModel)
-    : width(w), height(h), enableSuperRes(sr), mWhiteLevel(whiteLevel) {
+                                   const float *noiseModel,
+                                   const float *lensShadingMap,
+                                   uint32_t lscWidth, uint32_t lscHeight)
+    : width(w), height(h), mWhiteLevel(whiteLevel), mLscWidth(lscWidth),
+      mLscHeight(lscHeight) {
 
   if (blackLevel)
     memcpy(mBlackLevel, blackLevel, 4 * sizeof(float));
@@ -30,28 +33,16 @@ VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool sr,
     memcpy(mWbGains, wbGains, 4 * sizeof(float));
   if (noiseModel)
     memcpy(mNoiseModel, noiseModel, 2 * sizeof(float));
+  if (lensShadingMap && lscWidth > 0 && lscHeight > 0) {
+    size_t size = (size_t)lscWidth * lscHeight * 4;
+    mLensShadingMap.assign(lensShadingMap, lensShadingMap + size);
+  }
 
-  // Force tiles to 1x1 for now if needed, or keep 2x2.
-  // SuperRes accumulation logic changed.
-  // Force tiles to 1x1 for now.
-  // The processStack implementation currently dispatches for the full image
-  // (non-tiled). Allocating tiled buffers would cause overflow/crash. Modern
-  // GPUs can handle full resolution buffers (approx 300MB for 12MP float16/32).
   numTilesX = 1;
   numTilesY = 1;
-  /*
-    if (enableSuperRes) {
-      numTilesX = 2;
-      numTilesY = 2;
-    } else {
-      numTilesX = 1;
-      numTilesY = 1;
-    }
-  */
 
   VulkanManager::getInstance().init();
   initVulkanResources();
-  LOGI("VulkanRawStacker created: %dx%d, SR=%d", width, height, enableSuperRes);
 }
 
 VulkanRawStacker::~VulkanRawStacker() {
@@ -63,7 +54,7 @@ void VulkanRawStacker::initVulkanResources() {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  uint32_t scale = enableSuperRes ? 2 : 1;
+  uint32_t scale = 1;
   uint32_t outW = width * scale;
   uint32_t outH = height * scale;
 
@@ -240,7 +231,128 @@ void VulkanRawStacker::initVulkanResources() {
   memset(ptr, 0, (size_t)alignBufferSize);
   vkUnmapMemory(device, alignmentMemory);
 
+  // --- 3. Lens Shading Map Texture ---
+  VkBuffer lscStagingBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory lscStagingMemory = VK_NULL_HANDLE;
+
+  if (mLensShadingMap.empty()) {
+    mLscWidth = 1;
+    mLscHeight = 1;
+    mLensShadingMap = {1.0f, 1.0f, 1.0f, 1.0f};
+  }
+
+  {
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = mLscWidth;
+    imageInfo.extent.height = mLscHeight;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VK_CHECK(vkCreateImage(device, &imageInfo, nullptr, &lscImage));
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device, lscImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = vm.findMemoryType(
+        memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &lscMemory));
+    vkBindImageMemory(device, lscImage, lscMemory, 0);
+
+    // Upload Data using staging buffer
+    VkDeviceSize lscSize = mLensShadingMap.size() * sizeof(float);
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = lscSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(device, &bufferInfo, nullptr, &lscStagingBuffer);
+
+    vkGetBufferMemoryRequirements(device, lscStagingBuffer, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = vm.findMemoryType(
+        memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(device, &allocInfo, nullptr, &lscStagingMemory);
+    vkBindBufferMemory(device, lscStagingBuffer, lscStagingMemory, 0);
+
+    void *data;
+    vkMapMemory(device, lscStagingMemory, 0, lscSize, 0, &data);
+    memcpy(data, mLensShadingMap.data(), (size_t)lscSize);
+    vkUnmapMemory(device, lscStagingMemory);
+
+    // Transition and Copy
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = lscImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {mLscWidth, mLscHeight, 1};
+    vkCmdCopyBufferToImage(cb, lscStagingBuffer, lscImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+
+    // Sampler (Linear for smooth interpolation)
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    vkCreateSampler(device, &samplerInfo, nullptr, &lscSampler);
+
+    // View
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = lscImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &viewInfo, nullptr, &lscView);
+  }
+
   vm.endSingleTimeCommands(cb);
+
+  if (lscStagingBuffer) {
+    vkDestroyBuffer(device, lscStagingBuffer, nullptr);
+    vkFreeMemory(device, lscStagingMemory, nullptr);
+  }
 }
 
 // Helper to create compute pipeline
@@ -359,8 +471,9 @@ void VulkanRawStacker::createPipelines() {
                                              robustness_raw_comp_spv_size);
 
   // --- 4. Accumulate Pipeline ---
-  // Updated with 5 bindings: 0=Input, 1=Accum, 2=Align, 3=Kernel, 4=Robustness
-  VkDescriptorSetLayoutBinding bindings[5] = {};
+  // Updated with 6 bindings: 0=Input, 1=Accum, 2=Align, 3=Kernel, 4=Robustness,
+  // 5=LSC
+  VkDescriptorSetLayoutBinding bindings[6] = {};
   bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                  VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
   bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
@@ -371,10 +484,12 @@ void VulkanRawStacker::createPipelines() {
                  VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
   bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                  VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  bindings[5] = {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
   VkDescriptorSetLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 5;
+  layoutInfo.bindingCount = 6;
   layoutInfo.pBindings = bindings;
   vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                               &descriptorSetLayout);
@@ -541,8 +656,6 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   if (pendingFrames.empty())
     return false;
 
-  LOGI("Processing stack with %zu frames", pendingFrames.size());
-
   // 1. Calculate scores and sort (Highest score first = Reference)
   for (auto &frame : pendingFrames) {
     if (frame.score == 0.0f) {
@@ -554,8 +667,6 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
 
-  LOGI("Best frame score: %.2f", pendingFrames[0].score);
-
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
@@ -563,7 +674,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     createPipelines();
   }
 
-  uint32_t scale = enableSuperRes ? 2 : 1;
+  uint32_t scale = 1;
   uint32_t outputW = width * scale;
   uint32_t outputH = height * scale;
   uint32_t inputW = width / 2;
@@ -614,6 +725,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                               3);
     updateBufferDescriptorSet(device, accumSets[i], robustnessBuffer,
                               VK_WHOLE_SIZE, 4);
+    updateImageDescriptorSet(device, accumSets[i], lscView, lscSampler, 5);
   }
 
   // Pre-update constant bindings (Buffers) for other pipelines
@@ -635,6 +747,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                               3);
     updateBufferDescriptorSet(device, accumSets[i], robustnessBuffer,
                               VK_WHOLE_SIZE, 4);
+    updateImageDescriptorSet(device, accumSets[i], lscView, lscSampler, 5);
   }
 
   VkImage refImage = VK_NULL_HANDLE;
@@ -720,21 +833,31 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     pc.planeHeight = inputH;
     pc.sensorWidth = width;
     pc.sensorHeight = height;
-    pc.offsetX = 0.0f;
-    pc.offsetY = 0.0f;
     pc.scale = (float)scale;
     pc.cfaPattern = (uint32_t)frame.cfaPattern;
     memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
     pc.whiteLevel = mWhiteLevel;
     memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
-    memcpy(pc.noiseModel, mNoiseModel, 2 * sizeof(float));
     pc.gridW = gridW;
     pc.gridH = gridH;
     pc.tileSize = (uint32_t)tileSize;
     pc.bufferStride = outputW + 16;
-    pc.noiseAlpha = mNoiseModel[0];
-    pc.noiseBeta = mNoiseModel[1];
-    pc.baseNoise = 0.01f; // TBD
+
+    // Set tiling for pre-processing shaders (Plane Resolution)
+    pc.tileX = 0;
+    pc.tileY = 0;
+    pc.tileW = inputW;
+    pc.tileH = inputH;
+
+    // Scale noise model from raw ADU space to UNORM [0,1] space.
+    // SENSOR_NOISE_PROFILE gives (S, O) where Var(raw) = S * raw_value + O
+    // In UNORM space: value_unorm = raw / whiteLevel
+    // Var(unorm) = S * value_unorm / whiteLevel + O / whiteLevel^2
+    //            = (S / whiteLevel) * value_unorm + O / whiteLevel^2
+    float wl = mWhiteLevel > 0 ? mWhiteLevel : 1023.0f;
+    pc.noiseAlpha = mNoiseModel[0] / wl;       // S / whiteLevel
+    pc.noiseBeta = mNoiseModel[1] / (wl * wl); // O / whiteLevel^2
+    pc.baseNoise = pc.noiseBeta;
 
     if (isRef) {
       refImage = currImage;
@@ -742,6 +865,8 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       refMem = currMem;
 
       VkCommandBuffer cb = vm.beginSingleTimeCommands();
+
+      // Structure tensor pass
       vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                         structureTensorPipeline);
       updateImageDescriptorSet(device, structureTensorSet, refView, sampler, 0);
@@ -760,59 +885,17 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
                            1, &bMem, 0, nullptr);
-      vm.endSingleTimeCommands(cb);
 
-    } else {
-      VkCommandBuffer cb = vm.beginSingleTimeCommands();
-
-      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, alignLkPipeline);
-      updateImageDescriptorSet(device, alignSet, refView, sampler, 0);
-      updateImageDescriptorSet(device, alignSet, currView, sampler, 1);
-      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                              alignLkPipelineLayout, 0, 1, &alignSet, 0,
-                              nullptr);
-      vkCmdPushConstants(cb, alignLkPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                         0, sizeof(pc), &pc);
-      vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
-
-      VkBufferMemoryBarrier bMem{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-      bMem.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-      bMem.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-      bMem.buffer = alignmentBuffer;
-      bMem.size = VK_WHOLE_SIZE;
-      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                           1, &bMem, 0, nullptr);
-
-      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, robustnessPipeline);
-      updateImageDescriptorSet(device, robustSet, refView, sampler, 0);
-      updateImageDescriptorSet(device, robustSet, currView, sampler, 1);
-      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                              robustnessPipelineLayout, 0, 1, &robustSet, 0,
-                              nullptr);
-      vkCmdPushConstants(cb, robustnessPipelineLayout,
-                         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-      vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
-
-      bMem.buffer = robustnessBuffer;
-      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                           1, &bMem, 0, nullptr);
-      vm.endSingleTimeCommands(cb);
-    }
-
-    {
-      VkCommandBuffer cb = vm.beginSingleTimeCommands();
+      // Accumulate pass for reference frame (isFirstFrame = 1)
       vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, accumulatePipeline);
-
       for (int c = 0; c < 3; ++c) {
         updateImageDescriptorSet(device, accumSets[c], currView, sampler, 0);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipelineLayout, 0, 1, &accumSets[c], 0,
                                 nullptr);
 
-        pc.isFirstFrame = isRef ? 1 : 0;
-        pc.outputChannel = c; // 0=R, 1=G, 2=B
+        pc.isFirstFrame = 1;
+        pc.outputChannel = c;
         pc.width = outputW;
         pc.height = outputH;
         pc.planeWidth = inputW;
@@ -831,10 +914,139 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
         vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(pc), &pc);
         vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+
+        VkBufferMemoryBarrier accumBarrier{
+            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        accumBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        accumBarrier.dstAccessMask =
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        accumBarrier.buffer = accumBuffers[c];
+        accumBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                             nullptr, 1, &accumBarrier, 0, nullptr);
       }
+
       vm.endSingleTimeCommands(cb);
+
+    } else {
+      // --- Process Target Frame (Combined CB) ---
+      {
+        VkCommandBuffer cb = vm.beginSingleTimeCommands();
+
+        // 1. GPU Reset alignment buffer (No CPU-GPU sync)
+        vkCmdFillBuffer(cb, alignmentBuffer, 0, VK_WHOLE_SIZE, 0);
+        {
+          VkBufferMemoryBarrier fillBarrier{
+              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+          fillBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+          fillBarrier.dstAccessMask =
+              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          fillBarrier.buffer = alignmentBuffer;
+          fillBarrier.size = VK_WHOLE_SIZE;
+          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                               nullptr, 1, &fillBarrier, 0, nullptr);
+        }
+
+        // 2. Pass 1: LK Alignment (5 iterations)
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, alignLkPipeline);
+        updateImageDescriptorSet(device, alignSet, refView, sampler, 0);
+        updateImageDescriptorSet(device, alignSet, currView, sampler, 1);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                alignLkPipelineLayout, 0, 1, &alignSet, 0,
+                                nullptr);
+        vkCmdPushConstants(cb, alignLkPipelineLayout,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+        const int LK_ITERATIONS = 5;
+        for (int iter = 0; iter < LK_ITERATIONS; ++iter) {
+          vkCmdDispatch(cb, (gridW + 15) / 16, (gridH + 15) / 16, 1);
+
+          VkBufferMemoryBarrier lkBarrier{
+              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+          lkBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+          lkBarrier.dstAccessMask =
+              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          lkBarrier.buffer = alignmentBuffer;
+          lkBarrier.size = VK_WHOLE_SIZE;
+          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                               nullptr, 1, &lkBarrier, 0, nullptr);
+        }
+
+        // 3. Pass 2: Robustness
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          robustnessPipeline);
+        updateImageDescriptorSet(device, robustSet, refView, sampler, 0);
+        updateImageDescriptorSet(device, robustSet, currView, sampler, 1);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                robustnessPipelineLayout, 0, 1, &robustSet, 0,
+                                nullptr);
+        vkCmdPushConstants(cb, robustnessPipelineLayout,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
+
+        {
+          VkBufferMemoryBarrier rbBarrier{
+              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+          rbBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+          rbBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+          rbBarrier.buffer = robustnessBuffer;
+          rbBarrier.size = VK_WHOLE_SIZE;
+          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                               nullptr, 1, &rbBarrier, 0, nullptr);
+        }
+
+        // 4. Pass 3: Accumulate (3 channels)
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          accumulatePipeline);
+
+        for (int c = 0; c < 3; ++c) {
+          updateImageDescriptorSet(device, accumSets[c], currView, sampler, 0);
+          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  pipelineLayout, 0, 1, &accumSets[c], 0,
+                                  nullptr);
+
+          pc.isFirstFrame = 0;
+          pc.outputChannel = c; // 0=R, 1=G, 2=B
+          pc.width = outputW;
+          pc.height = outputH;
+          pc.planeWidth = inputW;
+          pc.planeHeight = inputH;
+          pc.sensorWidth = width;
+          pc.sensorHeight = height;
+          pc.scale = (float)scale;
+          pc.cfaPattern = (uint32_t)frame.cfaPattern;
+          pc.tileSize = (uint32_t)tileSize;
+          pc.gridW = gridW;
+          pc.gridH = gridH;
+          pc.bufferStride = outputW + 16;
+          pc.tileW = outputW;
+          pc.tileH = outputH;
+
+          vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                             sizeof(pc), &pc);
+          vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+
+          VkBufferMemoryBarrier accBarrier{
+              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+          accBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+          accBarrier.dstAccessMask =
+              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+          accBarrier.buffer = accumBuffers[c];
+          accBarrier.size = VK_WHOLE_SIZE;
+          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                               nullptr, 1, &accBarrier, 0, nullptr);
+        }
+
+        vm.endSingleTimeCommands(cb);
+      }
     }
 
+    // Clean up non-reference frame resources (ref is kept for comparison)
     if (!isRef) {
       vkDestroyImageView(device, currView, nullptr);
       vkDestroyImage(device, currImage, nullptr);
@@ -900,19 +1112,11 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     size_t reqSize = (size_t)outputW * outputH * 3 * sizeof(uint16_t);
     if (bufferSize >= reqSize) {
       memcpy(outBuffer, mapData, reqSize);
-      // Debug: Log first few pixels
-      uint16_t *outShorts = (uint16_t *)mapData;
-      LOGI("First pixel (mapped): %u, %u, %u", outShorts[0], outShorts[1],
-           outShorts[2]);
-      LOGI("Mid pixel (mapped): %u, %u, %u", outShorts[reqSize / 4],
-           outShorts[reqSize / 4 + 1], outShorts[reqSize / 4 + 2]);
     } else {
       LOGE("Buffer too small! Req: %zu, Has: %zu", reqSize, bufferSize);
     }
     vkUnmapMemory(device, stagingMemory);
   }
-
-  LOGI("Stacking complete, output size: %ux%u", outputW, outputH);
 
   vkDestroySampler(device, sampler, nullptr);
   return true;
@@ -987,4 +1191,13 @@ void VulkanRawStacker::releaseVulkanResources() {
     vkDestroyBuffer(device, robustnessBuffer, nullptr);
   if (robustnessMemory)
     vkFreeMemory(device, robustnessMemory, nullptr);
+
+  if (lscView)
+    vkDestroyImageView(device, lscView, nullptr);
+  if (lscImage)
+    vkDestroyImage(device, lscImage, nullptr);
+  if (lscMemory)
+    vkFreeMemory(device, lscMemory, nullptr);
+  if (lscSampler)
+    vkDestroySampler(device, lscSampler, nullptr);
 }

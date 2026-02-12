@@ -602,10 +602,7 @@ object RawShaders {
             // 色彩转换 (CCM)
             rgb = uColorCorrectionMatrix * rgb;
 
-            // 应用曝光增益 (Linear HDR Space)
-            rgb *= uExposureGain;
-
-            // Output Linear (由下一步 LUT Pass / LLF 处理)
+            // Output Linear (由下一步 ToneMap Pass 处理)
             fragColor = vec4(rgb, 1.0);
         }
     """.trimIndent()
@@ -627,6 +624,7 @@ object RawShaders {
         uniform usampler2D uRawTexture; // RGB16UI
         uniform vec2 uImageSize;
         uniform mat3 uColorCorrectionMatrix;
+        uniform sampler2D uLensShadingMap;
         
         uniform float uExposureGain;       // 曝光增益
 
@@ -639,13 +637,10 @@ object RawShaders {
             uvec3 raw = texelFetch(uRawTexture, coord, 0).rgb;
             vec3 rgb = vec3(raw) / 65535.0;
 
-            // CCM
+            // 1. CCM
             rgb = uColorCorrectionMatrix * rgb;
 
-            // Exposure
-            rgb *= uExposureGain;
-
-            // Output Linear (由下一步 LUT Pass / LLF 处理)
+            // Output Linear (由下一步 ToneMap Pass 处理)
             fragColor = vec4(rgb, 1.0);
         }
     """.trimIndent()
@@ -685,6 +680,62 @@ object RawShaders {
         
         void main() {
             fragColor = texture(uTexture, vTexCoord);
+        }
+    """.trimIndent()
+
+    /**
+     * Tone Mapping Shader - Scientific HDR to LDR conversion
+     * 解决 RAW 图像“灰蒙蒙”且对比度平淡的问题。
+     */
+    val TONEMAP_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+        
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+        
+        uniform sampler2D uInputTexture;
+        uniform vec4 uToneMapParams; // (ExposureGain, DRC_Strength, BlackPoint, WhitePoint)
+        
+        // ACES Tone Mapping (Narkowicz 2015)
+        vec3 ACESFilm(vec3 x) {
+            float a = 2.51;
+            float b = 0.03;
+            float c = 2.43;
+            float d = 0.59;
+            float e = 0.14;
+            return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+        }
+        
+        vec3 linearToSRGB(vec3 linear) {
+            return mix(
+                12.92 * linear,
+                1.055 * pow(max(linear, 0.0), vec3(1.0/2.4)) - 0.055,
+                step(0.0031308, linear)
+            );
+        }
+        
+        void main() {
+            vec3 color = texture(uInputTexture, vTexCoord).rgb;
+            
+            float gain = uToneMapParams.x;
+            float drc = uToneMapParams.y;
+            float blackPoint = uToneMapParams.z;
+            float whitePoint = uToneMapParams.w;
+            
+            // 1. 扣除自动黑点 (彻底解决“灰蒙蒙”)
+            // 我们在每个场景中找到物理最小值，将其映射回 0.0
+            color = (color - blackPoint) / max(0.0001, (whitePoint - blackPoint));
+            color = max(vec3(0.0), color);
+            
+            // 2. 应用 ACES Filmic 曲线
+            // 它是 HDR 到 SDR 的黄金准则，提供自然的对比度和高光保护
+            color = ACESFilm(color);
+            
+            // 3. 应用 sRGB Gamma (RAW 图像必须有这个，否则必然灰蒙蒙)
+            color = linearToSRGB(color);
+            
+            fragColor = vec4(color, 1.0);
         }
     """.trimIndent()
 
@@ -738,6 +789,7 @@ object RawShaders {
             uniform float uSharpening;           // 0.0 ~ 1.0 (锐化强度)
             uniform float uNoiseReduction;       // 0.0 ~ 1.0 (降噪强度)
             uniform float uChromaNoiseReduction; // 0.0 ~ 1.0 (减少杂色强度)
+            uniform vec4 uToneMapParams;         // (ExposureGain, DRC_Strength, BlackPoint, WhitePoint)
 
             // RGB 转 YCbCr
             vec3 rgb2ycbcr(vec3 rgb) {
@@ -769,14 +821,6 @@ object RawShaders {
                 return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
             }
 
-            vec3 linearToSRGB(vec3 linear) {
-                return mix(
-                    12.92 * linear,
-                    1.055 * pow(max(linear, 0.0), vec3(1.0/2.4)) - 0.055,
-                    step(0.0031308, linear)
-                );
-            }
-
             vec3 applyLutCurve(vec3 rgb, int curveType) {
                 if (curveType == 0) return rgb; // SRGB
                 vec3 l = srgbToLinear(rgb);
@@ -804,76 +848,10 @@ object RawShaders {
                 }
                 return rgb;
             }
-            
-            float ACESFilm(float x) {
-                float a = 2.51;
-                float b = 0.03;
-                float c = 2.43;
-                float d = 0.59;
-                float e = 0.14;
-                return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-            }
-            
-            vec3 simpleLocalToneMap(vec3 color, vec2 uv) {
-                float luma = getLuma(color);
-                
-                // --- 参数 ---
-                float blurRadius = 3.0; // 采样步长
-                float sigmaColor = 0.3; // 双边滤波的色彩权重 (防止光晕的关键)
-                float detailStrength = 1.3; // (Alpha)
-                float betaEdge = 0.6;    // (Beta)
-                float threshold = 0.1;      // (Sigma Edge)
-
-                // --- 1. 计算 Base (双边滤波近似) ---
-                float baseLuma = 0.0;
-                float totalWeight = 0.0;
-                
-                // 稀疏采样以提高性能 (5x5 loop)
-                for (int x = -2; x <= 2; x++) {
-                    for (int y = -2; y <= 2; y++) {
-                        vec2 offset = vec2(float(x), float(y)) * uTexelSize * blurRadius;
-                        vec3 sampleColor = texture(uInputTexture, uv + offset).rgb;
-                        float sampleLuma = getLuma(sampleColor);
-                        
-                        // 空间权重 (Gaussian)
-                        float wSpatial = exp(-(float(x*x + y*y)) / 4.0);
-                        
-                        // 亮度权重 (Bilateral - 核心防光晕)
-                        float diff = abs(sampleLuma - luma);
-                        float wRange = exp(-(diff * diff) / (2.0 * sigmaColor * sigmaColor));
-                        
-                        float weight = wSpatial * wRange;
-                        
-                        baseLuma += sampleLuma * weight;
-                        totalWeight += weight;
-                    }
-                }
-                baseLuma /= totalWeight;
-                baseLuma = max(baseLuma, 0.001);
-
-                // --- 2. 细节分离与重映射 ---
-                float detail = luma - baseLuma;
-                
-                // S-Curve Remap logic
-                float remappedDetail;
-                if (abs(detail) < threshold) {
-                    remappedDetail = detail * detailStrength;
-                } else {
-                    float sign = sign(detail);
-                    remappedDetail = sign * (threshold * detailStrength + (abs(detail) - threshold) * betaEdge);
-                }
-
-                float newLuma = ACESFilm(baseLuma) + remappedDetail;
-                
-                vec3 newColor = (color - 0.18) * 1.1 + 0.18;
-                return newColor * (max(newLuma, 0.0001) / max(luma, 0.0001));
-            }
 
             void main() {
                 // 从输入纹理采样原始颜色
                 vec4 color = texture(uInputTexture, vTexCoord);
-                
-                color.rgb = simpleLocalToneMap(color.rgb, vTexCoord);
 
                 // === 后期处理：降噪和减少杂色（在色彩处理之前，避免放大噪点） ===
 
@@ -943,7 +921,7 @@ object RawShaders {
 
                     vec2 sumUV = vec2(0.0);
                     float sumWeight = 0.0;
-                    float maxStride = 2.0 + uChromaNoiseReduction * 10.0;
+                    float maxStride = uChromaNoiseReduction * 25.0;
                     float colorThreshold = 0.15;
                     const int RADIUS_UV = 2;
 
@@ -966,9 +944,7 @@ object RawShaders {
                     }
 
                     if (sumWeight > 0.001) {
-                        vec2 cleanUV = sumUV / sumWeight;
-                        float mixFactor = clamp(uChromaNoiseReduction * 3.0, 0.0, 1.0);
-                        yuv.yz = mix(yuv.yz, cleanUV, mixFactor);
+                        yuv.yz = sumUV / sumWeight;
                     }
 
                     color.rgb = ycbcr2rgb(yuv);
@@ -1128,9 +1104,6 @@ object RawShaders {
                     // Clamp 防止过曝
                     color.rgb = clamp(color.rgb, 0.0, 1.0);
                 }
-
-                // Final conversion to sRGB
-                color.rgb = linearToSRGB(color.rgb);
 
                 fragColor = color;
             }

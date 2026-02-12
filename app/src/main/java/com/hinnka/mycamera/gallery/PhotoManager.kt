@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
@@ -283,7 +282,6 @@ object PhotoManager {
         captureResult: CaptureResult?,
         thumbnail: Bitmap?,
         useLivePhoto: Boolean,
-        useSuperResolution: Boolean
     ) = withContext(Dispatchers.IO) {
         try {
             val photoId = UUID.randomUUID().toString()
@@ -293,11 +291,7 @@ object PhotoManager {
             val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
             val metadataFile = File(photoDir, METADATA_FILE)
 
-            var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
-            if (useSuperResolution && cropRegion != null) {
-                cropRegion =
-                    Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
-            }
+            val cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
 
             val dimensions =
                 BitmapUtils.calculateProcessedRect(metadata.width, metadata.height, metadata.ratio, cropRegion, metadata.rotation)
@@ -558,7 +552,6 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
-        useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
@@ -574,7 +567,6 @@ object PhotoManager {
                 rotation,
                 aspectRatio,
                 yuvFile.absolutePath,
-                useSuperResolution,
                 useGpuAcceleration
             ) ?: return@withContext
             // Save Original (Stacked Result)
@@ -616,8 +608,8 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
-        useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
+        previewLuma: Float,
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
@@ -640,12 +632,14 @@ object PhotoManager {
 
             val byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
-                useSuperResolution,
                 useGpuAcceleration,
                 masterBlackLevel = rawMetadata.blackLevel,
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
                 whiteBalanceGains = rawMetadata.whiteBalanceGains,
-                noiseModel = rawMetadata.noiseProfile
+                noiseModel = rawMetadata.noiseProfile,
+                lensShading = rawMetadata.lensShadingMap,
+                lensShadingWidth = rawMetadata.lensShadingMapWidth,
+                lensShadingHeight = rawMetadata.lensShadingMapHeight,
             ) ?: return@withContext
 //            val byteOutstream = ByteArrayOutputStream()
 //            byteOutstream.use { outputStream ->
@@ -672,26 +666,10 @@ object PhotoManager {
 //            }
 
             val result: Bitmap = run {
-                val scale = if (useSuperResolution) 2 else 1
-                val stackedWidth = firstImageWidth * scale
-                val stackedHeight = firstImageHeight * scale
-
-                // Scale crop region if needed
-                val scaledCropRegion = if (useSuperResolution && metadata.cropRegion != null) {
-                    Rect(
-                        metadata.cropRegion.left * scale,
-                        metadata.cropRegion.top * scale,
-                        metadata.cropRegion.right * scale,
-                        metadata.cropRegion.bottom * scale
-                    )
-                } else {
-                    metadata.cropRegion
-                }
-
                 // Construct metadata for Linear RGB
                 val linearMetadata = rawMetadata.copy(
-                    width = stackedWidth,
-                    height = stackedHeight,
+                    width = firstImageWidth,
+                    height = firstImageHeight,
                     cfaPattern = RawMetadata.CFA_LINEAR_RGB,
                     blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
                     whiteLevel = 65535f,
@@ -701,13 +679,17 @@ object PhotoManager {
 
                 RawDemosaicProcessor.getInstance().process(
                     byteBuffer,
-                    stackedWidth,
-                    stackedHeight,
-                    stackedWidth * 6, // 3 channels * 2 bytes
+                    firstImageWidth,
+                    firstImageHeight,
+                    firstImageWidth * 6, // 3 channels * 2 bytes
                     linearMetadata,
                     aspectRatio,
-                    scaledCropRegion,
-                    rotation
+                    metadata.cropRegion,
+                    rotation,
+                    sharpeningValue = 0.4f,
+                    noiseReductionValue = 0.2f,
+                    chromaNoiseReductionValue = 0.25f,
+                    previewLuma = previewLuma
                 )
             } ?: return@withContext
             // Save Original (Stacked Result)
@@ -751,8 +733,8 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
-        useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
+        previewLuma: Float = 0.18f
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -768,7 +750,6 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
-                    useSuperResolution,
                     useGpuAcceleration
                 )
             }
@@ -788,8 +769,8 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
-                    useSuperResolution,
-                    useGpuAcceleration
+                    useGpuAcceleration,
+                    previewLuma
                 )
             }
             else -> {

@@ -15,9 +15,11 @@
  */
 class VulkanRawStacker {
 public:
-  VulkanRawStacker(uint32_t width, uint32_t height, bool enableSuperRes,
-                   const float *blackLevel, float whiteLevel,
-                   const float *wbGains, const float *noiseModel);
+  VulkanRawStacker(uint32_t width, uint32_t height, const float *blackLevel,
+                   float whiteLevel, const float *wbGains,
+                   const float *noiseModel,
+                   const float *lensShadingMap = nullptr, uint32_t lscWidth = 0,
+                   uint32_t lscHeight = 0);
   ~VulkanRawStacker();
 
   // Add a frame from CPU memory (uint16_t RAW data)
@@ -26,11 +28,8 @@ public:
   // Process all queued frames and output the result
   bool processStack(uint16_t *outBuffer, size_t bufferSize);
 
-  int getScale() const { return enableSuperRes ? 2 : 1; }
-
 private:
   uint32_t width, height;
-  bool enableSuperRes;
   bool isFirstFrame = true;
   int mCfaPattern = 0; // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
 
@@ -82,6 +81,15 @@ private:
   VkBuffer stagingBuffer = VK_NULL_HANDLE;
   VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
+  // Lens Shading Map
+  VkImage lscImage = VK_NULL_HANDLE;
+  VkDeviceMemory lscMemory = VK_NULL_HANDLE;
+  VkImageView lscView = VK_NULL_HANDLE;
+  VkSampler lscSampler = VK_NULL_HANDLE;
+  uint32_t mLscWidth = 0;
+  uint32_t mLscHeight = 0;
+  std::vector<float> mLensShadingMap;
+
   int tileSize = 16;
   int gridW = 0;
   int gridH = 0;
@@ -99,34 +107,31 @@ private:
     uint32_t sensorWidth;  // 16
     uint32_t sensorHeight; // 20
 
-    float offsetX; // 24
-    float offsetY; // 28
-    float scale;   // 32
+    float scale; // 24
 
     // Metadata
-    float blackLevel[4]; // 36, 40, 44, 48
-    float whiteLevel;    // 52
-    float wbGains[4];    // 56, 60, 64, 68
-    float noiseModel[2]; // 72, 76
+    float blackLevel[4]; // 28, 32, 36, 40
+    float whiteLevel;    // 44
+    float wbGains[4];    // 48, 52, 56, 60
 
-    uint32_t isFirstFrame;  // 80
-    uint32_t outputChannel; // 84
-    uint32_t cfaPattern;    // 88
-    uint32_t planeIndex;    // 92
+    uint32_t isFirstFrame;  // 64
+    uint32_t outputChannel; // 68
+    uint32_t cfaPattern;    // 72
+    uint32_t planeIndex;    // 76
 
-    uint32_t tileX;        // 96
-    uint32_t tileY;        // 100
-    uint32_t tileW;        // 104
-    uint32_t tileH;        // 108
-    uint32_t bufferStride; // 112
-    uint32_t gridW;        // 116
-    uint32_t gridH;        // 120
-    uint32_t tileSize;     // 124
+    uint32_t tileX;        // 80
+    uint32_t tileY;        // 84
+    uint32_t tileW;        // 88
+    uint32_t tileH;        // 92
+    uint32_t bufferStride; // 96
+    uint32_t gridW;        // 100
+    uint32_t gridH;        // 104
+    uint32_t tileSize;     // 108
 
-    float noiseAlpha; // 128
-    float noiseBeta;  // 132
-    float baseNoise;  // 136
-  };
+    float noiseAlpha; // 112
+    float noiseBeta;  // 116
+    float baseNoise;  // 120
+  }; // Total size: 124 bytes
 
   // Metadata storage
   float mBlackLevel[4] = {0, 0, 0, 0};

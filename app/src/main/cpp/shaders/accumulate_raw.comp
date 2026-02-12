@@ -12,13 +12,11 @@ layout(push_constant, scalar) uniform PushConstants {
     uint sensorWidth;
     uint sensorHeight;
     
-    float offsetX, offsetY;
     float scale;
     
     float blackLevel[4];
     float whiteLevel;
     float wbGains[4];
-    float noiseModel[2];
     
     uint isFirstFrame;
     uint outputChannel;
@@ -61,6 +59,8 @@ layout(set = 0, binding = 3, scalar) buffer KernelParams {
 layout(set = 0, binding = 4, scalar) buffer RobustnessBuffer {
     float data[]; 
 } outRobustness;
+
+layout(set = 0, binding = 5) uniform sampler2D uLensShadingMap;
 
 // Helper to get inverse kernel matrix from parameters
 // Params: k1, k2, cos2t, sin2t
@@ -145,23 +145,28 @@ void main() {
              int samplePhase = (samplePos.y % 2) * 2 + (samplePos.x % 2);
              
              int sampleColor = -1;
-             // Simplified CFA check
+             int lscIdx = -1; // 0=R, 1=Gr, 2=Gb, 3=B
+             
              if (pc.cfaPattern == 0) { // RGGB
-                 if (samplePhase == 0) sampleColor = 0; // R
-                 else if (samplePhase == 3) sampleColor = 2; // B
-                 else sampleColor = 1; // G
+                 if (samplePhase == 0) { sampleColor = 0; lscIdx = 0; }
+                 else if (samplePhase == 1) { sampleColor = 1; lscIdx = 1; }
+                 else if (samplePhase == 2) { sampleColor = 1; lscIdx = 2; }
+                 else { sampleColor = 2; lscIdx = 3; }
              } else if (pc.cfaPattern == 1) { // GRBG
-                 if (samplePhase == 1) sampleColor = 0; // R
-                 else if (samplePhase == 2) sampleColor = 2; // B
-                 else sampleColor = 1; // G
+                 if (samplePhase == 0) { sampleColor = 1; lscIdx = 1; }
+                 else if (samplePhase == 1) { sampleColor = 0; lscIdx = 0; }
+                 else if (samplePhase == 2) { sampleColor = 2; lscIdx = 3; }
+                 else { sampleColor = 1; lscIdx = 2; }
              } else if (pc.cfaPattern == 2) { // GBRG
-                 if (samplePhase == 2) sampleColor = 0; // R
-                 else if (samplePhase == 1) sampleColor = 2; // B
-                 else sampleColor = 1; // G
+                 if (samplePhase == 0) { sampleColor = 1; lscIdx = 2; }
+                 else if (samplePhase == 1) { sampleColor = 2; lscIdx = 3; }
+                 else if (samplePhase == 2) { sampleColor = 0; lscIdx = 0; }
+                 else { sampleColor = 1; lscIdx = 1; }
              } else { // BGGR
-                 if (samplePhase == 3) sampleColor = 0; // R
-                 else if (samplePhase == 0) sampleColor = 2; // B
-                 else sampleColor = 1; // G
+                 if (samplePhase == 0) { sampleColor = 2; lscIdx = 3; }
+                 else if (samplePhase == 1) { sampleColor = 1; lscIdx = 2; }
+                 else if (samplePhase == 2) { sampleColor = 1; lscIdx = 1; }
+                 else { sampleColor = 0; lscIdx = 0; }
              }
              
              if (sampleColor != targetCFA) continue;
@@ -178,7 +183,26 @@ void main() {
                                  OmegaInv.z * d.y * d.y;
              
              // Fetch Value
-             float val = texelFetch(inputRawSampler, samplePos, 0).r;
+             float raw = texelFetch(inputRawSampler, samplePos, 0).r;
+             
+             // --- Scientific Correction ---
+             // 1. Black Level Subtraction
+             float black = pc.blackLevel[samplePhase];
+             float val = max(0.0, raw * 65535.0 - black);
+             
+             // 2. Lens Shading Correction
+             // Android LensShadingMap order: [R, Gr, Gb, B]
+             // Bayer phase (RGGB): 0=R, 1=Gr, 2=Gb, 3=B
+             vec2 lscUV = (vec2(samplePos) + 0.5) / vec2(pc.sensorWidth, pc.sensorHeight);
+             vec4 lscGains = texture(uLensShadingMap, lscUV);
+             float lscGain = 1.0;
+             if (lscIdx == 0) lscGain = lscGains.r;
+             else if (lscIdx == 1) lscGain = lscGains.g;
+             else if (lscIdx == 2) lscGain = lscGains.b;
+             else if (lscIdx == 3) lscGain = lscGains.a;
+             
+             val *= lscGain;
+             val /= 65535.0; // Normalize back to [0, 1] for accumulator
              
              // Fetch Robustness R
              // Robustness is at Half-Res (Plane)
@@ -187,16 +211,8 @@ void main() {
              
              float R = 1.0;
              if (pc.isFirstFrame == 0) {
-                 float minR = 1.0;
-                 for (int ry = -2; ry <= 2; ry++) {
-                     for (int rx = -2; rx <= 2; rx++) {
-                         int nx = clamp(rX + rx, 0, int(pc.planeWidth)-1);
-                         int ny = clamp(rY + ry, 0, int(pc.planeHeight)-1);
-                         float rVal = outRobustness.data[ny * pc.planeWidth + nx];
-                         minR = min(minR, rVal);
-                     }
-                 }
-                 R = minR;
+                 // Fetch precomputed and min-filtered robustness
+                 R = outRobustness.data[rY * pc.planeWidth + rX];
              }
              
              // Final Weight

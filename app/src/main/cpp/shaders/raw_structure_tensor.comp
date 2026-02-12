@@ -21,13 +21,11 @@ layout(push_constant, scalar) uniform PushConstants {
     uint sensorWidth;
     uint sensorHeight;
     
-    float offsetX, offsetY;
     float scale;
     
     float blackLevel[4];
     float whiteLevel;
     float wbGains[4];
-    float noiseModel[2];
     
     uint isFirstFrame;
     uint outputChannel;

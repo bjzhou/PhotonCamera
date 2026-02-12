@@ -532,7 +532,7 @@ class Camera2Controller(private val context: Context) {
                                     // 还没找到结果，存入缓存
                                     pendingImages[timestamp] = image
                                     // 限制缓存大小（防御性，防止内存泄漏）
-                                    if (pendingImages.size > 5) {
+                                    if (pendingImages.size > 20) {
                                         val oldestKey = pendingImages.keys.minOrNull()
                                         if (oldestKey != null) {
                                             pendingImages.remove(oldestKey)?.close()
@@ -1748,10 +1748,6 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(useMultiFrame = useMultiFrame, multiFrameCount = multiFrameCount)
     }
 
-    fun setUseSuperResolution(useSuperResolution: Boolean) {
-        _state.value = _state.value.copy(useSuperResolution = useSuperResolution)
-    }
-
 
     fun setCapturingLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(isCapturingLivePhoto = enabled)
@@ -1818,7 +1814,7 @@ class Camera2Controller(private val context: Context) {
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
-                // previewSurface?.let { addTarget(it) }
+//                previewSurface?.let { addTarget(it) }
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 // isCapture = true 确保使用完整的曝光时间（不限制长曝光）
@@ -1837,6 +1833,34 @@ class Camera2Controller(private val context: Context) {
                     }
                     preview.get(CaptureRequest.CONTROL_AE_REGIONS)?.let {
                         set(CaptureRequest.CONTROL_AE_REGIONS, it)
+                    }
+                }
+
+                // RAW + MultiFrame 曝光补偿策略
+                if (_state.value.useRaw && _state.value.useMultiFrame && _state.value.multiFrameCount > 1
+                    && _state.value.isIsoAuto && _state.value.isShutterSpeedAuto) {
+                    try {
+                        val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(device.id)
+                        val step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+                        val range = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+
+                        if (step != null && range != null && step.denominator != 0) {
+                            val stepValue = step.numerator.toDouble() / step.denominator.toDouble()
+                            if (stepValue > 0) {
+                                val count = _state.value.multiFrameCount.toDouble()
+                                // log2(sqrt(x)) = ln(x^0.5) / ln(2)
+                                val reductionEv = ln(count.pow(0.5)) / ln(2.0)
+                                val reductionSteps = (reductionEv / stepValue).roundToInt()
+
+                                val currentCompensation = _state.value.exposureCompensation
+                                val targetCompensation =
+                                    (currentCompensation - reductionSteps).coerceIn(range.lower, range.upper)
+
+                                set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetCompensation)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        PLog.e(TAG, "Failed to apply exposure reduction", e)
                     }
                 }
 
@@ -2113,7 +2137,7 @@ class Camera2Controller(private val context: Context) {
             cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
 
             _state.value = _state.value.copy(isPreviewActive = false)
-            
+
             // 停止 Live Photo 录制，释放旧环境下的 EGL 资源
             livePhotoRecorder.stopRecording()
 

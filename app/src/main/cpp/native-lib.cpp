@@ -28,9 +28,8 @@ extern "C" {
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  auto *stacker = new ImageStacker(width, height, enableSuperRes);
+    JNIEnv *env, jobject /* this */, jint width, jint height) {
+  auto *stacker = new ImageStacker(width, height);
   return reinterpret_cast<jlong>(stacker);
 }
 
@@ -147,9 +146,8 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  auto *stacker = new VulkanImageStacker(width, height, enableSuperRes);
+    JNIEnv *env, jobject /* this */, jint width, jint height) {
+  auto *stacker = new VulkanImageStacker(width, height);
   return reinterpret_cast<jlong>(stacker);
 }
 
@@ -207,17 +205,9 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanStackerNative(
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createRawStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean useSuperRes) {
-  auto *stacker = new RawStacker(width, height, (bool)useSuperRes);
+    JNIEnv *env, jobject /* this */, jint width, jint height) {
+  auto *stacker = new RawStacker(width, height);
   return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT jint JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_getRawStackerScaleNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
-  return stacker ? stacker->getScale() : 1;
 }
 
 JNIEXPORT void JNICALL
@@ -295,9 +285,9 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNative(
-    JNIEnv *env, jobject, jint width, jint height, jboolean useSuperRes,
-    jfloatArray blackLevel, jint whiteLevel, jfloatArray wbGains,
-    jfloatArray noiseModel) {
+    JNIEnv *env, jobject, jint width, jint height, jfloatArray blackLevel,
+    jint whiteLevel, jfloatArray wbGains, jfloatArray noiseModel,
+    jfloatArray lensShadingMap, jint lscWidth, jint lscHeight) {
 
   float bl[4] = {0, 0, 0, 0};
   if (blackLevel) {
@@ -320,16 +310,20 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNativ
     env->ReleaseFloatArrayElements(noiseModel, body, 0);
   }
 
-  auto *stacker = new VulkanRawStacker(width, height, (bool)useSuperRes, bl,
-                                       (float)whiteLevel, wb, noise);
-  return reinterpret_cast<jlong>(stacker);
-}
+  float *lsc = nullptr;
+  if (lensShadingMap && lscWidth > 0 && lscHeight > 0) {
+    lsc = env->GetFloatArrayElements(lensShadingMap, nullptr);
+  }
 
-JNIEXPORT jint JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_getVulkanRawStackerScaleNative(
-    JNIEnv *env, jobject, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  return stacker ? stacker->getScale() : 1;
+  auto *stacker =
+      new VulkanRawStacker(width, height, bl, (float)whiteLevel, wb, noise, lsc,
+                           (uint32_t)lscWidth, (uint32_t)lscHeight);
+
+  if (lsc) {
+    env->ReleaseFloatArrayElements(lensShadingMap, lsc, 0);
+  }
+
+  return reinterpret_cast<jlong>(stacker);
 }
 
 JNIEXPORT jboolean JNICALL

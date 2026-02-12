@@ -518,10 +518,10 @@ inline float sampleBicubicPlane(const std::vector<uint16_t> &data, int width,
 
 // --- ImageStacker Implementation ---
 
-ImageStacker::ImageStacker(int width, int height, bool enableSuperRes)
+ImageStacker::ImageStacker(int width, int height)
     : width(width), height(height), isFirstFrame(true) {
-  scale = enableSuperRes ? 2 : 1;
-  // Accumulator buffers are scaled
+  int scale = 1;
+  // Accumulator buffers are scaled (always 1x now)
   int scaledW = width * scale;
   int scaledH = height * scale;
   int size = scaledW * scaledH;
@@ -677,18 +677,16 @@ void ImageStacker::processFrame(int index) {
 
     referencePyramid = buildPyramid(staged.y8.data.data(), width, height, 4);
 
-    // Initialize accumulators by upscaling the first frame
-    int scaledW = width * scale;
-    int scaledH = height * scale;
+    // Initialize accumulators (always 1x now)
+    int scaledW = width;
+    int scaledH = height;
 
 #pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledH; ++y) {
       for (int x = 0; x < scaledW; ++x) {
-        // Map scaled coordinates back to input coordinates
-        float srcX = (float)x / scale;
-        float srcY = (float)y / scale;
+        float srcX = (float)x;
+        float srcY = (float)y;
 
-        // Initial frame: strict bicubic upscale
         uint16_t val =
             (uint16_t)sampleBicubic(staged.y, width, height, srcX, srcY);
         accumY[y * scaledW + x] = (int32_t)val * 256;
@@ -705,8 +703,8 @@ void ImageStacker::processFrame(int index) {
 #pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledUVHeight; ++y) {
       for (int x = 0; x < scaledUVWidth; ++x) {
-        float srcX = (float)x / scale;
-        float srcY = (float)y / scale;
+        float srcX = (float)x;
+        float srcY = (float)y;
 
         uint16_t uVal = (uint16_t)sampleBicubic(staged.u, uvRefWidth,
                                                 uvRefHeight, srcX, srcY);
@@ -732,16 +730,16 @@ void ImageStacker::processFrame(int index) {
   TileAlignment alignment =
       computeTileAlignment(referencePyramid, currentPyramid, 64);
 
-  int scaledW = width * scale;
-  int scaledH = height * scale;
+  int scaledW = width;
+  int scaledH = height;
 
   // Merge with Robust Weighting
-  // Y Plane - Iterate over Output Grid (Scaled)
+  // Y Plane - Iterate over Output Grid
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < scaledH; ++y) {
     for (int x = 0; x < scaledW; ++x) {
-      float refX = (float)x / scale;
-      float refY = (float)y / scale;
+      float refX = (float)x;
+      float refY = (float)y;
 
       Point offset = alignment.getOffset((int)refX, (int)refY);
       float tx = refX + offset.x;
@@ -762,8 +760,8 @@ void ImageStacker::processFrame(int index) {
         accumY[destIdx] += (int32_t)targetVal * weight;
         weightY[destIdx] += weight;
 
-        if (x % scale == 0 && y % scale == 0 && weight > 128) {
-          int refIdx = (y / scale) * width + (x / scale);
+        if (weight > 128) {
+          int refIdx = y * width + x;
           referenceY[refIdx] =
               (uint16_t)((referenceY[refIdx] * 7 + targetVal) / 8);
         }
@@ -790,8 +788,8 @@ void ImageStacker::processFrame(int index) {
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < scaledUVHeight; ++y) {
     for (int x = 0; x < scaledUVWidth; ++x) {
-      float refUVX = (float)x / scale;
-      float refUVY = (float)y / scale;
+      float refUVX = (float)x;
+      float refUVY = (float)y;
 
       Point offset = alignment.getOffset(refUVX * 2, refUVY * 2);
       float tx = refUVX + offset.x / 2.0f;
@@ -817,8 +815,8 @@ void ImageStacker::processFrame(int index) {
         accumV[destIdx] += (int32_t)targetV * weight;
         weightV[destIdx] += weight;
 
-        if (x % scale == 0 && y % scale == 0 && weight > 128) {
-          int refIdx = (y / scale) * uvRefWidth + (x / scale);
+        if (weight > 128) {
+          int refIdx = y * uvRefWidth + x;
           referenceU[refIdx] =
               (uint16_t)((referenceU[refIdx] * 7 + targetU) / 8);
           referenceV[refIdx] =
@@ -838,8 +836,8 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
                                const char *outputPath, int *outFinalW,
                                int *outFinalH) {
   // Use current scaled dimensions
-  int currentW = width * scale;
-  int currentH = height * scale;
+  int currentW = width;
+  int currentH = height;
 
   int ySize = currentW * currentH;
   int uvWidth = currentW / 2;
@@ -967,10 +965,11 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   }
 }
 
-RawStacker::RawStacker(int width, int height, bool enableSuperRes)
-    : width(width), height(height), scale(enableSuperRes ? 2 : 1),
-      isFirstFrame(true) {
-  int planeSize = (width / 2 * scale) * (height / 2 * scale);
+RawStacker::RawStacker(int width, int height)
+    : width(width), height(height), isFirstFrame(true) {
+  // Initialize accumulators at native 1x resolution (plane resolution is
+  // width/2 x height/2)
+  int planeSize = (width / 2) * (height / 2);
   for (int i = 0; i < 4; ++i) {
     accum[i].assign(planeSize, 0);
     weight[i].assign(planeSize, 0);
@@ -1152,16 +1151,16 @@ void RawStacker::processFrame(int index) {
     referencePyramid =
         buildPyramid(staged.proxy.data.data(), proxyW, proxyH, 4);
 
-    int scaledW = proxyW * scale;
-    int scaledH = proxyH * scale;
+    int scaledW = proxyW;
+    int scaledH = proxyH;
 
     for (int i = 0; i < 4; ++i) {
       referencePlanes[i] = staged.planes[i];
 #pragma omp parallel for collapse(2) num_threads(4)
       for (int sy = 0; sy < scaledH; sy++) {
         for (int sx = 0; sx < scaledW; sx++) {
-          float refX = (float)sx / scale;
-          float refY = (float)sy / scale;
+          float refX = (float)sx;
+          float refY = (float)sy;
 
           float val =
               sampleBicubicPlane(staged.planes[i], proxyW, proxyH, refX, refY);
@@ -1181,8 +1180,8 @@ void RawStacker::processFrame(int index) {
   TileAlignment alignment =
       computeTileAlignment(referencePyramid, currentPyramid, 48);
 
-  int scaledW = proxyW * scale;
-  int scaledH = proxyH * scale;
+  int scaledW = proxyW;
+  int scaledH = proxyH;
 
   for (int i = 0; i < 4; ++i) {
     const auto &srcPlane = staged.planes[i];
@@ -1190,8 +1189,8 @@ void RawStacker::processFrame(int index) {
 #pragma omp parallel for collapse(2) num_threads(4)
     for (int y = 0; y < scaledH; ++y) {
       for (int x = 0; x < scaledW; ++x) {
-        float refX = (float)x / scale;
-        float refY = (float)y / scale;
+        float refX = (float)x;
+        float refY = (float)y;
 
         Point offset = alignment.getOffset(refX, refY);
         float tx = refX + offset.x;
@@ -1234,12 +1233,12 @@ void RawStacker::processFrame(int index) {
 }
 
 std::vector<uint16_t> RawStacker::process() {
-  int outW = width * scale;
-  int outH = height * scale;
+  int outW = width;
+  int outH = height;
   std::vector<uint16_t> result(outW * outH);
 
-  int planeW = width / 2 * scale;
-  int planeH = height / 2 * scale;
+  int planeW = width / 2;
+  int planeH = height / 2;
 
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < planeH; ++y) {

@@ -12,13 +12,11 @@ layout(push_constant, scalar) uniform PushConstants {
     uint sensorWidth;
     uint sensorHeight;
     
-    float offsetX, offsetY;
     float scale;
     
     float blackLevel[4];
     float whiteLevel;
     float wbGains[4];
-    float noiseModel[2];
     
     uint isFirstFrame;
     uint outputChannel;
@@ -54,11 +52,11 @@ float getPixelVal(sampler2D tex, vec2 uv) {
 }
 
 void main() {
-    uint tileIdx = gl_GlobalInvocationID.x;
-    if (tileIdx >= pc.gridW * pc.gridH) return;
+    uint gx = gl_GlobalInvocationID.x;
+    uint gy = gl_GlobalInvocationID.y;
     
-    uint gx = tileIdx % pc.gridW;
-    uint gy = tileIdx / pc.gridW;
+    if (gx >= pc.gridW || gy >= pc.gridH) return;
+    uint tileIdx = gy * pc.gridW + gx;
     
     // Current Estimate of Flow for this tile
     vec2 currentFlow = alignBuffer.offsets[tileIdx];

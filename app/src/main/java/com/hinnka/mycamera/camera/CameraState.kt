@@ -8,7 +8,7 @@ import android.util.Range
  * 画面比例枚举
  */
 enum class AspectRatio(val widthRatio: Int, val heightRatio: Int) {
-//    RATIO_3_2(3, 2),
+    //    RATIO_3_2(3, 2),
     RATIO_4_3(4, 3),
     RATIO_16_9(16, 9),
     RATIO_1_1(1, 1),
@@ -177,7 +177,6 @@ data class CameraState(
     val isRawSupported: Boolean = false,
     val useMultiFrame: Boolean = false,
     val multiFrameCount: Int = 0,
-    val useSuperResolution: Boolean = false,
     val useRaw: Boolean = false,
     val useLivePhoto: Boolean = false,
     // 是否正在拍摄 Live Photo (用于 UI 动画)
@@ -240,5 +239,18 @@ data class CameraState(
      */
     fun getZoomSteps(): List<Float> {
         return getCurrentCameraInfo()?.zoomSteps ?: listOf(1f)
+    }
+
+    fun getAvgLuma(): Float {
+        val histogram = histogram ?: return 0.18f
+        var totalCount = 0L
+        var weightedSum = 0L
+        for (i in histogram.indices) {
+            val count = histogram[i].toLong()
+            weightedSum += i * count
+            totalCount += count
+        }
+        if (totalCount == 0L) return 0.18f
+        return (weightedSum.toFloat() / totalCount) / 255f
     }
 }
