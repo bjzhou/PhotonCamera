@@ -1320,9 +1320,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
-                sharpening = if (useRaw.value && sharpeningValue == 0f) 0.4f else sharpeningValue,
+                sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = if (useRaw.value && chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue,
                 width = image.width,
                 height = image.height,
                 ratio = aspectRatio,
@@ -1368,7 +1368,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
-                    photoQualityValue
+                    photoQualityValue,
+                    state.value.getAvgLuma()
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -1423,9 +1424,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = currentRecipeParams.value,
-                sharpening = if (sharpeningValue == 0f) 0.4f else sharpeningValue,
+                sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = if (useRaw.value && chromaNoiseReductionValue == 0f) 0.25f else chromaNoiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue,
                 width = images[0].width,
                 height = images[0].height,
                 ratio = aspectRatio,

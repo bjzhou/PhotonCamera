@@ -413,7 +413,8 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
-        photoQuality: Int = 95
+        photoQuality: Int = 95,
+        previewLuma: Float
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
@@ -421,47 +422,28 @@ object PhotoManager {
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
-            val dngFile = File(photoDir, DNG_FILE)
 
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             captureResult ?: return@withContext
-            val dngDataBytes = ByteArrayOutputStream().use { dngData ->
-                image.use {
-                    RawProcessor.saveToDng(image, characteristics, captureResult, dngData, rotation)
-                }
-                dngData.toByteArray()
-            }
-            FileOutputStream(dngFile).use { outputStream ->
-                outputStream.write(dngDataBytes)
-            }
             RawDemosaicProcessor.getInstance().loadToneCurveFromAssets(context)
-            val bitmap = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
-                RawDemosaicProcessor.getInstance().process(
-                    dngFile.absolutePath,
-                    aspectRatio,
-                    metadata.cropRegion,
-                    rotation
-                )
-            } else {
-                RawProcessor.processAndToBitmap(
-                    dngDataBytes,
-                    aspectRatio,
-                    metadata.cropRegion,
-                    rotation
-                )
-            } ?: return@withContext
+            val bitmap = RawDemosaicProcessor.getInstance().process(
+                image,
+                characteristics,
+                captureResult,
+                aspectRatio,
+                rotation,
+                sharpeningValue = 0.4f,
+                noiseReductionValue = 0.8f,
+                chromaNoiseReductionValue = 0.25f,
+                previewLuma = previewLuma
+            ) ?: return@withContext
             FileOutputStream(tempFile).use { outputStream ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
             }
             tempFile.renameTo(photoFile)
             bitmap.recycle()
             if (shouldAutoSave) {
-                exportDng(
-                    context,
-                    dngDataBytes,
-                    metadata,
-                )
                 exportPhoto(
                     context,
                     photoId,
@@ -498,7 +480,8 @@ object PhotoManager {
         sharpeningValue: Float,
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
-        photoQuality: Int = 95
+        photoQuality: Int = 95,
+        previewLuma: Float = 0.5f,
     ) {
         // 根据图像格式处理
         when (val format = image.format) {
@@ -532,7 +515,8 @@ object PhotoManager {
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
-                    photoQuality
+                    photoQuality,
+                    previewLuma
                 )
             }
             else -> {
