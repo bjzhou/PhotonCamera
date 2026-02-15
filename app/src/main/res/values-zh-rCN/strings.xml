@@ -1,36 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">光子相机</string>
-    
+
     <!-- Camera Controls -->
     <string name="capture">拍摄</string>
     <string name="switch_camera">切换相机</string>
     <string name="settings">设置</string>
-    
+
     <!-- Exposure Controls -->
     <string name="exposure_compensation">曝光补偿</string>
     <string name="iso">感光度</string>
     <string name="shutter_speed">快门速度</string>
     <string name="auto">自动</string>
-    
+
     <!-- Focus -->
     <string name="focus">对焦</string>
     <string name="tap_to_focus">点击对焦</string>
-    
+
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">画面比例</string>
     <string name="ratio_3_2">3:2</string>
     <string name="ratio_4_3">4:3</string>
     <string name="ratio_16_9">16:9</string>
     <string name="ratio_1_1">1:1</string>
-    
+
     <!-- Permissions -->
     <string name="camera_permission_required">需要相机权限</string>
     <string name="grant_permission">授予权限</string>
-    
+
     <!-- Zoom -->
     <string name="zoom">变焦</string>
-    
+
     <!-- Gallery -->
     <string name="gallery">相册</string>
     <string name="photo_detail">照片详情</string>
@@ -40,6 +40,9 @@
     <string name="export_success">照片导出成功</string>
     <string name="export_failed">照片导出失败</string>
     <string name="edit">编辑</string>
+    <string name="refresh">刷新</string>
+    <string name="refresh_success">预览已刷新</string>
+    <string name="refresh_failed">刷新预览失败</string>
     <string name="select_all">全选</string>
     <string name="cancel">取消</string>
     <string name="save">保存</string>
@@ -55,7 +58,7 @@
     <string name="intensity">强度</string>
     <string name="original">原图</string>
     <string name="export_confirm">导出应用滤镜后的照片？</string>
-    
+
     <!-- Frame Watermark -->
     <string name="frame">边框</string>
     <string name="none">无</string>
@@ -97,4 +100,14 @@
     <string name="settings_background">背景设置</string>
     <string name="settings_background_description">更改应用背景图</string>
     <string name="settings_custom_background">自定义...</string>
+    <string name="settings_raw_restore_lut">RAW 还原 LUT</string>
+    <string name="settings_raw_restore_lut_description">选择用于 RAW 色彩还原的 LUT。选择“灰片”以获得 Log 风格输出。</string>
+    <string name="settings_raw_restore_flat">灰片直出</string>
+    <string name="settings_dro_mode">RAW动态范围优化 (DRO)</string>
+    <string name="settings_dro_mode_description">通过利用 F-Log2 高光冗余，在不牺牲高光的前提下提升阴影细节。</string>
+    <string name="settings_dro_off">关闭</string>
+    <string name="settings_dro_low">中等</string>
+    <string name="settings_dro_high">最高</string>
+    <string name="settings_apply_ultra_hdr">Ultra HDR 曝光策略</string>
+    <string name="settings_apply_ultra_hdr_description">基于多帧堆叠和直方图分析，在光照充足时自动压低曝光以保护高光。仅当 RAW 和多帧合成同时开启时生效。</string>
 </resources>

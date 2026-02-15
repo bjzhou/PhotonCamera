@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name">Photon Camera</string>
-    
+
     <!-- Camera Controls -->
     <string name="capture">Capture</string>
     <string name="switch_camera">Switch Camera</string>
@@ -10,31 +10,31 @@
     <string name="histogram">Histogram</string>
     <string name="grid">Grid</string>
     <string name="back">Back</string>
-    
+
     <!-- Exposure Controls -->
     <string name="exposure_compensation">EV</string>
     <string name="iso">ISO</string>
     <string name="shutter_speed">Shutter</string>
     <string name="auto">AUTO</string>
-    
+
     <!-- Focus -->
     <string name="focus">Focus</string>
     <string name="tap_to_focus">Tap to focus</string>
-    
+
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">Aspect Ratio</string>
     <string name="ratio_3_2">3:2</string>
     <string name="ratio_4_3">4:3</string>
     <string name="ratio_16_9">16:9</string>
     <string name="ratio_1_1">1:1</string>
-    
+
     <!-- Permissions -->
     <string name="camera_permission_required">Camera and Microphone permissions are required</string>
     <string name="grant_permission">Grant Permission</string>
-    
+
     <!-- Zoom -->
     <string name="zoom">Zoom</string>
-    
+
     <!-- Gallery -->
     <string name="gallery">Gallery</string>
     <string name="photo_detail">Photo Detail</string>
@@ -44,6 +44,9 @@
     <string name="export_success">Photo exported successfully</string>
     <string name="export_failed">Failed to export photo</string>
     <string name="edit">Edit</string>
+    <string name="refresh">Refresh</string>
+    <string name="refresh_success">Preview refreshed</string>
+    <string name="refresh_failed">Failed to refresh preview</string>
     <string name="select_all">Select All</string>
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>
@@ -70,7 +73,7 @@
     <string name="photo_info_aperture">Aperture</string>
     <string name="photo_info_iso">ISO</string>
     <string name="photo_info_shutter_speed">Shutter Speed</string>
-    
+
     <!-- Frame Watermark -->
     <string name="frame">Frame</string>
     <string name="none">None</string>
@@ -90,7 +93,7 @@
     <string name="font_option">Font</string>
     <string name="default_text">Default</string>
     <string name="custom_import">Import...</string>
-    
+
     <!-- Settings -->
     <string name="settings_title">Settings</string>
     <string name="settings_section_capture">Capture</string>
@@ -154,7 +157,7 @@
     <string name="settings_background">Background</string>
     <string name="settings_background_description">Change the app background image</string>
     <string name="settings_custom_background">Custom...</string>
-    
+
     <!-- LUT -->
     <string name="filter_intensity">LUT Intensity</string>
     <string name="lut_intensity_none">None</string>
@@ -298,4 +301,14 @@
     <string name="settings_donation_description">Support the development of Photon Camera</string>
     <string name="settings_default_focal_length">Default Focal Length</string>
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
+    <string name="settings_raw_restore_lut">RAW Restore LUT</string>
+    <string name="settings_raw_restore_lut_description">Choose the LUT used for RAW color restoration. Use \"Flat\" for log output.</string>
+    <string name="settings_raw_restore_flat">Flat Output</string>
+    <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>
+    <string name="settings_dro_mode_description">Optimizes shadow detail and highlight compression by utilizing F-Log2 headroom. Higher values preserve more highlights but may require more light.</string>
+    <string name="settings_dro_off">Off</string>
+    <string name="settings_dro_low">Low</string>
+    <string name="settings_dro_high">High</string>
+    <string name="settings_apply_ultra_hdr">Ultra HDR Exposure Strategy</string>
+    <string name="settings_apply_ultra_hdr_description">Based on multi-frame stacking and histogram analysis, automatically reduce exposure to protect highlights when lighting is sufficient. Effective only when RAW and Multi-Frame are enabled.</string>
 </resources>

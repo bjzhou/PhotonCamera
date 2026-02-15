@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.settings
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -9,46 +11,31 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FilterNone
-import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
-import android.content.Intent
-import android.net.Uri
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.camera.autoRotate
-import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LogViewerDialog
+import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
-import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.viewmodel.CameraViewModel
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import com.hinnka.mycamera.data.RawEngine
 import kotlin.math.roundToInt
 
 /**
@@ -80,9 +67,12 @@ fun SettingsScreen(
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
-    val rawEngine by viewModel.rawEngine.collectAsState(initial = RawEngine.NATIVE)
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
+    val rawLut by viewModel.rawLut.collectAsState()
+    val droMode by viewModel.droMode.collectAsState()
+    val applyUltraHDR by viewModel.applyUltraHDR.collectAsState()
+    val availableRawLutList = viewModel.availableRawLutList
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -280,6 +270,46 @@ fun SettingsScreen(
                     currentLevel = photoQuality,
                     onLevelSelected = { viewModel.setPhotoQuality(it) }
                 )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_dro_mode),
+                    description = stringResource(R.string.settings_dro_mode_description),
+                    levels = listOf(
+                        "OFF" to stringResource(R.string.settings_dro_off),
+                        "LOW" to stringResource(R.string.settings_dro_low),
+                        "HIGH" to stringResource(R.string.settings_dro_high)
+                    ),
+                    currentLevel = droMode,
+                    onLevelSelected = { viewModel.setDroMode(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                RawRestoreLutSetting(
+                    availableLuts = availableRawLutList,
+                    currentLut = rawLut,
+                    onLutSelected = { viewModel.setRawLut(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_apply_ultra_hdr),
+                    description = stringResource(R.string.settings_apply_ultra_hdr_description),
+                    checked = applyUltraHDR,
+                    onCheckedChange = { viewModel.setApplyUltraHDR(it) }
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -430,17 +460,6 @@ fun SettingsScreen(
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.1f),
                     modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                QualityLevelSetting(
-                    title = stringResource(R.string.settings_raw_engine),
-                    description = stringResource(R.string.settings_raw_engine_description),
-                    levels = listOf(
-                        RawEngine.NATIVE.ordinal to stringResource(R.string.settings_raw_engine_native),
-                        RawEngine.SELF_DEVELOPED.ordinal to stringResource(R.string.settings_raw_engine_self_developed),
-                    ),
-                    currentLevel = rawEngine.ordinal,
-                    onLevelSelected = { viewModel.setRawEngine(RawEngine.entries[it]) }
                 )
 
                 HorizontalDivider(
@@ -963,12 +982,12 @@ private fun PremiumCard(
  * 图像质量等级设置（通用组件）
  */
 @Composable
-fun QualityLevelSetting(
+fun <T> QualityLevelSetting(
     title: String,
     description: String,
-    levels: List<Pair<Int, String>>,
-    currentLevel: Int,
-    onLevelSelected: (Int) -> Unit,
+    levels: List<Pair<T, String>>,
+    currentLevel: T,
+    onLevelSelected: (T) -> Unit,
     modifier: Modifier = Modifier
 ) {
 
@@ -1164,7 +1183,7 @@ fun BackgroundSetting(
 ) {
     val currentBg by viewModel.backgroundImage.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
-    
+
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -1193,7 +1212,7 @@ fun BackgroundSetting(
                     onClick = { viewModel.setBackgroundImage(bgName) }
                 )
             }
-            
+
             item {
                 CustomBackgroundItem(
                     isSelected = currentBg.startsWith("/"),
@@ -1220,7 +1239,7 @@ private fun BackgroundItem(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
-    
+
     Box(
         modifier = Modifier
             .size(80.dp, 80.dp)
@@ -1240,7 +1259,7 @@ private fun BackgroundItem(
                 modifier = Modifier.fillMaxSize()
             )
         }
-        
+
         if (isSelected) {
             Box(
                 modifier = Modifier
@@ -1292,7 +1311,7 @@ private fun CustomBackgroundItem(
                 textAlign = TextAlign.Center
             )
         }
-        
+
         if (isSelected) {
             Box(
                 modifier = Modifier
@@ -1307,6 +1326,103 @@ private fun CustomBackgroundItem(
                     modifier = Modifier.size(24.dp)
                 )
             }
+        }
+    }
+}
+
+/**
+ * RAW 还原 LUT 设置 - 升级版 UI (网格布局，展示完整文字)
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun RawRestoreLutSetting(
+    availableLuts: List<String>,
+    currentLut: String,
+    onLutSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.settings_raw_restore_lut),
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        Text(
+            text = stringResource(R.string.settings_raw_restore_lut_description),
+            color = Color.White.copy(alpha = 0.5f),
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            RawLutChip(
+                name = stringResource(R.string.settings_raw_restore_flat),
+                isSelected = currentLut == "none",
+                onClick = { onLutSelected("none") },
+                isNone = true
+            )
+
+            availableLuts.forEach { lut ->
+                RawLutChip(
+                    name = lut.substringBeforeLast("."),
+                    isSelected = currentLut == lut,
+                    onClick = { onLutSelected(lut) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RawLutChip(
+    name: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    isNone: Boolean = false
+) {
+    val accentColor = Color(0xFFFF6B35)
+
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (isSelected) {
+                    Brush.horizontalGradient(
+                        listOf(accentColor.copy(alpha = 0.25f), accentColor.copy(alpha = 0.15f))
+                    )
+                } else {
+                    Brush.horizontalGradient(
+                        listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.04f))
+                    )
+                }
+            )
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = name,
+                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.8f),
+                fontSize = 10.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Visible
+            )
         }
     }
 }

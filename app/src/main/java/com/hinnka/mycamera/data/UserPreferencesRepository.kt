@@ -25,11 +25,6 @@ enum class VolumeKeyAction {
     ZOOM
 }
 
-enum class RawEngine {
-    NATIVE,           // 原生
-    SELF_DEVELOPED    // 自研
-}
-
 /**
  * 用户偏好设置数据类
  */
@@ -59,11 +54,13 @@ data class UserPreferences(
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val useMultiFrame: Boolean = false, // 是否使用多帧合成
     val multiFrameCount: Int = 8, // 多帧合成帧数
-    val rawEngine: RawEngine = RawEngine.NATIVE, // RAW处理引擎
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
-    val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration // 多帧合成是否使用 GPU 加速
+    val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
+    val rawLut: String = "PROVIA.plut", // RAW 还原 LUT，默认为 WDR
+    val droMode: String = "OFF", // DRO 模式
+    val applyUltraHDR: Boolean = true // 是否应用 Ultra HDR 策略
 )
 
 /**
@@ -107,11 +104,13 @@ class UserPreferencesRepository(private val context: Context) {
         // 多帧合成 Key
         private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
-        private val RAW_ENGINE = stringPreferencesKey("raw_engine")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
         private val USE_GPU_ACCELERATION = booleanPreferencesKey("use_gpu_acceleration")
+        private val RAW_LUT = stringPreferencesKey("raw_lut")
+        private val DRO_MODE = stringPreferencesKey("dro_mode")
+        private val APPLY_ULTRA_HDR = booleanPreferencesKey("apply_ultra_hdr")
     }
 
     /**
@@ -148,13 +147,13 @@ class UserPreferencesRepository(private val context: Context) {
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 useMultiFrame = preferences[USE_MULTI_FRAME] ?: false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8,
-                rawEngine = RawEngine.valueOf(
-                    preferences[RAW_ENGINE] ?: RawEngine.NATIVE.name
-                ),
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
-                useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration
+                useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
+                rawLut = preferences[RAW_LUT] ?: "PROVIA.plut",
+                droMode = preferences[DRO_MODE] ?: "OFF",
+                applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: true
             )
         }
 
@@ -427,15 +426,6 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
-     * 保存 RAW 处理引擎
-     */
-    suspend fun saveRawEngine(engine: RawEngine) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_ENGINE] = engine.name
-        }
-    }
-
-    /**
      * 保存照片质量
      */
     suspend fun savePhotoQuality(quality: Int) {
@@ -467,6 +457,33 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseGpuAcceleration(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_GPU_ACCELERATION] = enabled
+        }
+    }
+
+    /**
+     * 保存 RAW 还原 LUT
+     */
+    suspend fun saveRawLut(lut: String) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_LUT] = lut
+        }
+    }
+
+    /**
+     * 保存 DRO 模式
+     */
+    suspend fun saveDroMode(mode: String) {
+        context.dataStore.edit { preferences ->
+            preferences[DRO_MODE] = mode
+        }
+    }
+
+    /**
+     * 保存是否应用 Ultra HDR 策略
+     */
+    suspend fun saveApplyUltraHDR(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[APPLY_ULTRA_HDR] = enabled
         }
     }
 }

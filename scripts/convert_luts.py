@@ -29,7 +29,7 @@ def convert_cube_to_plut(cube_path, plut_path):
         line = line.strip()
         if not line or line.startswith('#'):
             continue
-        
+
         if line.startswith('LUT_3D_SIZE'):
             size = int(line.split()[1])
         elif line.startswith('DOMAIN_MIN'):
@@ -75,14 +75,14 @@ def convert_cube_to_plut(cube_path, plut_path):
         f.write(struct.pack('<I', 1))
         # Data
         f.write(struct.pack(f'<{len(data)}H', *data))
-    
+
     return True
 
 def main():
     # Adjust path if needed
     base_dir = os.getcwd()
-    lut_dir = os.path.join(base_dir, 'app', 'src', 'main', 'assets', 'luts')
-    
+    lut_dir = os.path.join(base_dir, 'app', 'src', 'main', 'assets', 'raw')
+
     if not os.path.exists(lut_dir):
         print(f"Directory not found: {lut_dir}")
         return
@@ -95,7 +95,7 @@ def main():
             print(f"Converting {filename} -> {os.path.basename(plut_path)}...")
             if convert_cube_to_plut(cube_path, plut_path):
                 count += 1
-    
+
     print(f"Successfully converted {count} LUT files.")
 
 if __name__ == '__main__':

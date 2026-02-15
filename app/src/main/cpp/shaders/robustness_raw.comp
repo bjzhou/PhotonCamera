@@ -22,18 +22,18 @@ layout(push_constant, scalar) uniform PushConstants {
     uint planeHeight;
     uint sensorWidth;
     uint sensorHeight;
-    
+
     float scale;
-    
+
     float blackLevel[4];
     float whiteLevel;
     float wbGains[4];
-    
+
     uint isFirstFrame;
     uint outputChannel;
     uint cfaPattern;
     uint planeIndex;
-    
+
     uint tileX;
     uint tileY;
     uint tileW;
@@ -42,7 +42,7 @@ layout(push_constant, scalar) uniform PushConstants {
     uint gridW;
     uint gridH;
     uint tileSize;
-    
+
     float noiseAlpha;
     float noiseBeta;
     float baseNoise;
@@ -55,7 +55,7 @@ float getGreen(sampler2D tex, int px, int py) {
     int sy = py * 2;
     sx = clamp(sx, 0, int(pc.sensorWidth) - 2);
     sy = clamp(sy, 0, int(pc.sensorHeight) - 2);
-    
+
     // Average the two green subpixels from the 2x2 Bayer block
     float g1, g2;
     if (pc.cfaPattern == 0 || pc.cfaPattern == 3) {
@@ -85,14 +85,14 @@ void main() {
     gx = clamp(gx, 0, pc.gridW - 1);
     gy = clamp(gy, 0, pc.gridH - 1);
     vec2 flow = alignBuffer.offsets[gy * pc.gridW + gx];
-    
+
     // Flow magnitude penalty (pre-compute once)
     float flowPenalty = 1.0;
     float flowMag = length(flow);
     if (flowMag > 2.0) {
         flowPenalty = exp(-0.5 * (flowMag - 2.0));
     }
-    
+
     // Flow consistency check (pre-compute once)
     float consistencyPenalty = 1.0;
     vec2 f_min = flow;
@@ -110,49 +110,49 @@ void main() {
     if (flowRange > 0.5) {
         consistencyPenalty = exp(-2.0 * (flowRange - 0.5));
     }
-    
+
     float globalPenalty = flowPenalty * consistencyPenalty;
 
     float minRobustness = 1.0;
-    
+
     // Morphological Min Filter (Radius 1 = 3x3, much faster than 5x5)
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
              int nx = clamp(int(planeX) + dx, 0, int(pc.planeWidth) - 1);
              int ny = clamp(int(planeY) + dy, 0, int(pc.planeHeight) - 1);
-             
+
              // Use green channel only for fast comparison (1 channel)
              float greenRef = getGreen(refImg, nx, ny);
-             
+
              // Target: use hardware texture sampling for speed
              vec2 trgPlane = vec2(nx, ny) + flow;
              // Convert plane coord to sensor UV for hardware sampling
              // Green center is approximately at the center of the 2x2 block
              vec2 trgSensorUV = (trgPlane * 2.0 + 1.0) / vec2(pc.sensorWidth, pc.sensorHeight);
              float greenTrg = texture(trgImg, trgSensorUV).r;
-             
+
              // Squared difference (single channel)
              float diff = greenRef - greenTrg;
              float distSq = diff * diff;
-             
+
              // Noise model (single channel)
              float sigma2 = pc.noiseAlpha * greenRef + pc.noiseBeta;
              sigma2 = max(sigma2, 1e-10);
-             
+
              // Robustness: single channel, diff of 2 noisy observations
              // Expected noise distSq = 2 * sigma²
              // R = exp(-distSq / (S² * 2 * sigma²))
-             float S = 3.0;
+             float S = 2.7;
              float denom = sigma2 * 2.0 * S * S;
              float R = exp(-distSq / denom);
-             
+
              // Apply pre-computed penalties
              R *= globalPenalty;
-             
+
              minRobustness = min(minRobustness, R);
         }
     }
-    
+
     // Output
     uint outIdx = planeY * pc.planeWidth + planeX;
     outRobustness.data[outIdx] = minRobustness;

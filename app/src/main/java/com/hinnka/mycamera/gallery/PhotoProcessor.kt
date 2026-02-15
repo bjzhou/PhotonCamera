@@ -1,25 +1,23 @@
 package com.hinnka.mycamera.gallery
 
 import android.content.Context
-import android.graphics.*
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
-import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.nio.ByteBuffer
 
 /**
  * 照片处理器
- * 
+ *
  * 集中管理照片的 LUT、旋转、亮度和边框应用逻辑
  */
 class PhotoProcessor(
@@ -98,13 +96,14 @@ class PhotoProcessor(
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
         val cropRegion = metadata.cropRegion
 
-        val bitmap = if (metadata.rawEngine == RawEngine.SELF_DEVELOPED) {
-            RawDemosaicProcessor.getInstance().process(
-                context, dngPath, metadata.ratio ?: AspectRatio.RATIO_4_3, cropRegion, metadata.rotation
-            )
-        } else {
-            RawProcessor.processAndToBitmap(File(dngPath), metadata.ratio, cropRegion, metadata.rotation)
-        }
+        val bitmap = RawDemosaicProcessor.getInstance().process(
+            context,
+            dngPath,
+            metadata.ratio ?: AspectRatio.RATIO_4_3,
+            cropRegion,
+            metadata.rotation,
+            metadata.exposureBias ?: 0f
+        )
 
         result = bitmap?.let {
             lutImageProcessor.applyLut(
@@ -205,7 +204,7 @@ class PhotoProcessor(
         )
 
         result = applyFrame(result, metadata)
-        
+
         result
     }
 

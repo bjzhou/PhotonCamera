@@ -9,20 +9,20 @@ import java.io.InputStreamReader
 
 /**
  * Adobe .cube LUT 文件解析器
- * 
+ *
  * 支持 3D LUT 的 .cube 文件格式解析
  * 参考: https://wwwimages2.adobe.com/content/dam/acom/en/products/speedgrade/cc/pdfs/cube-lut-specification-1.0.pdf
  */
 object CubeLutParser {
-    
+
     private const val TAG = "CubeLutParser"
-    
+
     // .cube 文件关键字
     private const val KEYWORD_TITLE = "TITLE"
     private const val KEYWORD_LUT_3D_SIZE = "LUT_3D_SIZE"
     private const val KEYWORD_DOMAIN_MIN = "DOMAIN_MIN"
     private const val KEYWORD_DOMAIN_MAX = "DOMAIN_MAX"
-    
+
     /**
      * 从 InputStream 解析 .cube 文件
      * 优化版本：单遍流式处理避免内存溢出
@@ -116,49 +116,7 @@ object CubeLutParser {
             title = title
         )
     }
-    
-    /**
-     * 从 Assets 文件夹解析 .cube 文件
-     */
-    fun parseFromAssets(context: Context, fileName: String): LutConfig {
-        return context.assets.open(fileName).use { inputStream ->
-            parse(inputStream)
-        }
-    }
-    
-    /**
-     * 从 Assets 的 luts 子目录解析 .cube 文件
-     */
-    fun parseFromLutsFolder(context: Context, fileName: String): LutConfig {
-        val path = if (fileName.startsWith("luts/")) fileName else "luts/$fileName"
-        return parseFromAssets(context, path)
-    }
-    
-    /**
-     * 列出 Assets 中可用的 LUT 文件
-     */
-    fun listAvailableLuts(context: Context, folder: String = "luts"): List<LutInfo> {
-        return try {
-            val files = context.assets.list(folder) ?: emptyArray()
-            files.filter { it.endsWith(".cube", ignoreCase = true) }
-                .map { fileName ->
-                    val id = fileName.substringBeforeLast(".")
-                    val name = id.replace("_", " ")
-                    LutInfo(
-                        id = id,
-                        nameMap = mapOf("en" to name, "zh" to name),
-                        fileName = "$folder/$fileName",
-                        isBuiltIn = true,
-                        isDefault = false,
-                        isVip = id != "standard"
-                    )
-                }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to list LUT files", e)
-            emptyList()
-        }
-    }
-    
+
     /**
      * 提取引号中的字符串
      */
@@ -171,14 +129,14 @@ object CubeLutParser {
             line.substringAfter(' ').trim()
         }
     }
-    
+
     /**
      * 解析包含三个浮点数的行
      */
     private fun parseFloatTriple(line: String): FloatArray? {
         val parts = line.trim().split(Regex("\\s+"))
         if (parts.size < 3) return null
-        
+
         return try {
             floatArrayOf(
                 parts[0].toFloat(),
@@ -189,7 +147,7 @@ object CubeLutParser {
             null
         }
     }
-    
+
     /**
      * 将值标准化到 [0, 1] 范围
      */

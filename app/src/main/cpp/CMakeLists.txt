@@ -5,6 +5,7 @@ set(LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 
 # 4. 添加头文件路径
 include_directories(${LIB_PATH}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
 
 file(GLOB JXL_LIBS "${LIB_PATH}/lib/${ANDROID_ABI}/*.a")
 
@@ -60,10 +61,13 @@ endforeach()
 add_custom_target(compile_shaders DEPENDS ${GENERATED_SHADER_HEADERS})
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 
+# LibRaw sources
+file(GLOB_RECURSE LIBRAW_SOURCES LibRaw/src/*.cpp LibRaw/src/*.c)
+list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*_ph\\.cpp$")
+
 # 6. 将你的 native 库链接到 libyuv
 add_library(my-native-lib SHARED 
     native-lib.cpp
-    dng_parser.cpp
     yuv_utils.cpp
     jxl_utils.cpp
     stacking_utils.cpp
@@ -72,13 +76,14 @@ add_library(my-native-lib SHARED
     vulkan_utils.cpp
     vulkan_stacker.cpp
     vulkan_raw_stacker.cpp
+    ${LIBRAW_SOURCES}
     ${GENERATED_SHADER_HEADERS}
 )
 add_dependencies(my-native-lib compile_shaders)
 
 # 启用优化和 OpenMP
-target_compile_definitions(my-native-lib PRIVATE VK_USE_PLATFORM_ANDROID_KHR)
-target_compile_options(my-native-lib PRIVATE -O3 -ffast-math ${OpenMP_CXX_FLAGS})
+target_compile_definitions(my-native-lib PRIVATE VK_USE_PLATFORM_ANDROID_KHR LIBRAW_USE_OPENMP)
+target_compile_options(my-native-lib PRIVATE -O3 -ffast-math -w ${OpenMP_CXX_FLAGS})
 
 target_link_libraries(
     my-native-lib

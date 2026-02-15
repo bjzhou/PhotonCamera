@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -119,7 +121,7 @@ fun PhotoDetailScreen(
         initialPage = initialIndex,
         pageCount = { photos.size }
     )
-    
+
     // 同步当前索引
     LaunchedEffect(pagerState.currentPage) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
@@ -130,9 +132,9 @@ fun PhotoDetailScreen(
             pagerState.scrollToPage(0)
         }
     }
-    
+
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -168,6 +170,43 @@ fun PhotoDetailScreen(
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
+                        }
+                    }
+                    if (currentPhoto != null && viewModel.isRaw(currentPhoto.id)) {
+                        val isRefreshing = viewModel.refreshingPhotos.contains(currentPhoto.id)
+                        val infiniteTransition = rememberInfiniteTransition(label = "refresh")
+                        val rotation by infiniteTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1000, easing = LinearEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rotation"
+                        )
+
+                        IconButton(
+                            onClick = {
+                                viewModel.refreshRawPreview(currentPhoto) { success ->
+                                    if (success) {
+                                        Toast.makeText(context, R.string.refresh_success, Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, R.string.refresh_failed, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            enabled = !isRefreshing
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = stringResource(R.string.refresh),
+                                tint = if (isRefreshing) Color.White.copy(alpha = 0.5f) else Color.White,
+                                modifier = Modifier.graphicsLayer {
+                                    if (isRefreshing) {
+                                        rotationZ = rotation
+                                    }
+                                }
+                            )
                         }
                     }
                     IconButton(onClick = { showInfoDialog = true }) {
@@ -216,7 +255,7 @@ fun PhotoDetailScreen(
                             )
                         }
                     }
-                    
+
                     // 编辑
                     IconButton(
                         onClick = {
@@ -233,7 +272,7 @@ fun PhotoDetailScreen(
                             tint = Color.White
                         )
                     }
-                    
+
                     // 导出
                     IconButton(
                         onClick = { currentPhoto?.let { showExportDialog = true } },
@@ -255,7 +294,7 @@ fun PhotoDetailScreen(
                             )
                         }
                     }
-                    
+
                     // 删除
                     IconButton(
                         onClick = { showDeleteDialog = true },
@@ -379,6 +418,23 @@ fun PhotoDetailScreen(
                                     viewModel = viewModel,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                /*val brightness = viewModel.currentBrightness[photo.id]
+                                brightness?.let {
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(16.dp)
+                                            .align(Alignment.TopEnd)
+                                            .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "avg: ${String.format("%.2f", it)}",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }*/
                             }
                         }
                     }
@@ -480,7 +536,7 @@ fun PhotoDetailScreen(
             textContentColor = Color.White
         )
     }
-    
+
     // 照片信息对话框
     if (showInfoDialog && currentPhoto != null) {
         AlertDialog(
@@ -566,8 +622,9 @@ private fun ZoomableImage(
         }
 
         var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+        val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
 
-        LaunchedEffect(photo.id, metadataHash, showOrigin) {
+        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey) {
             suspend fun loadBitmap() {
                 isLoading = bitmap == null
                 bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin)
@@ -616,7 +673,7 @@ fun MotionPhotoPlayer(
 ) {
     if (!photo.isMotionPhoto) return
     val context = LocalContext.current
-    
+
     var isReadyToShow by remember(photo.id, isPlaying) { mutableStateOf(false) }
 
     val exoPlayer = remember(photo.id, isPlaying) {

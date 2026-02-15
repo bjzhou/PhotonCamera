@@ -36,7 +36,13 @@ data class DngRawData @Keep constructor(
     val baselineExposure: Float,
     val lensShadingMap: FloatArray?,
     val lensShadingMapWidth: Int,
-    val lensShadingMapHeight: Int
+    val lensShadingMapHeight: Int,
+    val exposureBias: Float,
+    val iso: Int,
+    val shutterSpeed: Long,
+    val aperture: Float,
+    val activeArray: IntArray?, // [left, top, right, bottom]
+    val noiseProfile: FloatArray?, // NoiseProfile [S1, O1, S2, O2, ...]
 ) : AutoCloseable {
 
     @Volatile

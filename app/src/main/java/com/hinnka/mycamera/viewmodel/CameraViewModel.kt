@@ -15,7 +15,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
@@ -27,15 +26,11 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
-import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.utils.OrientationObserver
-import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.utils.ShutterSoundPlayer
-import com.hinnka.mycamera.utils.VibrationHelper
+import com.hinnka.mycamera.utils.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.flow.first
 import java.io.File
 import kotlin.math.abs
 
@@ -152,8 +147,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
-    val rawEngine: Flow<RawEngine> = userPreferencesRepository.userPreferences
-        .map { it.rawEngine }
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -163,6 +156,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useGpuAcceleration: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useGpuAcceleration }
         .stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUtil.defaultGpuAcceleration)
+    val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.rawLut }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "PROVIA.plut")
+    val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.droMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
+    val applyUltraHDR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.applyUltraHDR }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    var availableRawLutList: List<String> by mutableStateOf(emptyList())
+        private set
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -240,6 +245,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseRaw(it.useRaw)
                 // 同步 Live Photo 设置到相机控制器
                 cameraController.setUseLivePhoto(it.useLivePhoto)
+                // 同步 RAW LUT 到解马赛克处理器
+                RawDemosaicProcessor.getInstance().setRawLut(application, it.rawLut)
+                // 同步 Ultra HDR 设置到相机控制器
+                cameraController.setApplyUltraHDR(it.applyUltraHDR)
+            }
+        }
+
+        // 加载 assets/raw 目录下的 LUT 列表
+        viewModelScope.launch(Dispatchers.IO) {
+            val rawFolder = "raw"
+            try {
+                val files = application.assets.list(rawFolder)
+                availableRawLutList = files?.filter { it.endsWith(".plut") }?.toList() ?: emptyList()
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to list raw luts", e)
             }
         }
 
@@ -715,6 +735,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置是否应用 Ultra HDR 策略
+     */
+    fun setApplyUltraHDR(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveApplyUltraHDR(enabled)
+        }
+    }
+
+    /**
      * 获取 LUT 信息
      */
     fun getLutInfo(id: String): LutInfo? {
@@ -872,15 +901,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveMultiFrameCount(count)
             //reopenCamera()
-        }
-    }
-
-    /**
-     * 设置 RAW 处理引擎
-     */
-    fun setRawEngine(engine: RawEngine) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawEngine(engine)
         }
     }
 
@@ -1294,6 +1314,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val droModeString = droMode.value
+            val droModeForProcessing = try {
+                com.hinnka.mycamera.raw.MeteringSystem.DROMode.valueOf(droModeString)
+            } catch (e: Exception) {
+                com.hinnka.mycamera.raw.MeteringSystem.DROMode.OFF
+            }
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -1335,7 +1361,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
-                rawEngine = rawEngine.firstOrNull()
+                exposureBias = state.value.exposureBias,
+                droMode = droModeString
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1355,6 +1382,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             viewModelScope.launch(Dispatchers.IO) {
                 PhotoManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+
                 PhotoManager.savePhoto(
                     context,
                     photoId,
@@ -1369,7 +1397,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQualityValue,
-                    state.value.getAvgLuma()
+                    exposureBias = state.value.exposureBias,
+                    droMode = droModeForProcessing
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -1398,6 +1427,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val droModeString = droMode.value
+            val droModeForProcessing = try {
+                com.hinnka.mycamera.raw.MeteringSystem.DROMode.valueOf(droModeString)
+            } catch (e: Exception) {
+                com.hinnka.mycamera.raw.MeteringSystem.DROMode.OFF
+            }
             val currentCameraId = cameraController.getCurrentCameraId()
 
             // 计算旋转角度
@@ -1439,7 +1474,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
-                rawEngine = rawEngine.firstOrNull()
+                exposureBias = state.value.exposureBias,
+                droMode = droModeString
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1464,6 +1500,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             viewModelScope.launch(Dispatchers.IO) {
                 PhotoManager.saveVideo(context, photoId, livePhotoVideoDeferred)
+
                 PhotoManager.saveStackedPhoto(
                     context,
                     photoId,
@@ -1479,7 +1516,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     useGpuAcceleration = useGpuAcceleration.value,
-                    previewLuma = state.value.getAvgLuma()
+                    exposureBias = state.value.exposureBias,
+                    droMode = droModeForProcessing
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -1569,5 +1607,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             it.close()
         }
         burstImages.clear()
+    }
+    /**
+     * 设置 RAW 还原 LUT
+     */
+    fun setRawLut(lut: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawLut(lut)
+        }
+    }
+
+    /**
+     * 设置当前 RAW 动态范围
+     */
+    fun setDroMode(mode: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveDroMode(mode)
+        }
     }
 }

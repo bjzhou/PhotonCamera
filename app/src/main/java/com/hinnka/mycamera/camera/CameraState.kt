@@ -124,6 +124,7 @@ data class CameraState(
     val isShutterSpeedAuto: Boolean = true,
     val iso: Int = 100,
     val shutterSpeed: Long = 1_000_000_000L / 60, // 1/60s in nanoseconds
+    val exposureBias: Float = 0f,
 
     val awbMode: Int = 1, // 自动白平衡模式
     val awbTemperature: Int = 5000, // 色温 (K)
@@ -181,6 +182,7 @@ data class CameraState(
     val useLivePhoto: Boolean = false,
     // 是否正在拍摄 Live Photo (用于 UI 动画)
     val isCapturingLivePhoto: Boolean = false,
+    val applyUltraHDR: Boolean = true,
 ) {
     /**
      * 是否全自动曝光

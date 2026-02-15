@@ -1,6 +1,16 @@
 {
   "luts": [
     {
+      "id": "none",
+      "name": {
+        "en": "None",
+        "zh": "无"
+      },
+      "path": "",
+      "isDefault": false,
+      "isVip": false
+    },
+    {
       "id": "standard",
       "name": {
         "en": "Standard",

@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Build
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.data.RawEngine
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
@@ -15,7 +14,7 @@ import java.util.*
 
 /**
  * 照片元数据
- * 
+ *
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class PhotoMetadata(
@@ -46,15 +45,16 @@ data class PhotoMetadata(
     val focalLength: String? = null,
     val focalLength35mm: String? = null,
     val aperture: String? = null,
+    val exposureBias: Float? = null,
     val isImported: Boolean = false,
     // 边框水印自定义
     val customProperties: Map<String, String> = emptyMap(),
     // 导出到系统相册的 URI 列表
     val exportedUris: List<String> = emptyList(),
-    // RAW 处理引擎
-    val rawEngine: RawEngine? = null,
     // Live Photo 演示时间戳 (us)
-    val presentationTimestampUs: Long? = null
+    val presentationTimestampUs: Long? = null,
+    // DRO 模式
+    val droMode: String? = null
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -152,6 +152,7 @@ data class PhotoMetadata(
             put("focalLength", focalLength ?: JSONObject.NULL)
             put("focalLength35mm", focalLength35mm ?: JSONObject.NULL)
             put("aperture", aperture ?: JSONObject.NULL)
+            put("exposureBias", exposureBias ?: JSONObject.NULL)
             put("isImported", isImported)
             // 边框水印自定义
             val customPropsObj = JSONObject()
@@ -159,10 +160,10 @@ data class PhotoMetadata(
             put("customProperties", customPropsObj)
             // 导出的 URI 列表
             put("exportedUris", org.json.JSONArray(exportedUris))
-            // RAW 处理引擎
-            put("rawEngine", rawEngine?.name ?: JSONObject.NULL)
             // Live Photo 时间戳
             put("presentationTimestampUs", presentationTimestampUs ?: JSONObject.NULL)
+            // DRO 模式
+            put("droMode", droMode ?: JSONObject.NULL)
         }.toString(2)
     }
 
@@ -237,6 +238,7 @@ data class PhotoMetadata(
                     focalLength = if (obj.isNull("focalLength")) null else obj.optString("focalLength"),
                     focalLength35mm = if (obj.isNull("focalLength35mm")) null else obj.optString("focalLength35mm"),
                     aperture = if (obj.isNull("aperture")) null else obj.optString("aperture"),
+                    exposureBias = if (obj.isNull("exposureBias")) null else obj.optDouble("exposureBias").toFloat(),
                     isImported = obj.optBoolean("isImported", false),
                     customProperties = mutableMapOf<String, String>().apply {
                         val customPropsObj = obj.optJSONObject("customProperties")
@@ -245,12 +247,8 @@ data class PhotoMetadata(
                         }
                     },
                     exportedUris = exportedUris,
-                    rawEngine = if (obj.isNull("rawEngine")) null else try {
-                        RawEngine.valueOf(obj.getString("rawEngine"))
-                    } catch (e: Exception) {
-                        null
-                    },
-                    presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs")
+                    presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),
+                    droMode = if (obj.isNull("droMode")) null else obj.optString("droMode")
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

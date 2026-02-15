@@ -9,10 +9,12 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.collection.MutableIntFloatMap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -139,6 +141,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 当前照片的元数据
     var currentPhotoMetadata: PhotoMetadata? by mutableStateOf(null)
         private set
+
+    // 当前照片的平均亮度（调试用）
+    val currentBrightness = SnapshotStateMap<String, Float>()
+
+    // 照片刷新密钥，用于强制 UI 重新加载图片
+    val photoRefreshKeys = SnapshotStateMap<String, Long>()
+
+    // 正在刷新的照片 ID 集合
+    val refreshingPhotos = mutableStateListOf<String>()
 
     // 可用的 LUT 列表
     var availableLuts: List<LutInfo> by mutableStateOf(emptyList())
@@ -968,10 +979,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     bitmap
                 } else {
                     // 预览生成
-                    photoProcessor.processBitmap(
+                    val result = photoProcessor.processBitmap(
                         bitmap, finalMetadata,
                         finalS, finalNR, finalCNR
                     )
+                    // 估计平均亮度
+                    currentBrightness[photo.id] = estimateAverageBrightness(result ?: bitmap)
+                    result
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1036,13 +1050,47 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * 刷新 RAW 照片的预览图
+     */
+    fun refreshRawPreview(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+        if (refreshingPhotos.contains(photo.id)) return
+        
+        viewModelScope.launch {
+            refreshingPhotos.add(photo.id)
+            try {
+                val context = getApplication<Application>()
+                val result = PhotoManager.refreshRawPreview(context, photo.id)
+                if (result != null) {
+                    // 更新刷新密钥以强制 UI 重新加载
+                    photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                    
+                    // 触发列表更新
+                    val updatedPhotos = _photos.value.map { p ->
+                        if (p.id == photo.id) {
+                            p.copy()
+                        } else {
+                            p
+                        }
+                    }
+                    _photos.value = updatedPhotos
+                    onComplete(true)
+                } else {
+                    onComplete(false)
+                }
+            } finally {
+                refreshingPhotos.remove(photo.id)
+            }
+        }
+    }
+
+    /**
      * 导出照片到公共目录（带 LUT 烘焙）
      */
     fun exportPhoto(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val metadata = photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
             val context = getApplication<Application>()
-            PhotoManager.exportPhoto(context, photo.id, photoProcessor, metadata,
+            PhotoManager.exportPhoto(context, photo.id, null, photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
                 chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95) { success ->
                 if (success) {
@@ -1081,20 +1129,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to prepare shared photo", e)
             null
-        }
-    }
-
-    /**
-     * 导入照片
-     */
-    fun importPhoto(uri: Uri) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            val photoId = PhotoManager.importPhoto(getApplication(), uri)
-            if (photoId != null) {
-                loadPhotos()
-            }
-            _isLoading.value = false
         }
     }
 
@@ -1168,6 +1202,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 contentRepository.refreshCustomContent()
             }
             PLog.d(TAG, "Custom content refreshed via ContentRepository")
+        }
+    }
+
+    /**
+     * 估计 Bitmap 的平均亮度（调试用）
+     */
+    private fun estimateAverageBrightness(bitmap: Bitmap): Float {
+        return try {
+            // 缩小尺寸以快速计算
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 64, 64, false)
+            val pixels = IntArray(64 * 64)
+            scaledBitmap.getPixels(pixels, 0, 64, 0, 0, 64, 64)
+
+            var totalLuma = 0f
+            for (pixel in pixels) {
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                // Luma = 0.299R + 0.587G + 0.114B
+                totalLuma += (0.299f * r + 0.587f * g + 0.114f * b)
+            }
+            scaledBitmap.recycle()
+            totalLuma / (64 * 64) / 255f
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to estimate brightness", e)
+            0f
         }
     }
 }

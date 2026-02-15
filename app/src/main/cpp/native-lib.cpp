@@ -11,15 +11,120 @@
 #include <omp.h>
 #include <string>
 #include <vector>
+#include <map>
 
+#include "libraw/libraw.h"
 #include "common.h"
-#include "dng_parser.h"
 #include "jxl_utils.h"
 #include "math_utils.h"
 #include "stacking_utils.h"
 #include "vulkan_raw_stacker.h"
+#include "vulkan_raw_stacker.h"
 #include "vulkan_stacker.h"
 #include <android/hardware_buffer_jni.h>
+
+#ifndef LOG_TAG
+#define LOG_TAG "native-lib"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#endif
+
+struct Matrix3x3 {
+    float m[9];
+
+    Matrix3x3() {
+        for (int i = 0; i < 9; i++) m[i] = 0;
+    }
+
+    static Matrix3x3 identity() {
+        Matrix3x3 res;
+        res.m[0] = res.m[4] = res.m[8] = 1.0f;
+        return res;
+    }
+
+    Matrix3x3 multiply(const Matrix3x3& other) const {
+        Matrix3x3 res;
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                res.m[i * 3 + j] = m[i * 3 + 0] * other.m[0 * 3 + j] +
+                                   m[i * 3 + 1] * other.m[1 * 3 + j] +
+                                   m[i * 3 + 2] * other.m[2 * 3 + j];
+            }
+        }
+        return res;
+    }
+
+    Matrix3x3 invert() const {
+        float det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
+                    m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                    m[2] * (m[3] * m[7] - m[4] * m[6]);
+
+        if (std::abs(det) < 1e-12f) return identity();
+
+        float invDet = 1.0f / det;
+        Matrix3x3 res;
+        res.m[0] = (m[4] * m[8] - m[5] * m[7]) * invDet;
+        res.m[1] = (m[2] * m[7] - m[1] * m[8]) * invDet;
+        res.m[2] = (m[1] * m[5] - m[2] * m[4]) * invDet;
+        res.m[3] = (m[5] * m[6] - m[3] * m[8]) * invDet;
+        res.m[4] = (m[0] * m[8] - m[2] * m[6]) * invDet;
+        res.m[5] = (m[2] * m[3] - m[0] * m[5]) * invDet;
+        res.m[6] = (m[3] * m[7] - m[4] * m[6]) * invDet;
+        res.m[7] = (m[1] * m[6] - m[0] * m[7]) * invDet;
+        res.m[8] = (m[0] * m[4] - m[1] * m[3]) * invDet;
+        return res;
+    }
+};
+
+static float illuminantToTemp(int illuminant) {
+    switch (illuminant) {
+        case 1:  return 5500.0f;
+        case 2:  return 4000.0f;
+        case 3:  return 3200.0f;
+        case 4:  return 3400.0f;
+        case 9:  return 6500.0f;
+        case 10: return 7500.0f;
+        case 11: return 8000.0f;
+        case 17: return 2856.0f;
+        case 21: return 6504.0f;
+        case 23: return 5000.0f;
+        default: return 5000.0f;
+    }
+}
+
+static Matrix3x3 computeXYZD50ToGamut() {
+    float xr = 0.70800f, yr = 0.29200f;
+    float xg = 0.17000f, yg = 0.79700f;
+    float xb = 0.13100f, yb = 0.04600f;
+    float xw = 0.31270f, yw = 0.32900f;
+
+    Matrix3x3 mS;
+    mS.m[0] = xr / yr; mS.m[1] = xg / yg; mS.m[2] = xb / yb;
+    mS.m[3] = 1.0f;    mS.m[4] = 1.0f;    mS.m[5] = 1.0f;
+    mS.m[6] = (1 - xr - yr) / yr; mS.m[7] = (1 - xg - yg) / yg; mS.m[8] = (1 - xb - yb) / yb;
+
+    Matrix3x3 invS = mS.invert();
+    float Xw = xw / yw, Yw = 1.0f, Zw = (1 - xw - yw) / yw;
+    float sR = invS.m[0] * Xw + invS.m[1] * Yw + invS.m[2] * Zw;
+    float sG = invS.m[3] * Xw + invS.m[4] * Yw + invS.m[5] * Zw;
+    float sB = invS.m[6] * Xw + invS.m[7] * Yw + invS.m[8] * Zw;
+
+    Matrix3x3 gamutToXYZD65;
+    gamutToXYZD65.m[0] = mS.m[0] * sR; gamutToXYZD65.m[1] = mS.m[1] * sG; gamutToXYZD65.m[2] = mS.m[2] * sB;
+    gamutToXYZD65.m[3] = mS.m[3] * sR; gamutToXYZD65.m[4] = mS.m[4] * sG; gamutToXYZD65.m[5] = mS.m[5] * sB;
+    gamutToXYZD65.m[6] = mS.m[6] * sR; gamutToXYZD65.m[7] = mS.m[7] * sG; gamutToXYZD65.m[8] = mS.m[8] * sB;
+
+    float BRADFORD_D65_TO_D50[9] = {
+        1.0478112f, 0.0228866f, -0.0501270f,
+        0.0295424f, 0.9904844f, -0.0170491f,
+        -0.0092345f, 0.0150436f, 0.7521316f
+    };
+    Matrix3x3 bMat;
+    for (int i=0; i<9; i++) bMat.m[i] = BRADFORD_D65_TO_D50[i];
+
+    Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
+    return gamutToXYZD50.invert();
+}
 
 extern "C" {
 
@@ -709,7 +814,7 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
 /**
  * 释放内存
  */
-JNIEXPORT void JNICALL Java_com_hinnka_mycamera_utils_YuvProcessor_free(
+JNIEXPORT void JNICALL Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_freeNativeBuffer(
     JNIEnv *env, jobject /* this */, jobject rawDataBuffer) {
   if (rawDataBuffer == nullptr)
     return;
@@ -720,11 +825,86 @@ JNIEXPORT void JNICALL Java_com_hinnka_mycamera_utils_YuvProcessor_free(
   }
 }
 
+struct ExifData {
+    int iso = 0;
+    float noiseProfile[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    bool hasNoiseProfile = false;
+    int subjectLocation[4] = {0, 0, 0, 0};
+    int subjectLocationLen = 0;
+};
+
+static int sget2(unsigned int ord, LibRaw_abstract_datastream *stream) {
+    if (!stream) return 0;
+    unsigned char s[2];
+    if (stream->read(s, 1, 2) != 2) return 0;
+    if (ord == 0x4d4d) // MM (Big Endian)
+        return s[0] << 8 | s[1];
+    else // II (Little Endian)
+        return s[1] << 8 | s[0];
+}
+
+static int sget4(unsigned int ord, LibRaw_abstract_datastream *stream) {
+    if (!stream) return 0;
+    unsigned char s[4];
+    if (stream->read(s, 1, 4) != 4) return 0;
+    if (ord == 0x4d4d) // MM (Big Endian)
+        return (s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3];
+    else // II (Little Endian)
+        return (s[3] << 24) | (s[2] << 16) | (s[1] << 8) | s[0];
+}
+
+static void exif_callback(void *datap, int tag, int type, int len, unsigned int ord, void *ifp, long long offset) {
+    auto *ed = static_cast<ExifData *>(datap);
+    auto *stream = static_cast<LibRaw_abstract_datastream *>(ifp);
+
+    int actual_tag = tag & 0xFFFF;
+    INT64 current_pos = stream->tell();
+
+    if (offset != 0) {
+        stream->seek(offset, SEEK_SET);
+    }
+
+    if (actual_tag == 0x8827) { // ISOSpeedRatings
+        if (len > 0) {
+            if (type == 3) ed->iso = sget2(ord, stream);
+            else if (type == 4) ed->iso = sget4(ord, stream);
+        }
+    } else if (actual_tag == 0xC635 || actual_tag == 0xC761) { // NoiseProfile
+        if (len > 0) {
+            int count = std::min(len, 8);
+            for (int i = 0; i < count; i++) {
+                if (type == 12) { // DOUBLE
+                    double val = 0;
+                    stream->read(&val, 8, 1);
+                    ed->noiseProfile[i] = (float)val;
+                } else if (type == 11) { // FLOAT
+                    float val = 0;
+                    stream->read(&val, 4, 1);
+                    ed->noiseProfile[i] = val;
+                }
+            }
+            if (count > 0) ed->hasNoiseProfile = true;
+        }
+    } else if (actual_tag == 0x9214 || actual_tag == 0xA214) { // SubjectLocation / SubjectArea
+        if (len > 0) {
+            int count = std::min(len, 4);
+            for (int i = 0; i < count; i++) {
+                if (type == 3) ed->subjectLocation[i] = sget2(ord, stream);
+                else if (type == 4) ed->subjectLocation[i] = sget4(ord, stream);
+            }
+            ed->subjectLocationLen = count;
+        }
+    }
+
+    // Always restore the stream position
+    stream->seek(current_pos, SEEK_SET);
+}
+
 /**
- * 从 DNG 文件中提取 RAW 数据和元数据
+ * 使用 LibRaw 处理 DNG 文件
  */
 JNIEXPORT jobject JNICALL
-Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_extractDngDataNative(
+Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     JNIEnv *env, jobject /* this */, jstring filePath) {
 
   const char *path = env->GetStringUTFChars(filePath, nullptr);
@@ -733,405 +913,322 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_extractDngDataNative(
     return nullptr;
   }
 
-  LOGI("Parsing DNG file: %s", path);
+  LibRaw RawProcessor;
+  ExifData ed;
+  RawProcessor.set_exifparser_handler(exif_callback, &ed);
 
-  std::ifstream file(path, std::ios::binary | std::ios::ate);
-  if (!file.is_open()) {
-    LOGE("Failed to open DNG file: %s", path);
+  int ret = RawProcessor.open_file(path);
+  if (ret != LIBRAW_SUCCESS) {
+    LOGE("processDngNative: Failed to open file %s, ret=%d", path, ret);
     env->ReleaseStringUTFChars(filePath, path);
     return nullptr;
   }
 
-  std::streamsize fileSize = file.tellg();
-  file.seekg(0, std::ios::beg);
-
-  std::vector<uint8_t> fileData(fileSize);
-  if (!file.read(reinterpret_cast<char *>(fileData.data()), fileSize)) {
-    LOGE("Failed to read DNG file");
-    file.close();
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-  file.close();
-
-  if (fileSize < 8) {
-    LOGE("File too small to be a valid TIFF");
+  ret = RawProcessor.unpack();
+  if (ret != LIBRAW_SUCCESS) {
+    LOGE("processDngNative: Failed to unpack %s, ret=%d", path, ret);
     env->ReleaseStringUTFChars(filePath, path);
     return nullptr;
   }
 
-  bool bigEndian;
-  if (fileData[0] == 0x49 && fileData[1] == 0x49) {
-    bigEndian = false;
-  } else if (fileData[0] == 0x4D && fileData[1] == 0x4D) {
-    bigEndian = true;
-  } else {
-    LOGE("Invalid TIFF header");
+  // 配置处理参数
+  RawProcessor.imgdata.params.output_bps = 16;
+  RawProcessor.imgdata.params.gamm[0] = 1.0; // Linear
+  RawProcessor.imgdata.params.gamm[1] = 1.0;
+  RawProcessor.imgdata.params.no_auto_bright = 1;
+  RawProcessor.imgdata.params.use_camera_wb = 1;
+  RawProcessor.imgdata.params.output_color = 0; // Raw color space
+  RawProcessor.imgdata.params.user_qual = 13;    // LMMSE algorithm
+  RawProcessor.imgdata.params.fbdd_noiserd = 0;
+  RawProcessor.imgdata.params.threshold = 0;
+  RawProcessor.imgdata.params.med_passes = 0;
+
+  ret = RawProcessor.dcraw_process();
+  if (ret != LIBRAW_SUCCESS) {
+    LOGE("processDngNative: Failed to process %s, ret=%d", path, ret);
     env->ReleaseStringUTFChars(filePath, path);
     return nullptr;
   }
 
-  uint16_t version = readValue<uint16_t>(&fileData[2], bigEndian);
-  if (version != 42 && version != 43) {
-    LOGE("Unsupported TIFF version: %d", version);
+  // 获取处理后的图像
+  libraw_processed_image_t *image = RawProcessor.dcraw_make_mem_image(&ret);
+  if (!image || ret != 0) {
+    LOGE("processDngNative: Failed to make mem image, ret=%d", ret);
     env->ReleaseStringUTFChars(filePath, path);
     return nullptr;
   }
 
-  uint32_t ifdOffset = readValue<uint32_t>(&fileData[4], bigEndian);
+  // 准备返回结果
+  size_t outputSize = (size_t)image->width * image->height * 3 * 2;
+  void *outData = malloc(outputSize);
+  memcpy(outData, image->data, outputSize);
+  jobject rawDataBuffer = env->NewDirectByteBuffer(outData, outputSize);
 
-  std::vector<std::map<uint16_t, TiffTagData>> allIFDs;
-  std::vector<uint32_t> pendingOffsets = {ifdOffset};
-  std::vector<uint32_t> visitedOffsets;
-
-  while (!pendingOffsets.empty()) {
-    uint32_t offset = pendingOffsets.back();
-    pendingOffsets.pop_back();
-
-    if (std::find(visitedOffsets.begin(), visitedOffsets.end(), offset) !=
-        visitedOffsets.end()) {
-      continue;
-    }
-    visitedOffsets.push_back(offset);
-
-    if (offset == 0 || offset + 2 >= fileData.size()) {
-      continue;
-    }
-
-    auto ifd = parseTiffIFD(fileData, offset, bigEndian);
-    if (ifd.empty()) {
-      LOGD("  IFD at offset %u is empty", offset);
-      continue;
-    }
-
-    allIFDs.push_back(ifd);
-
-    uint16_t entryCount = readValue<uint16_t>(&fileData[offset], bigEndian);
-    uint32_t nextPtr = offset + 2 + entryCount * 12;
-    if (nextPtr + 4 <= fileData.size()) {
-      uint32_t nextOffset = readValue<uint32_t>(&fileData[nextPtr], bigEndian);
-      if (nextOffset > 0) {
-        pendingOffsets.push_back(nextOffset);
-      }
-    }
-
-    if (ifd.count(TiffTags::SubIFDs)) {
-      auto &tag = ifd.at(TiffTags::SubIFDs);
-      const uint8_t *p = tag.data.data();
-      size_t typeWidth = (tag.type == SHORT) ? 2 : 4;
-      for (size_t i = 0;
-           i < tag.count && (i + 1) * typeWidth <= tag.data.size(); ++i) {
-        uint32_t subOffset = (tag.type == SHORT)
-                                 ? readValue<uint16_t>(p + i * 2, bigEndian)
-                                 : readValue<uint32_t>(p + i * 4, bigEndian);
-        if (subOffset > 0) {
-          pendingOffsets.push_back(subOffset);
-        }
-      }
-    }
-  }
-
-  DngMetadata metadata;
-  metadata.width = 0;
-  metadata.height = 0;
-  metadata.whiteLevel = 65535.0f;
-  metadata.bitsPerSample = 16;
-  metadata.orientation = 1;
-  metadata.rawDataOffset = 0;
-  metadata.rawDataLength = 0;
-
-  int rawIfdIndex = -1;
-  uint32_t maxPixels = 0;
-
-  for (int i = 0; i < allIFDs.size(); ++i) {
-    auto &ifd = allIFDs[i];
-    if (ifd.count(TiffTags::StripOffsets) && ifd.count(TiffTags::ImageWidth) &&
-        ifd.count(TiffTags::ImageLength)) {
-      uint32_t w = getUint32FromTag(ifd.at(TiffTags::ImageWidth), bigEndian);
-      uint32_t h = getUint32FromTag(ifd.at(TiffTags::ImageLength), bigEndian);
-      if (w * h > maxPixels) {
-        maxPixels = w * h;
-        rawIfdIndex = i;
-      }
-    }
-  }
-
-  // 收集元数据：先从所有 IFD 中收集基础元数据（如 AsShotNeutral 通常在主 IFD）
-  for (size_t ifdIdx = 0; ifdIdx < allIFDs.size(); ++ifdIdx) {
-    const auto &ifd = allIFDs[ifdIdx];
-
-    if (ifd.count(TiffTags::Orientation))
-      metadata.orientation =
-          getUint16FromTag(ifd.at(TiffTags::Orientation), bigEndian);
-    if (ifd.count(TiffTags::AsShotNeutral))
-      metadata.asShotNeutral =
-          getFloatArrayFromTag(ifd.at(TiffTags::AsShotNeutral), bigEndian);
-    if (ifd.count(TiffTags::AnalogBalance))
-      metadata.analogBalance =
-          getFloatArrayFromTag(ifd.at(TiffTags::AnalogBalance), bigEndian);
-
-    if (ifd.count(TiffTags::ColorMatrix1)) {
-      metadata.colorMatrix1 =
-          getFloatArrayFromTag(ifd.at(TiffTags::ColorMatrix1), bigEndian);
-    }
-    if (ifd.count(TiffTags::ColorMatrix2)) {
-      metadata.colorMatrix2 =
-          getFloatArrayFromTag(ifd.at(TiffTags::ColorMatrix2), bigEndian);
-    }
-
-    if (ifd.count(TiffTags::ForwardMatrix1)) {
-      auto &tag = ifd.at(TiffTags::ForwardMatrix1);
-      metadata.forwardMatrix1 = getFloatArrayFromTag(tag, bigEndian);
-    }
-
-    if (ifd.count(TiffTags::ForwardMatrix2)) {
-      auto &tag = ifd.at(TiffTags::ForwardMatrix2);
-      metadata.forwardMatrix2 = getFloatArrayFromTag(tag, bigEndian);
-    }
-
-    if (ifd.count(TiffTags::CalibrationIlluminant1))
-      metadata.illuminant1 = static_cast<uint32_t>(getFloatArrayFromTag(
-          ifd.at(TiffTags::CalibrationIlluminant1), bigEndian)[0]);
-    if (ifd.count(TiffTags::CalibrationIlluminant2))
-      metadata.illuminant2 = static_cast<uint32_t>(getFloatArrayFromTag(
-          ifd.at(TiffTags::CalibrationIlluminant2), bigEndian)[0]);
-    if (ifd.count(TiffTags::BaselineExposure)) {
-      std::vector<float> be =
-          getFloatArrayFromTag(ifd.at(TiffTags::BaselineExposure), bigEndian);
-      if (!be.empty())
-        metadata.baselineExposure = be[0];
-    }
-    if (ifd.count(TiffTags::WhiteLevel)) {
-      auto wl = getFloatArrayFromTag(ifd.at(TiffTags::WhiteLevel), bigEndian);
-      if (!wl.empty())
-        metadata.whiteLevel = wl[0];
-    }
-    if (ifd.count(TiffTags::BlackLevel))
-      metadata.blackLevel =
-          getFloatArrayFromTag(ifd.at(TiffTags::BlackLevel), bigEndian);
-    if (ifd.count(TiffTags::CFAPattern)) {
-      auto &tag = ifd.at(TiffTags::CFAPattern);
-      if (tag.data.size() >= 4)
-        for (int j = 0; j < 4; j++)
-          metadata.cfaPattern[j] = tag.data[j];
-    }
-  }
-
-  if (rawIfdIndex != -1) {
-    auto &ifd = allIFDs[rawIfdIndex];
-    metadata.width = getUint32FromTag(ifd.at(TiffTags::ImageWidth), bigEndian);
-    metadata.height =
-        getUint32FromTag(ifd.at(TiffTags::ImageLength), bigEndian);
-    metadata.bitsPerSample =
-        ifd.count(TiffTags::BitsPerSample)
-            ? getUint16FromTag(ifd.at(TiffTags::BitsPerSample), bigEndian)
-            : 16;
-    metadata.rawDataOffset =
-        getUint32FromTag(ifd.at(TiffTags::StripOffsets), bigEndian);
-    if (ifd.count(TiffTags::StripByteCounts)) {
-      metadata.rawDataLength = 0;
-      auto counts =
-          getFloatArrayFromTag(ifd.at(TiffTags::StripByteCounts), bigEndian);
-      for (float c : counts)
-        metadata.rawDataLength += static_cast<uint32_t>(c);
-    }
-    if (ifd.count(TiffTags::BlackLevel))
-      metadata.blackLevel =
-          getFloatArrayFromTag(ifd.at(TiffTags::BlackLevel), bigEndian);
-    if (ifd.count(TiffTags::WhiteLevel)) {
-      auto wl = getFloatArrayFromTag(ifd.at(TiffTags::WhiteLevel), bigEndian);
-      if (!wl.empty())
-        metadata.whiteLevel = wl[0];
-    }
-    if (ifd.count(TiffTags::CFAPattern)) {
-      auto &tag = ifd.at(TiffTags::CFAPattern);
-      if (tag.data.size() >= 4)
-        for (int j = 0; j < 4; j++)
-          metadata.cfaPattern[j] = tag.data[j];
-    }
-    if (ifd.count(TiffTags::OpcodeList2)) {
-      auto &opcodeTag = ifd.at(TiffTags::OpcodeList2);
-      int cfaEnum = mapCfaPattern(metadata.cfaPattern);
-      parseOpcodeList2ForLSC(opcodeTag.data, metadata, cfaEnum);
-    }
-  }
-
-  // 计算白平衡增益
-  if (!metadata.asShotNeutral.empty()) {
-    metadata.wbGains.clear();
-    for (float neutral : metadata.asShotNeutral) {
-      metadata.wbGains.push_back((neutral > 1e-6f) ? (1.0f / neutral) : 1.0f);
-    }
-    if (metadata.wbGains.size() > 1) {
-      float gGain = metadata.wbGains[1];
-      if (gGain > 1e-6f) {
-        for (float &g : metadata.wbGains)
-          g /= gGain;
-      }
-    }
-  }
-
-  if (metadata.wbGains.empty()) {
-    metadata.wbGains = {1.0f, 1.0f, 1.0f, 1.0f};
-  } else if (metadata.wbGains.size() == 3) {
-    metadata.wbGains = {metadata.wbGains[0], metadata.wbGains[1],
-                        metadata.wbGains[1], metadata.wbGains[2]};
-  }
-  while (metadata.wbGains.size() < 4)
-    metadata.wbGains.push_back(metadata.wbGains.back());
-
-  if (metadata.blackLevel.empty()) {
-    metadata.blackLevel = {0.0f, 0.0f, 0.0f, 0.0f};
-  } else if (metadata.blackLevel.size() == 1) {
-    float b = metadata.blackLevel[0];
-    metadata.blackLevel = {b, b, b, b};
-  } else if (metadata.blackLevel.size() == 4) {
-    reorderArrayByPattern(metadata.blackLevel, metadata.cfaPattern);
-  }
-
-  const float XYZ_D50_TO_SRGB[9] = {3.1338561f,  -1.6168667f, -0.4906146f,
-                                    -0.9787684f, 1.9161415f,  0.0334540f,
-                                    0.0719453f,  -0.2289914f, 1.4052427f};
-
-  float weight = 0.0f;
-  if (metadata.illuminant1 != 0 && metadata.illuminant2 != 0 &&
-      metadata.wbGains.size() >= 3 && metadata.wbGains[0] > 0 &&
-      metadata.wbGains[2] > 0) {
-    float temp1 = illuminantToTemp(metadata.illuminant1);
-    float temp2 = illuminantToTemp(metadata.illuminant2);
-    float rGain = metadata.wbGains[0];
-    float bGain =
-        metadata.wbGains[metadata.wbGains.size() > 2 ? 2 : 0]; // 假设 B 在索引
-                                                               // 2 或 3
-    if (metadata.wbGains.size() == 4 && metadata.cfaPattern[3] == 2)
-      bGain = metadata.wbGains[3];
-    float currentRatio = rGain / bGain;
-    if (temp1 < 4000 && temp2 > 5000) {
-      if (currentRatio < 0.5f)
-        weight = 1.0f;
-      else if (currentRatio > 0.8f)
-        weight = 0.0f;
-      else
-        weight = (0.8f - currentRatio) / (0.8f - 0.5f);
-    }
-  }
-
-  float m1[9], m2[9];
-  bool hasM1 = false, hasM2 = false;
-  if (!metadata.forwardMatrix1.empty()) {
-    memcpy(m1, metadata.forwardMatrix1.data(), 36);
-    hasM1 = true;
-  } else if (!metadata.colorMatrix1.empty())
-    hasM1 = invert3x3(metadata.colorMatrix1.data(), m1);
-  if (!metadata.forwardMatrix2.empty()) {
-    memcpy(m2, metadata.forwardMatrix2.data(), 36);
-    hasM2 = true;
-  } else if (!metadata.colorMatrix2.empty())
-    hasM2 = invert3x3(metadata.colorMatrix2.data(), m2);
-
-  float camToXYZ[9];
-  if (hasM1 && hasM2) {
-    for (int i = 0; i < 9; i++)
-      camToXYZ[i] = m1[i] * weight + m2[i] * (1.0f - weight);
-  } else if (hasM1)
-    memcpy(camToXYZ, m1, 36);
-  else if (hasM2)
-    memcpy(camToXYZ, m2, 36);
-  else {
-    memset(camToXYZ, 0, 36);
-    camToXYZ[0] = camToXYZ[4] = camToXYZ[8] = 1.0f;
-  }
-
-  float finalCCM[9];
-  matmul3x3(XYZ_D50_TO_SRGB, camToXYZ, finalCCM);
-  metadata.rowStride = metadata.width * (metadata.bitsPerSample / 8);
-
-  if (rawIfdIndex == -1 || metadata.rawDataOffset == 0 ||
-      metadata.rawDataLength == 0) {
-    LOGE("Failed to find RAW pixels");
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-
-  auto &stripIFD = allIFDs[rawIfdIndex];
-  auto stripOffsets =
-      getFloatArrayFromTag(stripIFD.at(TiffTags::StripOffsets), bigEndian);
-  auto stripCounts =
-      getFloatArrayFromTag(stripIFD.at(TiffTags::StripByteCounts), bigEndian);
-  size_t numStrips = stripOffsets.size();
-
-  std::vector<uint8_t> assembledData;
-  assembledData.reserve(metadata.rawDataLength);
-
-  for (size_t i = 0; i < numStrips; i++) {
-    uint32_t offset = static_cast<uint32_t>(stripOffsets[i]);
-    uint32_t length = static_cast<uint32_t>(stripCounts[i]);
-    if (offset + length > fileData.size()) {
-      LOGE("Strip %zu out of bounds", i);
-      env->ReleaseStringUTFChars(filePath, path);
-      return nullptr;
-    }
-    assembledData.insert(assembledData.end(), fileData.begin() + offset,
-                         fileData.begin() + offset + length);
-  }
-
-  uint8_t *persistentRawData = (uint8_t *)malloc(assembledData.size());
-  if (!persistentRawData) {
-    LOGE("Failed to allocate memory for RAW data");
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-  memcpy(persistentRawData, assembledData.data(), assembledData.size());
-
-  jobject rawDataBuffer =
-      env->NewDirectByteBuffer(persistentRawData, assembledData.size());
-  if (rawDataBuffer == nullptr) {
-    free(persistentRawData);
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-
+  // 提取元数据
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
-  if (dngDataClass == nullptr) {
-    LOGE("Failed to find DngRawData class");
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-
   jmethodID constructor = env->GetMethodID(
-      dngDataClass, "<init>", "(Ljava/nio/ByteBuffer;IIIF[F[F[FIIF[FII)V");
-  if (constructor == nullptr) {
-    LOGE("Failed to find DngRawData constructor");
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
+      dngDataClass, "<init>", "(Ljava/nio/ByteBuffer;IIIF[F[F[FIIF[FIIFIJF[I[F)V");
+
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
-  env->SetFloatArrayRegion(blackLevelArray, 0, 4, metadata.blackLevel.data());
-  jfloatArray wbArray = env->NewFloatArray(4);
-  env->SetFloatArrayRegion(wbArray, 0, 4, metadata.wbGains.data());
-  jfloatArray colorMatrixArray = env->NewFloatArray(9);
-  env->SetFloatArrayRegion(colorMatrixArray, 0, 9, finalCCM);
-  jfloatArray lscArray = nullptr;
-  if (!metadata.lensShadingMap.empty()) {
-    lscArray = env->NewFloatArray(metadata.lensShadingMap.size());
-    env->SetFloatArrayRegion(lscArray, 0, metadata.lensShadingMap.size(),
-                             metadata.lensShadingMap.data());
+  for (int i = 0; i < 4; i++) {
+      // 注意偏移量是 6
+      float val = RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i];
+      env->SetFloatArrayRegion(blackLevelArray, i, 1, &val);
   }
 
-  int cfaEnum = mapCfaPattern(metadata.cfaPattern);
-  int rotation = orientationToRotation(metadata.orientation);
+  // 白平衡
+  jfloatArray wbArray = env->NewFloatArray(4);
+  float wb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
+  for (int i = 0; i < 4; i++) wb[i] = RawProcessor.imgdata.color.cam_mul[i];
+  float base = wb[1];
+  for (int i = 0; i < 4; i++) {
+    wb[i] = wb[i] / base;
+  }
+  LOGI("wb: %f, %f, %f, %f", wb[0], wb[1], wb[2], wb[3]); //RGB0 or RGBG
+
+  env->SetFloatArrayRegion(wbArray, 0, 1, &wb[0]);
+  env->SetFloatArrayRegion(wbArray, 1, 1, &wb[1]);
+  if (wb[3] > 0.0f) {
+    env->SetFloatArrayRegion(wbArray, 2, 1, &wb[3]);
+  } else {
+    env->SetFloatArrayRegion(wbArray, 2, 1, &wb[1]);
+  }
+  env->SetFloatArrayRegion(wbArray, 3, 1, &wb[2]);
+
+  // CCM (从 DNG ForwardMatrix 转换为 F-Gamut)
+  Matrix3x3 targetTransform = computeXYZD50ToGamut();
+  Matrix3x3 m1 = Matrix3x3::identity();
+  Matrix3x3 m2 = Matrix3x3::identity();
+  bool hasM1 = false, hasM2 = false;
+
+  auto getMatrix = [&](int index, Matrix3x3 &m) {
+      float sumFM = 0.0f;
+      for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) {
+              m.m[i * 3 + j] = RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
+              sumFM += std::abs(m.m[i * 3 + j]);
+          }
+      }
+      if (sumFM > 0.01f) return true;
+
+      float sumCM = 0.0f;
+      Matrix3x3 xyzToCam;
+      for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) {
+              xyzToCam.m[i * 3 + j] = RawProcessor.imgdata.color.dng_color[index].colormatrix[i][j];
+              sumCM += std::abs(xyzToCam.m[i * 3 + j]);
+          }
+      }
+      if (sumCM > 0.01f) {
+        // 1. 确定参考光源的 XYZ 白点 (根据 DNG 规范)
+        float lx, ly, lz;
+        int ill = RawProcessor.imgdata.color.dng_color[index].illuminant;
+
+        if (ill == 17) { // Standard Light A
+            lx = 1.0985f; ly = 1.0000f; lz = 0.3558f;
+        } else { // Assume D65
+            lx = 0.9504f; ly = 1.0000f; lz = 1.0888f;
+        }
+
+        // 2. 计算相机对该光源的响应 (Camera Neutral / White Balance)
+        // 这是 ColorMatrix 作用于光源 XYZ 的结果
+        float cameraNeutral[3];
+        for (int i = 0; i < 3; i++) {
+            cameraNeutral[i] = xyzToCam.m[i*3+0] * lx +
+                               xyzToCam.m[i*3+1] * ly +
+                               xyzToCam.m[i*3+2] * lz;
+        }
+
+        // 3. 构造中间矩阵：ColorMatrix * ReferenceDiagonal
+        // 在 DNG 逻辑中，我们需要对 ColorMatrix 的每一列乘以对应的 CameraNeutral 分量
+        // 这样做的目的是为了让矩阵在处理该光源下的“白点”时，输出为 [1, 1, 1]
+        Matrix3x3 referenceMatrix = xyzToCam;
+        for (int col = 0; col < 3; col++) {
+            // 这一步非常关键：为了求逆后能还原，这里其实是预补偿白平衡
+            referenceMatrix.m[0*3+col] /= cameraNeutral[0];
+            referenceMatrix.m[1*3+col] /= cameraNeutral[1];
+            referenceMatrix.m[2*3+col] /= cameraNeutral[2];
+        }
+
+        // 4. 求逆：从 Camera 空间转回该光源下的 XYZ 空间
+        // 现在 m 是从 Camera (White Balanced) -> XYZ (Illuminant Relative)
+        m = referenceMatrix.invert();
+
+        // 5. 应用色度适应 (Chromatic Adaptation) 映射到 D50
+        // ForwardMatrix 必须映射到 D50 空间
+        Matrix3x3 adapt;
+        if (ill == 17) { // A to D50 (Bradford Transform)
+            float a2d50[9] = {
+                0.8924f, -0.0157f,  0.0529f,
+               -0.1111f,  1.0505f, -0.0151f,
+                0.0522f, -0.0077f,  2.2396f
+            };
+            memcpy(adapt.m, a2d50, 9 * sizeof(float));
+        } else { // D65 to D50 (Bradford Transform)
+            float d652d50[9] = {
+                1.0478f,  0.0229f, -0.0501f,
+                0.0295f,  0.9905f, -0.0170f,
+               -0.0092f,  0.0150f,  0.7521f
+            };
+            memcpy(adapt.m, d652d50, 9 * sizeof(float));
+        }
+        m = adapt.multiply(m);
+        return true;
+      }
+      return false;
+  };
+
+  hasM1 = getMatrix(0, m1);
+  hasM2 = getMatrix(1, m2);
+
+  LOGI("hasM1 = %d hasM2 = %d", hasM1, hasM2);
+
+  float weight = 0.5f;
+  if (hasM1 && hasM2) {
+      float t1 = illuminantToTemp(RawProcessor.imgdata.color.dng_color[0].illuminant);
+      float t2 = illuminantToTemp(RawProcessor.imgdata.color.dng_color[1].illuminant);
+      float currentRatio = wb[0] / wb[2]; // R/B
+      float rWarm = 0.5f, rCool = 1.6f;
+      auto getTargetRatio = [&](float temp) {
+          if (temp <= 2856.0f) return rWarm;
+          if (temp >= 6504.0f) return rCool;
+          return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
+      };
+      float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
+      if (std::abs(r1 - r2) > 0.01f) {
+          weight = (currentRatio - r2) / (r1 - r2);
+          weight = std::max(0.0f, std::min(1.0f, weight));
+      }
+  }
+
+  Matrix3x3 camToXYZ;
+  if (hasM1 && hasM2) {
+      for (int i=0; i<9; i++) camToXYZ.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
+  } else if (hasM1) camToXYZ = m1;
+  else if (hasM2) camToXYZ = m2;
+  else {
+      // 没有任何 DNG 矩阵。尝试通过 LibRaw 的 ccm 反算。
+      // LibRaw 的 ccm 通常是 Camera-to-sRGB (D65)。
+      Matrix3x3 camToSRGB;
+      bool hasCCM = false;
+      for (int i=0; i<3; i++) for (int j=0; j<3; j++) {
+          camToSRGB.m[i*3+j] = RawProcessor.imgdata.color.ccm[i][j];
+          if (camToSRGB.m[i*3+j] != 0) hasCCM = true;
+      }
+
+      if (hasCCM) {
+          // 1. sRGB D65 to XYZ D65 转换矩阵
+          float srgb2xyz[9] = {
+              0.4124564f, 0.3575761f, 0.1804375f,
+              0.2126729f, 0.7151522f, 0.0721750f,
+              0.0193339f, 0.1191920f, 0.9503041f
+          };
+          Matrix3x3 mSRGB2XYZ;
+          memcpy(mSRGB2XYZ.m, srgb2xyz, 9 * sizeof(float));
+
+          // 2. Bradford 变换 (D65 to D50)
+          float d652d50[9] = {
+              1.0478f,  0.0229f, -0.0501f,
+              0.0295f,  0.9905f, -0.0170f,
+             -0.0092f,  0.0150f,  0.7521f
+          };
+          Matrix3x3 adapt;
+          memcpy(adapt.m, d652d50, 9 * sizeof(float));
+
+          // camToXYZ_D50 = adapt * sRGBToXYZ * camToSRGB
+          camToXYZ = adapt.multiply(mSRGB2XYZ.multiply(camToSRGB));
+          LOGI("Using LibRaw ccm converted to XYZ D50");
+      } else {
+          // 如果 ccm 也没有，最后尝试 cmatrix (XYZ to Camera)
+          Matrix3x3 xyzToCam;
+          bool hasCMatrix = false;
+          for (int i=0; i<3; i++) for (int j=0; j<3; j++) {
+              xyzToCam.m[i*3+j] = RawProcessor.imgdata.color.cmatrix[i][j];
+              if (xyzToCam.m[i*3+j] != 0) hasCMatrix = true;
+          }
+
+          if (hasCMatrix) {
+              // 处理方式同前：视为 D65 下的 ColorMatrix 反算
+              float lx = 0.9504f, ly = 1.0000f, lz = 1.0888f; 
+              float cameraNeutral[3];
+              for (int i = 0; i < 3; i++) {
+                  cameraNeutral[i] = xyzToCam.m[i*3+0] * lx + xyzToCam.m[i*3+1] * ly + xyzToCam.m[i*3+2] * lz;
+              }
+              Matrix3x3 referenceMatrix = xyzToCam;
+              for (int col = 0; col < 3; col++) {
+                  if (std::abs(cameraNeutral[0]) > 0.001f) referenceMatrix.m[0*3+col] /= cameraNeutral[0];
+                  if (std::abs(cameraNeutral[1]) > 0.001f) referenceMatrix.m[1*3+col] /= cameraNeutral[1];
+                  if (std::abs(cameraNeutral[2]) > 0.001f) referenceMatrix.m[2*3+col] /= cameraNeutral[2];
+              }
+              camToXYZ = referenceMatrix.invert();
+
+              float d652d50[9] = {1.0478f, 0.0229f, -0.0501f, 0.0295f, 0.9905f, -0.0170f, -0.0092f, 0.0150f, 0.7521f};
+              Matrix3x3 adapt;
+              memcpy(adapt.m, d652d50, 9 * sizeof(float));
+              camToXYZ = adapt.multiply(camToXYZ);
+              LOGI("Using cmatrix fallback converted to XYZ D50");
+          } else {
+              camToXYZ = Matrix3x3::identity();
+              LOGE("No color metadata found at all, using identity");
+          }
+      }
+  }
+
+  Matrix3x3 finalCCM = targetTransform.multiply(camToXYZ);
+  jfloatArray colorMatrixArray = env->NewFloatArray(9);
+  env->SetFloatArrayRegion(colorMatrixArray, 0, 9, finalCCM.m);
+
+  LOGI("finalCCM: %f, %f, %f, %f, %f, %f, %f, %f, %f", finalCCM.m[0], finalCCM.m[1], finalCCM.m[2], finalCCM.m[3], finalCCM.m[4], finalCCM.m[5], finalCCM.m[6], finalCCM.m[7], finalCCM.m[8]);
+
+  // 其它
+  jint width = image->width;
+  jint height = image->height;
+  jint rowStride = width * 6; // RGB16
+  jfloat whiteLevel = (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
+  if (whiteLevel <= 0) whiteLevel = (jfloat)RawProcessor.imgdata.color.maximum;
+  jint cfaPattern = -1; // CFA_LINEAR_RGB
+
+  jfloat baselineExposure = RawProcessor.imgdata.color.dng_levels.baseline_exposure;
+  jfloat exposureBias = RawProcessor.imgdata.makernotes.common.ExposureCalibrationShift;
+  int iso = RawProcessor.imgdata.other.iso_speed;
+  if (iso == 0) iso = ed.iso;
+
+  jlong shutterSpeedLong = (jlong)(RawProcessor.imgdata.other.shutter * 1e9); // ns
+  jfloat aperture = RawProcessor.imgdata.other.aperture;
+
+  LOGI("iso = %d, shutterSpeed = %lld aperture = %f baselineExposure = %f exposureBias = %f", iso, (long long)shutterSpeedLong, aperture, baselineExposure, exposureBias);
+
+  // ActiveArray: use margins to define the actual active sensor area
+  jintArray activeArray = env->NewIntArray(4);
+  jint aa[4] = {
+      (jint)RawProcessor.imgdata.sizes.left_margin,
+      (jint)RawProcessor.imgdata.sizes.top_margin,
+      (jint)RawProcessor.imgdata.sizes.left_margin + (jint)RawProcessor.imgdata.sizes.width,
+      (jint)RawProcessor.imgdata.sizes.top_margin + (jint)RawProcessor.imgdata.sizes.height
+  };
+  env->SetIntArrayRegion(activeArray, 0, 4, aa);
+
+  // LOGI("aa: %d, %d, %d, %d", aa[0], aa[1], aa[2], aa[3]);
+
+  jfloatArray afRegions = nullptr;
+  jfloatArray noiseProfileArray = nullptr;
+  if (ed.hasNoiseProfile) {
+      noiseProfileArray = env->NewFloatArray(8);
+      env->SetFloatArrayRegion(noiseProfileArray, 0, 8, ed.noiseProfile);
+  }
+
   jobject dngData = env->NewObject(
       dngDataClass, constructor, rawDataBuffer,
-      static_cast<jint>(metadata.width), static_cast<jint>(metadata.height),
-      static_cast<jint>(metadata.rowStride),
-      static_cast<jfloat>(metadata.whiteLevel), blackLevelArray, wbArray,
-      colorMatrixArray, static_cast<jint>(cfaEnum), static_cast<jint>(rotation),
-      static_cast<jfloat>(metadata.baselineExposure), lscArray,
-      static_cast<jint>(metadata.lscWidth),
-      static_cast<jint>(metadata.lscHeight));
+      width, height, rowStride, whiteLevel, blackLevelArray, wbArray,
+      colorMatrixArray, cfaPattern, 0, baselineExposure, nullptr, 0, 0,
+      exposureBias, iso, shutterSpeedLong, aperture, activeArray, noiseProfileArray);
 
+  // 释放资源
+  LibRaw::dcraw_clear_mem(image);
   env->ReleaseStringUTFChars(filePath, path);
+
   return dngData;
 }
 

@@ -144,6 +144,9 @@ class LutManager(private val context: Context) {
         // 从文件加载
         return try {
             val lutConfig = if (lutInfo.isBuiltIn) {
+                if (lutInfo.fileName.isBlank()) {
+                    return null
+                }
                 // 内置 LUT 从 assets 加载
                 LutParser.parseFromAssets(context, lutInfo.fileName)
             } else {
@@ -175,7 +178,7 @@ class LutManager(private val context: Context) {
 
     /**
      * 预加载 LUT
-     * 
+     *
      * 在后台线程中预加载 LUT，以便快速切换
      */
     fun preloadLut(id: String) {

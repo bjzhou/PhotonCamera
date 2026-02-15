@@ -17,6 +17,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
+import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -24,6 +25,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -92,6 +94,7 @@ object PhotoManager {
     suspend fun exportPhoto(
         context: Context,
         id: String,
+        bitmap: Bitmap? = null,
         photoProcessor: PhotoProcessor,
         metadata: PhotoMetadata,
         sharpeningValue: Float,
@@ -103,12 +106,15 @@ object PhotoManager {
         withContext(Dispatchers.IO) {
             try {
                 // 读取照片
-                val processedBitmap = photoProcessor.process(
+                val processedBitmap = bitmap?.let {
+                    photoProcessor.processBitmap(
+                        bitmap, metadata,
+                        sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
+                    )
+                } ?: photoProcessor.process(
                     context, id, metadata,
                     sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
-                )
-
-                processedBitmap ?: return@withContext
+                ) ?: return@withContext
 
                 // 保存到指定目录
                 val filename =
@@ -384,6 +390,7 @@ object PhotoManager {
                     exportPhoto(
                         context,
                         photoId,
+                        previewBitmap,
                         photoProcessor,
                         metadata,
                         sharpeningValue,
@@ -412,37 +419,58 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
-        previewLuma: Float
+        exposureBias: Float? = null,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
+            val dngFile = File(photoDir, DNG_FILE)
             val tempFile = File(photoDir, "temp.jpg")
 
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             captureResult ?: return@withContext
+
+            val byteOutstream = ByteArrayOutputStream()
+            byteOutstream.use { outputStream ->
+                image.use {
+                    try {
+                        RawProcessor.saveToDng(image, characteristics, captureResult, outputStream, rotation)
+                    } catch (e: Throwable) {
+                        PLog.e(TAG, "DNG save failed", e)
+                    }
+                }
+            }
+            val array = byteOutstream.toByteArray()
+            FileOutputStream(dngFile).use {
+                it.write(array)
+            }
+            if (shouldAutoSave) {
+                exportDng(context, array, metadata)
+            }
+
             val bitmap = RawDemosaicProcessor.getInstance().process(
                 context,
-                image,
-                characteristics,
-                captureResult,
+                dngFile.absolutePath,
                 aspectRatio,
+                cropRegion = metadata.cropRegion,
                 rotation,
+                exposureBias = exposureBias ?: 0f,
                 sharpeningValue = 0.4f,
-                previewLuma = previewLuma
+                droMode = droMode
             ) ?: return@withContext
             FileOutputStream(tempFile).use { outputStream ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
             }
             tempFile.renameTo(photoFile)
-            bitmap.recycle()
             if (shouldAutoSave) {
                 exportPhoto(
                     context,
                     photoId,
+                    bitmap,
                     photoProcessor,
                     metadata,
                     sharpeningValue,
@@ -451,6 +479,7 @@ object PhotoManager {
                     photoQuality
                 )
             }
+            bitmap.recycle()
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
         }
@@ -477,7 +506,8 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
-        previewLuma: Float = 0.5f,
+        exposureBias: Float? = null,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ) {
         // 根据图像格式处理
         when (val format = image.format) {
@@ -512,7 +542,8 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
-                    previewLuma
+                    exposureBias,
+                    droMode
                 )
             }
             else -> {
@@ -555,13 +586,13 @@ object PhotoManager {
                 result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
             }
             tempFile.renameTo(photoFile)
-            result.recycle()
             // Auto Save
             if (shouldAutoSave) {
                 val metadata = loadMetadata(context, photoId) ?: return@withContext
                 exportPhoto(
                     context,
                     photoId,
+                    result,
                     photoProcessor,
                     metadata,
                     sharpeningValue,
@@ -570,6 +601,7 @@ object PhotoManager {
                     photoQuality
                 )
             }
+            result.recycle()
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
         }
@@ -590,7 +622,8 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useGpuAcceleration: Boolean = true,
-        previewLuma: Float,
+        exposureBias: Float? = null,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
@@ -608,7 +641,7 @@ object PhotoManager {
             val firstImageWidth = images[0].width
             val firstImageHeight = images[0].height
 
-            val rawMetadata = RawMetadata.create(firstImageWidth, firstImageHeight, characteristics, captureResult)
+            val rawMetadata = RawMetadata.create(firstImageWidth, firstImageHeight, characteristics, captureResult, exposureBias, droMode)
 
             val byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
@@ -667,8 +700,7 @@ object PhotoManager {
                     aspectRatio,
                     metadata.cropRegion,
                     rotation,
-                    sharpeningValue = 0.4f,
-                    previewLuma = previewLuma
+                    sharpeningValue = 0.4f
                 )
             } ?: return@withContext
             // Save Original (Stacked Result)
@@ -681,6 +713,7 @@ object PhotoManager {
                 exportPhoto(
                     context,
                     photoId,
+                    result,
                     photoProcessor,
                     metadata,
                     sharpeningValue,
@@ -713,7 +746,8 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useGpuAcceleration: Boolean = true,
-        previewLuma: Float = 0.18f
+        exposureBias: Float? = null,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -749,7 +783,8 @@ object PhotoManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     useGpuAcceleration,
-                    previewLuma
+                    exposureBias,
+                    droMode
                 )
             }
             else -> {
@@ -1007,7 +1042,10 @@ object PhotoManager {
                 val fileName = getFileName(context, uri) ?: ""
                 val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
                         mimeType?.contains("dng", ignoreCase = true) == true ||
-                        fileName.endsWith(".dng", ignoreCase = true)
+                        fileName.endsWith(".dng", ignoreCase = true) ||
+                        fileName.endsWith(".rw2", ignoreCase = true) ||
+                        fileName.endsWith(".arw", ignoreCase = true) ||
+                        fileName.endsWith(".cr3", ignoreCase = true)
 
                 if (isRaw) {
                     // --- RAW 处理逻辑 ---
@@ -1020,25 +1058,11 @@ object PhotoManager {
 
                     // 2. 读取元数据以获取旋转信息
                     val metadata = PhotoMetadata.fromUri(context, uri)
-                    val exif = ExifInterface(dngFile.absolutePath)
-                    val orientation = exif.getAttributeInt(
-                        ExifInterface.TAG_ORIENTATION,
-                        ExifInterface.ORIENTATION_NORMAL
-                    )
-                    val rotation = when (orientation) {
-                        ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                        ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                        ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                        else -> 0
-                    }
 
                     // 3. 处理 RAW 以生成 JPEG 预览
-                    val processedBitmap = RawProcessor.processAndToBitmap(
-                        dngFile,
-                        null,
-                        null,
-                        rotation
-                    )
+                    val processedBitmap = RawDemosaicProcessor.getInstance().process(context,
+                        dngFile.absolutePath, null, null, 0,
+                        sharpeningValue = 0.4f)
 
                     if (processedBitmap != null) {
                         // 保存为 original.jpg
@@ -1053,7 +1077,7 @@ object PhotoManager {
                         val updatedMetadata = metadata.copy(
                             width = processedBitmap.width,
                             height = processedBitmap.height,
-                            rotation = rotation,
+                            rotation = 0,
                             isImported = true
                         )
                         metadataFile.writeText(updatedMetadata.toJson())
@@ -1081,6 +1105,40 @@ object PhotoManager {
 
                 PLog.d(TAG, "Photo imported: $photoId (isRaw: $isRaw)")
                 photoId
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to import photo", e)
+                null
+            }
+        }
+    }
+
+    suspend fun refreshRawPreview(context: Context, photoId: String): Bitmap? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val photoDir = getPhotoDir(context, photoId)
+                val photoFile = File(photoDir, PHOTO_FILE)
+                val dngFile = File(photoDir, DNG_FILE)
+                val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+
+                if (!dngFile.exists()) return@withContext null
+
+                // 2. 读取元数据以获取旋转信息
+                val metadata = loadMetadata(context, photoId)
+
+                // 3. 处理 RAW 以生成 JPEG 预览
+                val processedBitmap = RawDemosaicProcessor.getInstance().process(context,
+                    dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
+                    sharpeningValue = 0.4f)
+
+                if (processedBitmap != null) {
+                    // 保存为 original.jpg
+                    FileOutputStream(photoFile).use { out ->
+                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    }
+                    // 生成缩略图
+                    generateThumbnail(processedBitmap, thumbnailFile)
+                }
+                processedBitmap
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to import photo", e)
                 null

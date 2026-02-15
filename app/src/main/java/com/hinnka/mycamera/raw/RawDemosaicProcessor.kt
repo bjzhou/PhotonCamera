@@ -3,14 +3,11 @@ package com.hinnka.mycamera.raw
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CaptureResult
 import android.media.Image
 import android.opengl.*
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutParser
-import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
@@ -24,8 +21,7 @@ import java.nio.ShortBuffer
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ln
-import kotlin.math.log2
-import kotlin.math.pow
+import kotlin.math.sqrt
 import android.opengl.Matrix as GlMatrix
 
 /**
@@ -47,62 +43,11 @@ class RawDemosaicProcessor {
     /**
      * DNG 数据容器（包含原始 DngRawData 用于清理）
      */
-    private data class DngData(
-        val rawData: ByteBuffer,
-        val width: Int,
-        val height: Int,
-        val rowStride: Int,
-        val metadata: RawMetadata,
-        val rotation: Int,  // 从 DNG 文件读取的旋转信息
-        val dngRawData: DngRawData  // 保留原始对象用于清理内存
-    ) : AutoCloseable {
-        override fun close() {
-            dngRawData.close()
-        }
-    }
-
-    /**
-     * 从 DNG 文件中提取 RAW 数据和元数据
-     */
-    private fun extractDngData(dngFile: File): DngData? {
-        try {
-            PLog.d(TAG, "Parsing DNG file: ${dngFile.absolutePath}")
-
-            // 调用 JNI 方法解析 DNG 文件
-            val dngRawData = extractDngDataNative(dngFile.absolutePath)
-            if (dngRawData == null) {
-                PLog.e(TAG, "Failed to parse DNG file via JNI")
-                return null
-            }
-
-            PLog.d(
-                TAG,
-                "DNG parsed successfully: ${dngRawData.width}x${dngRawData.height}, rotation: ${dngRawData.rotation}°"
-            )
-
-            // 转换 DngRawData 为 RawMetadata
-            val metadata = convertDngRawDataToMetadata(dngRawData)
-
-            return DngData(
-                rawData = dngRawData.rawData,
-                width = dngRawData.width,
-                height = dngRawData.height,
-                rowStride = dngRawData.rowStride,
-                metadata = metadata,
-                rotation = dngRawData.rotation,  // 使用从 DNG 文件读取的旋转信息
-                dngRawData = dngRawData  // 保留原始对象用于清理
-            )
-
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to extract DNG data", e)
-            return null
-        }
-    }
 
     /**
      * 将 DngRawData 转换为 RawMetadata
      */
-    private fun convertDngRawDataToMetadata(dngRawData: DngRawData): RawMetadata {
+    private fun convertDngRawDataToMetadata(dngRawData: DngRawData, exposureBias: Float, droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF): RawMetadata {
         // CFA 模式：使用从 JNI 传递过来的实际值
         val cfaPattern = dngRawData.cfaPattern
 
@@ -127,6 +72,10 @@ class RawDemosaicProcessor {
             )
         }
 
+        val activeArray = if (dngRawData.activeArray != null && dngRawData.activeArray.size == 4) {
+            Rect(dngRawData.activeArray[0], dngRawData.activeArray[1], dngRawData.activeArray[2], dngRawData.activeArray[3])
+        } else null
+
         return RawMetadata(
             width = dngRawData.width,
             height = dngRawData.height,
@@ -135,17 +84,29 @@ class RawDemosaicProcessor {
             whiteLevel = whiteLevel,
             whiteBalanceGains = whiteBalanceGains,
             colorCorrectionMatrix = colorCorrectionMatrix,
-            lensShadingMap = dngRawData.lensShadingMap,  // 使用 DNG 中的 LSC 数据
+            lensShadingMap = dngRawData.lensShadingMap,
             lensShadingMapWidth = dngRawData.lensShadingMapWidth,
             lensShadingMapHeight = dngRawData.lensShadingMapHeight,
-            baselineExposure = dngRawData.baselineExposure
+            baselineExposure = dngRawData.baselineExposure,
+            exposureBias = if (dngRawData.exposureBias == 0f) exposureBias else dngRawData.exposureBias,
+            iso = dngRawData.iso,
+            shutterSpeed = dngRawData.shutterSpeed,
+            aperture = dngRawData.aperture,
+            activeArray = activeArray,
+            noiseProfile = dngRawData.noiseProfile ?: floatArrayOf(0f, 0f),
+            droMode = droMode
         )
     }
 
     /**
-     * Native 方法：解析 DNG 文件
+     * Native 方法：使用 LibRaw 处理 DNG 文件
      */
-    private external fun extractDngDataNative(filePath: String): DngRawData?
+    private external fun processDngNative(filePath: String): DngRawData?
+
+    /**
+     * Native 方法：释放 DirectByteBuffer
+     */
+    private external fun freeNativeBuffer(buffer: ByteBuffer)
 
     companion object {
         private const val TAG = "RawDemosaicProcessor"
@@ -177,8 +138,8 @@ class RawDemosaicProcessor {
 
     // GL 资源
     private var demosaicProgram = 0
-    private var tonemapProgram = 0
-    private var lutProgram = 0
+    private var combinedProgram = 0
+    private var sharpenProgram = 0
     private var passthroughProgram = 0
 
     private var rawTextureId = 0
@@ -188,15 +149,15 @@ class RawDemosaicProcessor {
     private var demosaicWidth = 0
     private var demosaicHeight = 0
 
-    private var tonemapFramebufferId = 0
-    private var tonemapTextureId = 0
-    private var tonemapWidth = 0
-    private var tonemapHeight = 0
+    private var combinedFramebufferId = 0
+    private var combinedTextureId = 0
+    private var combinedWidth = 0
+    private var combinedHeight = 0
 
-    private var lutFramebufferId = 0
-    private var lutTextureId = 0
-    private var lutWidth = 0
-    private var lutHeight = 0
+    private var sharpenFramebufferId = 0
+    private var sharpenTextureId = 0
+    private var sharpenWidth = 0
+    private var sharpenHeight = 0
     private var lut3DTextureId = 0
 
     private var outputFramebufferId = 0
@@ -251,17 +212,21 @@ class RawDemosaicProcessor {
     private var uPassTextureLoc = 0
     private var uPassTexMatrixLoc = 0
 
-    // LUT Program Uniform 位置
-    private var uLutInputTextureLoc = 0
-    private var uLut3DTextureLoc = 0
-    private var uLutSizeLoc = 0
-    private var uLutEnabledLoc = 0
-    private var uLutCurveLoc = 0
-    private var uLutTexMatrixLoc = 0
-    private var uTexelSizeLoc = 0
+    // Combined Program Uniform 位置
+    private var uCombinedInputTextureLoc = 0
+    private var uCombinedLutTextureLoc = 0
+    private var uCombinedLutSizeLoc = 0
+    private var uCombinedLutEnabledLoc = 0
+    private var uCombinedExposureGainLoc = 0
+    private var uCombinedTexMatrixLoc = 0
+
+    // Sharpen Program Uniform 位置
+    private var uSharpenInputTextureLoc = 0
+    private var uSharpenTexelSizeLoc = 0
+    private var uSharpenValueLoc = 0
+    private var uSharpenTexMatrixLoc = 0
 
     // 后期处理 Uniform 位置
-    private var uSharpeningLoc = 0
     private var uNoiseReductionLoc = 0
     private var uChromaNoiseReductionLoc = 0
 
@@ -288,18 +253,35 @@ class RawDemosaicProcessor {
 
     data class SceneStats(
         val exposureGain: Float,
-        val drcStrength: Float, // Dynamic Range Compression Strength (0.0 - 1.0)
-        val blackPoint: Float,
-        val whitePoint: Float
+        val droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     )
 
-    private var uToneMapParamsLoc = 0
-    private var uToneMapInputTextureLoc = 0
-    private var uToneMapTexMatrixLoc = 0
-    private var uToneMapTexelSizeLoc = 0
     private var isInitialized = false
 
     private var baseLut: LutConfig? = null
+    private var baseLutName: String? = null
+
+    /**
+     * 设置 RAW 还原 LUT
+     * @param context Context
+     * @param lutName LUT 文件名 (在 assets/raw 目录下)，"none" 表示不使用 LUT
+     */
+    fun setRawLut(context: Context, lutName: String) {
+        if (baseLutName == lutName) return
+        baseLutName = lutName
+        if (lutName == "none") {
+            baseLut = null
+            PLog.d(TAG, "RAW LUT disabled (Flat profile)")
+        } else {
+            try {
+                baseLut = LutParser.parseFromAssets(context, "raw/$lutName")
+                PLog.d(TAG, "RAW LUT updated to: $lutName")
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to load RAW LUT: $lutName", e)
+                baseLut = null
+            }
+        }
+    }
 
     /**
      * 处理 DNG 文件
@@ -316,7 +298,9 @@ class RawDemosaicProcessor {
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        sharpeningValue: Float = 0f
+        exposureBias: Float = 0f,
+        sharpeningValue: Float = 0f,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
         if (!dngFile.exists() || !dngFile.canRead()) {
@@ -325,90 +309,18 @@ class RawDemosaicProcessor {
         }
 
         try {
-            // 从 DNG 文件提取 RAW 数据和元数据
-            val dngData = extractDngData(dngFile)
-            if (dngData == null) {
-                PLog.e(TAG, "Failed to extract DNG data from: $dngFilePath, fallback to native raw processor")
-                return@withContext RawProcessor.processAndToBitmap(File(dngFilePath), aspectRatio, cropRegion, rotation)
-            }
-
-            // 使用 .use 确保 native 内存在处理后被释放
-            dngData.use {
-                // 使用提取的数据调用内部处理方法
-                // 注意：使用从 DNG 文件读取的 rotation，而不是外部传入的参数
-                processInternal(
-                    context = context,
-                    rawData = it.rawData,
-                    width = it.width,
-                    height = it.height,
-                    rowStride = it.rowStride,
-                    metadata = it.metadata,
-                    aspectRatio = aspectRatio,
-                    cropRegion = cropRegion,
-                    rotation = it.rotation,  // 使用从 DNG 文件读取的 rotation
-                    sharpeningValue = sharpeningValue
-                )
-            }
+            processInternal(
+                context = context,
+                aspectRatio = aspectRatio,
+                cropRegion = cropRegion,
+                rotation = rotation,
+                exposureBias = exposureBias,
+                sharpeningValue = sharpeningValue,
+                droMode = droMode,
+                dngFile = dngFile
+            )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process DNG file: $dngFilePath", e)
-            null
-        }
-    }
-
-    /**
-     * 处理 RAW 图像
-     *
-     * @param rawImage RAW_SENSOR 格式的 Image
-     * @param characteristics 相机特性
-     * @param captureResult 拍摄结果
-     * @param aspectRatio 目标宽高比
-     * @param rotation 旋转角度(0, 90, 180, 270)
-     * @param sharpeningValue 锐化强度(0.0 - 1.0)
-     * @return 处理后的 Bitmap ， 失败返回 null
-     */
-    suspend fun process(
-        context: Context,
-        rawImage: SafeImage,
-        characteristics: CameraCharacteristics,
-        captureResult: CaptureResult,
-        aspectRatio: AspectRatio,
-        rotation: Int,
-        sharpeningValue: Float = 0f,
-        previewLuma: Float = 0.5f
-    ): Bitmap? = withContext(glDispatcher) {
-        try {
-            if (!isInitialized) {
-                if (!initializeOnGlThread()) {
-                    PLog.e(TAG, "Failed to initialize processor")
-                    return@withContext null
-                }
-            }
-
-            val width = rawImage.width
-            val height = rawImage.height
-
-            // 提取元数据
-            val metadata = RawMetadata.create(width, height, characteristics, captureResult)
-            val cropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
-
-            // 使用内部处理方法
-            rawImage.use {
-                processInternal(
-                    context = context,
-                    rawData = rawImage.planes[0].buffer,
-                    width = width,
-                    height = height,
-                    rowStride = rawImage.planes[0].rowStride,
-                    metadata = metadata,
-                    aspectRatio = aspectRatio,
-                    cropRegion = cropRegion,
-                    rotation = rotation,
-                    sharpeningValue = sharpeningValue,
-                    previewLuma = previewLuma,
-                )
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to process RAW image", e)
             null
         }
     }
@@ -427,7 +339,6 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         sharpeningValue: Float = 0f,
-        previewLuma: Float = 0.18f,
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
@@ -448,7 +359,6 @@ class RawDemosaicProcessor {
                 cropRegion = cropRegion,
                 rotation = rotation,
                 sharpeningValue = sharpeningValue,
-                previewLuma = previewLuma
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW buffer", e)
@@ -461,104 +371,127 @@ class RawDemosaicProcessor {
      */
     private suspend fun processInternal(
         context: Context,
-        rawData: ByteBuffer,
-        width: Int,
-        height: Int,
-        rowStride: Int,
-        metadata: RawMetadata,
+        rawData: ByteBuffer? = null,
+        width: Int = 0,
+        height: Int = 0,
+        rowStride: Int = 0,
+        metadata: RawMetadata? = null,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
+        exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
-        previewLuma: Float = 0.18f
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
+        dngFile: File? = null
     ): Bitmap? = withContext(glDispatcher) {
-        if (!isInitialized) {
-            if (!initializeOnGlThread()) {
-                PLog.e(TAG, "Failed to initialize processor")
-                return@withContext null
+        var actualRawData = rawData
+        var actualWidth = width
+        var actualHeight = height
+        var actualRowStride = rowStride
+        var actualMetadata = metadata
+        var actualRotation = rotation
+        var dngRawDataCleanup: DngRawData? = null
+
+        if (dngFile != null) {
+            val dngRawData = processDngNative(dngFile.absolutePath)
+            if (dngRawData == null) {
+                return@withContext RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)
             }
+            dngRawDataCleanup = dngRawData
+            actualRawData = dngRawData.rawData
+            actualWidth = dngRawData.width
+            actualHeight = dngRawData.height
+            actualRowStride = dngRawData.rowStride
+            actualMetadata = convertDngRawDataToMetadata(dngRawData, exposureBias, droMode)
+            actualRotation = dngRawData.rotation
         }
 
-        PLog.d(TAG, "Processing RAW image: ${width}x${height}")
-        PLog.d(TAG, "CFA Pattern: ${metadata.cfaPattern}, WhiteLevel: ${metadata.whiteLevel}")
-        PLog.d(
-            TAG,
-            "WB Gains: R=${metadata.whiteBalanceGains[0]}, Gr=${metadata.whiteBalanceGains[1]}, Gb=${metadata.whiteBalanceGains[2]}, B=${metadata.whiteBalanceGains[3]}"
-        )
-        PLog.d(TAG, "Black Level: ${metadata.blackLevel.contentToString()}")
-        PLog.d(TAG, "CCM: ${metadata.colorCorrectionMatrix.contentToString()}")
-        PLog.d(TAG, "BaselineExposure: ${metadata.baselineExposure}")
-
-        // 上传 RAW 数据到纹理
-        val uploadStart = System.currentTimeMillis()
-        uploadRawTextureFromBuffer(rawData, width, height, rowStride, metadata.cfaPattern)
-        PLog.d(TAG, "Texture upload took: ${System.currentTimeMillis() - uploadStart}ms")
-
-        val bounds = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, cropRegion, rotation)
-        val finalWidth = bounds.width()
-        val finalHeight = bounds.height()
-
-        // 4. 第一步：全分辨率解马赛克 (Demosaic Pass)
-        // 保持 Linear HDR 原色，不再这里进行曝光增益
-        setupFullResFramebuffer(width, height)
-        val demosaicStart = System.currentTimeMillis()
-        renderDemosaicPass(metadata)
-        PLog.d(TAG, "Demosaic Pass took: ${System.currentTimeMillis() - demosaicStart}ms")
-
-        // 场景分析: 从 GPU demosaic 纹理读回精确的 Linear RGB 数据
-        // 计算平均亮度、直方图、黑白点、DRC 强度
-        val sceneStats = analyzeFromGpuTexture(demosaicTextureId, width, height, previewLuma)
-
-        // 5. 第二步：Tone Mapping (HDR Linear -> LDR sRGB)
-        setupTonemapFramebuffer(width, height)
-        val tonemapStart = System.currentTimeMillis()
-        renderToneMapPass(metadata, sceneStats)
-        PLog.d(TAG, "ToneMap Pass took: ${System.currentTimeMillis() - tonemapStart}ms")
-
-        // 5.5 Guided Filter 降噪 (ToneMap 之后, LUT 之前)
-        val denoiseStart = System.currentTimeMillis()
-        renderNLMPass(
-            sourceTextureId = tonemapTextureId,
-            width = width,
-            height = height
-        )
-        val denoiseOutputTexture = gfTexId[1]
-        PLog.d(TAG, "Guided Filter Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
-
-        // 6. 第三步：LUT
-        setupLutFramebuffer(width, height)
-        if (baseLut == null) {
-            baseLut = LutParser.parseFromAssets(context, "luts/base.plut")
+        if (actualRawData == null || actualMetadata == null) {
+            PLog.e(TAG, "Missing source data or metadata")
+            return@withContext null
         }
-        val lutStart = System.currentTimeMillis()
-        renderLutPass(
-            metadata,
-            baseLut,
-            sharpeningValue,
-            denoiseOutputTexture
-        )
-        PLog.d(TAG, "Color Pass took: ${System.currentTimeMillis() - lutStart}ms")
-        val sourceTextureForOutput = lutTextureId
 
-        // 6. 第三步：缩放、旋转、裁剪并输出 (Output Pass)
-        setupOutputFramebuffer(finalWidth, finalHeight)
-        val outputStart = System.currentTimeMillis()
-        renderOutputPass(
-            rotation,
-            width,
-            height,
-            bounds,
-            sourceTextureForOutput
-        )
-        PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
+        PLog.d(TAG, "Processing RAW image: ${actualWidth}x${actualHeight}")
 
-        // 7. 读取结果
-        val readStart = System.currentTimeMillis()
-        val finalBitmap = readPixels(finalWidth, finalHeight)
-        PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
+        try {
+            if (!isInitialized) {
+                if (!initializeOnGlThread()) {
+                    PLog.e(TAG, "Failed to initialize processor")
+                    return@withContext null
+                }
+            }
 
-        PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
-        finalBitmap
+            val bounds = BitmapUtils.calculateProcessedRect(actualWidth, actualHeight, aspectRatio, cropRegion, actualRotation)
+            val finalWidth = bounds.width()
+            val finalHeight = bounds.height()
+
+            // 4. 第一步：全分辨率处理 (Linear CCM)
+            setupFullResFramebuffer(actualWidth, actualHeight)
+            uploadRawTextureFromBuffer(actualRawData, actualWidth, actualHeight, actualRowStride, RawMetadata.CFA_LINEAR_RGB)
+            renderLinearPass(actualMetadata)
+
+            // 场景分析: 从 GPU demosaic 纹理读回精确的 Linear RGB 数据
+            // 计算平均亮度
+            val sceneStats = analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, actualMetadata)
+
+            // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
+            setupCombinedFramebuffer(actualWidth, actualHeight)
+            if (baseLut == null && baseLutName != "none") {
+                // 如果尚未初始化且不是 "none"，则加载默认 LUT
+                val lutToLoad = baseLutName ?: "PROVIA.plut"
+                baseLut = try {
+                    LutParser.parseFromAssets(context, "raw/$lutToLoad")
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            val combinedStart = System.currentTimeMillis()
+            renderCombinedPass(actualMetadata, sceneStats, baseLut)
+            PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
+
+            // 5.5 NLM 降噪 (Combined 之后)
+            val denoiseStart = System.currentTimeMillis()
+            renderNLMPass(
+                sourceTextureId = combinedTextureId,
+                width = actualWidth,
+                height = actualHeight,
+                metadata = actualMetadata,
+                sceneStats = sceneStats
+            )
+            val denoiseOutputTexture = gfTexId[1]
+            PLog.d(TAG, "NLM Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
+//            val denoiseOutputTexture = combinedTextureId
+
+            // 6. 第三步：锐化 (Sharpen Pass)
+            setupSharpenFramebuffer(actualWidth, actualHeight)
+            val sharpenStart = System.currentTimeMillis()
+            renderSharpenPass(actualMetadata, sharpeningValue, denoiseOutputTexture)
+            PLog.d(TAG, "Sharpen Pass took: ${System.currentTimeMillis() - sharpenStart}ms")
+
+            val sourceTextureForOutput = sharpenTextureId
+
+            // 7. 第四步：输出旋转 (Output Pass)
+            setupOutputFramebuffer(finalWidth, finalHeight)
+            val outputStart = System.currentTimeMillis()
+            renderOutputPass(
+                actualRotation,
+                actualWidth,
+                actualHeight,
+                bounds,
+                sourceTextureForOutput
+            )
+            PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
+
+            // 8. 读取结果
+            val readStart = System.currentTimeMillis()
+            val finalBitmap = readPixels(finalWidth, finalHeight)
+            PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
+
+            PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
+            finalBitmap
+        } finally {
+            dngRawDataCleanup?.close()
+        }
     }
 
     private suspend fun initializeOnGlThread(): Boolean = withContext(glDispatcher) {
@@ -656,7 +589,7 @@ class RawDemosaicProcessor {
         val vShader = compileShader(GLES30.GL_VERTEX_SHADER, RawShaders.VERTEX_SHADER)
 
         // 1. DHT Multi-Pass Programs (替代旧的单 pass AHD)
-        initDhtPrograms(vShader)
+        // initDhtPrograms(vShader)
 
         // 1.5 Linear Program (For Stacked RGB, 保留)
         val fShaderLinear = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.FRAGMENT_SHADER_LINEAR)
@@ -674,48 +607,42 @@ class RawDemosaicProcessor {
             GLES30.glDeleteShader(fShaderLinear)
         }
 
-        // 2. LUT + ColorRecipe Program
-        val fShaderLut = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.LUT_FRAGMENT_SHADER)
-        if (vShader != 0 && fShaderLut != 0) {
-            lutProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(lutProgram, vShader)
-            GLES30.glAttachShader(lutProgram, fShaderLut)
-            GLES30.glLinkProgram(lutProgram)
+        // 2. Combined Processing Program
+        val fShaderCombined = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.COMBINED_FRAGMENT_SHADER)
+        if (vShader != 0 && fShaderCombined != 0) {
+            combinedProgram = GLES30.glCreateProgram()
+            GLES30.glAttachShader(combinedProgram, vShader)
+            GLES30.glAttachShader(combinedProgram, fShaderCombined)
+            GLES30.glLinkProgram(combinedProgram)
 
-            uLutInputTextureLoc = GLES30.glGetUniformLocation(lutProgram, "uInputTexture")
-            uLut3DTextureLoc = GLES30.glGetUniformLocation(lutProgram, "uLutTexture")
-            uLutSizeLoc = GLES30.glGetUniformLocation(lutProgram, "uLutSize")
-            uLutEnabledLoc = GLES30.glGetUniformLocation(lutProgram, "uLutEnabled")
-            uLutCurveLoc = GLES30.glGetUniformLocation(lutProgram, "uLutCurve")
-            uLutTexMatrixLoc = GLES30.glGetUniformLocation(lutProgram, "uTexMatrix")
-            uTexelSizeLoc = GLES30.glGetUniformLocation(lutProgram, "uTexelSize")
+            uCombinedInputTextureLoc = GLES30.glGetUniformLocation(combinedProgram, "uInputTexture")
+            uCombinedLutTextureLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutTexture")
+            uCombinedLutSizeLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutSize")
+            uCombinedLutEnabledLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled")
+            uCombinedExposureGainLoc = GLES30.glGetUniformLocation(combinedProgram, "uExposureGain")
+            uCombinedTexMatrixLoc = GLES30.glGetUniformLocation(combinedProgram, "uTexMatrix")
 
-            // 后期处理 Uniform 位置
-            uSharpeningLoc = GLES30.glGetUniformLocation(lutProgram, "uSharpening")
-            uNoiseReductionLoc = GLES30.glGetUniformLocation(lutProgram, "uNoiseReduction")
-            uChromaNoiseReductionLoc = GLES30.glGetUniformLocation(lutProgram, "uChromaNoiseReduction")
-
-            GLES30.glDeleteShader(fShaderLut)
+            GLES30.glDeleteShader(fShaderCombined)
         }
 
-        // 2.5 Tone Mapping Program (New)
-        val fShaderToneMap = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.TONEMAP_FRAGMENT_SHADER)
-        if (vShader != 0 && fShaderToneMap != 0) {
-            tonemapProgram = GLES30.glCreateProgram()
-            GLES30.glAttachShader(tonemapProgram, vShader)
-            GLES30.glAttachShader(tonemapProgram, fShaderToneMap)
-            GLES30.glLinkProgram(tonemapProgram)
+        // 2.2 Sharpen Program
+        val fShaderSharpen = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.SHARPEN_FRAGMENT_SHADER)
+        if (vShader != 0 && fShaderSharpen != 0) {
+            sharpenProgram = GLES30.glCreateProgram()
+            GLES30.glAttachShader(sharpenProgram, vShader)
+            GLES30.glAttachShader(sharpenProgram, fShaderSharpen)
+            GLES30.glLinkProgram(sharpenProgram)
 
-            uToneMapInputTextureLoc = GLES30.glGetUniformLocation(tonemapProgram, "uInputTexture")
-            uToneMapParamsLoc = GLES30.glGetUniformLocation(tonemapProgram, "uToneMapParams")
-            uToneMapTexMatrixLoc = GLES30.glGetUniformLocation(tonemapProgram, "uTexMatrix")
-            uToneMapTexelSizeLoc = GLES30.glGetUniformLocation(tonemapProgram, "uTexelSize")
+            uSharpenInputTextureLoc = GLES30.glGetUniformLocation(sharpenProgram, "uInputTexture")
+            uSharpenTexelSizeLoc = GLES30.glGetUniformLocation(sharpenProgram, "uTexelSize")
+            uSharpenValueLoc = GLES30.glGetUniformLocation(sharpenProgram, "uSharpening")
+            uSharpenTexMatrixLoc = GLES30.glGetUniformLocation(sharpenProgram, "uTexMatrix")
 
-            GLES30.glDeleteShader(fShaderToneMap)
+            GLES30.glDeleteShader(fShaderSharpen)
         }
 
-        // 2.7 Guided Filter Programs (4 pass 降噪)
-        initGuidedFilterPrograms(vShader)
+        // 2.7 NLM Programs
+        initNLMPrograms(vShader)
 
         // 3. Passthrough Program
         val fShaderPass = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.PASSTHROUGH_FRAGMENT_SHADER)
@@ -734,7 +661,7 @@ class RawDemosaicProcessor {
         GLES30.glDeleteShader(vShader)
         PLog.d(
             TAG,
-            "Shader programs created: demosaic=$demosaicProgram, lut=$lutProgram, passthrough=$passthroughProgram"
+            "Shader programs created: demosaic=$demosaicProgram, combined=$combinedProgram, passthrough=$passthroughProgram"
         )
     }
 
@@ -879,7 +806,7 @@ class RawDemosaicProcessor {
     /**
      * 初始化 Guided Filter Pass 0 和 NLM 着色器
      */
-    private fun initGuidedFilterPrograms(vShader: Int) {
+    private fun initNLMPrograms(vShader: Int) {
         fun createGfProgram(vShader: Int, fSource: String, name: String): Int {
             val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fSource)
             if (vShader == 0 || fShader == 0) return 0
@@ -901,7 +828,7 @@ class RawDemosaicProcessor {
             gfPass0TexelSizeLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexelSize")
             gfPass0TexMatrixLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix")
         }
-        
+
         if (nlmPassHProgram != 0) {
             nlmPassHInputTexLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture")
             nlmPassHTexelSizeLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize")
@@ -988,7 +915,9 @@ class RawDemosaicProcessor {
     private fun renderNLMPass(
         sourceTextureId: Int,
         width: Int,
-        height: Int
+        height: Int,
+        metadata: RawMetadata,
+        sceneStats: SceneStats
     ) {
         setupNLMFramebuffers(width, height)
 
@@ -999,9 +928,29 @@ class RawDemosaicProcessor {
 
         val texelW = 1.0f / width
         val texelH = 1.0f / height
-        
-        // NLM 参数配置
-        val h = 0.015f         // 衰减系数 (需要调优)
+
+        // 动态 NLM 参数计算
+        // 增益由三部分组成：传感器 ISO、ISP 数字增益、后期 Tonemap 增益
+        val isoGain = metadata.iso / 100.0f
+        val digitalGain = metadata.postRawSensitivityBoost
+        val postGain = sceneStats.exposureGain
+        val totalGain = isoGain * digitalGain * postGain
+
+        // 基于噪声特性的基础强度
+        val s = metadata.noiseProfile[0]
+        val o = metadata.noiseProfile[1]
+        // 估算标准差，映射到一个易用的量级 (使用 1e-3 作为中等 RAW 亮度的估算)
+        val noiseBase = sqrt((s * 1e-3f + o * 1e-6f).toDouble()).toFloat() * 100.0f
+
+        // 动态计算 h 值 (衰减系数)
+        // 规则：基础强度 (0.01) + 增益强度系数 + 传感器噪声水平系数
+        // 使用 sqrt(totalGain) 是因为噪声标准差随增益的平方根增加（近似）
+        val baseH = 0.01f
+        val dynamicH = 0.003f * sqrt(totalGain.toDouble()).toFloat()
+        val noiseCorrection = (noiseBase * 0.1f).coerceIn(0f, 0.02f)
+
+        val h = (baseH + dynamicH + noiseCorrection).coerceIn(0.01f, 0.1f)
+        PLog.d(TAG, "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, h=$h")
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -1039,7 +988,7 @@ class RawDemosaicProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId) // Original (Guide)
         GLES30.glUniform1i(nlmPassVInputTexLoc, 0)
-        
+
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])    // Blur Input
         GLES30.glUniform1i(nlmPassVBlurTexLoc, 1)
@@ -1413,74 +1362,25 @@ class RawDemosaicProcessor {
         checkGlError("setupFullResFramebuffer")
     }
 
-    private fun setupLutFramebuffer(width: Int, height: Int) {
-        if (lutFramebufferId != 0 && lutTextureId != 0) {
-            if (lutWidth == width && lutHeight == height) {
-                return
-            }
-            GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
-            GLES30.glDeleteFramebuffers(1, intArrayOf(lutFramebufferId), 0)
-        }
-
-        lutWidth = width
-        lutHeight = height
-
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        lutTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lutTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_RGBA16F,
-            width,
-            height,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_HALF_FLOAT,
-            null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-
-        val fbos = IntArray(1)
-        GLES30.glGenFramebuffers(1, fbos, 0)
-        lutFramebufferId = fbos[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, lutFramebufferId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            lutTextureId,
-            0
-        )
-        checkGlError("setupLutFramebuffer")
-    }
-
-    /**
-     * 设置 ToneMap 中间帧缓冲
-     */
-    private fun setupTonemapFramebuffer(width: Int, height: Int) {
-        if (tonemapWidth == width && tonemapHeight == height && tonemapFramebufferId != 0) {
+    private fun setupCombinedFramebuffer(width: Int, height: Int) {
+        if (combinedWidth == width && combinedHeight == height && combinedFramebufferId != 0) {
             return
         }
 
-        // 清理旧资源
-        if (tonemapTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(tonemapTextureId), 0)
+        if (combinedTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(combinedTextureId), 0)
         }
-        if (tonemapFramebufferId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(tonemapFramebufferId), 0)
+        if (combinedFramebufferId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(combinedFramebufferId), 0)
         }
 
-        tonemapWidth = width
-        tonemapHeight = height
+        combinedWidth = width
+        combinedHeight = height
 
-        // 创建输出纹理 (使用 8位，因为 ToneMap 之后已经是 LDR)
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
-        tonemapTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tonemapTextureId)
+        combinedTextureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, combinedTextureId)
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0,
             GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
@@ -1488,19 +1388,58 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
 
-        // 创建帧缓冲
         val framebuffers = IntArray(1)
         GLES30.glGenFramebuffers(1, framebuffers, 0)
-        tonemapFramebufferId = framebuffers[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, tonemapFramebufferId)
+        combinedFramebufferId = framebuffers[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, combinedFramebufferId)
         GLES30.glFramebufferTexture2D(
             GLES30.GL_FRAMEBUFFER,
             GLES30.GL_COLOR_ATTACHMENT0,
             GLES30.GL_TEXTURE_2D,
-            tonemapTextureId,
+            combinedTextureId,
             0
         )
-        checkGlError("setupTonemapFramebuffer")
+        checkGlError("setupCombinedFramebuffer")
+    }
+
+    private fun setupSharpenFramebuffer(width: Int, height: Int) {
+        if (sharpenWidth == width && sharpenHeight == height && sharpenFramebufferId != 0) {
+            return
+        }
+
+        if (sharpenTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
+        }
+        if (sharpenFramebufferId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(sharpenFramebufferId), 0)
+        }
+
+        sharpenWidth = width
+        sharpenHeight = height
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        sharpenTextureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sharpenTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+
+        val framebuffers = IntArray(1)
+        GLES30.glGenFramebuffers(1, framebuffers, 0)
+        sharpenFramebufferId = framebuffers[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sharpenFramebufferId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            sharpenTextureId,
+            0
+        )
+        checkGlError("setupSharpenFramebuffer")
     }
 
     private fun setupOutputFramebuffer(width: Int, height: Int) {
@@ -1546,19 +1485,18 @@ class RawDemosaicProcessor {
      * 场景分析 (GPU Post-Demosaic)
      *
      * 从 demosaic 后的 RGBA16F 纹理中间 mip level 读回降采样数据，
-     * 在精确的 Linear RGB 数据上计算所有统计量。
+     * 执行评价测光 (Evaluative Metering)：以对焦点（或中心点）为中心应用高斯权重分布。
      *
      * 优势:
      * - 数据已经过完整的 BLC → WB → LSC → Demosaic → CCM 变换链
      * - 与 ToneMap shader 输入完全一致，不存在 CPU/GPU 不匹配
-     * - 读取量极小 (~64x64 * 16bytes ≈ 64KB)，性能优于 CPU 全图采样
-     * - 直方图基于真实亮度，百分位数（黑白点）更准确
+     * - 评价测光权衡了主体和环境，曝光更自然
      */
     private fun analyzeFromGpuTexture(
         textureId: Int,
         width: Int,
         height: Int,
-        previewLuma: Float = 0.5f
+        metadata: RawMetadata? = null
     ): SceneStats {
         // 1. 生成 mipmap
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
@@ -1567,15 +1505,12 @@ class RawDemosaicProcessor {
         checkGlError("analyzeFromGpuTexture: glGenerateMipmap")
 
         // 2. 选择合适的 mip level 进行读回
-        // 目标: ~64x64 的降采样分辨率 (足够计算直方图，又足够小)
         val maxDim = maxOf(width, height)
         val totalMipLevels = (ln(maxDim.toFloat()) / ln(2.0f)).toInt()
-        // 目标尺寸 ~64，所以需要降 log2(maxDim/64) 级
-        val targetSize = 64
+        val targetSize = 256
         val desiredMipLevel = (ln(maxDim.toFloat() / targetSize) / ln(2.0f))
             .toInt().coerceIn(0, totalMipLevels)
 
-        // 计算该 mip level 的实际尺寸
         val mipWidth = maxOf(1, width shr desiredMipLevel)
         val mipHeight = maxOf(1, height shr desiredMipLevel)
 
@@ -1600,7 +1535,7 @@ class RawDemosaicProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            return SceneStats(1.0f, 0.0f, 0.0f, 1.0f)
+            return SceneStats(1.0f)
         }
 
         // 4. 读取整个 mip 的像素数据 (RGBA float)
@@ -1617,98 +1552,38 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        // ====== 以下全部基于精确的 GPU Linear RGB 数据 ======
+        // Determine focus point in normalized (0..1) coordinates
+        var focusX = 0.5f
+        var focusY = 0.5f
 
-        // 6. 遍历读回的像素，计算统计量
-        val histBins = 256
-        val histogram = IntArray(histBins)
-        var sumLuma = 0.0
-        var validCount = 0
+        metadata?.let { meta ->
+            val afRegion = meta.afRegions?.firstOrNull()
+            val activeArray = meta.activeArray
+            if (afRegion != null && activeArray != null) {
+                // Map AF region center to 0..1 based on ACTIVE_ARRAY
+                focusX = (afRegion.rect.centerX().toFloat() - activeArray.left) / activeArray.width()
+                focusY = (afRegion.rect.centerY().toFloat() - activeArray.top) / activeArray.height()
 
-        floatBuffer.position(0)
-        for (i in 0 until pixelCount) {
-            val r = floatBuffer.get()
-            val g = floatBuffer.get()
-            val b = floatBuffer.get()
-            val a = floatBuffer.get() // skip alpha
+                // Clamp to 0..1
+                focusX = focusX.coerceIn(0f, 1f)
+                focusY = focusY.coerceIn(0f, 1f)
 
-            // Rec.709 亮度 (Linear 域)
-            val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
-
-            // 排除无效像素 (可能有 NaN 或 负值)
-            if (luma.isNaN() || luma < 0f) continue
-
-            validCount++
-            sumLuma += luma.toDouble()
-
-            // 直方图: 将亮度 clamp 到 [0, 2] 范围映射到 bins
-            // 范围扩展到 2.0 是因为 CCM 后可能 > 1.0
-            val histVal = (luma / 2.0f).coerceIn(0.0f, 1.0f)
-            val bin = (histVal * (histBins - 1)).toInt().coerceIn(0, histBins - 1)
-            histogram[bin]++
-        }
-
-        if (validCount == 0) return SceneStats(1.0f, 0.0f, 0.0f, 1.0f)
-
-        // A. 计算平均亮度和自动曝光增益
-        val avgLuma = (sumLuma / validCount).toFloat()
-        val targetMean = previewLuma.pow(2.2f)
-        val exposureGain = if (avgLuma > 0.0001f) {
-            (targetMean / avgLuma).coerceIn(0.25f, 64.0f)
-        } else {
-            1.0f
-        }
-
-        // B. 计算稳健的黑白点 (Robust Percentiles)
-        var count: Int
-        var robustMin = 0.0f
-        var robustMax = 1.0f
-        val thresholdLow = (validCount * 0.005).toInt()   // P0.5
-        val thresholdHigh = (validCount * 0.005).toInt()   // P99.5
-
-        // P0.5 (黑点)
-        count = 0
-        for (i in 0 until histBins) {
-            count += histogram[i]
-            if (count > thresholdLow) {
-                // 映射回 [0, 2] 范围
-                robustMin = (i.toFloat() / (histBins - 1).toFloat()) * 2.0f
-                break
+                // Adjust for Y-axis inversion (OpenGLES texture has origin at bottom-left)
+                focusY = 1.0f - focusY
             }
         }
 
-        // P99.5 (白点)
-        count = 0
-        for (i in histBins - 1 downTo 0) {
-            count += histogram[i]
-            if (count > thresholdHigh) {
-                robustMax = (i.toFloat() / (histBins - 1).toFloat()) * 2.0f
-                break
-            }
-        }
-
-        // C. 计算动态范围压缩强度 (DRC Strength)
-        val exposedMax = exposureGain * robustMax
-        val highlightHeadroom = log2(exposedMax / targetMean)
-
-        val drcStrength = when {
-            highlightHeadroom < 2.0f -> 0.0f
-            highlightHeadroom > 5.0f -> 0.6f
-            else -> ((highlightHeadroom - 2.0f) / 3.0f) * 0.6f
-        }
-
-        // D. 修正黑白点 (传给 Shader, 在 Linear 空间)
-        val finalBlack = (robustMin * 0.8f).coerceIn(0.0f, 0.05f)
-        val finalWhite = robustMax.coerceIn(0.1f, 2.0f)
-
-        PLog.d(
-            TAG, "analyzeFromGpuTexture: previewLuma=$previewLuma avgLuma=$avgLuma, gain=$exposureGain, " +
-                    "robustMin=$robustMin, robustMax=$robustMax, " +
-                    "exposedMax=$exposedMax, headroom=${highlightHeadroom}stops, " +
-                    "drc=$drcStrength, black=$finalBlack, white=$finalWhite"
+        // 5. 调用外部测光系统进行分析
+        val analysis = MeteringSystem.analyze(
+            floatBuffer,
+            mipWidth,
+            mipHeight,
+            focusX,
+            focusY,
+            metadata
         )
 
-        return SceneStats(exposureGain, drcStrength, finalBlack, finalWhite)
+        return SceneStats(analysis.exposureGain, analysis.droMode)
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
@@ -1759,97 +1634,82 @@ class RawDemosaicProcessor {
     }
 
     /**
-     * Tone Mapping Pass
+     * Combined Processing Pass: ToneMap + LUT + Sharpening
      */
-    private fun renderToneMapPass(metadata: RawMetadata, sceneStats: SceneStats) {
-        GLES30.glUseProgram(tonemapProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, tonemapFramebufferId)
-        GLES30.glViewport(0, 0, metadata.width, metadata.height)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, demosaicTextureId)
-        GLES30.glUniform1i(uToneMapInputTextureLoc, 0)
-
-        // 设置 ToneMap 参数
-        GLES30.glUniform4f(
-            uToneMapParamsLoc,
-            sceneStats.exposureGain,
-            sceneStats.drcStrength,
-            sceneStats.blackPoint,
-            sceneStats.whitePoint
-        )
-
-        // 设置 TexelSize
-        GLES30.glUniform2f(uToneMapTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
-
-        // 绘制全屏四边形
-        val identity = FloatArray(16)
-        GlMatrix.setIdentityM(identity, 0)
-        GLES30.glUniformMatrix4fv(uToneMapTexMatrixLoc, 1, false, identity, 0)
-
-        drawQuad(tonemapProgram)
-        checkGlError("renderToneMapPass")
-    }
-
-    /**
-     * LUT + ColorRecipe 处理 Pass
-     */
-    private fun renderLutPass(
+    private fun renderCombinedPass(
         metadata: RawMetadata,
+        sceneStats: SceneStats,
         lutConfig: LutConfig?,
-        sharpeningValue: Float = 0f,
-        inputTextureId: Int = tonemapTextureId
+        inputTextureId: Int = demosaicTextureId
     ) {
-        GLES30.glUseProgram(lutProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, lutFramebufferId)
+        GLES30.glUseProgram(combinedProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, combinedFramebufferId)
 
         GLES30.glViewport(0, 0, metadata.width, metadata.height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId) // 使用降噪后或 ToneMap 后的纹理
-        GLES30.glUniform1i(uLutInputTextureLoc, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        GLES30.glUniform1i(uCombinedInputTextureLoc, 0)
 
         lutConfig?.let { uploadLut3DTexture(it) }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
-        GLES30.glUniform1i(uLut3DTextureLoc, 1)
-        GLES30.glUniform1f(uLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
-        GLES30.glUniform1i(uLutEnabledLoc, if (lutConfig != null) 1 else 0)
-        GLES30.glUniform1i(uLutCurveLoc, lutConfig?.curve?.ordinal ?: 0)
-
-        GLES30.glUniform2f(uTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
-        GLES30.glUniform1f(uSharpeningLoc, sharpeningValue)
+        GLES30.glUniform1i(uCombinedLutTextureLoc, 1)
+        GLES30.glUniform1f(uCombinedLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
+        GLES30.glUniform1i(uCombinedLutEnabledLoc, if (lutConfig != null) 1 else 0)
+        GLES30.glUniform1f(uCombinedExposureGainLoc, sceneStats.exposureGain)
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(uLutTexMatrixLoc, 1, false, identityMatrix, 0)
-        drawQuad(lutProgram)
-        checkGlError("renderLutPass")
+        GLES30.glUniformMatrix4fv(uCombinedTexMatrixLoc, 1, false, identityMatrix, 0)
+        drawQuad(combinedProgram)
+        checkGlError("renderCombinedPass")
     }
 
-    private fun renderDemosaicPass(metadata: RawMetadata) {
-        if (metadata.cfaPattern == RawMetadata.CFA_LINEAR_RGB) {
-            GLES30.glUseProgram(linearProgram)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
-            GLES30.glViewport(0, 0, metadata.width, metadata.height)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
-            GLES30.glUniform1i(uLinearRawTextureLoc, 0)
-            GLES30.glUniform2f(uLinearImageSizeLoc, metadata.width.toFloat(), metadata.height.toFloat())
-            val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
-            GLES30.glUniformMatrix3fv(uLinearColorCorrectionMatrixLoc, 1, false, transposedCCM, 0)
-            val identity = FloatArray(16)
-            GlMatrix.setIdentityM(identity, 0)
-            GLES30.glUniformMatrix4fv(uLinearTexMatrixLoc, 1, false, identity, 0)
-            drawQuad(linearProgram)
-            return
-        }
+    /**
+     * Sharpen Pass
+     */
+    private fun renderSharpenPass(
+        metadata: RawMetadata,
+        sharpeningValue: Float,
+        inputTextureId: Int
+    ) {
+        GLES30.glUseProgram(sharpenProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sharpenFramebufferId)
+        GLES30.glViewport(0, 0, metadata.width, metadata.height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
 
-        // Bayer CFA: 使用 DHT 多 pass 解马赛克
-        renderDhtDemosaic(metadata)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        GLES30.glUniform1i(uSharpenInputTextureLoc, 0)
+
+        GLES30.glUniform2f(uSharpenTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
+        GLES30.glUniform1f(uSharpenValueLoc, sharpeningValue)
+
+        val identityMatrix = FloatArray(16)
+        GlMatrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(uSharpenTexMatrixLoc, 1, false, identityMatrix, 0)
+
+        drawQuad(sharpenProgram)
+        checkGlError("renderSharpenPass")
+    }
+
+    private fun renderLinearPass(metadata: RawMetadata) {
+        GLES30.glUseProgram(linearProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, demosaicFramebufferId)
+        GLES30.glViewport(0, 0, metadata.width, metadata.height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
+        GLES30.glUniform1i(uLinearRawTextureLoc, 0)
+        GLES30.glUniform2f(uLinearImageSizeLoc, metadata.width.toFloat(), metadata.height.toFloat())
+        val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
+        GLES30.glUniformMatrix3fv(uLinearColorCorrectionMatrixLoc, 1, false, transposedCCM, 0)
+        val identity = FloatArray(16)
+        GlMatrix.setIdentityM(identity, 0)
+        GLES30.glUniformMatrix4fv(uLinearTexMatrixLoc, 1, false, identity, 0)
+        drawQuad(linearProgram)
     }
 
     private fun renderOutputPass(rotation: Int, width: Int, height: Int, bounds: Rect, sourceTextureId: Int) {
@@ -1994,8 +1854,8 @@ class RawDemosaicProcessor {
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
 
         if (demosaicProgram != 0) GLES30.glDeleteProgram(demosaicProgram)
-        if (tonemapProgram != 0) GLES30.glDeleteProgram(tonemapProgram)
-        if (lutProgram != 0) GLES30.glDeleteProgram(lutProgram)
+        if (combinedProgram != 0) GLES30.glDeleteProgram(combinedProgram)
+        if (sharpenProgram != 0) GLES30.glDeleteProgram(sharpenProgram)
         if (passthroughProgram != 0) GLES30.glDeleteProgram(passthroughProgram)
 
         // DHT programs
@@ -2029,10 +1889,10 @@ class RawDemosaicProcessor {
             intArrayOf(demosaicFramebufferId),
             0
         )
-        if (lutTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
-        if (lutFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(lutFramebufferId), 0)
-        if (tonemapTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(tonemapTextureId), 0)
-        if (tonemapFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(tonemapFramebufferId), 0)
+        if (combinedTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(combinedTextureId), 0)
+        if (combinedFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(combinedFramebufferId), 0)
+        if (sharpenTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
+        if (sharpenFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(sharpenFramebufferId), 0)
         if (lut3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lut3DTextureId), 0)
         if (outputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
         if (outputFramebufferId != 0) GLES30.glDeleteFramebuffers(

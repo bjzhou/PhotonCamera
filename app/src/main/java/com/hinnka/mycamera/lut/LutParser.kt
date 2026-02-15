@@ -124,7 +124,7 @@ object LutParser {
                     LutInfo(
                         id = id,
                         nameMap = nameMap,
-                        fileName = "$folder/$path",
+                        fileName = if (path.isBlank()) "" else "$folder/$path",
                         isBuiltIn = true,
                         isDefault = isDefault,
                         isVip = isVip,

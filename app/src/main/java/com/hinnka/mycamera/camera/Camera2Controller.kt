@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
 
 /**
  * Camera2 相机控制器
- * 
+ *
  * 使用原生 Camera2 API 直接控制相机，支持：
  * - 绑定隐藏的物理摄像头（通过探测发现的 Camera ID）
  * - 手动曝光控制（ISO、快门速度）
@@ -1194,8 +1194,10 @@ class Camera2Controller(private val context: Context) {
      */
     fun setExposureCompensation(value: Int) {
         val range = _state.value.getExposureCompensationRange()
+        val evStep = _state.value.getExposureCompensationStep()
         val clampedValue = value.coerceIn(range.lower, range.upper)
-        _state.value = _state.value.copy(exposureCompensation = clampedValue)
+        val exposureBias = clampedValue * evStep
+        _state.value = _state.value.copy(exposureCompensation = clampedValue, exposureBias = exposureBias)
 
         previewRequestBuilder?.apply {
             // 使用统一的曝光设置方法，确保与闪光灯模式正确配合
@@ -1208,11 +1210,28 @@ class Camera2Controller(private val context: Context) {
      * 设置 ISO
      */
     fun setIso(value: Int) {
-        val range = _state.value.getIsoRange()
+        val currentState = _state.value
+        val range = currentState.getIsoRange()
         val clampedValue = value.coerceIn(range.lower, range.upper)
-        _state.value = _state.value.copy(
+
+        val evStep = currentState.getExposureCompensationStep()
+        val sliderBias = currentState.exposureCompensation * evStep
+        // 只有当两者都是手动时，才需要计算并叠加曝光偏移
+        val isFullManual = !currentState.isShutterSpeedAuto
+
+        val newBias = if (isFullManual) {
+            val deltaEv = if (currentState.iso > 0) {
+                ln(clampedValue.toDouble() / currentState.iso.toDouble()) / ln(2.0)
+            } else 0.0
+            currentState.exposureBias + deltaEv.toFloat()
+        } else {
+            sliderBias
+        }
+
+        _state.value = currentState.copy(
             iso = clampedValue,
-            isIsoAuto = false
+            isIsoAuto = false,
+            exposureBias = newBias
         )
 
         previewRequestBuilder?.apply {
@@ -1223,16 +1242,33 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 设置快门速度
-     * 
+     *
      * 注意：预览时会限制最大曝光时间为 1/15秒，防止画面卡死
      * 拍摄时会使用完整的用户设置
      */
     fun setShutterSpeed(value: Long) {
-        val range = _state.value.getShutterSpeedRange()
+        val currentState = _state.value
+        val range = currentState.getShutterSpeedRange()
         val clampedValue = value.coerceIn(range.lower, range.upper)
-        _state.value = _state.value.copy(
+
+        val evStep = currentState.getExposureCompensationStep()
+        val sliderBias = currentState.exposureCompensation * evStep
+        // 只有当两者都是手动时，才需要计算并叠加曝光偏移
+        val isFullManual = !currentState.isIsoAuto
+
+        val newBias = if (isFullManual) {
+            val deltaEv = if (currentState.shutterSpeed > 0) {
+                ln(clampedValue.toDouble() / currentState.shutterSpeed.toDouble()) / ln(2.0)
+            } else 0.0
+            currentState.exposureBias + deltaEv.toFloat()
+        } else {
+            sliderBias
+        }
+
+        _state.value = currentState.copy(
             shutterSpeed = clampedValue,
-            isShutterSpeedAuto = false
+            isShutterSpeedAuto = false,
+            exposureBias = newBias
         )
 
         previewRequestBuilder?.apply {
@@ -1261,9 +1297,14 @@ class Camera2Controller(private val context: Context) {
      * 设置自动曝光模式 (Legacy / Global)
      */
     fun setAutoExposure(enabled: Boolean) {
-        _state.value = _state.value.copy(
+        val currentState = _state.value
+        val evStep = currentState.getExposureCompensationStep()
+        val sliderBias = currentState.exposureCompensation * evStep
+
+        _state.value = currentState.copy(
             isIsoAuto = enabled,
-            isShutterSpeedAuto = enabled
+            isShutterSpeedAuto = enabled,
+            exposureBias = if (enabled) sliderBias else currentState.exposureBias
         )
 
         previewRequestBuilder?.apply {
@@ -1276,7 +1317,18 @@ class Camera2Controller(private val context: Context) {
      * 设置 ISO 自动模式
      */
     fun setIsoAuto(enabled: Boolean) {
-        _state.value = _state.value.copy(isIsoAuto = enabled)
+        val currentState = _state.value
+        val evStep = currentState.getExposureCompensationStep()
+        val sliderBias = currentState.exposureCompensation * evStep
+
+        // 只要 ISO 变成自动，或者快门已经是自动，都属于自动/半自动模式，重置偏移量
+        val isAutoOrSemi = enabled || currentState.isShutterSpeedAuto
+        val exposureBias = if (isAutoOrSemi) sliderBias else currentState.exposureBias
+
+        _state.value = currentState.copy(
+            isIsoAuto = enabled,
+            exposureBias = exposureBias
+        )
         previewRequestBuilder?.apply {
             applyExposureSettings(this, _state.value, false)
             updatePreview()
@@ -1287,7 +1339,18 @@ class Camera2Controller(private val context: Context) {
      * 设置快门自动模式
      */
     fun setShutterSpeedAuto(enabled: Boolean) {
-        _state.value = _state.value.copy(isShutterSpeedAuto = enabled)
+        val currentState = _state.value
+        val evStep = currentState.getExposureCompensationStep()
+        val sliderBias = currentState.exposureCompensation * evStep
+
+        // 只要快门变成自动，或者 ISO 已经是自动，都属于自动/半自动模式，重置偏移量
+        val isAutoOrSemi = enabled || currentState.isIsoAuto
+        val exposureBias = if (isAutoOrSemi) sliderBias else currentState.exposureBias
+
+        _state.value = currentState.copy(
+            isShutterSpeedAuto = enabled,
+            exposureBias = exposureBias
+        )
         previewRequestBuilder?.apply {
             applyExposureSettings(this, _state.value, false)
             updatePreview()
@@ -1296,7 +1359,7 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 检查当前相机是否支持手动白平衡控制
-     * 
+     *
      * 只有 FULL 或 LEVEL_3 级别的设备才支持 COLOR_CORRECTION_GAINS
      */
     private fun supportsManualWhiteBalance(): Boolean {
@@ -1365,10 +1428,10 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 设置白平衡色温（Kelvin）
-     * 
+     *
      * 对于支持 FULL 级别的设备: 使用 RggbChannelVector 精确控制
      * 对于不支持的设备: 使用最接近的预设 AWB 模式
-     * 
+     *
      * 有效范围: 2000K (暖) - 10000K (冷)
      */
     fun setAwbTemperature(kelvin: Int) {
@@ -1416,7 +1479,7 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 将色温转换为最接近的预设 AWB 模式
-     * 
+     *
      * 预设模式对应的近似色温:
      * - INCANDESCENT (白炽灯): ~2700K
      * - WARM_FLUORESCENT (暖色荧光灯): ~3000K
@@ -1477,10 +1540,10 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 将色温(Kelvin)转换为 RggbChannelVector
-     * 
+     *
      * 基于 Tanner Helland 算法 + Camera2 特定的增益系数
      * 参考: https://stackoverflow.com/questions/35439159/camera2-api-set-custom-white-balance-temperature-color
-     * 
+     *
      * @param kelvin 色温值 (2000-10000K)
      * @return RggbChannelVector 白平衡增益
      */
@@ -1751,6 +1814,10 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(isCapturingLivePhoto = enabled)
     }
 
+    fun setApplyUltraHDR(enabled: Boolean) {
+        _state.value = _state.value.copy(applyUltraHDR = enabled)
+    }
+
 
 // ==================== 拍照 ====================
 
@@ -1834,69 +1901,7 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
 
-                // RAW + MultiFrame 曝光补偿策略（自适应版本）
-                // 原理：多帧堆叠提升 SNR √N 倍，理论上可缩减 0.5*log2(N) EV 的曝光
-                // 来换取高光余量。但在暗光场景，传感器读出噪声(read noise)主导，
-                // 降曝光会使暗部信号被噪声淹没，多帧堆叠也无法有效恢复。
-                // 因此需根据场景亮度（AE 选择的 ISO 反映）动态调整降幅。
-                /*if (_state.value.useRaw && _state.value.useMultiFrame && _state.value.multiFrameCount > 1
-                    && _state.value.isIsoAuto && _state.value.isShutterSpeedAuto
-                ) {
-                    try {
-                        val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(device.id)
-                        val step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
-                        val range = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-
-                        if (step != null && range != null && step.denominator != 0) {
-                            val stepValue = step.numerator.toDouble() / step.denominator.toDouble()
-                            if (stepValue > 0) {
-                                val count = _state.value.multiFrameCount.toDouble()
-                                // 理论最大降幅: 0.5 * log2(N)
-                                val maxReductionEv = ln(count.pow(0.5)) / ln(2.0)
-
-                                // 基于当前 AE ISO 判断场景亮度，自适应调整降幅
-                                // - 当 ISO ≤ isoLow (明亮): 完全降曝光 (scaleFactor = 1.0)
-                                // - 当 ISO ≥ isoHigh (暗光): 不降曝光   (scaleFactor = 0.0)
-                                // - 中间区域: 对数域平滑过渡
-                                val currentIso = _state.value.iso
-                                val isoLow = 200    // 低于此值认为场景足够亮
-                                val isoHigh = 1600  // 高于此值认为场景太暗，不应降曝光
-                                val scaleFactor = if (currentIso <= isoLow) {
-                                    1.0
-                                } else if (currentIso >= isoHigh) {
-                                    0.0
-                                } else {
-                                    // 在对数域平滑过渡: log(iso) 在 [log(isoLow), log(isoHigh)] 之间线性插值
-                                    val logIso = ln(currentIso.toDouble())
-                                    val logLow = ln(isoLow.toDouble())
-                                    val logHigh = ln(isoHigh.toDouble())
-                                    1.0 - (logIso - logLow) / (logHigh - logLow)
-                                }
-
-                                val actualReductionEv = maxReductionEv * scaleFactor
-                                val reductionSteps = (actualReductionEv / stepValue).roundToInt()
-
-                                if (reductionSteps > 0) {
-                                    val currentCompensation = _state.value.exposureCompensation
-                                    val targetCompensation =
-                                        (currentCompensation - reductionSteps).coerceIn(range.lower, range.upper)
-
-                                    set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetCompensation)
-                                    PLog.d(
-                                        TAG, "RAW MultiFrame EV reduction: ISO=$currentIso, " +
-                                                "scale=${String.format("%.2f", scaleFactor)}, " +
-                                                "reduction=${String.format("%.2f", actualReductionEv)}EV, " +
-                                                "steps=$reductionSteps"
-                                    )
-                                } else {
-                                    PLog.d(TAG, "RAW MultiFrame: low light (ISO=$currentIso), skip EV reduction")
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        PLog.e(TAG, "Failed to apply exposure reduction", e)
-                    }
-                }*/
+                applyUltraHDR(this)
 
                 PLog.d(
                     TAG,
@@ -2050,9 +2055,103 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    // RAW + MultiFrame 曝光控制策略（手动曝光自适应版本）
+    // 原理：多帧堆叠提升 SNR √N 倍，理论上可缩减 0.5*log2(N) EV 的曝光来换取高光余量。
+    fun applyUltraHDR(builder: CaptureRequest.Builder) {
+        if (!_state.value.applyUltraHDR) return
+        if (!_state.value.useRaw) return
+        if (!_state.value.useMultiFrame) return
+        if (!_state.value.isIsoAuto) return
+        if (!_state.value.isShutterSpeedAuto) return
+        if (!isManualSensorSupported) return
+        val characteristics = cachedCharacteristics ?: return
+        try {
+            // 计算光照等级 (LV)
+            val aperture = _state.value.aperture.toDouble()
+            val shutterSpeed = _state.value.shutterSpeed.toDouble() / 1_000_000_000.0
+            val iso = _state.value.iso.toDouble()
+            val ev = ln(aperture * aperture / shutterSpeed) / ln(2.0)
+            val lv = ev - ln(iso / 100.0) / ln(2.0)
+
+            // 只有在光照等级足够时才触发 Ultra HDR 曝光压制策略
+            // 阈值设为 7.0 (办公室内典型照明)，低于此数值通常认为是暗光，不应压低曝光以保护信噪比。
+            if (lv < 7.0) {
+                PLog.d(TAG, "applyUltraHDR: Light level too low (LV=${String.format("%.2f", lv)}), skip HDR reduction")
+                return
+            }
+
+            val count = _state.value.multiFrameCount.toDouble()
+            // 理论最大降幅: 0.5 * log2(N)
+            val maxReductionEv = ln(count.pow(0.5)) / ln(2.0)
+
+            // 基于当前预览直方图的亮点（满井像素）比例，动态决定要压多少曝光（scaleFactor）来保护高光
+            // 亮点越多，压得越狠；如果不满井，则不压曝光，保持原始亮度以保护暗部。
+            val histogram = _state.value.histogram ?: intArrayOf()
+            val scaleFactor = if (histogram.size >= 256) {
+                val totalPixels = histogram.sum().toDouble().coerceAtLeast(1.0)
+                // 满井像素在直方图最后一格 (255)
+                val saturatedPixels = histogram[255].toDouble()
+                val saturatedRatio = saturatedPixels / totalPixels
+
+                // 定义自适应阈值：
+                // - 当满井比例 ≤ 0.2% (lowRatio): 认为是琐碎亮点或可接受裁切，不压曝光 (scaleFactor = 0.0)
+                // - 当满井比例 ≥ 2.0% (highRatio): 认为存在大面积高光过曝，全力压低曝光 (scaleFactor = 1.0)
+                // - 中间区域：线性过渡
+                val lowRatio = 0.002
+                val highRatio = 0.02
+                if (saturatedRatio <= lowRatio) 0.0
+                else if (saturatedRatio >= highRatio) 1.0
+                else (saturatedRatio - lowRatio) / (highRatio - lowRatio)
+            } else {
+                // 直方图数据缺失时，默认不进行额外的降曝光压制
+                0.0
+            }
+
+            val currentIso = _state.value.iso
+            val currentShutter = _state.value.shutterSpeed
+
+            val actualReductionEv = maxReductionEv * scaleFactor
+            val reductionFactor = 2.0.pow(actualReductionEv)
+
+            // 优先调整快门以避免感光度不足（低 ISO）在暗部产生的噪点碎片或色差。
+            // 在 RAW 流程中，较高的 ISO（在合理范围内）往往比过低的 ISO 配合后期提亮有更好的底噪表现。
+            var targetShutter = (currentShutter / reductionFactor).toLong()
+            var targetIso = currentIso
+
+            // 约束调整：如果快门已经达到硬件极限，则补偿 ISO
+            val shutterRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+
+            if (shutterRange != null && isoRange != null) {
+                if (targetShutter < shutterRange.lower) {
+                    val remainingFactor = shutterRange.lower.toDouble() / targetShutter.toDouble()
+                    targetShutter = shutterRange.lower
+                    targetIso = (targetIso / remainingFactor).toInt().coerceIn(isoRange.lower, isoRange.upper)
+                }
+            }
+
+            // 应用手动曝光设置，覆盖 applyBaseCameraSettings
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, targetIso)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, targetShutter)
+
+            PLog.d(
+                TAG, "RAW MultiFrame Histogram-Adaptive Manual Capture (LV=${String.format("%.2f", lv)}): " +
+                        "saturated=${String.format("%.2f", (histogram.getOrElse(255) { 0 }.toDouble() / histogram.sum().toDouble().coerceAtLeast(1.0)) * 100)}%, " +
+                        "scale=${String.format("%.2f", scaleFactor)}, " +
+                        "target: ISO=$targetIso (from $currentIso), " +
+                        "Shutter=${String.format("%.2f", targetShutter / 1_000_000.0)}ms (from ${String.format("%.2f", currentShutter / 1_000_000.0)}ms), " +
+                        "reduction=${String.format("%.2f", actualReductionEv)}EV"
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to apply adaptive manual exposure", e)
+        }
+    }
+
+
     /**
      * 构建 CaptureInfo
-     * 
+     *
      * 从 TotalCaptureResult 和 CameraCharacteristics 提取拍摄信息
      */
     fun rebuildCaptureInfo(
@@ -2124,7 +2223,7 @@ class Camera2Controller(private val context: Context) {
 
     /**
      * 计算等效35mm焦距
-     * 
+     *
      * 基于传感器尺寸计算裁切系数
      */
     private fun calculate35mmEquivalent(

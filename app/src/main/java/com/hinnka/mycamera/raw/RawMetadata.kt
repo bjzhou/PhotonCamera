@@ -3,14 +3,16 @@ package com.hinnka.mycamera.raw
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
 import com.hinnka.mycamera.utils.PLog
+import kotlin.collections.contentToString
 
 /**
  * RAW 图像处理所需的元数据
- * 
+ *
  * 封装从 CameraCharacteristics 和 CaptureResult 中提取的参数，
  * 用于 GPU 解马赛克和颜色校正
  */
@@ -61,7 +63,16 @@ data class RawMetadata(
      */
     val postRawSensitivityBoost: Float = 1.0f,
     val baselineExposure: Float = 0.0f,
-    val noiseProfile: FloatArray = floatArrayOf(0f, 0f)
+    val noiseProfile: FloatArray = floatArrayOf(0f, 0f),
+    val afRegions: Array<MeteringRectangle>? = null,
+    val activeArray: android.graphics.Rect? = null,
+    val aeMode: Int = CaptureResult.CONTROL_AE_MODE_ON,
+    val exposureCompensation: Float = 0f,
+    val exposureBias: Float = 0f,
+    val iso: Int = 100,
+    val shutterSpeed: Long = 0L,
+    val aperture: Float = 0f,
+    val droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
 ) {
     companion object {
         private const val TAG = "RawMetadata"
@@ -80,7 +91,9 @@ data class RawMetadata(
             width: Int,
             height: Int,
             characteristics: CameraCharacteristics,
-            captureResult: CaptureResult
+            captureResult: CaptureResult,
+            userExposureCompensation: Float? = null,
+            droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
             val cfaId = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -235,6 +248,17 @@ data class RawMetadata(
             // 8. 获取噪声模型
             val noiseProfile = extractNoiseProfile(captureResult)
 
+            // 9. 获取 AE 模式和曝光补偿
+            val aeMode = captureResult.get(CaptureResult.CONTROL_AE_MODE) ?: CaptureResult.CONTROL_AE_MODE_ON
+            val evComp = captureResult.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
+            val evStep = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) ?: Rational(1, 3)
+            val exposureCompensation = evComp * evStep.toFloat()
+
+            // 10. 获取 ISO 和快门
+            val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
+            val shutterSpeed = captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+            val aperture = captureResult.get(CaptureResult.LENS_APERTURE) ?: 0f
+
             return RawMetadata(
                 width = width,
                 height = height,
@@ -248,7 +272,16 @@ data class RawMetadata(
                 lensShadingMapHeight = shadingHeight,
                 postRawSensitivityBoost = postRawSensitivityBoost,
                 baselineExposure = 0f,
-                noiseProfile = noiseProfile
+                noiseProfile = noiseProfile,
+                afRegions = captureResult.get(CaptureResult.CONTROL_AF_REGIONS),
+                activeArray = activeArray,
+                aeMode = aeMode,
+                exposureCompensation = exposureCompensation,
+                exposureBias = userExposureCompensation ?: exposureCompensation,
+                iso = iso,
+                shutterSpeed = shutterSpeed,
+                aperture = aperture,
+                droMode = droMode
             )
         }
 
@@ -274,7 +307,6 @@ data class RawMetadata(
         /**
          * 使用 ForwardMatrix/ColorMatrix 计算色彩校正矩阵
          *
-         * 此实现与 native-lib.cpp 中的 DNG 解析逻辑完全一致：
          * 1. 优先使用 ForwardMatrix，否则使用 ColorMatrix 的逆矩阵
          * 2. 支持双光源插值（Illuminant1/Illuminant2）
          * 3. 最终 CCM = XYZ_D50_TO_SRGB × interpolate(CamToXYZ1, CamToXYZ2, weight)
@@ -283,12 +315,24 @@ data class RawMetadata(
             characteristics: CameraCharacteristics,
             captureResult: CaptureResult
         ): FloatArray {
-            // XYZ D50 到 Linear sRGB 的转换矩阵（与 native-lib.cpp 完全一致）
+            // XYZ D50 到 Linear sRGB 的转换矩阵
             val XYZ_D50_TO_SRGB = floatArrayOf(
                 3.1338561f, -1.6168667f, -0.4906146f,
                 -0.9787684f, 1.9161415f, 0.0334540f,
                 0.0719453f, -0.2289914f, 1.4052427f
             )
+
+            // 动态计算目标色域矩阵
+            val FGAMUT_PRIMARIES = floatArrayOf(
+                0.70800f, 0.29200f, // Red
+                0.17000f, 0.79700f, // Green
+                0.13100f, 0.04600f  // Blue
+            )
+            val D65_WHITE = floatArrayOf(0.31270f, 0.32900f)
+
+            // 计算 XYZ(D50) -> F-Gamut 的转换矩阵
+            val targetTransform = computeXYZD50ToGamut(FGAMUT_PRIMARIES, D65_WHITE)
+                ?: XYZ_D50_TO_SRGB // 如果计算失败则回退到 sRGB
 
             // 获取参考光源
             val illuminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.toInt()
@@ -307,22 +351,8 @@ data class RawMetadata(
             val weight = calculateInterpolationWeight(illuminant1, illuminant2, wbGains)
 
             // 2. 获取两个光源下的 Camera -> XYZ(D50) 矩阵
-            val m1: FloatArray? = if (forwardMatrix1 != null) {
-                extractCCM(forwardMatrix1)
-            } else if (colorMatrix1 != null) {
-                // 如果没有 ForwardMatrix，使用 ColorMatrix 的逆矩阵
-                invertMatrix3x3(extractCCM(colorMatrix1))
-            } else {
-                null
-            }
-
-            val m2: FloatArray? = if (forwardMatrix2 != null) {
-                extractCCM(forwardMatrix2)
-            } else if (colorMatrix2 != null) {
-                invertMatrix3x3(extractCCM(colorMatrix2))
-            } else {
-                null
-            }
+            val m1: FloatArray? = computeCamToXYZ(forwardMatrix1, colorMatrix1, illuminant1)
+            val m2: FloatArray? = computeCamToXYZ(forwardMatrix2, colorMatrix2, illuminant2)
 
             // 3. 插值得到最终的 Camera -> XYZ(D50) 矩阵
             val camToXYZ = when {
@@ -339,13 +369,10 @@ data class RawMetadata(
                 }
             }
 
-            // 4. 计算最终 CCM: XYZ_D50_TO_SRGB × CamToXYZ
-            val finalCCM = multiplyMatrix3x3(XYZ_D50_TO_SRGB, camToXYZ)
+            // 4. 计算最终 CCM: targetTransform × CamToXYZ
+            val finalCCM = multiplyMatrix3x3(targetTransform, camToXYZ)
 
-            Log.d(TAG, "Computed CCM from ForwardMatrix/ColorMatrix (weight=$weight):")
-            Log.d(TAG, "[${finalCCM[0]}, ${finalCCM[1]}, ${finalCCM[2]}]")
-            Log.d(TAG, "[${finalCCM[3]}, ${finalCCM[4]}, ${finalCCM[5]}]")
-            Log.d(TAG, "[${finalCCM[6]}, ${finalCCM[7]}, ${finalCCM[8]}]")
+            PLog.d(TAG, "targetTransform = ${targetTransform.contentToString()} finalCCM = ${finalCCM.contentToString()}")
 
             return finalCCM
         }
@@ -399,6 +426,75 @@ data class RawMetadata(
         }
 
         /**
+         * 计算从相机空间到 XYZ(D50) 的转换矩阵
+         */
+        private fun computeCamToXYZ(
+            forwardMatrix: ColorSpaceTransform?,
+            colorMatrix: ColorSpaceTransform?,
+            illuminant: Int?
+        ): FloatArray? {
+            if (forwardMatrix != null) {
+                return extractCCM(forwardMatrix)
+            }
+            if (colorMatrix != null) {
+                val xyzToCam = extractCCM(colorMatrix)
+
+                // 1. 确定参考光源的 XYZ 白点
+                val ill = illuminant ?: 21 // 默认 D65
+                val (lx, ly, lz) = getIlluminantWhitePoint(ill)
+
+                // 2. 计算相机对该光源的响应 (Camera Neutral)
+                val cameraNeutral = FloatArray(3)
+                for (i in 0 until 3) {
+                    cameraNeutral[i] = xyzToCam[i * 3 + 0] * lx +
+                                       xyzToCam[i * 3 + 1] * ly +
+                                       xyzToCam[i * 3 + 2] * lz
+                }
+
+                // 3. 构造中间矩阵：为了让作用于已 WB 像素的矩阵生效，需在求逆前补偿白平衡
+                val referenceMatrix = xyzToCam.copyOf()
+                for (row in 0 until 3) {
+                    val cn = if (kotlin.math.abs(cameraNeutral[row]) > 0.001f) cameraNeutral[row] else 1.0f
+                    referenceMatrix[row * 3 + 0] /= cn
+                    referenceMatrix[row * 3 + 1] /= cn
+                    referenceMatrix[row * 3 + 2] /= cn
+                }
+
+                // 4. 求逆：从 Camera (White Balanced) -> XYZ (Illuminant Relative)
+                val m = invertMatrix3x3(referenceMatrix) ?: return null
+
+                // 5. 应用色度适应 (Chromatic Adaptation) 映射到 D50
+                val adapt = getChromaticAdaptationMatrix(ill)
+                return multiplyMatrix3x3(adapt, m)
+            }
+            return null
+        }
+
+        private fun getIlluminantWhitePoint(ill: Int): Triple<Float, Float, Float> {
+            return if (ill == 17) { // Standard Light A
+                Triple(1.0985f, 1.0000f, 0.3558f)
+            } else { // Assume D65
+                Triple(0.9504f, 1.0000f, 1.0888f)
+            }
+        }
+
+        private fun getChromaticAdaptationMatrix(ill: Int): FloatArray {
+            return if (ill == 17) { // A to D50 (Bradford Transform)
+                floatArrayOf(
+                    0.8924f, -0.0157f,  0.0529f,
+                   -0.1111f,  1.0505f, -0.0151f,
+                    0.0522f, -0.0077f,  2.2396f
+                )
+            } else { // D65 to D50 (Bradford Transform)
+                floatArrayOf(
+                    1.0478f,  0.0229f, -0.0501f,
+                    0.0295f,  0.9905f, -0.0170f,
+                   -0.0092f,  0.0150f,  0.7521f
+                )
+            }
+        }
+
+        /**
          * 光源 ID 转色温（遵循 DNG/Exif 标准 ID）
          */
         private fun illuminantToTemp(illuminant: Int): Float {
@@ -424,6 +520,57 @@ data class RawMetadata(
                 24 -> 3200f     // ISO Studio Tungsten
                 else -> 5000f
             }
+        }
+
+        /**
+         * 根据三原色 xy 坐标和白点 xy 坐标，动态计算 XYZ(D50) 到该色域空间的转换矩阵
+         */
+        private fun computeXYZD50ToGamut(primaries: FloatArray, whitePoint: FloatArray): FloatArray? {
+            if (primaries.size != 6 || whitePoint.size != 2) return null
+
+            val xr = primaries[0]; val yr = primaries[1]
+            val xg = primaries[2]; val yg = primaries[3]
+            val xb = primaries[4]; val yb = primaries[5]
+            val xw = whitePoint[0]; val yw = whitePoint[1]
+
+            // 1. 实现 RGB -> XYZ (D65) 的推导过程
+            // 构造系数矩阵 S
+            val mS = floatArrayOf(
+                xr / yr, xg / yg, xb / yb,
+                1f, 1f, 1f,
+                (1 - xr - yr) / yr, (1 - xg - yg) / yg, (1 - xb - yb) / yb
+            )
+            val invS = invertMatrix3x3(mS) ?: return null
+
+            // 计算白点的 XYZ
+            val Xw = xw / yw
+            val Yw = 1f
+            val Zw = (1 - xw - yw) / yw
+
+            // 计算缩放分量 (sR, sG, sB)
+            val sR = invS[0] * Xw + invS[1] * Yw + invS[2] * Zw
+            val sG = invS[3] * Xw + invS[4] * Yw + invS[5] * Zw
+            val sB = invS[6] * Xw + invS[7] * Yw + invS[8] * Zw
+
+            // 得到 Gamut -> XYZ (D65) 矩阵
+            val gamutToXYZD65 = floatArrayOf(
+                mS[0] * sR, mS[1] * sG, mS[2] * sB,
+                mS[3] * sR, mS[4] * sG, mS[5] * sB,
+                mS[6] * sR, mS[7] * sG, mS[8] * sB
+            )
+
+            // 2. 色彩适应：从 XYZ(D65) 转换到 XYZ(D50) 基准
+            // 使用标准 Bradford 矩阵
+            val BRADFORD_D65_TO_D50 = floatArrayOf(
+                1.0478112f, 0.0228866f, -0.0501270f,
+                0.0295424f, 0.9904844f, -0.0170491f,
+                -0.0092345f, 0.0150436f, 0.7521316f
+            )
+
+            val gamutToXYZD50 = multiplyMatrix3x3(BRADFORD_D65_TO_D50, gamutToXYZD65)
+
+            // 3. 求逆：得到最终的 XYZ(D50) -> Gamut 转换矩阵
+            return invertMatrix3x3(gamutToXYZD50)
         }
 
         /**
@@ -506,6 +653,8 @@ data class RawMetadata(
         if (!whiteBalanceGains.contentEquals(other.whiteBalanceGains)) return false
         if (!colorCorrectionMatrix.contentEquals(other.colorCorrectionMatrix)) return false
         if (baselineExposure != other.baselineExposure) return false
+        if (iso != other.iso) return false
+        if (shutterSpeed != other.shutterSpeed) return false
 
         return true
     }
@@ -523,6 +672,8 @@ data class RawMetadata(
         result = 31 * result + lensShadingMapHeight
         result = 31 * result + postRawSensitivityBoost.hashCode()
         result = 31 * result + baselineExposure.hashCode()
+        result = 31 * result + iso
+        result = 31 * result + shutterSpeed.hashCode()
         return result
     }
 }
