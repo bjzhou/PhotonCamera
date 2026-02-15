@@ -351,58 +351,77 @@ data class RawMetadata(
         }
 
         /**
-         * 计算双光源插值权重（与 native-lib.cpp 逻辑一致）
+         * 计算双光源插值权重
+         * 基于 WB Gains 的 R/B 比例在两个参考光源之间进行线性插值
          *
-         * @param illuminant1 参考光源 1 ID
-         * @param illuminant2 参考光源 2 ID
-         * @param wbGains 白平衡增益
-         * @return 插值权重 (0.0 = 完全使用 illuminant2, 1.0 = 完全使用 illuminant1)
+         * @return 插值权重 (1.0 = 完全使用 illuminant1, 0.0 = 完全使用 illuminant2)
          */
         private fun calculateInterpolationWeight(
             illuminant1: Int?,
             illuminant2: Int?,
             wbGains: RggbChannelVector?
         ): Float {
-            // 默认使用 Illuminant2 (通常是 D65/Daylight)
             if (illuminant1 == null || illuminant2 == null || illuminant1 == 0 || illuminant2 == 0 || wbGains == null) {
-                return 0.0f
+                return 0.0f // 默认使用第二个矩阵 (通常是 D65)
             }
 
-            val temp1 = illuminantToTemp(illuminant1)
-            val temp2 = illuminantToTemp(illuminant2)
+            val t1 = illuminantToTemp(illuminant1)
+            val t2 = illuminantToTemp(illuminant2)
+            if (kotlin.math.abs(t1 - t2) < 100f) return 1.0f
 
-            // 从当前 WB Gains 计算 R/B 比例
-            val rGain = wbGains.red
-            val bGain = wbGains.blue
+            // 增益比率反映了环境色温：
+            // A 光源 (2856K): 红色富余，故 R Gain 较小；蓝色匮乏，故 B Gain 较大。R/B 比例小 (约 0.4~0.6)。
+            // D65 光源 (6504K): 蓝色富余，故 B Gain 较小；红色匮乏，故 R Gain 较大。R/B 比例大 (约 1.2~1.8)。
+            val currentRatio = wbGains.red / wbGains.blue
 
-            if (bGain <= 0) return 0.0f
+            // 通用的 Gain Ratio 基准值 (对应标准光源下的典型 WB Gain 比例)
+            val ratioWarm = 0.5f   // 对应 2856K (Standard A)
+            val ratioCool = 1.6f   // 对应 6504K (D65)
 
-            val currentRatio = rGain / bGain
-
-            // 根据色温范围判断插值策略
-            // 典型情况: Illuminant1 = StdA (2856K), Illuminant2 = D65 (6504K)
-            if (temp1 < 4000 && temp2 > 5000) {
+            // 根据光源色温计算其在 R/B 比例轴上的预期位置
+            fun getTargetRatio(temp: Float): Float {
                 return when {
-                    currentRatio < 0.5f -> 1.0f  // 低色温环境，完全使用 A 光源
-                    currentRatio > 0.8f -> 0.0f  // 高色温环境，完全使用 D65
-                    else -> (0.8f - currentRatio) / (0.8f - 0.5f)  // 线性插值
+                    temp <= 2856f -> ratioWarm
+                    temp >= 6504f -> ratioCool
+                    else -> ratioWarm + (ratioCool - ratioWarm) * (temp - 2856f) / (6504f - 2856f)
                 }
             }
 
-            return 0.0f
+            val r1 = getTargetRatio(t1)
+            val r2 = getTargetRatio(t2)
+
+            // 线性插值公式: weight * r1 + (1.0 - weight) * r2 = currentRatio
+            val diff = r1 - r2
+            if (kotlin.math.abs(diff) < 0.01f) return 0.5f
+
+            val weight = (currentRatio - r2) / diff
+            return weight.coerceIn(0.0f, 1.0f)
         }
 
         /**
-         * 光源 ID 转色温（与 native-lib.cpp 的 illuminantToTemp 一致）
+         * 光源 ID 转色温（遵循 DNG/Exif 标准 ID）
          */
         private fun illuminantToTemp(illuminant: Int): Float {
             return when (illuminant) {
-                1 -> 2856f    // Daylight
-                17 -> 2856f   // Standard Light A
-                20 -> 5500f   // D55
-                21 -> 5000f   // D50
-                11, 22 -> 6504f  // D65
-                23 -> 7500f   // D75
+                1 -> 5500f      // Daylight
+                2 -> 4000f      // Fluorescent
+                3 -> 3200f      // Tungsten (Incandescent)
+                4 -> 3400f      // Flash
+                9 -> 6500f      // Fine Weather
+                10 -> 7500f     // Cloudy Weather
+                11 -> 8000f     // Shade
+                12 -> 6500f     // Daylight Fluorescent (D 5700 – 7100K)
+                13 -> 5000f     // Day White Fluorescent (N 4600 – 5400K)
+                14 -> 4200f     // Cool White Fluorescent (W 3900 – 4500K)
+                15 -> 3500f     // White Fluorescent (WW 3200 – 3700K)
+                17 -> 2856f     // Standard Light A
+                18 -> 4874f     // Standard Light B
+                19 -> 6774f     // Standard Light C
+                20 -> 5500f     // D55
+                21 -> 6504f     // D65
+                22 -> 7505f     // D75
+                23 -> 5000f     // D50
+                24 -> 3200f     // ISO Studio Tungsten
                 else -> 5000f
             }
         }
