@@ -93,7 +93,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
 
     // Initial copy
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rrr = ba; rrr < rr1 - ba; rrr++) {
         int row = rrr - ba;
@@ -110,7 +110,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
 
     // G-R(B)
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rr = 2; rr < rr1 - 2; rr++) {
         for (int cc = 2 + (FC(rr, 2) & 1); cc < cc1 - 2; cc += 2) {
@@ -147,7 +147,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
     RUN_CALLBACK(LIBRAW_PROGRESS_INTERPOLATE, 20, 100);
 
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rr = 4; rr < rr1 - 4; rr++) {
         for (int cc = 4; cc < cc1 - 4; cc++) {
@@ -163,7 +163,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
     RUN_CALLBACK(LIBRAW_PROGRESS_INTERPOLATE, 30, 100);
 
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rr = 4; rr < rr1 - 4; rr++) {
         for (int cc = 4 + (FC(rr, 4) & 1); cc < cc1 - 4; cc += 2) {
@@ -195,7 +195,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
     RUN_CALLBACK(LIBRAW_PROGRESS_INTERPOLATE, 40, 100);
 
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rr = 0; rr < rr1; rr++) {
         int row = rr - ba;
@@ -220,7 +220,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
     RUN_CALLBACK(LIBRAW_PROGRESS_INTERPOLATE, 50, 100);
 
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rr = 1; rr < rr1 - 1; rr++) {
         for (int cc = 1 + (FC(rr, 2) & 1); cc < cc1 - 1; cc += 2) {
@@ -237,7 +237,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
     RUN_CALLBACK(LIBRAW_PROGRESS_INTERPOLATE, 65, 100);
 
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int rr = 1; rr < rr1 - 1; rr++) {
         for (int cc = 1 + (FC(rr, 1) & 1); cc < cc1 - 1; cc += 2) {
@@ -254,7 +254,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
 
     for (int pass = 0; pass < iter; pass++) {
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
         for (int rr = 1; rr < rr1 - 1; rr++) {
             for (int c = 0; c < 3; c += 2) {
@@ -269,7 +269,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
             }
         }
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
         for (int rr = 0; rr < rr1; rr++) {
             if (FC(rr, 0) == 1) { // Green
@@ -309,7 +309,7 @@ void LibRaw::lmmse_interpolate(int gamma_apply)
     }
 
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
@@ -333,7 +333,7 @@ void LibRaw::refinement(int PassCount)
 {
     for (int b = 0; b < PassCount; b++) {
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
         for (int row = 2; row < height - 2; row++) {
             for (int col = 2 + (FC(row, 2) & 1); col < width - 2; col += 2) {
@@ -348,7 +348,7 @@ void LibRaw::refinement(int PassCount)
             }
         }
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
         for (int row = 2; row < height - 2; row++) {
             for (int col = 2 + (FC(row, 3) & 1); col < width - 2; col += 2) {
@@ -365,7 +365,7 @@ void LibRaw::refinement(int PassCount)
             }
         }
 #ifdef LIBRAW_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4)
 #endif
         for (int row = 2; row < height - 2; row++) {
             for (int col = 2 + (FC(row, 2) & 1); col < width - 2; col += 2) {

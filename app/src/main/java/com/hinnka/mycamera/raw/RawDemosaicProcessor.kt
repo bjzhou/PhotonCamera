@@ -434,6 +434,18 @@ class RawDemosaicProcessor {
             // 计算平均亮度
             val sceneStats = analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, actualMetadata)
 
+            // NLM 降噪 (Combined 之后)
+            val denoiseStart = System.currentTimeMillis()
+            renderNLMPass(
+                sourceTextureId = demosaicTextureId,
+                width = actualWidth,
+                height = actualHeight,
+                metadata = actualMetadata,
+                sceneStats = sceneStats
+            )
+            val denoiseOutputTexture = gfTexId[1]
+            PLog.d(TAG, "NLM Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
+
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             setupCombinedFramebuffer(actualWidth, actualHeight)
             if (baseLut == null && baseLutName != "none") {
@@ -446,26 +458,13 @@ class RawDemosaicProcessor {
                 }
             }
             val combinedStart = System.currentTimeMillis()
-            renderCombinedPass(actualMetadata, sceneStats, baseLut)
+            renderCombinedPass(actualMetadata, sceneStats, baseLut, inputTextureId = denoiseOutputTexture)
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
-
-            // 5.5 NLM 降噪 (Combined 之后)
-            val denoiseStart = System.currentTimeMillis()
-            renderNLMPass(
-                sourceTextureId = combinedTextureId,
-                width = actualWidth,
-                height = actualHeight,
-                metadata = actualMetadata,
-                sceneStats = sceneStats
-            )
-            val denoiseOutputTexture = gfTexId[1]
-            PLog.d(TAG, "NLM Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
-//            val denoiseOutputTexture = combinedTextureId
 
             // 6. 第三步：锐化 (Sharpen Pass)
             setupSharpenFramebuffer(actualWidth, actualHeight)
             val sharpenStart = System.currentTimeMillis()
-            renderSharpenPass(actualMetadata, sharpeningValue, denoiseOutputTexture)
+            renderSharpenPass(actualMetadata, sharpeningValue, combinedTextureId)
             PLog.d(TAG, "Sharpen Pass took: ${System.currentTimeMillis() - sharpenStart}ms")
 
             val sourceTextureForOutput = sharpenTextureId
@@ -943,9 +942,9 @@ class RawDemosaicProcessor {
         val noiseBase = sqrt((s * 1e-3f + o * 1e-6f).toDouble()).toFloat() * 100.0f
 
         // 动态计算 h 值 (衰减系数)
-        // 规则：基础强度 (0.01) + 增益强度系数 + 传感器噪声水平系数
+        // 规则：基础强度 + 增益强度系数 + 传感器噪声水平系数
         // 使用 sqrt(totalGain) 是因为噪声标准差随增益的平方根增加（近似）
-        val baseH = 0.01f
+        val baseH = 0.003f
         val dynamicH = 0.003f * sqrt(totalGain.toDouble()).toFloat()
         val noiseCorrection = (noiseBase * 0.1f).coerceIn(0f, 0.02f)
 

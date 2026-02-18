@@ -37,7 +37,7 @@ object MeteringSystem {
     data class AnalysisResult(
         val exposureGain: Float,
         val p98Luma: Float,
-        val maxLuma: Float,
+        val maxColor: Float,
         val weightedAvgLuma: Float,
         val droMode: DROMode = DROMode.OFF
     )
@@ -82,7 +82,7 @@ object MeteringSystem {
 
         var totalWeight = 0.0
         var weightedSumFLog2 = 0.0 // 在 F-Log2 空间累加
-        var maxLuma = 0.0f
+        var maxColor = 0.0f
         var totalSumLuma = 0.0f
 
         floatBuffer.position(0)
@@ -95,6 +95,9 @@ object MeteringSystem {
 
                 val luma = r * 0.2126f + g * 0.7152f + b * 0.0722f
                 if (luma.isNaN() || luma < 0f) continue
+
+                val max = maxOf(r, g, b)
+                if (max > maxColor) maxColor = max
 
                 // 转换到 F-Log2 空间进行测光分析
                 val flog2Luma = linearToFLog2(luma)
@@ -115,14 +118,13 @@ object MeteringSystem {
                         envWeight = 0.3f
                     }
                 }
-
                 // 3. 肤色加权
                 var skinWeight = 1.0f
                 if (r > g && g > b && g > 0.001f) {
                     val rgRatio = r / g
                     val gbRatio = g / b
                     if (rgRatio in 1.1f..2.5f && gbRatio in 1.0f..3.0f) {
-                        skinWeight = 1.5f
+                        skinWeight = 3f
                     }
                 }
 
@@ -132,7 +134,6 @@ object MeteringSystem {
                 totalWeight += finalWeight
 
                 totalSumLuma += luma
-                if (luma > maxLuma) maxLuma = luma
                 allLumas[validPixelCount++] = luma
             }
         }
@@ -170,11 +171,21 @@ object MeteringSystem {
         }
 
         val highlightSpan = p999Luma - p99Luma
-        val highlightAnchor = if (highlightSpan > 0.2f) {
+        val rawHighlightAnchor = if (highlightSpan > 0.2f) {
             p999Luma
         } else {
             p99Luma
         }
+
+        // 防止在高光不足时（如曝光保守或低对比度场景）过度提升增益
+        // 在明亮场景下（LV较大），我们预期“代表性高光”不应低于某个阈值。
+        // 如果 RAW 里的高光远低于该阈值，说明场景本身可能偏暗或曝光非常保守，此时不应强行拉亮。
+        val anchorFloor = when {
+            lv >= 13 -> 0.50f
+            lv >= 10 -> 0.40f
+            else -> 0.30f
+        }
+        val highlightAnchor = if (lv >= 8) maxOf(rawHighlightAnchor, anchorFloor) else rawHighlightAnchor
 
         val sceneContrast = highlightAnchor / representativeLinearLuma
         var droMode = DROMode.OFF
@@ -194,10 +205,12 @@ object MeteringSystem {
 
         var gain = when {
             lv >= 13 -> {
-                (flog2ToLinear(0.8f) * biasMultiplier) / highlightAnchor
+                // 降低目标值，0.8f 在 F-Log2 中过于白亮，0.72f (~72% IRE) 更符合摄影直觉
+                (flog2ToLinear(0.72f) * biasMultiplier) / highlightAnchor
             }
             lv >= 8 -> {
-                (flog2ToLinear(0.7f) * biasMultiplier) / highlightAnchor
+                // 0.7f -> 0.66f
+                (flog2ToLinear(0.66f) * biasMultiplier) / highlightAnchor
             }
             lv >= 4 -> {
                 (flog2ToLinear(0.42f) * biasMultiplier) / representativeLinearLuma
@@ -216,17 +229,17 @@ object MeteringSystem {
         }
 
         // 7. 绝对剪裁保护
-        if (maxLuma * gain > F_LOG2_MAX_LINEAR) {
-            gain = F_LOG2_MAX_LINEAR / maxLuma
+        if (maxColor * gain > F_LOG2_MAX_LINEAR) {
+            gain = F_LOG2_MAX_LINEAR / maxColor
         }
 
         PLog.d(TAG, "F-Log2 Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=${sceneContrast.toInt()}, " +
-                "anchor=$highlightAnchor bias=$biasMultiplier max=$maxLuma gain=$gain")
+                "p99=$p99Luma p999=$p999Luma bias=$biasMultiplier max=$maxColor gain=$gain")
 
         return AnalysisResult(
             exposureGain = gain,
             p98Luma = p99Luma,
-            maxLuma = maxLuma,
+            maxColor = maxColor,
             weightedAvgLuma = avgFLog2,
             droMode = droMode
         )

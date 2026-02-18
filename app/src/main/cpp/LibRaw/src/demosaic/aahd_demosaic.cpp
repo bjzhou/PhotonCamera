@@ -57,29 +57,20 @@ struct AAHD
     HOT = 8
   };
 
-  static inline float calc_dist(int c1, int c2) throw()
-  {
-    return c1 > c2 ? (float)c1 / c2 : (float)c2 / c1;
-  }
+  static inline float calc_dist(int c1, int c2) throw() { return c1 > c2 ? (float)c1 / c2 : (float)c2 / c1; }
   int inline Y(ushort3 &rgb) throw()
   {
-    return int(yuv_cam[0][0] * rgb[0] + yuv_cam[0][1] * rgb[1] +
-           yuv_cam[0][2] * rgb[2]);
+    return int(yuv_cam[0][0] * rgb[0] + yuv_cam[0][1] * rgb[1] + yuv_cam[0][2] * rgb[2]);
   }
   int inline U(ushort3 &rgb) throw()
   {
-    return int(yuv_cam[1][0] * rgb[0] + yuv_cam[1][1] * rgb[1] +
-           yuv_cam[1][2] * rgb[2]);
+    return int(yuv_cam[1][0] * rgb[0] + yuv_cam[1][1] * rgb[1] + yuv_cam[1][2] * rgb[2]);
   }
   int inline V(ushort3 &rgb) throw()
   {
-    return int(yuv_cam[2][0] * rgb[0] + yuv_cam[2][1] * rgb[1] +
-           yuv_cam[2][2] * rgb[2]);
+    return int(yuv_cam[2][0] * rgb[0] + yuv_cam[2][1] * rgb[1] + yuv_cam[2][2] * rgb[2]);
   }
-  inline int nr_offset(int row, int col) throw()
-  {
-    return (row * nr_width + col);
-  }
+  inline int nr_offset(int row, int col) throw() { return (row * nr_width + col); }
   ~AAHD();
   AAHD(LibRaw &_libraw);
   void make_ahd_greens();
@@ -117,7 +108,7 @@ const float AAHD::yuv_coeff[3][3] = {
     //	U = (B-Y)/1.8814 =  (-0,2627R' - 0,6780G' + 0.9407B) / 1.8814 =
     //-0.13963R - 0.36037G + 0.5B
     //	V = (R-Y)/1.4647 = (0.7373R - 0,6780G - 0,0593B) / 1.4647 = 0.5R -
-    //0.4629G - 0.04049B
+    // 0.4629G - 0.04049B
     {+0.2627f, +0.6780f, +0.0593f},
     {-0.13963f, -0.36037f, +0.5f},
     {+0.5034f, -0.4629f, -0.0405f}
@@ -130,8 +121,7 @@ AAHD::AAHD(LibRaw &_libraw) : libraw(_libraw)
 {
   nr_height = libraw.imgdata.sizes.iheight + nr_margin * 2;
   nr_width = libraw.imgdata.sizes.iwidth + nr_margin * 2;
-  rgb_ahd[0] = (ushort3 *)calloc(nr_height * nr_width,
-                                 (sizeof(ushort3) * 2 + sizeof(int3) * 2 + 3));
+  rgb_ahd[0] = (ushort3 *)calloc(nr_height * nr_width, (sizeof(ushort3) * 2 + sizeof(int3) * 2 + 3));
   if (!rgb_ahd[0])
     throw LIBRAW_EXCEPTION_ALLOC;
 
@@ -159,8 +149,7 @@ AAHD::AAHD(LibRaw &_libraw) : libraw(_libraw)
     for (int i = 0; i < 0x10000; i++)
     {
       r = (float)i / 0x10000;
-      gammaLUT[i] =
-          0x10000 * (r < 0.0181 ? 4.5f * r : 1.0993f * pow(r, 0.45f) - .0993f);
+      gammaLUT[i] = 0x10000 * (r < 0.0181 ? 4.5f * r : 1.0993f * pow(r, 0.45f) - .0993f);
     }
   }
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
@@ -188,32 +177,28 @@ AAHD::AAHD(LibRaw &_libraw) : libraw(_libraw)
       }
     }
   }
-  channels_max =
-      MAX(MAX(channel_maximum[0], channel_maximum[1]), channel_maximum[2]);
+  channels_max = MAX(MAX(channel_maximum[0], channel_maximum[1]), channel_maximum[2]);
 }
 
 void AAHD::hide_hots()
 {
   int iwidth = libraw.imgdata.sizes.iwidth;
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     int js = libraw.COLOR(i, 0) & 1;
     int kc = libraw.COLOR(i, js);
-    /*
-     * js -- начальная х-координата, которая попадает мимо известного зелёного
-     * kc -- известный цвет в точке интерполирования
-     */
     int moff = nr_offset(i + nr_margin, nr_margin + js);
     for (int j = js; j < iwidth; j += 2, moff += 2)
     {
       ushort3 *rgb = &rgb_ahd[0][moff];
       int c = rgb[0][kc];
-      if ((c > rgb[2 * Pe][kc] && c > rgb[2 * Pw][kc] && c > rgb[2 * Pn][kc] &&
-           c > rgb[2 * Ps][kc] && c > rgb[Pe][1] && c > rgb[Pw][1] &&
-           c > rgb[Pn][1] && c > rgb[Ps][1]) ||
-          (c < rgb[2 * Pe][kc] && c < rgb[2 * Pw][kc] && c < rgb[2 * Pn][kc] &&
-           c < rgb[2 * Ps][kc] && c < rgb[Pe][1] && c < rgb[Pw][1] &&
-           c < rgb[Pn][1] && c < rgb[Ps][1]))
+      if ((c > rgb[2 * Pe][kc] && c > rgb[2 * Pw][kc] && c > rgb[2 * Pn][kc] && c > rgb[2 * Ps][kc] && c > rgb[Pe][1] &&
+           c > rgb[Pw][1] && c > rgb[Pn][1] && c > rgb[Ps][1]) ||
+          (c < rgb[2 * Pe][kc] && c < rgb[2 * Pw][kc] && c < rgb[2 * Pn][kc] && c < rgb[2 * Ps][kc] && c < rgb[Pe][1] &&
+           c < rgb[Pw][1] && c < rgb[Pn][1] && c < rgb[Ps][1]))
       {
         int chot = c >> Thot;
         int cdead = c << Tdead;
@@ -228,21 +213,16 @@ void AAHD::hide_hots()
         if (chot > avg || cdead < avg)
         {
           ndir[moff] |= HOT;
-          int dh =
-              ABS(rgb[2 * Pw][kc] - rgb[2 * Pe][kc]) +
-              ABS(rgb[Pw][1] - rgb[Pe][1]) +
-              ABS(rgb[Pw][1] - rgb[Pe][1] + rgb[2 * Pe][kc] - rgb[2 * Pw][kc]);
-          int dv =
-              ABS(rgb[2 * Pn][kc] - rgb[2 * Ps][kc]) +
-              ABS(rgb[Pn][1] - rgb[Ps][1]) +
-              ABS(rgb[Pn][1] - rgb[Ps][1] + rgb[2 * Ps][kc] - rgb[2 * Pn][kc]);
+          int dh = ABS(rgb[2 * Pw][kc] - rgb[2 * Pe][kc]) + ABS(rgb[Pw][1] - rgb[Pe][1]) +
+                   ABS(rgb[Pw][1] - rgb[Pe][1] + rgb[2 * Pe][kc] - rgb[2 * Pw][kc]);
+          int dv = ABS(rgb[2 * Pn][kc] - rgb[2 * Ps][kc]) + ABS(rgb[Pn][1] - rgb[Ps][1]) +
+                   ABS(rgb[Pn][1] - rgb[Ps][1] + rgb[2 * Ps][kc] - rgb[2 * Pn][kc]);
           int d;
           if (dv > dh)
             d = Pw;
           else
             d = Pn;
-          rgb_ahd[1][moff][kc] = rgb[0][kc] =
-              (rgb[+2 * d][kc] + rgb[-2 * d][kc]) / 2;
+          rgb_ahd[1][moff][kc] = rgb[0][kc] = (rgb[+2 * d][kc] + rgb[-2 * d][kc]) / 2;
         }
       }
     }
@@ -252,12 +232,10 @@ void AAHD::hide_hots()
     {
       ushort3 *rgb = &rgb_ahd[0][moff];
       int c = rgb[0][1];
-      if ((c > rgb[2 * Pe][1] && c > rgb[2 * Pw][1] && c > rgb[2 * Pn][1] &&
-           c > rgb[2 * Ps][1] && c > rgb[Pe][kc] && c > rgb[Pw][kc] &&
-           c > rgb[Pn][kc ^ 2] && c > rgb[Ps][kc ^ 2]) ||
-          (c < rgb[2 * Pe][1] && c < rgb[2 * Pw][1] && c < rgb[2 * Pn][1] &&
-           c < rgb[2 * Ps][1] && c < rgb[Pe][kc] && c < rgb[Pw][kc] &&
-           c < rgb[Pn][kc ^ 2] && c < rgb[Ps][kc ^ 2]))
+      if ((c > rgb[2 * Pe][1] && c > rgb[2 * Pw][1] && c > rgb[2 * Pn][1] && c > rgb[2 * Ps][1] && c > rgb[Pe][kc] &&
+           c > rgb[Pw][kc] && c > rgb[Pn][kc ^ 2] && c > rgb[Ps][kc ^ 2]) ||
+          (c < rgb[2 * Pe][1] && c < rgb[2 * Pw][1] && c < rgb[2 * Pn][1] && c < rgb[2 * Ps][1] && c < rgb[Pe][kc] &&
+           c < rgb[Pw][kc] && c < rgb[Pn][kc ^ 2] && c < rgb[Ps][kc ^ 2]))
       {
         int chot = c >> Thot;
         int cdead = c << Tdead;
@@ -272,21 +250,16 @@ void AAHD::hide_hots()
         if (chot > avg || cdead < avg)
         {
           ndir[moff] |= HOT;
-          int dh =
-              ABS(rgb[2 * Pw][1] - rgb[2 * Pe][1]) +
-              ABS(rgb[Pw][kc] - rgb[Pe][kc]) +
-              ABS(rgb[Pw][kc] - rgb[Pe][kc] + rgb[2 * Pe][1] - rgb[2 * Pw][1]);
-          int dv = ABS(rgb[2 * Pn][1] - rgb[2 * Ps][1]) +
-                   ABS(rgb[Pn][kc ^ 2] - rgb[Ps][kc ^ 2]) +
-                   ABS(rgb[Pn][kc ^ 2] - rgb[Ps][kc ^ 2] + rgb[2 * Ps][1] -
-                       rgb[2 * Pn][1]);
+          int dh = ABS(rgb[2 * Pw][1] - rgb[2 * Pe][1]) + ABS(rgb[Pw][kc] - rgb[Pe][kc]) +
+                   ABS(rgb[Pw][kc] - rgb[Pe][kc] + rgb[2 * Pe][1] - rgb[2 * Pw][1]);
+          int dv = ABS(rgb[2 * Pn][1] - rgb[2 * Ps][1]) + ABS(rgb[Pn][kc ^ 2] - rgb[Ps][kc ^ 2]) +
+                   ABS(rgb[Pn][kc ^ 2] - rgb[Ps][kc ^ 2] + rgb[2 * Ps][1] - rgb[2 * Pn][1]);
           int d;
           if (dv > dh)
             d = Pw;
           else
             d = Pn;
-          rgb_ahd[1][moff][1] = rgb[0][1] =
-              (rgb[+2 * d][1] + rgb[-2 * d][1]) / 2;
+          rgb_ahd[1][moff][1] = rgb[0][1] = (rgb[+2 * d][1] + rgb[-2 * d][1]) / 2;
         }
       }
     }
@@ -300,6 +273,9 @@ void AAHD::evaluate_ahd()
    * YUV
    *
    */
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int d = 0; d < 2; ++d)
   {
     for (int i = 0; i < nr_width * nr_height; ++i)
@@ -350,6 +326,9 @@ void AAHD::evaluate_ahd()
    }
    }
    * Lab */
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     int moff = nr_offset(i + nr_margin, nr_margin);
@@ -364,14 +343,11 @@ void AAHD::evaluate_ahd()
         for (int k = 0; k < 4; k++)
         {
           ydiff[d][k] = float(ABS(ynr[0][0] - ynr[hvdir[k]][0]));
-          uvdiff[d][k] = SQR(ynr[0][1] - ynr[hvdir[k]][1]) +
-                         SQR(ynr[0][2] - ynr[hvdir[k]][2]);
+          uvdiff[d][k] = SQR(ynr[0][1] - ynr[hvdir[k]][1]) + SQR(ynr[0][2] - ynr[hvdir[k]][2]);
         }
       }
-      float yeps =
-          MIN(MAX(ydiff[0][0], ydiff[0][1]), MAX(ydiff[1][2], ydiff[1][3]));
-      int uveps =
-          MIN(MAX(uvdiff[0][0], uvdiff[0][1]), MAX(uvdiff[1][2], uvdiff[1][3]));
+      float yeps = MIN(MAX(ydiff[0][0], ydiff[0][1]), MAX(ydiff[1][2], ydiff[1][3]));
+      int uveps = MIN(MAX(uvdiff[0][0], uvdiff[0][1]), MAX(uvdiff[1][2], uvdiff[1][3]));
       for (int d = 0; d < 2; d++)
       {
         ynr = &yuv[d][moff];
@@ -387,9 +363,7 @@ void AAHD::evaluate_ahd()
               {
                 int hvd = m * hvdir[k];
                 if (ABS(ynr[0][0] - ynr[hvd][0]) < yeps &&
-                    SQR(ynr[0][1] - ynr[hvd][1]) +
-                            SQR(ynr[0][2] - ynr[hvd][2]) <
-                        uveps)
+                    SQR(ynr[0][1] - ynr[hvd][1]) + SQR(ynr[0][2] - ynr[hvd][2]) < uveps)
                 {
                   homo[d][moff + hvd]++;
                 }
@@ -401,6 +375,9 @@ void AAHD::evaluate_ahd()
       }
     }
   }
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     int moff = nr_offset(i + nr_margin, nr_margin);
@@ -431,30 +408,24 @@ void AAHD::evaluate_ahd()
       {
         int3 *ynr = &yuv[1][moff];
         int gv = SQR(2 * ynr[0][0] - ynr[Pn][0] - ynr[Ps][0]);
-        gv += SQR(2 * ynr[0][1] - ynr[Pn][1] - ynr[Ps][1]) +
-              SQR(2 * ynr[0][2] - ynr[Pn][2] - ynr[Ps][2]);
+        gv += SQR(2 * ynr[0][1] - ynr[Pn][1] - ynr[Ps][1]) + SQR(2 * ynr[0][2] - ynr[Pn][2] - ynr[Ps][2]);
         ynr = &yuv[1][moff + Pn];
-        gv += (SQR(2 * ynr[0][0] - ynr[Pn][0] - ynr[Ps][0]) +
-               SQR(2 * ynr[0][1] - ynr[Pn][1] - ynr[Ps][1]) +
+        gv += (SQR(2 * ynr[0][0] - ynr[Pn][0] - ynr[Ps][0]) + SQR(2 * ynr[0][1] - ynr[Pn][1] - ynr[Ps][1]) +
                SQR(2 * ynr[0][2] - ynr[Pn][2] - ynr[Ps][2])) /
               2;
         ynr = &yuv[1][moff + Ps];
-        gv += (SQR(2 * ynr[0][0] - ynr[Pn][0] - ynr[Ps][0]) +
-               SQR(2 * ynr[0][1] - ynr[Pn][1] - ynr[Ps][1]) +
+        gv += (SQR(2 * ynr[0][0] - ynr[Pn][0] - ynr[Ps][0]) + SQR(2 * ynr[0][1] - ynr[Pn][1] - ynr[Ps][1]) +
                SQR(2 * ynr[0][2] - ynr[Pn][2] - ynr[Ps][2])) /
               2;
         ynr = &yuv[0][moff];
         int gh = SQR(2 * ynr[0][0] - ynr[Pw][0] - ynr[Pe][0]);
-        gh += SQR(2 * ynr[0][1] - ynr[Pw][1] - ynr[Pe][1]) +
-              SQR(2 * ynr[0][2] - ynr[Pw][2] - ynr[Pe][2]);
+        gh += SQR(2 * ynr[0][1] - ynr[Pw][1] - ynr[Pe][1]) + SQR(2 * ynr[0][2] - ynr[Pw][2] - ynr[Pe][2]);
         ynr = &yuv[0][moff + Pw];
-        gh += (SQR(2 * ynr[0][0] - ynr[Pw][0] - ynr[Pe][0]) +
-               SQR(2 * ynr[0][1] - ynr[Pw][1] - ynr[Pe][1]) +
+        gh += (SQR(2 * ynr[0][0] - ynr[Pw][0] - ynr[Pe][0]) + SQR(2 * ynr[0][1] - ynr[Pw][1] - ynr[Pe][1]) +
                SQR(2 * ynr[0][2] - ynr[Pw][2] - ynr[Pe][2])) /
               2;
         ynr = &yuv[0][moff + Pe];
-        gh += (SQR(2 * ynr[0][0] - ynr[Pw][0] - ynr[Pe][0]) +
-               SQR(2 * ynr[0][1] - ynr[Pw][1] - ynr[Pe][1]) +
+        gh += (SQR(2 * ynr[0][0] - ynr[Pw][0] - ynr[Pe][0]) + SQR(2 * ynr[0][1] - ynr[Pw][1] - ynr[Pe][1]) +
                SQR(2 * ynr[0][2] - ynr[Pw][2] - ynr[Pe][2])) /
               2;
         if (gv > gh)
@@ -469,29 +440,30 @@ void AAHD::evaluate_ahd()
 
 void AAHD::combine_image()
 {
-  for (int i = 0, i_out = 0; i < libraw.imgdata.sizes.iheight; ++i)
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
+  for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     int moff = nr_offset(i + nr_margin, nr_margin);
+    int i_out = i * libraw.imgdata.sizes.iwidth;
     for (int j = 0; j < libraw.imgdata.sizes.iwidth; j++, ++moff, ++i_out)
     {
       if (ndir[moff] & HOT)
       {
         int c = libraw.COLOR(i, j);
-        rgb_ahd[1][moff][c] = rgb_ahd[0][moff][c] =
-            libraw.imgdata.image[i_out][c];
+        rgb_ahd[1][moff][c] = rgb_ahd[0][moff][c] = libraw.imgdata.image[i_out][c];
       }
       if (ndir[moff] & VER)
       {
         libraw.imgdata.image[i_out][0] = rgb_ahd[1][moff][0];
-        libraw.imgdata.image[i_out][3] = libraw.imgdata.image[i_out][1] =
-            rgb_ahd[1][moff][1];
+        libraw.imgdata.image[i_out][3] = libraw.imgdata.image[i_out][1] = rgb_ahd[1][moff][1];
         libraw.imgdata.image[i_out][2] = rgb_ahd[1][moff][2];
       }
       else
       {
         libraw.imgdata.image[i_out][0] = rgb_ahd[0][moff][0];
-        libraw.imgdata.image[i_out][3] = libraw.imgdata.image[i_out][1] =
-            rgb_ahd[0][moff][1];
+        libraw.imgdata.image[i_out][3] = libraw.imgdata.image[i_out][1] = rgb_ahd[0][moff][1];
         libraw.imgdata.image[i_out][2] = rgb_ahd[0][moff][2];
       }
     }
@@ -500,14 +472,23 @@ void AAHD::combine_image()
 
 void AAHD::refine_hv_dirs()
 {
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     refine_hv_dirs(i, i & 1);
   }
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     refine_hv_dirs(i, (i & 1) ^ 1);
   }
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     refine_ihv_dirs(i);
@@ -522,10 +503,8 @@ void AAHD::refine_ihv_dirs(int i)
   {
     if (ndir[moff] & HVSH)
       continue;
-    int nv = (ndir[moff + Pn] & VER) + (ndir[moff + Ps] & VER) +
-             (ndir[moff + Pw] & VER) + (ndir[moff + Pe] & VER);
-    int nh = (ndir[moff + Pn] & HOR) + (ndir[moff + Ps] & HOR) +
-             (ndir[moff + Pw] & HOR) + (ndir[moff + Pe] & HOR);
+    int nv = (ndir[moff + Pn] & VER) + (ndir[moff + Ps] & VER) + (ndir[moff + Pw] & VER) + (ndir[moff + Pe] & VER);
+    int nh = (ndir[moff + Pn] & HOR) + (ndir[moff + Ps] & HOR) + (ndir[moff + Pw] & HOR) + (ndir[moff + Pe] & HOR);
     nv /= VER;
     nh /= HOR;
     if ((ndir[moff] & VER) && nh > 3)
@@ -547,13 +526,10 @@ void AAHD::refine_hv_dirs(int i, int js)
   int moff = nr_offset(i + nr_margin, nr_margin + js);
   for (int j = js; j < iwidth; j += 2, moff += 2)
   {
-    int nv = (ndir[moff + Pn] & VER) + (ndir[moff + Ps] & VER) +
-             (ndir[moff + Pw] & VER) + (ndir[moff + Pe] & VER);
-    int nh = (ndir[moff + Pn] & HOR) + (ndir[moff + Ps] & HOR) +
-             (ndir[moff + Pw] & HOR) + (ndir[moff + Pe] & HOR);
-    bool codir = (ndir[moff] & VER)
-                     ? ((ndir[moff + Pn] & VER) || (ndir[moff + Ps] & VER))
-                     : ((ndir[moff + Pw] & HOR) || (ndir[moff + Pe] & HOR));
+    int nv = (ndir[moff + Pn] & VER) + (ndir[moff + Ps] & VER) + (ndir[moff + Pw] & VER) + (ndir[moff + Pe] & VER);
+    int nh = (ndir[moff + Pn] & HOR) + (ndir[moff + Ps] & HOR) + (ndir[moff + Pw] & HOR) + (ndir[moff + Pe] & HOR);
+    bool codir = (ndir[moff] & VER) ? ((ndir[moff + Pn] & VER) || (ndir[moff + Ps] & VER))
+                                    : ((ndir[moff + Pw] & HOR) || (ndir[moff + Pe] & HOR));
     nv /= VER;
     nh /= HOR;
     if ((ndir[moff] & VER) && (nh > 2 && !codir))
@@ -574,6 +550,9 @@ void AAHD::refine_hv_dirs(int i, int js)
  */
 void AAHD::make_ahd_greens()
 {
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     make_ahd_gline(i);
@@ -637,17 +616,14 @@ void AAHD::illustrate_dline(int i)
   {
     int x = j + nr_margin;
     int y = i + nr_margin;
-    rgb_ahd[1][nr_offset(y, x)][0] = rgb_ahd[1][nr_offset(y, x)][1] =
-        rgb_ahd[1][nr_offset(y, x)][2] = rgb_ahd[0][nr_offset(y, x)][0] =
-            rgb_ahd[0][nr_offset(y, x)][1] = rgb_ahd[0][nr_offset(y, x)][2] = 0;
+    rgb_ahd[1][nr_offset(y, x)][0] = rgb_ahd[1][nr_offset(y, x)][1] = rgb_ahd[1][nr_offset(y, x)][2] =
+        rgb_ahd[0][nr_offset(y, x)][0] = rgb_ahd[0][nr_offset(y, x)][1] = rgb_ahd[0][nr_offset(y, x)][2] = 0;
     int l = ndir[nr_offset(y, x)] & HVSH;
     l /= HVSH;
     if (ndir[nr_offset(y, x)] & VER)
-      rgb_ahd[1][nr_offset(y, x)][0] =
-          l * channel_maximum[0] / 4 + channel_maximum[0] / 4;
+      rgb_ahd[1][nr_offset(y, x)][0] = l * channel_maximum[0] / 4 + channel_maximum[0] / 4;
     else
-      rgb_ahd[0][nr_offset(y, x)][2] =
-          l * channel_maximum[2] / 4 + channel_maximum[2] / 4;
+      rgb_ahd[0][nr_offset(y, x)][2] = l * channel_maximum[2] / 4 + channel_maximum[2] / 4;
   }
 }
 
@@ -693,10 +669,16 @@ void AAHD::make_ahd_rb_hv(int i)
 
 void AAHD::make_ahd_rb()
 {
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     make_ahd_rb_hv(i);
   }
+#ifdef LIBRAW_USE_OPENMP
+#pragma omp parallel for num_threads(4)
+#endif
   for (int i = 0; i < libraw.imgdata.sizes.iheight; ++i)
   {
     make_ahd_rb_last(i);
@@ -733,12 +715,9 @@ void AAHD::make_ahd_rb_last(int i)
         for (int h = 0; h < 3; ++h)
         {
           // градиент зелёного плюс градиент {r,b}
-          int gd =
-              ABS(2 * cnr[0][1] - (cnr[+dirs[d][k]][1] + cnr[-dirs[d][h]][1])) +
-              ABS(cnr[+dirs[d][k]][c] - cnr[-dirs[d][h]][c]) / 4 +
-              ABS(cnr[+dirs[d][k]][c] - cnr[+dirs[d][k]][1] +
-                  cnr[-dirs[d][h]][1] - cnr[-dirs[d][h]][c]) /
-                  4;
+          int gd = ABS(2 * cnr[0][1] - (cnr[+dirs[d][k]][1] + cnr[-dirs[d][h]][1])) +
+                   ABS(cnr[+dirs[d][k]][c] - cnr[-dirs[d][h]][c]) / 4 +
+                   ABS(cnr[+dirs[d][k]][c] - cnr[+dirs[d][k]][1] + cnr[-dirs[d][h]][1] - cnr[-dirs[d][h]][c]) / 4;
           if (bgd == 0 || gd < bgd)
           {
             bgd = gd;
