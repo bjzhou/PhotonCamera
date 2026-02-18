@@ -205,12 +205,10 @@ object MeteringSystem {
 
         var gain = when {
             lv >= 13 -> {
-                // 降低目标值，0.8f 在 F-Log2 中过于白亮，0.72f (~72% IRE) 更符合摄影直觉
-                (flog2ToLinear(0.72f) * biasMultiplier) / highlightAnchor
+                (flog2ToLinear(0.75f) * biasMultiplier) / highlightAnchor
             }
             lv >= 8 -> {
-                // 0.7f -> 0.66f
-                (flog2ToLinear(0.66f) * biasMultiplier) / highlightAnchor
+                (flog2ToLinear(0.7f) * biasMultiplier) / highlightAnchor
             }
             lv >= 4 -> {
                 (flog2ToLinear(0.42f) * biasMultiplier) / representativeLinearLuma

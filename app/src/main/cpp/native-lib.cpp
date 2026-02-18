@@ -8,17 +8,16 @@
 #include <cstring>
 #include <fstream>
 #include <jni.h>
+#include <map>
 #include <omp.h>
 #include <string>
 #include <vector>
-#include <map>
 
-#include "libraw/libraw.h"
 #include "common.h"
 #include "jxl_utils.h"
+#include "libraw/libraw.h"
 #include "math_utils.h"
 #include "stacking_utils.h"
-#include "vulkan_raw_stacker.h"
 #include "vulkan_raw_stacker.h"
 #include "vulkan_stacker.h"
 #include <android/hardware_buffer_jni.h>
@@ -30,100 +29,124 @@
 #endif
 
 struct Matrix3x3 {
-    float m[9];
+  float m[9];
 
-    Matrix3x3() {
-        for (int i = 0; i < 9; i++) m[i] = 0;
+  Matrix3x3() {
+    for (int i = 0; i < 9; i++)
+      m[i] = 0;
+  }
+
+  static Matrix3x3 identity() {
+    Matrix3x3 res;
+    res.m[0] = res.m[4] = res.m[8] = 1.0f;
+    return res;
+  }
+
+  Matrix3x3 multiply(const Matrix3x3 &other) const {
+    Matrix3x3 res;
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        res.m[i * 3 + j] = m[i * 3 + 0] * other.m[0 * 3 + j] +
+                           m[i * 3 + 1] * other.m[1 * 3 + j] +
+                           m[i * 3 + 2] * other.m[2 * 3 + j];
+      }
     }
+    return res;
+  }
 
-    static Matrix3x3 identity() {
-        Matrix3x3 res;
-        res.m[0] = res.m[4] = res.m[8] = 1.0f;
-        return res;
-    }
+  Matrix3x3 invert() const {
+    float det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
+                m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                m[2] * (m[3] * m[7] - m[4] * m[6]);
 
-    Matrix3x3 multiply(const Matrix3x3& other) const {
-        Matrix3x3 res;
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-                res.m[i * 3 + j] = m[i * 3 + 0] * other.m[0 * 3 + j] +
-                                   m[i * 3 + 1] * other.m[1 * 3 + j] +
-                                   m[i * 3 + 2] * other.m[2 * 3 + j];
-            }
-        }
-        return res;
-    }
+    if (std::abs(det) < 1e-12f)
+      return identity();
 
-    Matrix3x3 invert() const {
-        float det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
-                    m[1] * (m[3] * m[8] - m[5] * m[6]) +
-                    m[2] * (m[3] * m[7] - m[4] * m[6]);
-
-        if (std::abs(det) < 1e-12f) return identity();
-
-        float invDet = 1.0f / det;
-        Matrix3x3 res;
-        res.m[0] = (m[4] * m[8] - m[5] * m[7]) * invDet;
-        res.m[1] = (m[2] * m[7] - m[1] * m[8]) * invDet;
-        res.m[2] = (m[1] * m[5] - m[2] * m[4]) * invDet;
-        res.m[3] = (m[5] * m[6] - m[3] * m[8]) * invDet;
-        res.m[4] = (m[0] * m[8] - m[2] * m[6]) * invDet;
-        res.m[5] = (m[2] * m[3] - m[0] * m[5]) * invDet;
-        res.m[6] = (m[3] * m[7] - m[4] * m[6]) * invDet;
-        res.m[7] = (m[1] * m[6] - m[0] * m[7]) * invDet;
-        res.m[8] = (m[0] * m[4] - m[1] * m[3]) * invDet;
-        return res;
-    }
+    float invDet = 1.0f / det;
+    Matrix3x3 res;
+    res.m[0] = (m[4] * m[8] - m[5] * m[7]) * invDet;
+    res.m[1] = (m[2] * m[7] - m[1] * m[8]) * invDet;
+    res.m[2] = (m[1] * m[5] - m[2] * m[4]) * invDet;
+    res.m[3] = (m[5] * m[6] - m[3] * m[8]) * invDet;
+    res.m[4] = (m[0] * m[8] - m[2] * m[6]) * invDet;
+    res.m[5] = (m[2] * m[3] - m[0] * m[5]) * invDet;
+    res.m[6] = (m[3] * m[7] - m[4] * m[6]) * invDet;
+    res.m[7] = (m[1] * m[6] - m[0] * m[7]) * invDet;
+    res.m[8] = (m[0] * m[4] - m[1] * m[3]) * invDet;
+    return res;
+  }
 };
 
 static float illuminantToTemp(int illuminant) {
-    switch (illuminant) {
-        case 1:  return 5500.0f;
-        case 2:  return 4000.0f;
-        case 3:  return 3200.0f;
-        case 4:  return 3400.0f;
-        case 9:  return 6500.0f;
-        case 10: return 7500.0f;
-        case 11: return 8000.0f;
-        case 17: return 2856.0f;
-        case 21: return 6504.0f;
-        case 23: return 5000.0f;
-        default: return 5000.0f;
-    }
+  switch (illuminant) {
+  case 1:
+    return 5500.0f;
+  case 2:
+    return 4000.0f;
+  case 3:
+    return 3200.0f;
+  case 4:
+    return 3400.0f;
+  case 9:
+    return 6500.0f;
+  case 10:
+    return 7500.0f;
+  case 11:
+    return 8000.0f;
+  case 17:
+    return 2856.0f;
+  case 21:
+    return 6504.0f;
+  case 23:
+    return 5000.0f;
+  default:
+    return 5000.0f;
+  }
 }
 
 static Matrix3x3 computeXYZD50ToGamut() {
-    float xr = 0.70800f, yr = 0.29200f;
-    float xg = 0.17000f, yg = 0.79700f;
-    float xb = 0.13100f, yb = 0.04600f;
-    float xw = 0.31270f, yw = 0.32900f;
+  float xr = 0.70800f, yr = 0.29200f;
+  float xg = 0.17000f, yg = 0.79700f;
+  float xb = 0.13100f, yb = 0.04600f;
+  float xw = 0.31270f, yw = 0.32900f;
 
-    Matrix3x3 mS;
-    mS.m[0] = xr / yr; mS.m[1] = xg / yg; mS.m[2] = xb / yb;
-    mS.m[3] = 1.0f;    mS.m[4] = 1.0f;    mS.m[5] = 1.0f;
-    mS.m[6] = (1 - xr - yr) / yr; mS.m[7] = (1 - xg - yg) / yg; mS.m[8] = (1 - xb - yb) / yb;
+  Matrix3x3 mS;
+  mS.m[0] = xr / yr;
+  mS.m[1] = xg / yg;
+  mS.m[2] = xb / yb;
+  mS.m[3] = 1.0f;
+  mS.m[4] = 1.0f;
+  mS.m[5] = 1.0f;
+  mS.m[6] = (1 - xr - yr) / yr;
+  mS.m[7] = (1 - xg - yg) / yg;
+  mS.m[8] = (1 - xb - yb) / yb;
 
-    Matrix3x3 invS = mS.invert();
-    float Xw = xw / yw, Yw = 1.0f, Zw = (1 - xw - yw) / yw;
-    float sR = invS.m[0] * Xw + invS.m[1] * Yw + invS.m[2] * Zw;
-    float sG = invS.m[3] * Xw + invS.m[4] * Yw + invS.m[5] * Zw;
-    float sB = invS.m[6] * Xw + invS.m[7] * Yw + invS.m[8] * Zw;
+  Matrix3x3 invS = mS.invert();
+  float Xw = xw / yw, Yw = 1.0f, Zw = (1 - xw - yw) / yw;
+  float sR = invS.m[0] * Xw + invS.m[1] * Yw + invS.m[2] * Zw;
+  float sG = invS.m[3] * Xw + invS.m[4] * Yw + invS.m[5] * Zw;
+  float sB = invS.m[6] * Xw + invS.m[7] * Yw + invS.m[8] * Zw;
 
-    Matrix3x3 gamutToXYZD65;
-    gamutToXYZD65.m[0] = mS.m[0] * sR; gamutToXYZD65.m[1] = mS.m[1] * sG; gamutToXYZD65.m[2] = mS.m[2] * sB;
-    gamutToXYZD65.m[3] = mS.m[3] * sR; gamutToXYZD65.m[4] = mS.m[4] * sG; gamutToXYZD65.m[5] = mS.m[5] * sB;
-    gamutToXYZD65.m[6] = mS.m[6] * sR; gamutToXYZD65.m[7] = mS.m[7] * sG; gamutToXYZD65.m[8] = mS.m[8] * sB;
+  Matrix3x3 gamutToXYZD65;
+  gamutToXYZD65.m[0] = mS.m[0] * sR;
+  gamutToXYZD65.m[1] = mS.m[1] * sG;
+  gamutToXYZD65.m[2] = mS.m[2] * sB;
+  gamutToXYZD65.m[3] = mS.m[3] * sR;
+  gamutToXYZD65.m[4] = mS.m[4] * sG;
+  gamutToXYZD65.m[5] = mS.m[5] * sB;
+  gamutToXYZD65.m[6] = mS.m[6] * sR;
+  gamutToXYZD65.m[7] = mS.m[7] * sG;
+  gamutToXYZD65.m[8] = mS.m[8] * sB;
 
-    float BRADFORD_D65_TO_D50[9] = {
-        1.0478112f, 0.0228866f, -0.0501270f,
-        0.0295424f, 0.9904844f, -0.0170491f,
-        -0.0092345f, 0.0150436f, 0.7521316f
-    };
-    Matrix3x3 bMat;
-    for (int i=0; i<9; i++) bMat.m[i] = BRADFORD_D65_TO_D50[i];
+  float BRADFORD_D65_TO_D50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
+                                  0.0295424f,  0.9904844f, -0.0170491f,
+                                  -0.0092345f, 0.0150436f, 0.7521316f};
+  Matrix3x3 bMat;
+  for (int i = 0; i < 9; i++)
+    bMat.m[i] = BRADFORD_D65_TO_D50[i];
 
-    Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
-    return gamutToXYZD50.invert();
+  Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
+  return gamutToXYZD50.invert();
 }
 
 extern "C" {
@@ -814,7 +837,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
 /**
  * 释放内存
  */
-JNIEXPORT void JNICALL Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_freeNativeBuffer(
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_freeNativeBuffer(
     JNIEnv *env, jobject /* this */, jobject rawDataBuffer) {
   if (rawDataBuffer == nullptr)
     return;
@@ -826,78 +850,89 @@ JNIEXPORT void JNICALL Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_freeNat
 }
 
 struct ExifData {
-    int iso = 0;
-    float noiseProfile[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-    bool hasNoiseProfile = false;
-    int subjectLocation[4] = {0, 0, 0, 0};
-    int subjectLocationLen = 0;
+  int iso = 0;
+  float noiseProfile[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  bool hasNoiseProfile = false;
+  int subjectLocation[4] = {0, 0, 0, 0};
+  int subjectLocationLen = 0;
 };
 
 static int sget2(unsigned int ord, LibRaw_abstract_datastream *stream) {
-    if (!stream) return 0;
-    unsigned char s[2];
-    if (stream->read(s, 1, 2) != 2) return 0;
-    if (ord == 0x4d4d) // MM (Big Endian)
-        return s[0] << 8 | s[1];
-    else // II (Little Endian)
-        return s[1] << 8 | s[0];
+  if (!stream)
+    return 0;
+  unsigned char s[2];
+  if (stream->read(s, 1, 2) != 2)
+    return 0;
+  if (ord == 0x4d4d) // MM (Big Endian)
+    return s[0] << 8 | s[1];
+  else // II (Little Endian)
+    return s[1] << 8 | s[0];
 }
 
 static int sget4(unsigned int ord, LibRaw_abstract_datastream *stream) {
-    if (!stream) return 0;
-    unsigned char s[4];
-    if (stream->read(s, 1, 4) != 4) return 0;
-    if (ord == 0x4d4d) // MM (Big Endian)
-        return (s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3];
-    else // II (Little Endian)
-        return (s[3] << 24) | (s[2] << 16) | (s[1] << 8) | s[0];
+  if (!stream)
+    return 0;
+  unsigned char s[4];
+  if (stream->read(s, 1, 4) != 4)
+    return 0;
+  if (ord == 0x4d4d) // MM (Big Endian)
+    return (s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3];
+  else // II (Little Endian)
+    return (s[3] << 24) | (s[2] << 16) | (s[1] << 8) | s[0];
 }
 
-static void exif_callback(void *datap, int tag, int type, int len, unsigned int ord, void *ifp, long long offset) {
-    auto *ed = static_cast<ExifData *>(datap);
-    auto *stream = static_cast<LibRaw_abstract_datastream *>(ifp);
+static void exif_callback(void *datap, int tag, int type, int len,
+                          unsigned int ord, void *ifp, long long offset) {
+  auto *ed = static_cast<ExifData *>(datap);
+  auto *stream = static_cast<LibRaw_abstract_datastream *>(ifp);
 
-    int actual_tag = tag & 0xFFFF;
-    INT64 current_pos = stream->tell();
+  int actual_tag = tag & 0xFFFF;
+  INT64 current_pos = stream->tell();
 
-    if (offset != 0) {
-        stream->seek(offset, SEEK_SET);
+  if (offset != 0) {
+    stream->seek(offset, SEEK_SET);
+  }
+
+  if (actual_tag == 0x8827) { // ISOSpeedRatings
+    if (len > 0) {
+      if (type == 3)
+        ed->iso = sget2(ord, stream);
+      else if (type == 4)
+        ed->iso = sget4(ord, stream);
     }
-
-    if (actual_tag == 0x8827) { // ISOSpeedRatings
-        if (len > 0) {
-            if (type == 3) ed->iso = sget2(ord, stream);
-            else if (type == 4) ed->iso = sget4(ord, stream);
+  } else if (actual_tag == 0xC635 || actual_tag == 0xC761) { // NoiseProfile
+    if (len > 0) {
+      int count = std::min(len, 8);
+      for (int i = 0; i < count; i++) {
+        if (type == 12) { // DOUBLE
+          double val = 0;
+          stream->read(&val, 8, 1);
+          ed->noiseProfile[i] = (float)val;
+        } else if (type == 11) { // FLOAT
+          float val = 0;
+          stream->read(&val, 4, 1);
+          ed->noiseProfile[i] = val;
         }
-    } else if (actual_tag == 0xC635 || actual_tag == 0xC761) { // NoiseProfile
-        if (len > 0) {
-            int count = std::min(len, 8);
-            for (int i = 0; i < count; i++) {
-                if (type == 12) { // DOUBLE
-                    double val = 0;
-                    stream->read(&val, 8, 1);
-                    ed->noiseProfile[i] = (float)val;
-                } else if (type == 11) { // FLOAT
-                    float val = 0;
-                    stream->read(&val, 4, 1);
-                    ed->noiseProfile[i] = val;
-                }
-            }
-            if (count > 0) ed->hasNoiseProfile = true;
-        }
-    } else if (actual_tag == 0x9214 || actual_tag == 0xA214) { // SubjectLocation / SubjectArea
-        if (len > 0) {
-            int count = std::min(len, 4);
-            for (int i = 0; i < count; i++) {
-                if (type == 3) ed->subjectLocation[i] = sget2(ord, stream);
-                else if (type == 4) ed->subjectLocation[i] = sget4(ord, stream);
-            }
-            ed->subjectLocationLen = count;
-        }
+      }
+      if (count > 0)
+        ed->hasNoiseProfile = true;
     }
+  } else if (actual_tag == 0x9214 ||
+             actual_tag == 0xA214) { // SubjectLocation / SubjectArea
+    if (len > 0) {
+      int count = std::min(len, 4);
+      for (int i = 0; i < count; i++) {
+        if (type == 3)
+          ed->subjectLocation[i] = sget2(ord, stream);
+        else if (type == 4)
+          ed->subjectLocation[i] = sget4(ord, stream);
+      }
+      ed->subjectLocationLen = count;
+    }
+  }
 
-    // Always restore the stream position
-    stream->seek(current_pos, SEEK_SET);
+  // Always restore the stream position
+  stream->seek(current_pos, SEEK_SET);
 }
 
 /**
@@ -966,27 +1001,32 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   // 提取元数据
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
-  jmethodID constructor = env->GetMethodID(
-      dngDataClass, "<init>", "(Ljava/nio/ByteBuffer;IIIF[F[F[FIIF[FIIFIJF[I[F)V");
-
+  jmethodID constructor =
+      env->GetMethodID(dngDataClass, "<init>",
+                       "(Ljava/nio/ByteBuffer;IIIF[F[F[FIIF[FIIFIJF[I[F)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
-      // 注意偏移量是 6
-      float val = RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i];
-      env->SetFloatArrayRegion(blackLevelArray, i, 1, &val);
+    // 注意偏移量是 6
+    float val = RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i];
+    env->SetFloatArrayRegion(blackLevelArray, i, 1, &val);
   }
 
   // 白平衡
   jfloatArray wbArray = env->NewFloatArray(4);
   float wb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
-  for (int i = 0; i < 4; i++) wb[i] = RawProcessor.imgdata.color.cam_mul[i];
+  for (int i = 0; i < 4; i++)
+    wb[i] = RawProcessor.imgdata.color.cam_mul[i];
   float base = wb[1];
   for (int i = 0; i < 4; i++) {
     wb[i] = wb[i] / base;
   }
-  LOGI("wb: %f, %f, %f, %f", wb[0], wb[1], wb[2], wb[3]); //RGB0 or RGBG
+  LOGI("wb: %f, %f, %f, %f", wb[0], wb[1], wb[2], wb[3]); // RGB0 or RGBG
+  LOGI("cam_xyz: %f", RawProcessor.imgdata.color.cam_xyz[0][0]);
+  LOGI("ccm: %f", RawProcessor.imgdata.color.ccm[0][0]);
+  LOGI("cmatrix: %f", RawProcessor.imgdata.color.cmatrix[0][0]);
+  LOGI("rgb_cam: %f", RawProcessor.imgdata.color.rgb_cam[0][0]);
 
   env->SetFloatArrayRegion(wbArray, 0, 1, &wb[0]);
   env->SetFloatArrayRegion(wbArray, 1, 1, &wb[1]);
@@ -1004,80 +1044,81 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   bool hasM1 = false, hasM2 = false;
 
   auto getMatrix = [&](int index, Matrix3x3 &m) {
-      float sumFM = 0.0f;
+    float sumFM = 0.0f;
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        m.m[i * 3 + j] =
+            RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
+        sumFM += std::abs(m.m[i * 3 + j]);
+      }
+    }
+    if (sumFM > 0.01f)
+      return true;
+
+    float sumCM = 0.0f;
+    Matrix3x3 xyzToCam;
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        xyzToCam.m[i * 3 + j] =
+            RawProcessor.imgdata.color.dng_color[index].colormatrix[i][j];
+        sumCM += std::abs(xyzToCam.m[i * 3 + j]);
+      }
+    }
+    if (sumCM > 0.01f) {
+      // 1. 确定参考光源的 XYZ 白点 (根据 DNG 规范)
+      float lx, ly, lz;
+      int ill = RawProcessor.imgdata.color.dng_color[index].illuminant;
+
+      if (ill == 17) { // Standard Light A
+        lx = 1.0985f;
+        ly = 1.0000f;
+        lz = 0.3558f;
+      } else { // Assume D65
+        lx = 0.9504f;
+        ly = 1.0000f;
+        lz = 1.0888f;
+      }
+
+      // 2. 计算相机对该光源的响应 (Camera Neutral / White Balance)
+      // 这是 ColorMatrix 作用于光源 XYZ 的结果
+      float cameraNeutral[3];
       for (int i = 0; i < 3; i++) {
-          for (int j = 0; j < 3; j++) {
-              m.m[i * 3 + j] = RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
-              sumFM += std::abs(m.m[i * 3 + j]);
-          }
+        cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
+                           xyzToCam.m[i * 3 + 1] * ly +
+                           xyzToCam.m[i * 3 + 2] * lz;
       }
-      if (sumFM > 0.01f) return true;
 
-      float sumCM = 0.0f;
-      Matrix3x3 xyzToCam;
-      for (int i = 0; i < 3; i++) {
-          for (int j = 0; j < 3; j++) {
-              xyzToCam.m[i * 3 + j] = RawProcessor.imgdata.color.dng_color[index].colormatrix[i][j];
-              sumCM += std::abs(xyzToCam.m[i * 3 + j]);
-          }
+      // 3. 构造中间矩阵：ColorMatrix * ReferenceDiagonal
+      // 在 DNG 逻辑中，我们需要对 ColorMatrix 的每一列乘以对应的 CameraNeutral
+      // 分量 这样做的目的是为了让矩阵在处理该光源下的“白点”时，输出为 [1, 1, 1]
+      Matrix3x3 referenceMatrix = xyzToCam;
+      for (int col = 0; col < 3; col++) {
+        // 这一步非常关键：为了求逆后能还原，这里其实是预补偿白平衡
+        referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
+        referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
+        referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
       }
-      if (sumCM > 0.01f) {
-        // 1. 确定参考光源的 XYZ 白点 (根据 DNG 规范)
-        float lx, ly, lz;
-        int ill = RawProcessor.imgdata.color.dng_color[index].illuminant;
 
-        if (ill == 17) { // Standard Light A
-            lx = 1.0985f; ly = 1.0000f; lz = 0.3558f;
-        } else { // Assume D65
-            lx = 0.9504f; ly = 1.0000f; lz = 1.0888f;
-        }
+      // 4. 求逆：从 Camera 空间转回该光源下的 XYZ 空间
+      // 现在 m 是从 Camera (White Balanced) -> XYZ (Illuminant Relative)
+      m = referenceMatrix.invert();
 
-        // 2. 计算相机对该光源的响应 (Camera Neutral / White Balance)
-        // 这是 ColorMatrix 作用于光源 XYZ 的结果
-        float cameraNeutral[3];
-        for (int i = 0; i < 3; i++) {
-            cameraNeutral[i] = xyzToCam.m[i*3+0] * lx +
-                               xyzToCam.m[i*3+1] * ly +
-                               xyzToCam.m[i*3+2] * lz;
-        }
-
-        // 3. 构造中间矩阵：ColorMatrix * ReferenceDiagonal
-        // 在 DNG 逻辑中，我们需要对 ColorMatrix 的每一列乘以对应的 CameraNeutral 分量
-        // 这样做的目的是为了让矩阵在处理该光源下的“白点”时，输出为 [1, 1, 1]
-        Matrix3x3 referenceMatrix = xyzToCam;
-        for (int col = 0; col < 3; col++) {
-            // 这一步非常关键：为了求逆后能还原，这里其实是预补偿白平衡
-            referenceMatrix.m[0*3+col] /= cameraNeutral[0];
-            referenceMatrix.m[1*3+col] /= cameraNeutral[1];
-            referenceMatrix.m[2*3+col] /= cameraNeutral[2];
-        }
-
-        // 4. 求逆：从 Camera 空间转回该光源下的 XYZ 空间
-        // 现在 m 是从 Camera (White Balanced) -> XYZ (Illuminant Relative)
-        m = referenceMatrix.invert();
-
-        // 5. 应用色度适应 (Chromatic Adaptation) 映射到 D50
-        // ForwardMatrix 必须映射到 D50 空间
-        Matrix3x3 adapt;
-        if (ill == 17) { // A to D50 (Bradford Transform)
-            float a2d50[9] = {
-                0.8924f, -0.0157f,  0.0529f,
-               -0.1111f,  1.0505f, -0.0151f,
-                0.0522f, -0.0077f,  2.2396f
-            };
-            memcpy(adapt.m, a2d50, 9 * sizeof(float));
-        } else { // D65 to D50 (Bradford Transform)
-            float d652d50[9] = {
-                1.0478f,  0.0229f, -0.0501f,
-                0.0295f,  0.9905f, -0.0170f,
-               -0.0092f,  0.0150f,  0.7521f
-            };
-            memcpy(adapt.m, d652d50, 9 * sizeof(float));
-        }
-        m = adapt.multiply(m);
-        return true;
+      // 5. 应用色度适应 (Chromatic Adaptation) 映射到 D50
+      // ForwardMatrix 必须映射到 D50 空间
+      Matrix3x3 adapt;
+      if (ill == 17) { // A to D50 (Bradford Transform)
+        float a2d50[9] = {0.8924f,  -0.0157f, 0.0529f,  -0.1111f, 1.0505f,
+                          -0.0151f, 0.0522f,  -0.0077f, 2.2396f};
+        memcpy(adapt.m, a2d50, 9 * sizeof(float));
+      } else { // D65 to D50 (Bradford Transform)
+        float d652d50[9] = {1.0478f,  0.0229f,  -0.0501f, 0.0295f, 0.9905f,
+                            -0.0170f, -0.0092f, 0.0150f,  0.7521f};
+        memcpy(adapt.m, d652d50, 9 * sizeof(float));
       }
-      return false;
+      m = adapt.multiply(m);
+      return true;
+    }
+    return false;
   };
 
   hasM1 = getMatrix(0, m1);
@@ -1087,127 +1128,183 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   float weight = 0.5f;
   if (hasM1 && hasM2) {
-      float t1 = illuminantToTemp(RawProcessor.imgdata.color.dng_color[0].illuminant);
-      float t2 = illuminantToTemp(RawProcessor.imgdata.color.dng_color[1].illuminant);
-      float currentRatio = wb[0] / wb[2]; // R/B
-      float rWarm = 0.5f, rCool = 1.6f;
-      auto getTargetRatio = [&](float temp) {
-          if (temp <= 2856.0f) return rWarm;
-          if (temp >= 6504.0f) return rCool;
-          return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
-      };
-      float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
-      if (std::abs(r1 - r2) > 0.01f) {
-          weight = (currentRatio - r2) / (r1 - r2);
-          weight = std::max(0.0f, std::min(1.0f, weight));
-      }
+    float t1 =
+        illuminantToTemp(RawProcessor.imgdata.color.dng_color[0].illuminant);
+    float t2 =
+        illuminantToTemp(RawProcessor.imgdata.color.dng_color[1].illuminant);
+    float currentRatio = wb[0] / wb[2]; // R/B
+    float rWarm = 0.5f, rCool = 1.6f;
+    auto getTargetRatio = [&](float temp) {
+      if (temp <= 2856.0f)
+        return rWarm;
+      if (temp >= 6504.0f)
+        return rCool;
+      return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
+    };
+    float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
+    if (std::abs(r1 - r2) > 0.01f) {
+      weight = (currentRatio - r2) / (r1 - r2);
+      weight = std::max(0.0f, std::min(1.0f, weight));
+    }
   }
 
   Matrix3x3 camToXYZ;
   if (hasM1 && hasM2) {
-      for (int i=0; i<9; i++) camToXYZ.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
-  } else if (hasM1) camToXYZ = m1;
-  else if (hasM2) camToXYZ = m2;
+    for (int i = 0; i < 9; i++)
+      camToXYZ.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
+  } else if (hasM1)
+    camToXYZ = m1;
+  else if (hasM2)
+    camToXYZ = m2;
   else {
-      // 没有任何 DNG 矩阵。尝试通过 LibRaw 的 ccm 反算。
-      // LibRaw 的 ccm 通常是 Camera-to-sRGB (D65)。
+    // 没有任何 DNG ForwardMatrix。
+    // Bradford 变换 (D65 to D50)
+    float d652d50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
+                        0.0295424f,  0.9904844f, -0.0170491f,
+                        -0.0092345f, 0.0150436f, 0.7521316f};
+    Matrix3x3 adapt;
+    memcpy(adapt.m, d652d50, 9 * sizeof(float));
+
+    Matrix3x3 xyzToCam;
+    bool hasCamXYZ = false;
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        // LibRaw 的 cam_xyz[chan][xyz] 是 XYZ-to-Camera 映射，与 ColorMatrix1/2
+        // 结构相同
+        xyzToCam.m[i * 3 + j] = RawProcessor.imgdata.color.cam_xyz[i][j];
+        if (std::abs(xyzToCam.m[i * 3 + j]) > 0.0001f)
+          hasCamXYZ = true;
+      }
+    }
+
+    if (hasCamXYZ) {
+      // 1. 视为 D65 下的 XYZ-to-Camera 矩阵进行标准化 (同 ColorMatrix 处理方式)
+      float lx = 0.9504f, ly = 1.0000f, lz = 1.0888f; // D65
+      float cameraNeutral[3];
+      for (int i = 0; i < 3; i++) {
+        cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
+                           xyzToCam.m[i * 3 + 1] * ly +
+                           xyzToCam.m[i * 3 + 2] * lz;
+      }
+      Matrix3x3 referenceMatrix = xyzToCam;
+      for (int col = 0; col < 3; col++) {
+        if (std::abs(cameraNeutral[0]) > 0.001f)
+          referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
+        if (std::abs(cameraNeutral[1]) > 0.001f)
+          referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
+        if (std::abs(cameraNeutral[2]) > 0.001f)
+          referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
+      }
+      // 2. 求逆得到 Camera-to-XYZ
+      camToXYZ = referenceMatrix.invert();
+      // 3. 应用色度适应 D65 -> D50
+      camToXYZ = adapt.multiply(camToXYZ);
+      LOGI(
+          "Using LibRaw cam_xyz (treated as ColorMatrix) converted to XYZ D50");
+    } else {
+      // 2. 尝试通过 LibRaw 的 ccm 反算。
+      // 当 output_color = 0 时，ccm 通常仍然是针对默认 sRGB (D65) 的矩阵。
       Matrix3x3 camToSRGB;
       bool hasCCM = false;
-      for (int i=0; i<3; i++) for (int j=0; j<3; j++) {
-          camToSRGB.m[i*3+j] = RawProcessor.imgdata.color.ccm[i][j];
-          if (camToSRGB.m[i*3+j] != 0) hasCCM = true;
+      for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+          camToSRGB.m[i * 3 + j] = RawProcessor.imgdata.color.ccm[i][j];
+          if (std::abs(camToSRGB.m[i * 3 + j]) > 0.0001f)
+            hasCCM = true;
+        }
       }
 
       if (hasCCM) {
-          // 1. sRGB D65 to XYZ D65 转换矩阵
-          float srgb2xyz[9] = {
-              0.4124564f, 0.3575761f, 0.1804375f,
-              0.2126729f, 0.7151522f, 0.0721750f,
-              0.0193339f, 0.1191920f, 0.9503041f
-          };
-          Matrix3x3 mSRGB2XYZ;
-          memcpy(mSRGB2XYZ.m, srgb2xyz, 9 * sizeof(float));
-
-          // 2. Bradford 变换 (D65 to D50)
-          float d652d50[9] = {
-              1.0478f,  0.0229f, -0.0501f,
-              0.0295f,  0.9905f, -0.0170f,
-             -0.0092f,  0.0150f,  0.7521f
-          };
-          Matrix3x3 adapt;
-          memcpy(adapt.m, d652d50, 9 * sizeof(float));
-
-          // camToXYZ_D50 = adapt * sRGBToXYZ * camToSRGB
-          camToXYZ = adapt.multiply(mSRGB2XYZ.multiply(camToSRGB));
-          LOGI("Using LibRaw ccm converted to XYZ D50");
+        float srgb2xyz[9] = {0.4124564f, 0.3575761f, 0.1804375f,
+                             0.2126729f, 0.7151522f, 0.0721750f,
+                             0.0193339f, 0.1191920f, 0.9503041f};
+        Matrix3x3 mSRGB2XYZ;
+        memcpy(mSRGB2XYZ.m, srgb2xyz, 9 * sizeof(float));
+        camToXYZ = adapt.multiply(mSRGB2XYZ.multiply(camToSRGB));
+        LOGI("Using LibRaw ccm converted to XYZ D50");
       } else {
-          // 如果 ccm 也没有，最后尝试 cmatrix (XYZ to Camera)
-          Matrix3x3 xyzToCam;
-          bool hasCMatrix = false;
-          for (int i=0; i<3; i++) for (int j=0; j<3; j++) {
-              xyzToCam.m[i*3+j] = RawProcessor.imgdata.color.cmatrix[i][j];
-              if (xyzToCam.m[i*3+j] != 0) hasCMatrix = true;
+        // 3. 最后尝试 cmatrix (XYZ D65 to Camera)
+        Matrix3x3 xyzToCam;
+        bool hasCMatrix = false;
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) {
+            xyzToCam.m[i * 3 + j] = RawProcessor.imgdata.color.cmatrix[i][j];
+            if (std::abs(xyzToCam.m[i * 3 + j]) > 0.0001f)
+              hasCMatrix = true;
           }
+        }
 
-          if (hasCMatrix) {
-              // 处理方式同前：视为 D65 下的 ColorMatrix 反算
-              float lx = 0.9504f, ly = 1.0000f, lz = 1.0888f; 
-              float cameraNeutral[3];
-              for (int i = 0; i < 3; i++) {
-                  cameraNeutral[i] = xyzToCam.m[i*3+0] * lx + xyzToCam.m[i*3+1] * ly + xyzToCam.m[i*3+2] * lz;
-              }
-              Matrix3x3 referenceMatrix = xyzToCam;
-              for (int col = 0; col < 3; col++) {
-                  if (std::abs(cameraNeutral[0]) > 0.001f) referenceMatrix.m[0*3+col] /= cameraNeutral[0];
-                  if (std::abs(cameraNeutral[1]) > 0.001f) referenceMatrix.m[1*3+col] /= cameraNeutral[1];
-                  if (std::abs(cameraNeutral[2]) > 0.001f) referenceMatrix.m[2*3+col] /= cameraNeutral[2];
-              }
-              camToXYZ = referenceMatrix.invert();
-
-              float d652d50[9] = {1.0478f, 0.0229f, -0.0501f, 0.0295f, 0.9905f, -0.0170f, -0.0092f, 0.0150f, 0.7521f};
-              Matrix3x3 adapt;
-              memcpy(adapt.m, d652d50, 9 * sizeof(float));
-              camToXYZ = adapt.multiply(camToXYZ);
-              LOGI("Using cmatrix fallback converted to XYZ D50");
-          } else {
-              camToXYZ = Matrix3x3::identity();
-              LOGE("No color metadata found at all, using identity");
+        if (hasCMatrix) {
+          float lx = 0.9504f, ly = 1.0000f, lz = 1.0888f;
+          float cameraNeutral[3];
+          for (int i = 0; i < 3; i++) {
+            cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
+                               xyzToCam.m[i * 3 + 1] * ly +
+                               xyzToCam.m[i * 3 + 2] * lz;
           }
+          Matrix3x3 referenceMatrix = xyzToCam;
+          for (int col = 0; col < 3; col++) {
+            if (std::abs(cameraNeutral[0]) > 0.001f)
+              referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
+            if (std::abs(cameraNeutral[1]) > 0.001f)
+              referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
+            if (std::abs(cameraNeutral[2]) > 0.001f)
+              referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
+          }
+          camToXYZ = referenceMatrix.invert();
+          camToXYZ = adapt.multiply(camToXYZ);
+          LOGI("Using cmatrix fallback converted to XYZ D50");
+        } else {
+          camToXYZ = Matrix3x3::identity();
+          LOGE("No color metadata found at all, using identity");
+        }
       }
+    }
   }
 
   Matrix3x3 finalCCM = targetTransform.multiply(camToXYZ);
   jfloatArray colorMatrixArray = env->NewFloatArray(9);
   env->SetFloatArrayRegion(colorMatrixArray, 0, 9, finalCCM.m);
 
-  LOGI("finalCCM: %f, %f, %f, %f, %f, %f, %f, %f, %f", finalCCM.m[0], finalCCM.m[1], finalCCM.m[2], finalCCM.m[3], finalCCM.m[4], finalCCM.m[5], finalCCM.m[6], finalCCM.m[7], finalCCM.m[8]);
+  LOGI("finalCCM: %f, %f, %f, %f, %f, %f, %f, %f, %f", finalCCM.m[0],
+       finalCCM.m[1], finalCCM.m[2], finalCCM.m[3], finalCCM.m[4],
+       finalCCM.m[5], finalCCM.m[6], finalCCM.m[7], finalCCM.m[8]);
 
   // 其它
   jint width = image->width;
   jint height = image->height;
   jint rowStride = width * 6; // RGB16
-  jfloat whiteLevel = (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
-  if (whiteLevel <= 0) whiteLevel = (jfloat)RawProcessor.imgdata.color.maximum;
+  jfloat whiteLevel =
+      (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
+  if (whiteLevel <= 0)
+    whiteLevel = (jfloat)RawProcessor.imgdata.color.maximum;
   jint cfaPattern = -1; // CFA_LINEAR_RGB
 
-  jfloat baselineExposure = RawProcessor.imgdata.color.dng_levels.baseline_exposure;
-  jfloat exposureBias = RawProcessor.imgdata.makernotes.common.ExposureCalibrationShift;
+  jfloat baselineExposure =
+      RawProcessor.imgdata.color.dng_levels.baseline_exposure;
+  jfloat exposureBias =
+      RawProcessor.imgdata.makernotes.common.ExposureCalibrationShift;
   int iso = RawProcessor.imgdata.other.iso_speed;
-  if (iso == 0) iso = ed.iso;
+  if (iso == 0)
+    iso = ed.iso;
 
-  jlong shutterSpeedLong = (jlong)(RawProcessor.imgdata.other.shutter * 1e9); // ns
+  jlong shutterSpeedLong =
+      (jlong)(RawProcessor.imgdata.other.shutter * 1e9); // ns
   jfloat aperture = RawProcessor.imgdata.other.aperture;
 
-  LOGI("iso = %d, shutterSpeed = %lld aperture = %f baselineExposure = %f exposureBias = %f", iso, (long long)shutterSpeedLong, aperture, baselineExposure, exposureBias);
+  LOGI("iso = %d, shutterSpeed = %lld aperture = %f baselineExposure = %f "
+       "exposureBias = %f",
+       iso, (long long)shutterSpeedLong, aperture, baselineExposure,
+       exposureBias);
 
   // ActiveArray: use margins to define the actual active sensor area
   jintArray activeArray = env->NewIntArray(4);
-  jint aa[4] = {
-      (jint)RawProcessor.imgdata.sizes.left_margin,
-      (jint)RawProcessor.imgdata.sizes.top_margin,
-      (jint)RawProcessor.imgdata.sizes.left_margin + (jint)RawProcessor.imgdata.sizes.width,
-      (jint)RawProcessor.imgdata.sizes.top_margin + (jint)RawProcessor.imgdata.sizes.height
-  };
+  jint aa[4] = {(jint)RawProcessor.imgdata.sizes.left_margin,
+                (jint)RawProcessor.imgdata.sizes.top_margin,
+                (jint)RawProcessor.imgdata.sizes.left_margin +
+                    (jint)RawProcessor.imgdata.sizes.width,
+                (jint)RawProcessor.imgdata.sizes.top_margin +
+                    (jint)RawProcessor.imgdata.sizes.height};
   env->SetIntArrayRegion(activeArray, 0, 4, aa);
 
   // LOGI("aa: %d, %d, %d, %d", aa[0], aa[1], aa[2], aa[3]);
@@ -1215,15 +1312,15 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jfloatArray afRegions = nullptr;
   jfloatArray noiseProfileArray = nullptr;
   if (ed.hasNoiseProfile) {
-      noiseProfileArray = env->NewFloatArray(8);
-      env->SetFloatArrayRegion(noiseProfileArray, 0, 8, ed.noiseProfile);
+    noiseProfileArray = env->NewFloatArray(8);
+    env->SetFloatArrayRegion(noiseProfileArray, 0, 8, ed.noiseProfile);
   }
 
   jobject dngData = env->NewObject(
-      dngDataClass, constructor, rawDataBuffer,
-      width, height, rowStride, whiteLevel, blackLevelArray, wbArray,
-      colorMatrixArray, cfaPattern, 0, baselineExposure, nullptr, 0, 0,
-      exposureBias, iso, shutterSpeedLong, aperture, activeArray, noiseProfileArray);
+      dngDataClass, constructor, rawDataBuffer, width, height, rowStride,
+      whiteLevel, blackLevelArray, wbArray, colorMatrixArray, cfaPattern, 0,
+      baselineExposure, nullptr, 0, 0, exposureBias, iso, shutterSpeedLong,
+      aperture, activeArray, noiseProfileArray);
 
   // 释放资源
   LibRaw::dcraw_clear_mem(image);
