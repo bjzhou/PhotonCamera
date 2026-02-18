@@ -60,6 +60,7 @@ import androidx.media3.ui.PlayerView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import java.io.File
 
@@ -552,6 +553,10 @@ fun PhotoDetailScreen(
                         InfoRow(stringResource(R.string.photo_info_aperture), it.aperture ?: "N/A")
                         InfoRow(stringResource(R.string.photo_info_iso), it.iso?.toString() ?: "N/A")
                         InfoRow(stringResource(R.string.photo_info_shutter_speed), it.shutterSpeed ?: "N/A")
+                        if (DeviceUtil.isChinaFlavor) {
+                            InfoRow("LV", "%.2f".format(it.lv))
+                            InfoRow("平均亮度", "%.2f".format(viewModel.currentBrightness[currentPhoto.id]))
+                        }
                     }
                 }
             },

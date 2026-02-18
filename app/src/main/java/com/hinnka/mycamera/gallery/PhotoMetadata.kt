@@ -11,6 +11,7 @@ import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.log2
 
 /**
  * 照片元数据
@@ -90,6 +91,14 @@ data class PhotoMetadata(
         } catch (e: Exception) {
             null
         }
+    }
+
+    val lv: Float get() {
+        val aperture = aperture?.substringAfter("/")?.toFloatOrNull() ?: return 0f
+        val shutterSpeed = parseExposureTime(shutterSpeed)?.let { it * 1f / 1_000_000_000L } ?: return 0f
+        val iso = iso ?: return 0f
+        val ev = log2((aperture * aperture) / shutterSpeed)
+        return ev - log2(iso / 100f)
     }
 
     /**
