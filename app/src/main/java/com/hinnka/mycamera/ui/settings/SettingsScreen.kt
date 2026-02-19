@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -18,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -31,10 +31,13 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
+import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlin.math.roundToInt
 
@@ -69,10 +72,11 @@ fun SettingsScreen(
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
-    val rawLut by viewModel.rawLut.collectAsState()
     val droMode by viewModel.droMode.collectAsState()
     val applyUltraHDR by viewModel.applyUltraHDR.collectAsState()
-    val availableRawLutList = viewModel.availableRawLutList
+    val colorSpace by viewModel.colorSpace.collectAsState()
+    val logCurve by viewModel.logCurve.collectAsState()
+    val rawLut by viewModel.rawLut.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -81,8 +85,16 @@ fun SettingsScreen(
     var showLogViewerDialog by remember { mutableStateOf(false) }
     var softwareProcessingExpanded by remember { mutableStateOf(false) }
     var calibrationExpanded by remember { mutableStateOf(false) }
+    var availableRawLutMap by remember { mutableStateOf(listOf<Pair<String, String>>()) }
 
-    val backgroundColor = Color(0xFF151515)
+    val noneStr = stringResource(R.string.none)
+
+    LaunchedEffect(logCurve) {
+        availableRawLutMap = listOf("none" to noneStr) + viewModel.getAvailableRawLutList(context, logCurve)
+            .map {
+                it to it.substringBeforeLast(".")
+            }
+    }
 
     val backgroundPainter = rememberBackgroundPainter(viewModel)
     Column(
@@ -293,10 +305,38 @@ fun SettingsScreen(
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
 
-                RawRestoreLutSetting(
-                    availableLuts = availableRawLutList,
-                    currentLut = rawLut,
-                    onLutSelected = { viewModel.setRawLut(it) }
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_color_space),
+                    description = stringResource(R.string.settings_color_space_description),
+                    levels = ColorSpace.entries.map { it to it.name },
+                    currentLevel = colorSpace,
+                    onLevelSelected = { viewModel.setColorSpace(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_log_curve),
+                    description = stringResource(R.string.settings_log_curve_description),
+                    levels = LogCurve.entries.map { it to it.name },
+                    currentLevel = logCurve,
+                    onLevelSelected = { viewModel.setLogCurve(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_raw_restore_lut),
+                    description = stringResource(R.string.settings_raw_restore_lut_description),
+                    levels = availableRawLutMap,
+                    currentLevel = rawLut,
+                    onLevelSelected = { viewModel.setRawLut(logCurve, it) }
                 )
 
                 HorizontalDivider(
@@ -1007,16 +1047,15 @@ fun <T> QualityLevelSetting(
             modifier = Modifier.padding(bottom = 12.dp)
         )
 
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             levels.forEach { (level, label) ->
                 val isSelected = currentLevel == level
                 Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(36.dp)
+                    modifier = Modifier.height(36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
                             if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.1f)
@@ -1028,7 +1067,9 @@ fun <T> QualityLevelSetting(
                         text = label,
                         color = Color.White,
                         fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 4.dp).widthIn(min = 44.dp)
                     )
                 }
             }
@@ -1326,103 +1367,6 @@ private fun CustomBackgroundItem(
                     modifier = Modifier.size(24.dp)
                 )
             }
-        }
-    }
-}
-
-/**
- * RAW 还原 LUT 设置 - 升级版 UI (网格布局，展示完整文字)
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun RawRestoreLutSetting(
-    availableLuts: List<String>,
-    currentLut: String,
-    onLutSelected: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = stringResource(R.string.settings_raw_restore_lut),
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
-        Text(
-            text = stringResource(R.string.settings_raw_restore_lut_description),
-            color = Color.White.copy(alpha = 0.5f),
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            RawLutChip(
-                name = stringResource(R.string.settings_raw_restore_flat),
-                isSelected = currentLut == "none",
-                onClick = { onLutSelected("none") },
-                isNone = true
-            )
-
-            availableLuts.forEach { lut ->
-                RawLutChip(
-                    name = lut.substringBeforeLast("."),
-                    isSelected = currentLut == lut,
-                    onClick = { onLutSelected(lut) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RawLutChip(
-    name: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    isNone: Boolean = false
-) {
-    val accentColor = Color(0xFFFF6B35)
-
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                if (isSelected) {
-                    Brush.horizontalGradient(
-                        listOf(accentColor.copy(alpha = 0.25f), accentColor.copy(alpha = 0.15f))
-                    )
-                } else {
-                    Brush.horizontalGradient(
-                        listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.04f))
-                    )
-                }
-            )
-            .border(
-                width = if (isSelected) 1.5.dp else 1.dp,
-                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = name,
-                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.8f),
-                fontSize = 10.sp,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Visible
-            )
         }
     }
 }

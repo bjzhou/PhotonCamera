@@ -756,7 +756,7 @@ class LutImageProcessor {
             
             // 辅助函数：亮度计算
             float getLuma(vec3 color) {
-                return dot(color, vec3(0.299, 0.587, 0.114));
+                return dot(color, vec3(0.2126, 0.7152, 0.0722));
             }
 
             float log10(float x) { return log(x) * 0.4342944819; }
@@ -981,7 +981,7 @@ class LutImageProcessor {
                     color.rgb *= pow(2.0, uExposure);
 
                     // 2. 高光/阴影调整（分区调整，基于亮度 mask）
-                    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
                     float highlightMask = smoothstep(0.5, 1.0, luma);
                     float shadowMask = smoothstep(0.5, 0.0, luma);
                     float highlightFactor;
@@ -1008,7 +1008,7 @@ class LutImageProcessor {
                     color.g += uTint * 0.05;
 
                     // 5. 饱和度（基于 Luma 的快速算法）
-                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    float gray = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
                     color.rgb = mix(vec3(gray), color.rgb, uSaturation);
 
                     // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
@@ -1051,7 +1051,7 @@ class LutImageProcessor {
                     // 8. 留银冲洗（Bleach Bypass - 胶片银盐保留效果）
                     if (uBleachBypass > 0.0) {
                         // 保留部分银盐：降低饱和度
-                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                        float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
                         vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
                         
                         // 增强对比度
@@ -1094,7 +1094,7 @@ class LutImageProcessor {
                         noise = (noise - 0.5) * 2.0;
                         
                         // 根据亮度自适应调整颗粒强度
-                        float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                        float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
                         float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
                         grainMask = grainMask * 0.5 + 0.5;
                         

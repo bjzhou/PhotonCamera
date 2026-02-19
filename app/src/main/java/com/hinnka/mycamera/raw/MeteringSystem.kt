@@ -15,25 +15,6 @@ object MeteringSystem {
         OFF, LOW, HIGH
     }
 
-    // F-Log2 官方参数 (Fujifilm Official)
-    private const val FLOG2_A = 5.555556f
-    private const val FLOG2_B = 0.064829f
-    private const val FLOG2_C = 0.245281f
-    private const val FLOG2_D = 0.384316f
-    private const val FLOG2_E = 8.799461f
-    private const val FLOG2_F = 0.092864f
-
-    // 临界点
-    private const val CUT1 = 0.000889f // Linear 边界
-    private const val CUT2 = 0.100686685f // F-Log2 边界 (IRE)
-
-    // 目标定标点
-    private const val TARGET_MID_GRAY_IRE = 0.40f // 稍微过曝一点，让画面更通透
-    private const val WHITE_90_IRE = 0.58f        // 标准 90% 白点
-
-    // F-Log2 曲线的绝对正向映射上限
-    private const val F_LOG2_MAX_LINEAR = 58.28f
-
     data class AnalysisResult(
         val exposureGain: Float,
         val p98Luma: Float,
@@ -43,25 +24,17 @@ object MeteringSystem {
     )
 
     /**
-     * 将线性反射率 (Scene Linear Reflection) 转换为 F-Log2 (0..1)
+     * 将线性反射率 (Scene Linear Reflection) 转换为 Log (0..1)
      */
-    private fun linearToFLog2(reflection: Float): Float {
-        return if (reflection >= CUT1) {
-            FLOG2_C * kotlin.math.log10(FLOG2_A * reflection.toDouble() + FLOG2_B).toFloat() + FLOG2_D
-        } else {
-            FLOG2_E * reflection + FLOG2_F
-        }
+    private fun linearToLog(reflection: Float, logCurve: LogCurve): Float {
+        return logCurve.linearToLog(reflection)
     }
 
     /**
-     * 将 F-Log2 (0..1) 还原为线性反射率
+     * 将 Log (0..1) 还原为线性反射率
      */
-    private fun flog2ToLinear(flog2: Float): Float {
-        return if (flog2 >= CUT2) {
-            ((10.0.pow((flog2 - FLOG2_D).toDouble() / FLOG2_C)) - FLOG2_B).toFloat() / FLOG2_A
-        } else {
-            (flog2 - FLOG2_F) / FLOG2_E
-        }
+    private fun logToLinear(logValue: Float, logCurve: LogCurve): Float {
+        return logCurve.logToLinear(logValue)
     }
 
     fun analyze(
@@ -70,6 +43,7 @@ object MeteringSystem {
         height: Int,
         focusX: Float,
         focusY: Float,
+        logCurve: LogCurve,
         metadata: RawMetadata?
     ): AnalysisResult {
         val pixelCount = width * height
@@ -99,8 +73,9 @@ object MeteringSystem {
                 val max = maxOf(r, g, b)
                 if (max > maxColor) maxColor = max
 
-                // 转换到 F-Log2 空间进行测光分析
-                val flog2Luma = linearToFLog2(luma)
+                // 转换到 Log 空间进行测光分析
+                val logCurve = logCurve
+                val logLuma = linearToLog(luma, logCurve)
 
                 // 1. 基础权重：高斯分布 + 基础权重
                 val px = x.toFloat() / width
@@ -130,7 +105,7 @@ object MeteringSystem {
 
                 val finalWeight = gaussianWeight * envWeight * skinWeight
 
-                weightedSumFLog2 += flog2Luma.toDouble() * finalWeight
+                weightedSumFLog2 += logLuma.toDouble() * finalWeight
                 totalWeight += finalWeight
 
                 totalSumLuma += luma
@@ -152,11 +127,12 @@ object MeteringSystem {
         val ev = log2((aperture * aperture) / shutterSpeed)
         val lv = ev - log2(iso / 100f)
 
-        // 计算 F-Log2 空间的加权平均亮度
-        val avgFLog2 = (weightedSumFLog2 / totalWeight).toFloat()
+        // 计算 Log 空间的加权平均亮度
+        val avgLog = (weightedSumFLog2 / totalWeight).toFloat()
 
         // 映射回线性空间，得到场景的“代表性亮度”
-        val representativeLinearLuma = flog2ToLinear(avgFLog2)
+        val logCurve = logCurve
+        val representativeLinearLuma = logToLinear(avgLog, logCurve)
 
         // 计算 P98 和 P05 用于动态范围分析
         val sortedLumas = allLumas.copyOfRange(0, validPixelCount)
@@ -208,7 +184,9 @@ object MeteringSystem {
         // 4 -> 0.391
         // 8 -> 0.42
         // 13 -> 0.45
-        var gain = flog2ToLinear(lv / (2.087f * lv + 1.759f)) * biasMultiplier / representativeLinearLuma
+        val logCurveForTarget = logCurve
+        val targetLumaIRE = lv / (2.087f * lv + 1.759f) / 0.391f * logCurve.middleGray
+        var gain = logToLinear(targetLumaIRE, logCurveForTarget) * biasMultiplier / representativeLinearLuma
 
         // 应用 DR 增益补偿
         if (drBoost > 0f) {
@@ -216,18 +194,19 @@ object MeteringSystem {
         }
 
         // 7. 绝对剪裁保护
-        if (maxColor * gain > F_LOG2_MAX_LINEAR) {
-            gain = F_LOG2_MAX_LINEAR / maxColor
+        val logCurveForGain = logCurve
+        if (maxColor * gain > logCurveForGain.maxLinear) {
+            gain = logCurveForGain.maxLinear / maxColor
         }
 
-        PLog.d(TAG, "F-Log2 Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=${sceneContrast.toInt()}, " +
+        PLog.d(TAG, "Log Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=${sceneContrast.toInt()}, " +
                 "p99=$p99Luma p999=$p999Luma bias=$biasMultiplier max=$maxColor gain=$gain")
 
         return AnalysisResult(
             exposureGain = gain,
             p98Luma = p99Luma,
             maxColor = maxColor,
-            weightedAvgLuma = avgFLog2,
+            weightedAvgLuma = avgLog,
             droMode = droMode
         )
     }

@@ -104,11 +104,8 @@ static float illuminantToTemp(int illuminant) {
   }
 }
 
-static Matrix3x3 computeXYZD50ToGamut() {
-  float xr = 0.70800f, yr = 0.29200f;
-  float xg = 0.17000f, yg = 0.79700f;
-  float xb = 0.13100f, yb = 0.04600f;
-  float xw = 0.31270f, yw = 0.32900f;
+static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
+                                      float xb, float yb, float xw, float yw) {
 
   Matrix3x3 mS;
   mS.m[0] = xr / yr;
@@ -940,7 +937,8 @@ static void exif_callback(void *datap, int tag, int type, int len,
  */
 JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
-    JNIEnv *env, jobject /* this */, jstring filePath) {
+    JNIEnv *env, jobject /* this */, jstring filePath, jfloat xr, jfloat yr,
+    jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw) {
 
   const char *path = env->GetStringUTFChars(filePath, nullptr);
   if (path == nullptr) {
@@ -1037,8 +1035,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   }
   env->SetFloatArrayRegion(wbArray, 3, 1, &wb[2]);
 
-  // CCM (从 DNG ForwardMatrix 转换为 F-Gamut)
-  Matrix3x3 targetTransform = computeXYZD50ToGamut();
+  // CCM (从 DNG ForwardMatrix 转换为目标色域)
+  Matrix3x3 targetTransform =
+      computeXYZD50ToGamut(xr, yr, xg, yg, xb, yb, xw, yw);
   Matrix3x3 m1 = Matrix3x3::identity();
   Matrix3x3 m2 = Matrix3x3::identity();
   bool hasM1 = false, hasM2 = false;

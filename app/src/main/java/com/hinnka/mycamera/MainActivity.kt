@@ -261,6 +261,7 @@ fun NavigationHost(
             composable(Routes.PHOTO_EDIT) {
                 PhotoEditScreen(
                     viewModel = galleryViewModel,
+                    cameraViewModel = cameraViewModel,
                     onBack = {
                         navController.popBackStack()
                     }

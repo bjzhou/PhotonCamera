@@ -130,15 +130,33 @@ object RawShaders {
         uniform bool uLutEnabled;
         uniform float uExposureGain;
         
+        uniform vec4 uLogCoeffs;  // a, b, c, d
+        uniform vec4 uLogLimits;  // e, f, cut1, cut2
+        uniform int uLogType;     // 0=Linear, 1=Quadratic
+        uniform bool uCustomCurveEnable;
+        
         float log10(float x) { return log(x) * 0.4342944819; }
         vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
         
-        vec3 linearToFLog2(vec3 linear) {
-            return mix(
-                8.799461 * linear + 0.092864, 
-                0.245281 * log10(5.555556 * linear + 0.064829) + 0.384316, 
-                step(0.00089, linear)
-            );
+        vec3 linearToLog(vec3 reflection) {
+            vec3 logPart = vec3(0.0);
+            if (uLogType == 2) {
+                // Power upper (sRGB style)
+                logPart = uLogCoeffs.x * pow(max(vec3(0.0), reflection), vec3(uLogCoeffs.z)) + uLogCoeffs.y;
+            } else {
+                // Log upper
+                logPart = uLogCoeffs.z * log10(uLogCoeffs.x * reflection + uLogCoeffs.y) + uLogCoeffs.w;
+            }
+            
+            vec3 lowPart = vec3(0.0);
+            if (uLogType == 1) {
+                // Quadratic toe (Apple Log)
+                lowPart = uLogLimits.x * pow(max(vec3(0.0), reflection - uLogLimits.y), vec3(2.0));
+            } else {
+                // Linear toe
+                lowPart = uLogLimits.x * reflection + uLogLimits.y;
+            }
+            return mix(lowPart, logPart, step(uLogLimits.z, reflection));
         }
         
         void main() {
@@ -148,11 +166,11 @@ object RawShaders {
             vec3 color = rawColor * uExposureGain;
             
             // 略微提升饱和度
-            float gray = dot(color, vec3(0.299, 0.587, 0.114));
+            float gray = dot(color, vec3(0.2126, 0.7152, 0.0722));
             color = mix(vec3(gray), color, 1.15);
             
-            // 2. F-Log2 Conversion
-            color = linearToFLog2(color);
+            // 2. Log Conversion
+            color = linearToLog(color);
             
             // 3. 3D LUT
             if (uLutEnabled) {
@@ -162,8 +180,10 @@ object RawShaders {
                 color = texture(uLutTexture, lutCoord).rgb;
             }
             
-            // 4. Gamma Adjustment (2.4 -> 2.2)
-            color = pow(max(color, 0.0), vec3(1.09090909));
+            if (uCustomCurveEnable) {
+                float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                color *= pow(luma, 0.1);
+            }
             
             fragColor = vec4(color, 1.0);
         }

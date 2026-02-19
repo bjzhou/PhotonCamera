@@ -15,7 +15,7 @@ object NLMShaders {
         uniform mat4 uTexMatrix;
 
         float getLuma(vec3 rgb) {
-            return dot(rgb, vec3(0.299, 0.587, 0.114));
+            return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
         }
         vec3 rgb2ycbcr(vec3 rgb) {
             float y = getLuma(rgb);
@@ -80,7 +80,7 @@ object NLMShaders {
             float h2 = max(uH * uH, 1e-5);
             float patchArea = float((2 * PATCH_RADIUS + 1) * (2 * PATCH_RADIUS + 1));
             float invH2 = 1.0 / (h2 * patchArea);
-            const vec3 W = vec3(0.299, 0.587, 0.114);
+            const vec3 W = vec3(0.2126, 0.7152, 0.0722);
             
             vec3 sumColor = vec3(0.0);
             float sumWeight = 0.0;
@@ -152,7 +152,7 @@ object NLMShaders {
             float h2 = max(uH * uH, 1e-5);
             float patchArea = float((2 * PATCH_RADIUS + 1) * (2 * PATCH_RADIUS + 1));
             float invH2 = 1.0 / (h2 * patchArea);
-            const vec3 W = vec3(0.299, 0.587, 0.114);
+            const vec3 W = vec3(0.2126, 0.7152, 0.0722);
             
             vec3 sumColor = vec3(0.0);
             float sumWeight = 0.0;

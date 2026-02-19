@@ -135,7 +135,7 @@ object Shaders {
     uniform float uVignette;      // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
 
-    const vec3 W = vec3(0.299, 0.587, 0.114);
+    const vec3 W = vec3(0.2126, 0.7152, 0.0722);
 
     float log10(float x) { return log(x) * 0.4342944819; }
     vec3 log10(vec3 x) { return log(x) * 0.4342944819; }

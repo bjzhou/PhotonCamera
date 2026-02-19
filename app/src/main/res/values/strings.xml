@@ -303,7 +303,6 @@
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
     <string name="settings_raw_restore_lut">RAW Restore LUT</string>
     <string name="settings_raw_restore_lut_description">Choose the LUT used for RAW color restoration. Use \"Flat\" for log output.</string>
-    <string name="settings_raw_restore_flat">Flat Output</string>
     <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>
     <string name="settings_dro_mode_description">Optimizes shadow detail and highlight compression by utilizing F-Log2 headroom. Higher values preserve more highlights but may require more light.</string>
     <string name="settings_dro_off">Off</string>
@@ -311,4 +310,8 @@
     <string name="settings_dro_high">High</string>
     <string name="settings_apply_ultra_hdr">Ultra HDR Exposure Strategy</string>
     <string name="settings_apply_ultra_hdr_description">Based on multi-frame stacking and histogram analysis, automatically reduce exposure to protect highlights when lighting is sufficient. Effective only when RAW and Multi-Frame are enabled.</string>
+    <string name="settings_color_space">RAW Color Space</string>
+    <string name="settings_color_space_description">Choose the target color space for RAW processing.</string>
+    <string name="settings_log_curve">RAW Gamma</string>
+    <string name="settings_log_curve_description">Choose the transfer function for RAW processing (Log Curve).</string>
 </resources>

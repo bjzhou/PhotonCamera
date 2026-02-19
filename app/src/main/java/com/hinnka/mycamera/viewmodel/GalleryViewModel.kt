@@ -204,7 +204,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }.collect { sortedLuts ->
                 availableLuts = sortedLuts
-                PLog.d(TAG, "GalleryViewModel: availableLuts updated to ${sortedLuts.size} items (sorted)")
             }
         }
 
@@ -220,7 +219,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }.collect { sortedFrames ->
                 availableFrames = sortedFrames
-                PLog.d(TAG, "GalleryViewModel: availableFrames updated to ${sortedFrames.size} items (sorted)")
             }
         }
     }
@@ -1220,8 +1218,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val r = (pixel shr 16) and 0xFF
                 val g = (pixel shr 8) and 0xFF
                 val b = pixel and 0xFF
-                // Luma = 0.299R + 0.587G + 0.114B
-                totalLuma += (0.299f * r + 0.587f * g + 0.114f * b)
+                totalLuma += (0.2126f * r + 0.7152f * g + 0.0722f * b)
             }
             scaledBitmap.recycle()
             totalLuma / (64 * 64) / 255f

@@ -1145,8 +1145,8 @@ class LutRenderer : GLSurfaceView.Renderer {
                 val g = meteringBytes[idx + 1].toInt() and 0xFF
                 val b = meteringBytes[idx + 2].toInt() and 0xFF
 
-                // 计算亮度 (Rec.601)
-                val luma = (0.299 * r + 0.587 * g + 0.114 * b).toInt().coerceIn(0, 255)
+                // 计算亮度 (Rec.709)
+                val luma = (0.2126 * r + 0.7152 * g + 0.0722 * b).toInt().coerceIn(0, 255)
                 histogram[luma]++
 
                 // 权重计算

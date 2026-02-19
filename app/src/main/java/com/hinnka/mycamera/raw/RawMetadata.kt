@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import android.R
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
@@ -93,7 +94,8 @@ data class RawMetadata(
             characteristics: CameraCharacteristics,
             captureResult: CaptureResult,
             userExposureCompensation: Float? = null,
-            droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+            droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
+            colorSpace: ColorSpace = ColorSpace.BT2020
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
             val cfaId = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -226,7 +228,7 @@ data class RawMetadata(
 
             // 5. 获取色彩校正矩阵
             // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
-            val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult)
+            val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult, colorSpace)
 
             // 6. 获取镜头阴影校正
             val shadingMap = captureResult.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
@@ -313,7 +315,8 @@ data class RawMetadata(
          */
         private fun computeCCMFromCharacteristics(
             characteristics: CameraCharacteristics,
-            captureResult: CaptureResult
+            captureResult: CaptureResult,
+            colorSpace: ColorSpace = ColorSpace.BT2020
         ): FloatArray {
             // XYZ D50 到 Linear sRGB 的转换矩阵
             val XYZ_D50_TO_SRGB = floatArrayOf(
@@ -323,15 +326,11 @@ data class RawMetadata(
             )
 
             // 动态计算目标色域矩阵
-            val FGAMUT_PRIMARIES = floatArrayOf(
-                0.70800f, 0.29200f, // Red
-                0.17000f, 0.79700f, // Green
-                0.13100f, 0.04600f  // Blue
-            )
-            val D65_WHITE = floatArrayOf(0.31270f, 0.32900f)
+            val targetPrimaries = colorSpace.primaries
+            val targetWhitePoint = colorSpace.whitePoint
 
-            // 计算 XYZ(D50) -> F-Gamut 的转换矩阵
-            val targetTransform = computeXYZD50ToGamut(FGAMUT_PRIMARIES, D65_WHITE)
+            // 计算 XYZ(D50) -> Target Gamut 的转换矩阵
+            val targetTransform = computeXYZD50ToGamut(targetPrimaries, targetWhitePoint)
                 ?: XYZ_D50_TO_SRGB // 如果计算失败则回退到 sRGB
 
             // 获取参考光源

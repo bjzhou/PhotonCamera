@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
@@ -26,7 +27,10 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
 import kotlinx.coroutines.*
@@ -156,18 +160,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useGpuAcceleration: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useGpuAcceleration }
         .stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUtil.defaultGpuAcceleration)
-    val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.rawLut }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "PROVIA.plut")
     val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.droMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
     val applyUltraHDR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.applyUltraHDR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val colorSpace: StateFlow<ColorSpace> = userPreferencesRepository.userPreferences
+        .map { it.colorSpace }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.BT2020)
+    val logCurve: StateFlow<LogCurve> = userPreferencesRepository.userPreferences
+        .map { it.logCurve }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, LogCurve.FLOG2)
 
-    var availableRawLutList: List<String> by mutableStateOf(emptyList())
-        private set
+    val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.rawLuts[it.logCurve.name] ?: "sRGB.plut" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "sRGB.plut")
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -245,21 +253,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setUseRaw(it.useRaw)
                 // 同步 Live Photo 设置到相机控制器
                 cameraController.setUseLivePhoto(it.useLivePhoto)
-                // 同步 RAW LUT 到解马赛克处理器
-                RawDemosaicProcessor.getInstance().setRawLut(application, it.rawLut)
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
-            }
-        }
-
-        // 加载 assets/raw 目录下的 LUT 列表
-        viewModelScope.launch(Dispatchers.IO) {
-            val rawFolder = "raw"
-            try {
-                val files = application.assets.list(rawFolder)
-                availableRawLutList = files?.filter { it.endsWith(".plut") }?.toList() ?: emptyList()
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to list raw luts", e)
+                // 同步 RAW 色彩空间和 Log 曲线到解马赛克处理器
+                RawDemosaicProcessor.getInstance().setRawColorSpace(it.colorSpace)
+                RawDemosaicProcessor.getInstance().setRawLogCurve(it.logCurve)
+                // 同步当前 Log 曲线对应的 RAW LUT
+                val currentRawLut = it.rawLuts[it.logCurve.name] ?: "Default.plut"
+                RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
             }
         }
 
@@ -290,7 +291,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }.collect { sortedLuts ->
                 availableLutList = sortedLuts
-                PLog.d(TAG, "CameraViewModel: availableLutList updated to ${sortedLuts.size} items (sorted)")
             }
         }
 
@@ -306,7 +306,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }.collect { sortedFrames ->
                 availableFrameList = sortedFrames
-                PLog.d(TAG, "CameraViewModel: availableFrameList updated to ${sortedFrames.size} items (sorted)")
             }
         }
 
@@ -364,6 +363,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+    }
+
+    fun getAvailableRawLutList(context: Context, logCurve: LogCurve): List<String> {
+        try {
+            val files = logCurve.rawFolder?.let { context.assets.list(it) }
+            return files?.filter { it.endsWith(".plut") }?.toList() ?: emptyList()
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to list raw luts", e)
+        }
+        return emptyList()
     }
 
     /**
@@ -1181,6 +1190,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置 RAW 色彩空间
+     */
+    fun setColorSpace(colorSpace: ColorSpace) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveColorSpace(colorSpace)
+        }
+    }
+
+    /**
+     * 设置 RAW Log 曲线
+     */
+    fun setLogCurve(logCurve: LogCurve) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveLogCurve(logCurve)
+        }
+    }
+
+    /**
+     * 设置 RAW 还原 LUT
+     */
+    fun setRawLut(logCurve: LogCurve, lut: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawLut(logCurve, lut)
+        }
+    }
+
+    /**
      * 设置降噪等级
      */
     fun setNRLevel(level: Int) {
@@ -1607,14 +1643,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             it.close()
         }
         burstImages.clear()
-    }
-    /**
-     * 设置 RAW 还原 LUT
-     */
-    fun setRawLut(lut: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawLut(lut)
-        }
     }
 
     /**

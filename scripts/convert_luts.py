@@ -81,7 +81,7 @@ def convert_cube_to_plut(cube_path, plut_path):
 def main():
     # Adjust path if needed
     base_dir = os.getcwd()
-    lut_dir = os.path.join(base_dir, 'app', 'src', 'main', 'assets', 'raw')
+    lut_dir = os.path.join(base_dir, '..', 'app', 'src', 'main', 'assets', 'raw', 'aces')
 
     if not os.path.exists(lut_dir):
         print(f"Directory not found: {lut_dir}")

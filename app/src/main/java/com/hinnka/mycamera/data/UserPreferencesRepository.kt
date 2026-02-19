@@ -9,6 +9,8 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.LogCurve
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -58,9 +60,11 @@ data class UserPreferences(
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
     val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
-    val rawLut: String = "PROVIA.plut", // RAW 还原 LUT，默认为 WDR
     val droMode: String = "OFF", // DRO 模式
-    val applyUltraHDR: Boolean = true // 是否应用 Ultra HDR 策略
+    val applyUltraHDR: Boolean = true, // 是否应用 Ultra HDR 策略
+    val colorSpace: ColorSpace = ColorSpace.BT2020, // 默认 F-Gamut
+    val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
+    val rawLuts: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -108,9 +112,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
         private val USE_GPU_ACCELERATION = booleanPreferencesKey("use_gpu_acceleration")
-        private val RAW_LUT = stringPreferencesKey("raw_lut")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
         private val APPLY_ULTRA_HDR = booleanPreferencesKey("apply_ultra_hdr")
+        private val COLOR_SPACE = stringPreferencesKey("color_space")
+        private val LOG_CURVE = stringPreferencesKey("log_curve")
     }
 
     /**
@@ -151,9 +156,11 @@ class UserPreferencesRepository(private val context: Context) {
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
                 useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
-                rawLut = preferences[RAW_LUT] ?: "PROVIA.plut",
                 droMode = preferences[DRO_MODE] ?: "OFF",
-                applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: true
+                applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: true,
+                colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.BT2020.name),
+                logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
+                rawLuts = parseRawLuts(preferences),
             )
         }
 
@@ -184,6 +191,20 @@ class UserPreferencesRepository(private val context: Context) {
         return offsets.entries
             .filter { it.value in listOf(0, 90, 180, 270) }
             .joinToString(",") { "${it.key}:${it.value}" }
+    }
+
+    private fun parseRawLuts(preferences: Preferences): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        LogCurve.entries.forEach { entry ->
+            val default = when (entry) {
+                LogCurve.FLOG2 -> "PROVIA.plut"
+                LogCurve.LINEAR -> "none"
+                else -> "sRGB.plut"
+            }
+            val value = preferences[stringPreferencesKey("${entry.name}_raw_lut")] ?: default
+            result[entry.name] = value
+        }
+        return result
     }
 
     /**
@@ -461,15 +482,6 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
-     * 保存 RAW 还原 LUT
-     */
-    suspend fun saveRawLut(lut: String) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_LUT] = lut
-        }
-    }
-
-    /**
      * 保存 DRO 模式
      */
     suspend fun saveDroMode(mode: String) {
@@ -484,6 +496,33 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveApplyUltraHDR(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[APPLY_ULTRA_HDR] = enabled
+        }
+    }
+
+    /**
+     * 保存色彩空间
+     */
+    suspend fun saveColorSpace(colorSpace: ColorSpace) {
+        context.dataStore.edit { preferences ->
+            preferences[COLOR_SPACE] = colorSpace.name
+        }
+    }
+
+    /**
+     * 保存 Log 曲线
+     */
+    suspend fun saveLogCurve(logCurve: LogCurve) {
+        context.dataStore.edit { preferences ->
+            preferences[LOG_CURVE] = logCurve.name
+        }
+    }
+
+    /**
+     * 保存针对特定 Log 曲线的 RAW 还原 LUT
+     */
+    suspend fun saveRawLut(logCurve: LogCurve, lut: String) {
+        context.dataStore.edit { preferences ->
+            preferences[stringPreferencesKey("${logCurve.name}_raw_lut")] = lut
         }
     }
 }

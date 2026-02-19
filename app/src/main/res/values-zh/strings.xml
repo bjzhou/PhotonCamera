@@ -289,7 +289,6 @@
     <string name="settings_custom_background">自定义...</string>
     <string name="settings_raw_restore_lut">RAW 还原 LUT</string>
     <string name="settings_raw_restore_lut_description">选择用于 RAW 色彩还原的 LUT。选择“灰片”以获得 Log 风格输出。</string>
-    <string name="settings_raw_restore_flat">灰片直出</string>
     <string name="settings_dro_mode">RAW动态范围优化 (DRO)</string>
     <string name="settings_dro_mode_description">通过利用 F-Log2 高光冗余，在不牺牲高光的前提下提升阴影细节。</string>
     <string name="settings_dro_off">关闭</string>

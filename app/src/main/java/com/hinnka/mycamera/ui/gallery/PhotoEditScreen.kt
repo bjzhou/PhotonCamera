@@ -4,8 +4,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -17,11 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import com.hinnka.mycamera.ui.common.WatermarkEditSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -42,15 +46,21 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.frame.TextType
+import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
-import com.hinnka.mycamera.ui.components.LutSelector
-import com.hinnka.mycamera.ui.components.PaymentDialog
-import com.hinnka.mycamera.ui.components.SliderSettingItem
+import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import me.saket.telephoto.zoomable.ZoomSpec
 import java.text.SimpleDateFormat
 import java.util.*
@@ -62,6 +72,7 @@ import java.util.*
 @Composable
 fun PhotoEditScreen(
     viewModel: GalleryViewModel,
+    cameraViewModel: CameraViewModel,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -95,16 +106,24 @@ fun PhotoEditScreen(
     val availableFrames = viewModel.availableFrames
     var editFrameCustomProperties by remember { mutableStateOf(emptyMap<String, String>()) }
 
-    val sharpening by viewModel.editSharpening.collectAsState()
-    val noiseReduction by viewModel.editNoiseReduction.collectAsState()
-    val chromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
+    val editSharpening by viewModel.editSharpening.collectAsState()
+    val editNoiseReduction by viewModel.editNoiseReduction.collectAsState()
+    val editChromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
+
+    val droMode by cameraViewModel.droMode.collectAsState()
+    val colorSpace by cameraViewModel.colorSpace.collectAsState()
+    val logCurve by cameraViewModel.logCurve.collectAsState()
+    val rawLut by cameraViewModel.rawLut.collectAsState()
+
+    val isRaw = currentPhoto?.let { viewModel.isRaw(it.id) } ?: false
 
     var showOrigin by remember { mutableStateOf(false) }
 
     // 编辑标签页状态
-    var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理
+    var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理, 2: RAW
     var showControls by remember { mutableStateOf(true) }
     var isZoomed by remember { mutableStateOf(false) }
+    val refreshKey = currentPhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
 
 
     LaunchedEffect(currentPhoto) {
@@ -115,14 +134,15 @@ fun PhotoEditScreen(
 
     LaunchedEffect(
         currentPhoto,
+        refreshKey,
         editLutId,
         editLutRecipeParams,
         editLutConfig,
         editFrameId,
         editFrameCustomProperties,
-        sharpening,
-        noiseReduction,
-        chromaNoiseReduction,
+        editSharpening,
+        editNoiseReduction,
+        editChromaNoiseReduction,
         showOrigin
     ) {
         if (currentPhoto == null) return@LaunchedEffect
@@ -201,6 +221,43 @@ fun PhotoEditScreen(
                         }
                     },
                     actions = {
+                        if (isRaw) {
+                            val isRefreshing = viewModel.refreshingPhotos.contains(currentPhoto.id)
+                            val infiniteTransition = rememberInfiniteTransition(label = "refresh")
+                            val rotation by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1000, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "rotation"
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    viewModel.refreshRawPreview(currentPhoto) { success ->
+                                        if (success) {
+                                            Toast.makeText(context, R.string.refresh_success, Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, R.string.refresh_failed, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                enabled = !isRefreshing
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = stringResource(R.string.refresh),
+                                    tint = if (isRefreshing) Color.White.copy(alpha = 0.5f) else Color.White,
+                                    modifier = Modifier.graphicsLayer {
+                                        if (isRefreshing) {
+                                            rotationZ = rotation
+                                        }
+                                    }
+                                )
+                            }
+                        }
                         // 保存元数据按钮
                         IconButton(
                             onClick = {
@@ -352,11 +409,17 @@ fun PhotoEditScreen(
                                 isSelected = editTab == 1,
                                 onClick = { editTab = 1 }
                             )
+                            if (isRaw) {
+                                TabItem(
+                                    title = "RAW",
+                                    isSelected = editTab == 2,
+                                    onClick = { editTab = 2 }
+                                )
+                            }
                         }
-
                         if (editTab == 0) {
-                            val currentInfo = availableLuts.find { it.id == editLutId }
-                            val lutTitle = currentInfo?.getName() ?: ""
+                            val currentLut = availableLuts.find { it.id == editLutId }
+                            val lutTitle = currentLut?.getName() ?: ""
 
                             Spacer(modifier = Modifier.height(16.dp))
                             Row(
@@ -493,28 +556,37 @@ fun PhotoEditScreen(
                                     )
                                 }
                             }
-                        } else {
+                        } else if (editTab == 1) {
                             Spacer(modifier = Modifier.height(16.dp))
                             // 细节处理调整 (锐化, 降噪, 杂色降噪)
                             SliderSettingItem(
                                 title = stringResource(R.string.settings_sharpening),
-                                value = sharpening,
+                                value = editSharpening,
                                 valueRange = 0f..1f,
                                 onValueChange = { viewModel.setSharpening(it) }
                             )
                             SliderSettingItem(
                                 title = stringResource(R.string.settings_noise_reduction),
-                                value = noiseReduction,
+                                value = editNoiseReduction,
                                 valueRange = 0f..1f,
                                 onValueChange = { viewModel.setNoiseReduction(it) }
                             )
                             SliderSettingItem(
                                 title = stringResource(R.string.settings_chroma_noise_reduction),
-                                value = chromaNoiseReduction,
+                                value = editChromaNoiseReduction,
                                 valueRange = 0f..1f,
                                 onValueChange = { viewModel.setChromaNoiseReduction(it) }
                             )
                             Spacer(modifier = Modifier.height(8.dp))
+                        } else if (editTab == 2) {
+                            RawEditPanel(
+                                viewModel = cameraViewModel,
+                                editDroMode = MeteringSystem.DROMode.valueOf(droMode),
+                                editColorSpace = colorSpace,
+                                editLogCurve = logCurve,
+                                editRawLut = rawLut,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
                 }
@@ -783,5 +855,116 @@ private fun ZoomableEditImage(
             state = zoomableState,
             modifier = Modifier.fillMaxSize()
         )
+    }
+}
+
+@Composable
+private fun RawEditPanel(
+    viewModel: CameraViewModel,
+    editDroMode: MeteringSystem.DROMode,
+    editColorSpace: ColorSpace,
+    editLogCurve: LogCurve,
+    editRawLut: String?,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var availableRawLuts by remember { mutableStateOf(listOf<String>()) }
+
+    LaunchedEffect(editLogCurve) {
+        availableRawLuts = listOf("none") + viewModel.getAvailableRawLutList(context, editLogCurve)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // DRO Mode
+        SegmentedControl(
+            title = stringResource(R.string.settings_dro_mode),
+            items = MeteringSystem.DROMode.values().toList(),
+            selectedItem = editDroMode,
+            onItemSelected = { viewModel.setDroMode(it.name) },
+            itemLabel = {
+                when (it) {
+                    MeteringSystem.DROMode.OFF -> context.getString(R.string.settings_dro_off)
+                    MeteringSystem.DROMode.LOW -> context.getString(R.string.settings_dro_low)
+                    MeteringSystem.DROMode.HIGH -> context.getString(R.string.settings_dro_high)
+                }
+            }
+        )
+
+        // Color Space
+        SegmentedControl(
+            title = stringResource(R.string.settings_color_space),
+            items = ColorSpace.values().toList(),
+            selectedItem = editColorSpace,
+            onItemSelected = { viewModel.setColorSpace(it) },
+            itemLabel = { it.name }
+        )
+
+        // Log Curve
+        SegmentedControl(
+            title = stringResource(R.string.settings_log_curve),
+            items = LogCurve.values().toList(),
+            selectedItem = editLogCurve,
+            onItemSelected = { viewModel.setLogCurve(it) },
+            itemLabel = { it.name }
+        )
+
+        // RAW LUT
+        SegmentedControl(
+            title = stringResource(R.string.settings_raw_restore_lut),
+            items = availableRawLuts,
+            selectedItem = editRawLut ?: "none",
+            onItemSelected = { viewModel.setRawLut(editLogCurve, it) },
+            itemLabel = { if (it == "none") context.getString(R.string.none) else it.substringBeforeLast(".") }
+        )
+    }
+}
+
+@Composable
+private fun <T> SegmentedControl(
+    title: String,
+    items: List<T>,
+    selectedItem: T,
+    onItemSelected: (T) -> Unit,
+    itemLabel: (T) -> String
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(items) { item ->
+                val isSelected = item == selectedItem
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent)
+                        .border(
+                            1.dp,
+                            if (isSelected) Color.White else Color.White.copy(alpha = 0.1f),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { onItemSelected(item) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = itemLabel(item),
+                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
     }
 }

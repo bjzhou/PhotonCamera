@@ -101,7 +101,13 @@ class RawDemosaicProcessor {
     /**
      * Native 方法：使用 LibRaw 处理 DNG 文件
      */
-    private external fun processDngNative(filePath: String): DngRawData?
+    private external fun processDngNative(
+        filePath: String,
+        xr: Float, yr: Float,
+        xg: Float, yg: Float,
+        xb: Float, yb: Float,
+        xw: Float, yw: Float
+    ): DngRawData?
 
     /**
      * Native 方法：释放 DirectByteBuffer
@@ -219,6 +225,9 @@ class RawDemosaicProcessor {
     private var uCombinedLutEnabledLoc = 0
     private var uCombinedExposureGainLoc = 0
     private var uCombinedTexMatrixLoc = 0
+    private var uCombinedLogCoeffsLoc = 0
+    private var uCombinedLogLimitsLoc = 0
+    private var uCombinedLogTypeLoc = 0
 
     // Sharpen Program Uniform 位置
     private var uSharpenInputTextureLoc = 0
@@ -259,28 +268,39 @@ class RawDemosaicProcessor {
     private var isInitialized = false
 
     private var baseLut: LutConfig? = null
-    private var baseLutName: String? = null
+    private var colorSpace = ColorSpace.BT2020
+    private var logCurve = LogCurve.FLOG2
 
     /**
      * 设置 RAW 还原 LUT
      * @param context Context
-     * @param lutName LUT 文件名 (在 assets/raw 目录下)，"none" 表示不使用 LUT
+     * @param lutFileName LUT 文件名，"none" 表示不使用 LUT
      */
-    fun setRawLut(context: Context, lutName: String) {
-        if (baseLutName == lutName) return
-        baseLutName = lutName
-        if (lutName == "none") {
+    fun setRawLut(context: Context, lutFileName: String) {
+        if (lutFileName == "none") {
             baseLut = null
-            PLog.d(TAG, "RAW LUT disabled (Flat profile)")
         } else {
+            val rawFolder = logCurve.rawFolder
+            if (rawFolder == null) {
+                baseLut = null
+                return
+            }
             try {
-                baseLut = LutParser.parseFromAssets(context, "raw/$lutName")
-                PLog.d(TAG, "RAW LUT updated to: $lutName")
+                baseLut = LutParser.parseFromAssets(context, "$rawFolder/$lutFileName")
+                PLog.d(TAG, "RAW LUT updated to: $lutFileName")
             } catch (e: Exception) {
-                PLog.e(TAG, "Failed to load RAW LUT: $lutName", e)
+                PLog.e(TAG, "Failed to load RAW LUT: $lutFileName", e)
                 baseLut = null
             }
         }
+    }
+
+    fun setRawColorSpace(colorSpace: ColorSpace) {
+        this.colorSpace = colorSpace
+    }
+
+    fun setRawLogCurve(logCurve: LogCurve) {
+        this.logCurve = logCurve
     }
 
     /**
@@ -393,7 +413,13 @@ class RawDemosaicProcessor {
         var dngRawDataCleanup: DngRawData? = null
 
         if (dngFile != null) {
-            val dngRawData = processDngNative(dngFile.absolutePath)
+            val dngRawData = processDngNative(
+                dngFile.absolutePath,
+                colorSpace.xr, colorSpace.yr,
+                colorSpace.xg, colorSpace.yg,
+                colorSpace.xb, colorSpace.yb,
+                colorSpace.xw, colorSpace.yw
+            )
             if (dngRawData == null) {
                 return@withContext RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)
             }
@@ -432,7 +458,7 @@ class RawDemosaicProcessor {
 
             // 场景分析: 从 GPU demosaic 纹理读回精确的 Linear RGB 数据
             // 计算平均亮度
-            val sceneStats = analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, actualMetadata)
+            val sceneStats = analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, logCurve, actualMetadata)
 
             // NLM 降噪 (Combined 之后)
             val denoiseStart = System.currentTimeMillis()
@@ -448,17 +474,8 @@ class RawDemosaicProcessor {
 
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             setupCombinedFramebuffer(actualWidth, actualHeight)
-            if (baseLut == null && baseLutName != "none") {
-                // 如果尚未初始化且不是 "none"，则加载默认 LUT
-                val lutToLoad = baseLutName ?: "PROVIA.plut"
-                baseLut = try {
-                    LutParser.parseFromAssets(context, "raw/$lutToLoad")
-                } catch (e: Exception) {
-                    null
-                }
-            }
             val combinedStart = System.currentTimeMillis()
-            renderCombinedPass(actualMetadata, sceneStats, baseLut, inputTextureId = denoiseOutputTexture)
+            renderCombinedPass(actualMetadata, sceneStats, baseLut, logCurve, inputTextureId = denoiseOutputTexture)
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
 
             // 6. 第三步：锐化 (Sharpen Pass)
@@ -620,6 +637,9 @@ class RawDemosaicProcessor {
             uCombinedLutEnabledLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled")
             uCombinedExposureGainLoc = GLES30.glGetUniformLocation(combinedProgram, "uExposureGain")
             uCombinedTexMatrixLoc = GLES30.glGetUniformLocation(combinedProgram, "uTexMatrix")
+            uCombinedLogCoeffsLoc = GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs")
+            uCombinedLogLimitsLoc = GLES30.glGetUniformLocation(combinedProgram, "uLogLimits")
+            uCombinedLogTypeLoc = GLES30.glGetUniformLocation(combinedProgram, "uLogType")
 
             GLES30.glDeleteShader(fShaderCombined)
         }
@@ -1495,6 +1515,7 @@ class RawDemosaicProcessor {
         textureId: Int,
         width: Int,
         height: Int,
+        logCurve: LogCurve,
         metadata: RawMetadata? = null
     ): SceneStats {
         // 1. 生成 mipmap
@@ -1579,6 +1600,7 @@ class RawDemosaicProcessor {
             mipHeight,
             focusX,
             focusY,
+            logCurve,
             metadata
         )
 
@@ -1639,6 +1661,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         sceneStats: SceneStats,
         lutConfig: LutConfig?,
+        logCurve: LogCurve,
         inputTextureId: Int = demosaicTextureId
     ) {
         GLES30.glUseProgram(combinedProgram)
@@ -1658,6 +1681,15 @@ class RawDemosaicProcessor {
         GLES30.glUniform1f(uCombinedLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
         GLES30.glUniform1i(uCombinedLutEnabledLoc, if (lutConfig != null) 1 else 0)
         GLES30.glUniform1f(uCombinedExposureGainLoc, sceneStats.exposureGain)
+
+        // Log 曲线参数
+        GLES30.glUniform4f(uCombinedLogCoeffsLoc, logCurve.a, logCurve.b, logCurve.c, logCurve.d)
+        GLES30.glUniform4f(uCombinedLogLimitsLoc, logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2)
+        GLES30.glUniform1i(uCombinedLogTypeLoc, logCurve.type)
+
+        val customCurveEnable = if (logCurve == LogCurve.SRGB && baseLut == null) 1 else 0
+        val customCurveLoc = GLES30.glGetUniformLocation(combinedProgram, "uCustomCurveEnable")
+        GLES30.glUniform1i(customCurveLoc, customCurveEnable)
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
