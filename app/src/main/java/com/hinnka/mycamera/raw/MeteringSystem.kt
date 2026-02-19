@@ -203,23 +203,12 @@ object MeteringSystem {
             }
         }
 
-        var gain = when {
-            lv >= 13 -> {
-                (flog2ToLinear(0.75f) * biasMultiplier) / highlightAnchor
-            }
-            lv >= 8 -> {
-                (flog2ToLinear(0.7f) * biasMultiplier) / highlightAnchor
-            }
-            lv >= 4 -> {
-                (flog2ToLinear(0.42f) * biasMultiplier) / representativeLinearLuma
-            }
-            else -> {
-                // 动态计算暗光目标：LV=4时目标0.42，LV=0时目标0.28
-                // 0.28 F-Log2 依然保留了暗部细节，但不会强行把黑夜拉成白天
-                val rollOff = (lv / 4.0f).coerceIn(0.0f, 1.0f)
-                (flog2ToLinear(0.28f + (0.14f * rollOff)) * biasMultiplier) / representativeLinearLuma
-            }
-        }
+        // LV -> Luma 拟合函数
+        // 1 -> 0.26
+        // 4 -> 0.391
+        // 8 -> 0.42
+        // 13 -> 0.45
+        var gain = flog2ToLinear(lv / (2.087f * lv + 1.759f)) * biasMultiplier / representativeLinearLuma
 
         // 应用 DR 增益补偿
         if (drBoost > 0f) {
