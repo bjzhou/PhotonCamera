@@ -35,6 +35,7 @@ set(SHADER_SOURCES
     shaders/align_lk.comp
     shaders/raw_structure_tensor.comp
     shaders/robustness_raw.comp
+    shaders/yuv_to_rgba.comp
 )
 
 set(GENERATED_SHADER_HEADERS "")

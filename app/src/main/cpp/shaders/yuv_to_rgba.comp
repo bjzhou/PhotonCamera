@@ -1,0 +1,26 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D yuvSampler;
+layout(binding = 1, rgba16f) uniform writeonly image2D rgbaOutput;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+} pc;
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+
+    if (x >= pc.width || y >= pc.height) return;
+
+    vec2 uv = (vec2(float(x), float(y)) + 0.5) / vec2(float(pc.width), float(pc.height));
+    
+    vec4 color = texture(yuvSampler, uv);
+    
+    // Explicitly set alpha to 1.0 as some YUV samplers might return 0
+    // and storing 0 alpha could cause issues in subsequent blending/weighting.
+    imageStore(rgbaOutput, ivec2(x, y), vec4(color.rgb, 1.0));
+}

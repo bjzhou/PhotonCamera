@@ -3,7 +3,7 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0) uniform sampler2D inputSampler;
+layout(binding = 0) uniform sampler2D rgbSampler;
 layout(binding = 1, scalar) writeonly buffer KernelParams {
     vec4 data[];  // (k1, k2, cos2theta, sin2theta)
 } kernelParams;
@@ -26,6 +26,10 @@ layout(push_constant, scalar) uniform PushConstants {
     float noiseAlpha; // Sensor noise model slope
     float noiseBeta;  // Sensor noise model intercept
 } pc;
+
+float rgb2gray(vec3 rgb) {
+    return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
 
 void main() {
     uint tx = gl_GlobalInvocationID.x;
@@ -54,10 +58,10 @@ void main() {
             vec2 offset = vec2(float(dx), float(dy)) * pixelSize;
             vec2 sampleUV = uv + offset;
             
-            float cxp = texture(inputSampler, sampleUV + vec2(pixelSize.x, 0.0)).r;
-            float cxm = texture(inputSampler, sampleUV - vec2(pixelSize.x, 0.0)).r;
-            float cyp = texture(inputSampler, sampleUV + vec2(0.0, pixelSize.y)).r;
-            float cym = texture(inputSampler, sampleUV - vec2(0.0, pixelSize.y)).r;
+            float cxp = rgb2gray(texture(rgbSampler, sampleUV + vec2(pixelSize.x, 0.0)).rgb);
+            float cxm = rgb2gray(texture(rgbSampler, sampleUV - vec2(pixelSize.x, 0.0)).rgb);
+            float cyp = rgb2gray(texture(rgbSampler, sampleUV + vec2(0.0, pixelSize.y)).rgb);
+            float cym = rgb2gray(texture(rgbSampler, sampleUV - vec2(0.0, pixelSize.y)).rgb);
             
             float Ix_ = (cxp - cxm) * 0.5 * 255.0;
             float Iy_ = (cyp - cym) * 0.5 * 255.0;

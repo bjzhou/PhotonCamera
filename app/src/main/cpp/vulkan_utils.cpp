@@ -97,17 +97,6 @@ bool VulkanBufferImporter::importHardwareBuffer(
   if (isYUV) {
     if (existingConversion != VK_NULL_HANDLE) {
       outImage.ycbcrConversion = existingConversion;
-      // Important: If we use existing conversion, we do NOT own it, so we
-      // shouldn't destroy it? But VulkanImage.release() will destroy it. We
-      // need a mechanism to signal ownership or modify release(). For
-      // simplicity: VulkanImageStacker manages the lifecycle of the *first*
-      // conversion (in immutableSampler/ycbcrConversion members). The temporary
-      // input images just borrow it. So we should NOT set
-      // outImage.ycbcrConversion if we want to avoid double free? NO, we need
-      // it set for ImageView creation below. We must update
-      // VulkanImage.release() to NOT destroy it if it's borrowed, OR simply set
-      // it to NULL before release() in the caller. Let's set it here, and
-      // caller (vulkan_stacker) must define logic.
     } else {
       VkSamplerYcbcrConversionCreateInfo ycbcrCreateInfo{};
       ycbcrCreateInfo.sType =

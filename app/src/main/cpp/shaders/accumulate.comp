@@ -3,7 +3,7 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0) uniform sampler2D inputSampler;
+layout(binding = 0) uniform sampler2D rgbSampler;
 layout(binding = 1, scalar) buffer Accumulator {
     vec4 data[]; // Back to float32
 } accumulator;
@@ -163,7 +163,7 @@ void main() {
 
     // 3. Sample Input Frame (Target)
     // Using hardware linear for speed, replace with Bicubic function if needed
-    vec4 targetVal = texture(inputSampler, finalUV);
+    vec4 targetVal = texture(rgbSampler, finalUV);
     
     // 4. Kernel Regression Elements
     vec2 posInSource = finalUV * nativeSize;
@@ -177,7 +177,7 @@ void main() {
     float centerRobustness = 1.0;
     if (pc.isFirstFrame == 0 && currentW > 0.001) {
         vec3 refRGB = accumulator.data[outIndex].rgb / currentW;
-        vec3 centerColor = texture(inputSampler, finalUV).rgb;
+        vec3 centerColor = texture(rgbSampler, finalUV).rgb;
         vec3 diffVec = abs(centerColor - refRGB);
         float diff = max(diffVec.r, max(diffVec.g, diffVec.b));
         float luma = refRGB.g;
@@ -199,7 +199,7 @@ void main() {
             vec2 samplePos = centerSource + vec2(float(i), float(j));
             vec2 sampleUV = samplePos / nativeSize;
             
-            vec3 sampleColor = texture(inputSampler, sampleUV).rgb;
+            vec3 sampleColor = texture(rgbSampler, sampleUV).rgb;
             vec2 d = (samplePos - posInSource); 
 
             // 6. Per-sample Robustness with Boundary Fallback

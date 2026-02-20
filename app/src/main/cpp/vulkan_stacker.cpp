@@ -2,6 +2,7 @@
 #include "accumulate.comp.h"
 #include "normalize.comp.h"
 #include "structure_tensor.comp.h"
+#include "yuv_to_rgba.comp.h"
 #include <android/log.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -135,17 +136,19 @@ void VulkanImageStacker::initVulkanResources() {
   vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
 
   // Descriptor Pool
-  VkDescriptorPoolSize poolSizes[2] = {};
+  VkDescriptorPoolSize poolSizes[3] = {};
   poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  poolSizes[0].descriptorCount = (uint32_t)numTiles * 32; // Generous
+  poolSizes[0].descriptorCount = (uint32_t)numTiles * 64;
   poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  poolSizes[1].descriptorCount = (uint32_t)numTiles * 32;
+  poolSizes[1].descriptorCount = (uint32_t)numTiles * 64;
+  poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  poolSizes[2].descriptorCount = (uint32_t)numTiles * 64;
 
   VkDescriptorPoolCreateInfo poolInfo{};
   poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  poolInfo.maxSets = (uint32_t)numTiles * 32;
-  poolInfo.poolSizeCount = 2;
+  poolInfo.maxSets = (uint32_t)numTiles * 64;
+  poolInfo.poolSizeCount = 3;
   poolInfo.pPoolSizes = poolSizes;
   VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool));
 
@@ -220,6 +223,62 @@ void VulkanImageStacker::initVulkanResources() {
                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
   VK_CHECK(vkAllocateMemory(device, &mpAlloc, nullptr, &motionPriorMemory));
   vkBindBufferMemory(device, motionPriorBuffer, motionPriorMemory, 0);
+
+  // Initialize RGB Intermediate Image
+  rgbFrame.width = width;
+  rgbFrame.height = height;
+  rgbFrame.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+  VkImageCreateInfo imageInfo{};
+  imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  imageInfo.imageType = VK_IMAGE_TYPE_2D;
+  imageInfo.format = rgbFrame.format;
+  imageInfo.extent = {width, height, 1};
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+  imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+  imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+  VK_CHECK(vkCreateImage(device, &imageInfo, nullptr, &rgbFrame.image));
+
+  VkMemoryRequirements memReqs;
+  vkGetImageMemoryRequirements(device, rgbFrame.image, &memReqs);
+
+  VkMemoryAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocInfo.allocationSize = memReqs.size;
+  allocInfo.memoryTypeIndex = vm.findMemoryType(
+      memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+  VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &rgbFrame.memory));
+  vkBindImageMemory(device, rgbFrame.image, rgbFrame.memory, 0);
+
+  VkImageViewCreateInfo viewInfo{};
+  viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  viewInfo.image = rgbFrame.image;
+  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  viewInfo.format = rgbFrame.format;
+  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &rgbFrame.viewY));
+
+  VkSamplerCreateInfo samplerInfo{};
+  samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  samplerInfo.magFilter = VK_FILTER_LINEAR;
+  samplerInfo.minFilter = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+
+  VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &rgbFrame.sampler));
 }
 
 void VulkanImageStacker::createPipelines(VkSampler sampler) {
@@ -233,7 +292,8 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
   bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   bindings[0].descriptorCount = 1;
   bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-  bindings[0].pImmutableSamplers = samplers; // Link the sampler statically
+  bindings[0].pImmutableSamplers =
+      nullptr; // Regular RGB image, no immutable sampler needed
 
   bindings[1].binding = 1;
   bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -361,7 +421,7 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
   tensorBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
   tensorBindings[0].descriptorCount = 1;
   tensorBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-  tensorBindings[0].pImmutableSamplers = samplers; // Setup immutable sampler
+  tensorBindings[0].pImmutableSamplers = nullptr; // Regular RGB image
 
   tensorBindings[1].binding = 1;
   tensorBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -400,6 +460,55 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
   vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &stPipelineInfo, nullptr,
                            &tensorPipeline);
   vkDestroyShaderModule(device, stModule, nullptr);
+
+  // 6. Create YUV to RGBA Pipeline
+  VkDescriptorSetLayoutBinding yuvToRgbaBindings[2] = {};
+  yuvToRgbaBindings[0].binding = 0; // Input YUV Sampler
+  yuvToRgbaBindings[0].descriptorType =
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  yuvToRgbaBindings[0].descriptorCount = 1;
+  yuvToRgbaBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  yuvToRgbaBindings[0].pImmutableSamplers = samplers;
+
+  yuvToRgbaBindings[1].binding = 1; // Output RGBA Image
+  yuvToRgbaBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  yuvToRgbaBindings[1].descriptorCount = 1;
+  yuvToRgbaBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+  VkDescriptorSetLayoutCreateInfo yuvToRgbaLayoutInfo{};
+  yuvToRgbaLayoutInfo.sType =
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  yuvToRgbaLayoutInfo.bindingCount = 2;
+  yuvToRgbaLayoutInfo.pBindings = yuvToRgbaBindings;
+  vkCreateDescriptorSetLayout(device, &yuvToRgbaLayoutInfo, nullptr,
+                              &yuvToRgbaLayout);
+
+  VkPipelineLayoutCreateInfo yuvToRgbaPLInfo{};
+  yuvToRgbaPLInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  yuvToRgbaPLInfo.setLayoutCount = 1;
+  yuvToRgbaPLInfo.pSetLayouts = &yuvToRgbaLayout;
+  yuvToRgbaPLInfo.pushConstantRangeCount = 1;
+  yuvToRgbaPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &yuvToRgbaPLInfo, nullptr,
+                         &yuvToRgbaPipelineLayout);
+
+  std::vector<uint32_t> yuvToRgbaCode(yuv_to_rgba_comp_spv,
+                                      yuv_to_rgba_comp_spv +
+                                          (yuv_to_rgba_comp_spv_size / 4));
+  VkShaderModule yuvToRgbaModule = vm.createShaderModule(yuvToRgbaCode);
+
+  VkComputePipelineCreateInfo yuvToRgbaPipelineInfo{};
+  yuvToRgbaPipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  yuvToRgbaPipelineInfo.layout = yuvToRgbaPipelineLayout;
+  yuvToRgbaPipelineInfo.stage.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  yuvToRgbaPipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  yuvToRgbaPipelineInfo.stage.module = yuvToRgbaModule;
+  yuvToRgbaPipelineInfo.stage.pName = "main";
+
+  vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &yuvToRgbaPipelineInfo,
+                           nullptr, &yuvToRgbaPipeline);
+  vkDestroyShaderModule(device, yuvToRgbaModule, nullptr);
 }
 
 bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
@@ -446,6 +555,43 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   // (32 per tile). We added tensor sets.
   int numTiles = numTilesX * numTilesY;
 
+  // Pre-conversion Descriptor Set
+  {
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &yuvToRgbaLayout;
+    VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &yuvToRgbaSet));
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = input.viewY;
+    imageInfo.sampler = input.sampler;
+
+    VkDescriptorImageInfo outInfo{};
+    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    outInfo.imageView = rgbFrame.viewY;
+    outInfo.sampler = VK_NULL_HANDLE;
+
+    VkWriteDescriptorSet writes[2] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = yuvToRgbaSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imageInfo;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = yuvToRgbaSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &outInfo;
+
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+  }
+
   for (int i = 0; i < numTiles; ++i) {
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -456,8 +602,8 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
 
     VkDescriptorImageInfo imageInfo{};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfo.imageView = input.viewY;
-    imageInfo.sampler = input.sampler;
+    imageInfo.imageView = rgbFrame.viewY;
+    imageInfo.sampler = rgbFrame.sampler;
 
     VkDescriptorBufferInfo accumBufferInfo{};
     accumBufferInfo.buffer = accumBuffers[i];
@@ -686,6 +832,60 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &imageBarrier);
 
+  // Transition RGB frame to GENERAL for writing
+  VkImageMemoryBarrier rgbWriteBarrier{};
+  rgbWriteBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  rgbWriteBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  rgbWriteBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  rgbWriteBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  rgbWriteBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  rgbWriteBarrier.image = rgbFrame.image;
+  rgbWriteBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  rgbWriteBarrier.subresourceRange.baseMipLevel = 0;
+  rgbWriteBarrier.subresourceRange.levelCount = 1;
+  rgbWriteBarrier.subresourceRange.baseArrayLayer = 0;
+  rgbWriteBarrier.subresourceRange.layerCount = 1;
+  rgbWriteBarrier.srcAccessMask = 0;
+  rgbWriteBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &rgbWriteBarrier);
+
+  // Dispatch YUV to RGBA Conversion
+  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, yuvToRgbaPipeline);
+  vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          yuvToRgbaPipelineLayout, 0, 1, &yuvToRgbaSet, 0,
+                          nullptr);
+
+  struct {
+    uint32_t w;
+    uint32_t h;
+  } convPc = {width, height};
+  vkCmdPushConstants(cb, yuvToRgbaPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                     0, sizeof(convPc), &convPc);
+  vkCmdDispatch(cb, (width + 15) / 16, (height + 15) / 16, 1);
+
+  // Transition RGB frame to SHADER_READ_ONLY_OPTIMAL for sampling
+  VkImageMemoryBarrier rgbReadBarrier{};
+  rgbReadBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  rgbReadBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+  rgbReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  rgbReadBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  rgbReadBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  rgbReadBarrier.image = rgbFrame.image;
+  rgbReadBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  rgbReadBarrier.subresourceRange.baseMipLevel = 0;
+  rgbReadBarrier.subresourceRange.levelCount = 1;
+  rgbReadBarrier.subresourceRange.baseArrayLayer = 0;
+  rgbReadBarrier.subresourceRange.layerCount = 1;
+  rgbReadBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  rgbReadBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &rgbReadBarrier);
+
   // Clear Accumulators if first frame
   if (pc.isFirstFrame) {
     for (int i = 0; i < numTiles; ++i) {
@@ -823,6 +1023,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
 
   vkFreeDescriptorSets(device, descriptorPool, numTiles, accumSets.data());
   vkFreeDescriptorSets(device, descriptorPool, numTiles, tensorSets.data());
+  vkFreeDescriptorSets(device, descriptorPool, 1, &yuvToRgbaSet);
   isFirstFrame = false;
   input.release(device);
   return true;
@@ -1133,4 +1334,13 @@ void VulkanImageStacker::releaseVulkanResources() {
     vkDestroyPipelineLayout(device, tensorPipelineLayout, nullptr);
   if (tensorPipeline != VK_NULL_HANDLE)
     vkDestroyPipeline(device, tensorPipeline, nullptr);
+
+  if (yuvToRgbaLayout != VK_NULL_HANDLE)
+    vkDestroyDescriptorSetLayout(device, yuvToRgbaLayout, nullptr);
+  if (yuvToRgbaPipelineLayout != VK_NULL_HANDLE)
+    vkDestroyPipelineLayout(device, yuvToRgbaPipelineLayout, nullptr);
+  if (yuvToRgbaPipeline != VK_NULL_HANDLE)
+    vkDestroyPipeline(device, yuvToRgbaPipeline, nullptr);
+
+  rgbFrame.release(device);
 }

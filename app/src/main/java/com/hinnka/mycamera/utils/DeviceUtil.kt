@@ -38,5 +38,5 @@ object DeviceUtil {
         get() = BuildConfig.FLAVOR == "china"
 
     val defaultGpuAcceleration: Boolean
-        get() = isQualcomm || isChinaFlavor
+        get() = true
 }

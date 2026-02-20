@@ -39,6 +39,13 @@ private:
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
   VkPipeline accumulatePipeline = VK_NULL_HANDLE;
 
+  // Pre-conversion resources
+  VulkanImage rgbFrame;
+  VkDescriptorSetLayout yuvToRgbaLayout = VK_NULL_HANDLE;
+  VkDescriptorSet yuvToRgbaSet = VK_NULL_HANDLE;
+  VkPipelineLayout yuvToRgbaPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline yuvToRgbaPipeline = VK_NULL_HANDLE;
+
   VkSampler immutableSampler = VK_NULL_HANDLE;
   VkSamplerYcbcrConversion ycbcrConversion = VK_NULL_HANDLE;
   VkDescriptorSetLayout normalizeSetLayout = VK_NULL_HANDLE;
