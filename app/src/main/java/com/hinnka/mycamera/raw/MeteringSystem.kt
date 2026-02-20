@@ -121,11 +121,11 @@ object MeteringSystem {
         val shutterSpeed = metadata?.shutterSpeed?.let { it * 1f / 1_000_000_000L } ?: 0.01f
         val iso = metadata?.iso?.let { if (it > 0) it else 100 } ?: 100
         val exposureBias = metadata?.exposureBias?.let { if (it > -10 && it < 10) it else 0f } ?: 0f
-        val baselineExposure = metadata?.baselineExposure?.let { if (it > -10 && it < 10) it else 0f } ?: 0f
-        val biasMultiplier = 2.0f.pow(baselineExposure + exposureBias)
+//        val baselineExposure = metadata?.baselineExposure?.let { if (it > -10 && it < 10) it else 0f } ?: 0f
+        val biasMultiplier = 2.0f.pow(exposureBias)
 
         val ev = log2((aperture * aperture) / shutterSpeed)
-        val lv = ev - log2(iso / 100f)
+        val lv = (ev - log2(iso / 100f)).coerceAtLeast(0f)
 
         // 计算 Log 空间的加权平均亮度
         val avgLog = (weightedSumLog / totalWeight).toFloat()
@@ -187,6 +187,8 @@ object MeteringSystem {
         val logCurveForTarget = logCurve
         val targetLumaIRE = lv / (2.087f * lv + 1.759f) / 0.391f * logCurve.middleGray
         var gain = logToLinear(targetLumaIRE, logCurveForTarget) * biasMultiplier / representativeLinearLuma
+
+        gain = gain.coerceAtLeast(1f)
 
         // 应用 DR 增益补偿
         if (drBoost > 0f) {

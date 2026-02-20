@@ -955,7 +955,7 @@ class RawDemosaicProcessor {
         val isoGain = metadata.iso / 100.0f
         val digitalGain = metadata.postRawSensitivityBoost
         val postGain = sceneStats.exposureGain
-        val totalGain = isoGain * digitalGain * postGain
+        val totalGain = (isoGain * digitalGain * postGain).coerceAtLeast(0f)
 
         // 基于噪声特性的基础强度
         val s = metadata.noiseProfile[0]
