@@ -65,6 +65,7 @@ data class UserPreferences(
     val colorSpace: ColorSpace = ColorSpace.BT2020, // 默认 F-Gamut
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
     val rawLuts: Map<String, String> = emptyMap(),
+    val useP010: Boolean = false,
 )
 
 /**
@@ -116,6 +117,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val APPLY_ULTRA_HDR = booleanPreferencesKey("apply_ultra_hdr")
         private val COLOR_SPACE = stringPreferencesKey("color_space")
         private val LOG_CURVE = stringPreferencesKey("log_curve")
+        private val USE_P010 = booleanPreferencesKey("use_p010")
     }
 
     /**
@@ -161,6 +163,7 @@ class UserPreferencesRepository(private val context: Context) {
                 colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.BT2020.name),
                 logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
                 rawLuts = parseRawLuts(preferences),
+                useP010 = preferences[USE_P010] ?: false,
             )
         }
 
@@ -523,6 +526,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawLut(logCurve: LogCurve, lut: String) {
         context.dataStore.edit { preferences ->
             preferences[stringPreferencesKey("${logCurve.name}_raw_lut")] = lut
+        }
+    }
+
+    /**
+     * 保存是否启用 P010
+     */
+    suspend fun saveUseP010(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_P010] = enabled
         }
     }
 }

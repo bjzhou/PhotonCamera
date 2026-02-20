@@ -113,4 +113,6 @@
     <string name="settings_color_space_description">选择 RAW 处理的目标色彩空间。</string>
     <string name="settings_log_curve">RAW 伽马</string>
     <string name="settings_log_curve_description">选择 RAW 处理的传输函数 (Log 曲线)。</string>
+    <string name="settings_use_p010">P010 (10位 YUV)</string>
+    <string name="settings_use_p010_description">启用 10位 YUV 输出以获得更好的图像数据精度。仅在支持的设备上且 RAW 关闭时生效。</string>
 </resources>

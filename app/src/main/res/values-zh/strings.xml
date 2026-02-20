@@ -293,4 +293,7 @@
     <string name="settings_dro_mode_description">通过利用 F-Log2 高光冗余，在不牺牲高光的前提下提升阴影细节。</string>
     <string name="settings_dro_off">关闭</string>
     <string name="settings_dro_low">中等</string>
-    <string name="settings_dro_high">最高</string></resources>
+    <string name="settings_dro_high">最高</string>
+    <string name="settings_use_p010">P010 (10位 YUV)</string>
+    <string name="settings_use_p010_description">启用 10位 YUV 输出以获得更好的图像数据精度。仅在支持的设备上且 RAW 关闭时生效。</string>
+</resources>

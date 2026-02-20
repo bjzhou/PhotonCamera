@@ -183,6 +183,8 @@ data class CameraState(
     // 是否正在拍摄 Live Photo (用于 UI 动画)
     val isCapturingLivePhoto: Boolean = false,
     val applyUltraHDR: Boolean = true,
+    val useP010: Boolean = false,
+    val isP010Supported: Boolean = false,
 ) {
     /**
      * 是否全自动曝光

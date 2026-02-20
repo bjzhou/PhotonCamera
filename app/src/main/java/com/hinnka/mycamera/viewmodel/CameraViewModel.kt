@@ -177,6 +177,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.rawLuts[it.logCurve.name] ?: "sRGB.plut" }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "sRGB.plut")
 
+    val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useP010 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
     val noiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.noiseReduction }
@@ -261,6 +265,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 同步当前 Log 曲线对应的 RAW LUT
                 val currentRawLut = it.rawLuts[it.logCurve.name] ?: "Default.plut"
                 RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
+                // 同步 P010 设置到相机控制器
+                cameraController.setUseP010(it.useP010)
             }
         }
 
@@ -749,6 +755,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setApplyUltraHDR(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveApplyUltraHDR(enabled)
+        }
+    }
+
+    /**
+     * 设置是否启用 P010
+     */
+    fun setUseP010(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseP010(enabled)
         }
     }
 

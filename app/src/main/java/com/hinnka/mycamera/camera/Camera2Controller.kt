@@ -103,6 +103,7 @@ class Camera2Controller(private val context: Context) {
     private var availableTonemapModes: IntArray = intArrayOf()
     private var availableVideoStabilizationModes: IntArray = intArrayOf()
     private var availableOpticalStabilizationModes: IntArray = intArrayOf()
+    private var availableLensShadingMapModes: IntArray = intArrayOf()
     private var isRawSupported = false
     private var isP010Supported = false
     private var availableAeModes: IntArray = intArrayOf()
@@ -432,6 +433,9 @@ class Camera2Controller(private val context: Context) {
                 availableOpticalStabilizationModes =
                     cachedCharacteristics?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                         ?: intArrayOf()
+                availableLensShadingMapModes =
+                    cachedCharacteristics?.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
+                        ?: intArrayOf()
                 isRawSupported = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
 
                 availableAeModes =
@@ -459,6 +463,7 @@ class Camera2Controller(private val context: Context) {
 
                 _state.value = _state.value.copy(
                     isRawSupported = isRawSupported,
+                    isP010Supported = isP010Supported,
                     availableNrModes = availableNoiseReductionModes
                 )
             } catch (e: Exception) {
@@ -488,7 +493,7 @@ class Camera2Controller(private val context: Context) {
             }
             val captureFormat = if (effectivelyUseRaw && CameraUtils.getRawCaptureSize(context, cameraId) != null) {
                 ImageFormat.RAW_SENSOR
-            } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            } else if (isP010Supported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && state.value.useP010) {
                 ImageFormat.YCBCR_P010
             } else {
                 ImageFormat.YUV_420_888
@@ -830,7 +835,9 @@ class Camera2Controller(private val context: Context) {
         applyStabilizationSettings(builder)
 
         // 8. 统计信息设置
-        builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+        if (availableLensShadingMapModes.contains(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)) {
+            builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+        }
     }
 
     /**
@@ -2351,6 +2358,10 @@ class Camera2Controller(private val context: Context) {
         } else {
             livePhotoRecorder.stopRecording()
         }
+    }
+
+    fun setUseP010(enabled: Boolean) {
+        _state.value = _state.value.copy(useP010 = enabled)
     }
 
     /**

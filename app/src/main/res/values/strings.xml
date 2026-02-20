@@ -314,4 +314,6 @@
     <string name="settings_color_space_description">Choose the target color space for RAW processing.</string>
     <string name="settings_log_curve">RAW Gamma</string>
     <string name="settings_log_curve_description">Choose the transfer function for RAW processing (Log Curve).</string>
+    <string name="settings_use_p010">P010 (10-bit YUV)</string>
+    <string name="settings_use_p010_description">Enable 10-bit YUV output for better image data precision. Effective on supported devices when RAW is disabled.</string>
 </resources>

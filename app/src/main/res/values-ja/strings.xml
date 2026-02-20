@@ -298,4 +298,6 @@
     <string name="settings_donation_description">Photon Cameraの開発を支援する</string>
     <string name="settings_default_focal_length">デフォルトの焦点距離</string>
     <string name="settings_default_focal_length_description">アプリ起動時に自動的に切り替える焦点距離を設定します。</string>
+    <string name="settings_use_p010">P010 (10ビット YUV)</string>
+    <string name="settings_use_p010_description">より精度の高い画像データを得るために 10ビット YUV 出力を有効にします。対応デバイスで RAW がオフの場合にのみ有効です。</string>
 </resources>
