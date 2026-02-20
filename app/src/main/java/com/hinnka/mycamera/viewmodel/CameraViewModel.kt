@@ -165,7 +165,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
     val applyUltraHDR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.applyUltraHDR }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val colorSpace: StateFlow<ColorSpace> = userPreferencesRepository.userPreferences
         .map { it.colorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.BT2020)

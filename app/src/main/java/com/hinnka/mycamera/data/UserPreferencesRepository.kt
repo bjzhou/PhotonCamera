@@ -61,7 +61,7 @@ data class UserPreferences(
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
     val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
     val droMode: String = "OFF", // DRO 模式
-    val applyUltraHDR: Boolean = true, // 是否应用 Ultra HDR 策略
+    val applyUltraHDR: Boolean = false, // 是否应用 Ultra HDR 策略
     val colorSpace: ColorSpace = ColorSpace.BT2020, // 默认 F-Gamut
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
     val rawLuts: Map<String, String> = emptyMap(),
@@ -157,7 +157,7 @@ class UserPreferencesRepository(private val context: Context) {
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
                 useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
                 droMode = preferences[DRO_MODE] ?: "OFF",
-                applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: true,
+                applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: false,
                 colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.BT2020.name),
                 logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
                 rawLuts = parseRawLuts(preferences),

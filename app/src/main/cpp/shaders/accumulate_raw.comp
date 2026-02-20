@@ -129,11 +129,12 @@ void main() {
     vec2 centerPos = vec2(outX, outY) + flowRaw;
     
     // Window search in Current Frame (Bayer)
-    // 3x3 Window (radius 1) around the center
+    // 5x5 Window (radius 2) around the center to ensure multiple 
+    // identical color samples are found for proper spatial denoising.
     ivec2 iCenter = ivec2(round(centerPos));
     
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
              ivec2 samplePos = iCenter + ivec2(dx, dy);
              
              // Check Bounds

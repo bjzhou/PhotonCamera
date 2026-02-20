@@ -851,12 +851,10 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
     // Scale noise model from raw ADU space to UNORM [0,1] space.
     // SENSOR_NOISE_PROFILE gives (S, O) where Var(raw) = S * raw_value + O
-    // In UNORM space: value_unorm = raw / whiteLevel
-    // Var(unorm) = S * value_unorm / whiteLevel + O / whiteLevel^2
-    //            = (S / whiteLevel) * value_unorm + O / whiteLevel^2
-    float wl = mWhiteLevel > 0 ? mWhiteLevel : 1023.0f;
-    pc.noiseAlpha = mNoiseModel[0] / wl;       // S / whiteLevel
-    pc.noiseBeta = mNoiseModel[1] / (wl * wl); // O / whiteLevel^2
+    // In UNORM space: value_unorm = raw_value / 65535.0f
+    // Var(unorm) = S * value_unorm / 65535.0f + O / (65535.0f * 65535.0f)
+    pc.noiseAlpha = mNoiseModel[0] / 65535.0f;       
+    pc.noiseBeta = mNoiseModel[1] / (65535.0f * 65535.0f); 
     pc.baseNoise = pc.noiseBeta;
 
     if (isRef) {
