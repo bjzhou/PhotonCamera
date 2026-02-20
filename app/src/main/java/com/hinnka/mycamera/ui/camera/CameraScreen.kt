@@ -85,6 +85,7 @@ fun CameraScreen(
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
+    val useSuperResolution by viewModel.useSuperResolution.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
 
     // 标记相机是否已打开
@@ -441,7 +442,17 @@ fun CameraScreen(
             },
             useMultiFrame = useMultiFrame,
             onMultiFrameToggle = {
+                if (!it) {
+                    viewModel.setUseSuperResolution(false)
+                }
                 viewModel.setUseMultiFrame(it)
+            },
+            useSuperResolution = useSuperResolution,
+            onSuperResolutionToggle = {
+                if (it) {
+                    viewModel.setUseMultiFrame(true)
+                }
+                viewModel.setUseSuperResolution(it)
             },
             showGrid = state.showGrid,
             onShowGridToggle = { viewModel.toggleGrid() }

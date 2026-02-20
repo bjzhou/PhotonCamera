@@ -286,6 +286,7 @@ object PhotoManager {
         captureResult: CaptureResult?,
         thumbnail: Bitmap?,
         useLivePhoto: Boolean,
+        useSuperResolution: Boolean
     ) = withContext(Dispatchers.IO) {
         try {
             val photoId = UUID.randomUUID().toString()
@@ -295,7 +296,11 @@ object PhotoManager {
             val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
             val metadataFile = File(photoDir, METADATA_FILE)
 
-            val cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
+            var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
+            if (useSuperResolution && cropRegion != null) {
+                cropRegion =
+                    Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
+            }
 
             val dimensions =
                 BitmapUtils.calculateProcessedRect(metadata.width, metadata.height, metadata.ratio, cropRegion, metadata.rotation)
@@ -564,6 +569,7 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
+        useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
@@ -579,6 +585,7 @@ object PhotoManager {
                 rotation,
                 aspectRatio,
                 yuvFile.absolutePath,
+                useSuperResolution,
                 useGpuAcceleration
             ) ?: return@withContext
             // Save Original (Stacked Result)
@@ -621,6 +628,7 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
+        useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
         droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
@@ -645,6 +653,7 @@ object PhotoManager {
 
             val byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
+                useSuperResolution,
                 useGpuAcceleration,
                 masterBlackLevel = rawMetadata.blackLevel,
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
@@ -658,8 +667,8 @@ object PhotoManager {
             val result: Bitmap = run {
                 // Construct metadata for Linear RGB
                 val linearMetadata = rawMetadata.copy(
-                    width = firstImageWidth,
-                    height = firstImageHeight,
+                    width = firstImageWidth * if (useSuperResolution) 2 else 1,
+                    height = firstImageHeight * if (useSuperResolution) 2 else 1,
                     cfaPattern = RawMetadata.CFA_LINEAR_RGB,
                     blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
                     whiteLevel = 65535f,
@@ -670,9 +679,9 @@ object PhotoManager {
                 val bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     byteBuffer,
-                    firstImageWidth,
-                    firstImageHeight,
-                    firstImageWidth * 6, // 3 channels * 2 bytes
+                    firstImageWidth * if (useSuperResolution) 2 else 1,
+                    firstImageHeight * if (useSuperResolution) 2 else 1,
+                    firstImageWidth * (if (useSuperResolution) 2 else 1) * 6, // 3 channels * 2 bytes
                     linearMetadata,
                     aspectRatio,
                     metadata.cropRegion,
@@ -730,6 +739,7 @@ object PhotoManager {
         noiseReductionValue: Float,
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
+        useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
         droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
@@ -748,6 +758,7 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
+                    useSuperResolution,
                     useGpuAcceleration
                 )
             }
@@ -767,6 +778,7 @@ object PhotoManager {
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQuality,
+                    useSuperResolution,
                     useGpuAcceleration,
                     exposureBias,
                     droMode

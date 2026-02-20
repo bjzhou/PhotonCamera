@@ -178,6 +178,7 @@ data class CameraState(
     val isRawSupported: Boolean = false,
     val useMultiFrame: Boolean = false,
     val multiFrameCount: Int = 0,
+    val useSuperResolution: Boolean = false,
     val useRaw: Boolean = false,
     val useLivePhoto: Boolean = false,
     // 是否正在拍摄 Live Photo (用于 UI 动画)

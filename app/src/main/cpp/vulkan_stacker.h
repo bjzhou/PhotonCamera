@@ -7,7 +7,7 @@
 
 class VulkanImageStacker {
 public:
-  VulkanImageStacker(uint32_t width, uint32_t height);
+  VulkanImageStacker(uint32_t width, uint32_t height, bool enableSuperRes);
   ~VulkanImageStacker();
 
   bool addFrame(AHardwareBuffer *buffer);
@@ -16,6 +16,7 @@ public:
 
 private:
   uint32_t width, height;
+  bool enableSuperRes;
   bool isFirstFrame = true;
 
   VulkanImage accumulator;

@@ -16,11 +16,16 @@
     }                                                                          \
   } while (0)
 
-VulkanImageStacker::VulkanImageStacker(uint32_t w, uint32_t h)
-    : width(w), height(h) {
+VulkanImageStacker::VulkanImageStacker(uint32_t w, uint32_t h, bool sr)
+    : width(w), height(h), enableSuperRes(sr) {
 
-  numTilesX = 1;
-  numTilesY = 1;
+  if (enableSuperRes) {
+    numTilesX = 2;
+    numTilesY = 2;
+  } else {
+    numTilesX = 1;
+    numTilesY = 1;
+  }
 
   VulkanManager::getInstance().init();
   initVulkanResources();
@@ -39,7 +44,7 @@ void VulkanImageStacker::initVulkanResources() {
   VkDevice device = vm.getDevice();
 
   // Create Accumulator Tiles
-  uint32_t scale = 1;
+  uint32_t scale = enableSuperRes ? 2 : 1;
   uint32_t fullW = width * scale;
   uint32_t fullH = height * scale;
 
@@ -794,7 +799,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   pc.t5 = transform[5];
   pc.offsetX = offsetX;
   pc.offsetY = offsetY;
-  uint32_t scale = 1;
+  uint32_t scale = enableSuperRes ? 2 : 1;
   pc.scale = static_cast<float>(scale);
   pc.width = width * scale;
   pc.height = height * scale;
@@ -1105,9 +1110,9 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
     return false;
   }
 
-  uint32_t scale = 1;
-  uint32_t sensorW = width;
-  uint32_t sensorH = height;
+  uint32_t scale = enableSuperRes ? 2 : 1;
+  uint32_t sensorW = width * scale;
+  uint32_t sensorH = height * scale;
 
   // Calculate the crop and rotation matrix
   float transform[6] = {1, 0, 0, 0, 1, 0};

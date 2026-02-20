@@ -94,9 +94,11 @@ void main() {
     if (outX >= pc.width || outY >= pc.height) return;
     
     // 1. Fetch Kernel Parameters from Base Frame (Structure Tensor)
-    // Structure Tensor is computed at Half-Res (Plane Resolution)
-    uint planeX = outX / 2;
-    uint planeY = outY / 2;
+    // Structure Tensor is computed at Half-Res (Plane Resolution) of Input
+    uint nativeX = uint(float(outX) / pc.scale);
+    uint nativeY = uint(float(outY) / pc.scale);
+    uint planeX = nativeX / 2;
+    uint planeY = nativeY / 2;
     planeX = clamp(planeX, 0, pc.planeWidth - 1);
     planeY = clamp(planeY, 0, pc.planeHeight - 1);
     
@@ -126,7 +128,7 @@ void main() {
     vec2 flowRaw = flow * 2.0; // In raw pixels
     
     // Projected Center in Input Frame
-    vec2 centerPos = vec2(outX, outY) + flowRaw;
+    vec2 centerPos = vec2(float(outX) / pc.scale, float(outY) / pc.scale) + flowRaw;
     
     // Window search in Current Frame (Bayer)
     // 5x5 Window (radius 2) around the center to ensure multiple 

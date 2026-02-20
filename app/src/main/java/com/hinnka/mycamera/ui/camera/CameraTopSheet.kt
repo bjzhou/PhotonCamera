@@ -39,6 +39,8 @@ fun CameraTopSheet(
     onMoreSettingsClick: () -> Unit,
     useMultiFrame: Boolean,
     onMultiFrameToggle: (Boolean) -> Unit,
+    useSuperResolution: Boolean,
+    onSuperResolutionToggle: (Boolean) -> Unit,
     showGrid: Boolean,
     onShowGridToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -101,6 +103,13 @@ fun CameraTopSheet(
                     title = stringResource(R.string.settings_use_multi_frame),
                     checked = useMultiFrame,
                     onCheckedChange = onMultiFrameToggle,
+                    modifier = Modifier.weight(1f)
+                )
+
+                QuickSettingToggle(
+                    title = stringResource(R.string.settings_use_super_resolution),
+                    checked = useSuperResolution,
+                    onCheckedChange = onSuperResolutionToggle,
                     modifier = Modifier.weight(1f)
                 )
 

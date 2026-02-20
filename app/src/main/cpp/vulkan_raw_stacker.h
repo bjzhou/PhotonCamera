@@ -15,9 +15,9 @@
  */
 class VulkanRawStacker {
 public:
-  VulkanRawStacker(uint32_t width, uint32_t height, const float *blackLevel,
-                   float whiteLevel, const float *wbGains,
-                   const float *noiseModel,
+  VulkanRawStacker(uint32_t width, uint32_t height, bool enableSuperRes,
+                   const float *blackLevel, float whiteLevel,
+                   const float *wbGains, const float *noiseModel,
                    const float *lensShadingMap = nullptr, uint32_t lscWidth = 0,
                    uint32_t lscHeight = 0);
   ~VulkanRawStacker();
@@ -30,6 +30,7 @@ public:
 
 private:
   uint32_t width, height;
+  bool mEnableSuperRes = false;
   bool isFirstFrame = true;
   int mCfaPattern = 0; // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
 

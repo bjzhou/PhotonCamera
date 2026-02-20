@@ -3,6 +3,7 @@ package com.hinnka.mycamera.viewmodel
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
@@ -151,6 +152,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
+    val useSuperResolution: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useSuperResolution }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -347,6 +351,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setShowGrid(prefs.showGrid)
 
                 cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
+                cameraController.setUseSuperResolution(prefs.useSuperResolution)
                 cameraController.setUseLivePhoto(prefs.useLivePhoto)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
@@ -922,6 +927,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * 设置是否使用超分辨率
+     */
+    fun setUseSuperResolution(enabled: Boolean) {
+        cameraController.setUseSuperResolution(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseSuperResolution(enabled)
+        }
+        reopenCamera()
+    }
+    /**
      * 设置是否启用 Live Photo
      */
     fun setUseLivePhoto(enabled: Boolean) {
@@ -1419,7 +1434,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId =
-                PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value)
+                PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value, false)
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save image")
                 return
@@ -1498,6 +1513,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
+            val useSuperRes = useSuperResolution.value
+
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
@@ -1506,8 +1523,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
-                width = images[0].width,
-                height = images[0].height,
+                width = images[0].width * (if (useSuperRes) 2 else 1),
+                height = images[0].height * (if (useSuperRes) 2 else 1),
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
@@ -1535,7 +1552,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             characteristics ?: return
             val photoId = PhotoManager.preparePhoto(
                 context, metadata, captureResult, previewThumbnail,
-                useLivePhoto.value
+                useLivePhoto.value, useSuperRes
             )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save burst image")
@@ -1559,6 +1576,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     noiseReductionValue,
                     chromaNoiseReductionValue,
                     photoQualityValue,
+                    useSuperResolution = useSuperRes,
                     useGpuAcceleration = useGpuAcceleration.value,
                     exposureBias = state.value.exposureBias,
                     droMode = droModeForProcessing

@@ -67,7 +67,6 @@ fun SettingsScreen(
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
     val chromaNoiseReduction by viewModel.chromaNoiseReduction.collectAsState(initial = 0f)
     val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
-    val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
@@ -456,61 +455,42 @@ fun SettingsScreen(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_multi_frame),
-                    description = stringResource(R.string.settings_use_multi_frame_description),
-                    checked = useMultiFrame,
-                    onCheckedChange = { viewModel.setUseMultiFrame(it) }
+                QualityLevelSetting(
+                    title = stringResource(R.string.settings_multi_frame_count),
+                    description = stringResource(R.string.settings_multi_frame_count_description),
+                    levels = listOf(
+                        4 to "4",
+                        8 to "8",
+                        12 to "12",
+                        16 to "16",
+                    ),
+                    currentLevel = multiFrameCount,
+                    onLevelSelected = { viewModel.setMultiFrameCount(it) }
                 )
 
-                if (useMultiFrame) {
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
 
-                    QualityLevelSetting(
-                        title = stringResource(R.string.settings_multi_frame_count),
-                        description = stringResource(R.string.settings_multi_frame_count_description),
-                        levels = listOf(
-                            4 to "4",
-                            8 to "8",
-                            12 to "12",
-                            16 to "16",
-                        ),
-                        currentLevel = multiFrameCount,
-                        onLevelSelected = { viewModel.setMultiFrameCount(it) }
-                    )
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_use_gpu_acceleration),
+                    description = stringResource(R.string.settings_use_gpu_acceleration_description),
+                    checked = useGpuAcceleration,
+                    onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
+                )
 
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
 
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_use_gpu_acceleration),
-                        description = stringResource(R.string.settings_use_gpu_acceleration_description),
-                        checked = useGpuAcceleration,
-                        onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.1f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-
-                    SwitchSettingItem(
-                        title = stringResource(R.string.settings_use_live_photo),
-                        description = stringResource(R.string.settings_use_live_photo_description),
-                        checked = useLivePhoto,
-                        onCheckedChange = { viewModel.setUseLivePhoto(it) }
-                    )
-                }
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_use_live_photo),
+                    description = stringResource(R.string.settings_use_live_photo_description),
+                    checked = useLivePhoto,
+                    onCheckedChange = { viewModel.setUseLivePhoto(it) }
+                )
 
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.1f),

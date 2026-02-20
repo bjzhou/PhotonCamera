@@ -1816,6 +1816,10 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(useMultiFrame = useMultiFrame, multiFrameCount = multiFrameCount)
     }
 
+    fun setUseSuperResolution(useSuperResolution: Boolean) {
+        _state.value = _state.value.copy(useSuperResolution = useSuperResolution)
+    }
+
 
     fun setCapturingLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(isCapturingLivePhoto = enabled)

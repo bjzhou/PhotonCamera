@@ -18,14 +18,14 @@
     }                                                                          \
   } while (0)
 
-VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h,
+VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool enableSuperRes,
                                    const float *blackLevel, float whiteLevel,
                                    const float *wbGains,
                                    const float *noiseModel,
                                    const float *lensShadingMap,
                                    uint32_t lscWidth, uint32_t lscHeight)
-    : width(w), height(h), mWhiteLevel(whiteLevel), mLscWidth(lscWidth),
-      mLscHeight(lscHeight) {
+    : width(w), height(h), mEnableSuperRes(enableSuperRes),
+      mWhiteLevel(whiteLevel), mLscWidth(lscWidth), mLscHeight(lscHeight) {
 
   if (blackLevel)
     memcpy(mBlackLevel, blackLevel, 4 * sizeof(float));
@@ -54,7 +54,7 @@ void VulkanRawStacker::initVulkanResources() {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  uint32_t scale = 1;
+  uint32_t scale = mEnableSuperRes ? 2 : 1;
   uint32_t outW = width * scale;
   uint32_t outH = height * scale;
 
@@ -674,7 +674,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     createPipelines();
   }
 
-  uint32_t scale = 1;
+  uint32_t scale = mEnableSuperRes ? 2 : 1;
   uint32_t outputW = width * scale;
   uint32_t outputH = height * scale;
   uint32_t inputW = width / 2;
@@ -853,8 +853,8 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     // SENSOR_NOISE_PROFILE gives (S, O) where Var(raw) = S * raw_value + O
     // In UNORM space: value_unorm = raw_value / 65535.0f
     // Var(unorm) = S * value_unorm / 65535.0f + O / (65535.0f * 65535.0f)
-    pc.noiseAlpha = mNoiseModel[0] / 65535.0f;       
-    pc.noiseBeta = mNoiseModel[1] / (65535.0f * 65535.0f); 
+    pc.noiseAlpha = mNoiseModel[0] / 65535.0f;
+    pc.noiseBeta = mNoiseModel[1] / (65535.0f * 65535.0f);
     pc.baseNoise = pc.noiseBeta;
 
     if (isRef) {
