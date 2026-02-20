@@ -89,11 +89,13 @@ class CustomImportManager(private val context: Context) {
             val plutFileName = "$lutId.plut"
             val plutFile = File(customLutDir, plutFileName)
 
-            // 读取 .cube 文件并转换为 .plut
+            // 读取 .cube / .png / .xmp 文件并转换为 .plut
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(plutFile).use { outputStream ->
-                    val success = if (fileName.endsWith(".xmp")) {
+                    val success = if (fileName.endsWith(".xmp", ignoreCase = true)) {
                         XmpLutParser.parse(inputStream, outputStream, curve = curve)
+                    } else if (fileName.endsWith(".png", ignoreCase = true)) {
+                        LutConverter.convertPngToplut(inputStream, outputStream, curve = curve)
                     } else LutConverter.convertCubeToplut(inputStream, outputStream, curve = curve)
 
                     if (!success) {

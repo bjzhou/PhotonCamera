@@ -6,6 +6,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.min
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import kotlin.math.roundToInt
 
 /**
  * LUT 转换器
@@ -51,6 +54,145 @@ object LutConverter {
         } catch (e: Exception) {
             e.printStackTrace()
             false
+        }
+    }
+
+    /**
+     * 将 .png 文件（HALD 或 Unwrapped Cube 格式）转换为 .plut 格式
+     *
+     * @param pngInputStream .png 文件输入流
+     * @param plutOutputStream .plut 文件输出流
+     * @param curve 输入曲线类型
+     * @return true if conversion succeeded
+     */
+    fun convertPngToplut(
+        pngInputStream: InputStream,
+        plutOutputStream: OutputStream,
+        curve: LutCurve = LutCurve.SRGB
+    ): Boolean {
+        return try {
+            val options = BitmapFactory.Options()
+            options.inScaled = false
+            options.inPremultiplied = false
+            options.inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
+
+            val bitmap = BitmapFactory.decodeStream(pngInputStream, null, options) ?: return false
+            val width = bitmap.width
+            val height = bitmap.height
+
+            val isHaldStr = isHald(width, height)
+            val isUnwrappedCubeStr = isUnwrappedCube(width, height)
+
+            val lutSize: Int
+            val values: ShortArray
+
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            if (isHaldStr) {
+                val haldLevel = determineHaldLevel(width) ?: return false
+                lutSize = haldLevel * haldLevel
+                values = ShortArray(lutSize * lutSize * lutSize * 3)
+                
+                var dataIndex = 0
+                for (bIdx in 0 until lutSize) {
+                    for (gIdx in 0 until lutSize) {
+                        for (rIdx in 0 until lutSize) {
+                            val squareX = bIdx % haldLevel
+                            val squareY = bIdx / haldLevel
+                            val x = squareX * lutSize + rIdx
+                            val y = squareY * lutSize + gIdx
+                            
+                            val pixel = pixels[y * width + x]
+                            val r = Color.red(pixel)
+                            val g = Color.green(pixel)
+                            val b = Color.blue(pixel)
+                            
+                            val rNorm = (r / 255f).coerceIn(0f, 1f)
+                            val gNorm = (g / 255f).coerceIn(0f, 1f)
+                            val bNorm = (b / 255f).coerceIn(0f, 1f)
+                            
+                            values[dataIndex++] = (rNorm * 65535f + 0.5f).toInt().toShort()
+                            values[dataIndex++] = (gNorm * 65535f + 0.5f).toInt().toShort()
+                            values[dataIndex++] = (bNorm * 65535f + 0.5f).toInt().toShort()
+                        }
+                    }
+                }
+            } else if (isUnwrappedCubeStr) {
+                lutSize = determineUnwrappedCubeRoot(width, height) ?: return false
+                values = ShortArray(lutSize * lutSize * lutSize * 3)
+                
+                var dataIndex = 0
+                for (bIdx in 0 until lutSize) {
+                    for (gIdx in 0 until lutSize) {
+                        for (rIdx in 0 until lutSize) {
+                            val x = bIdx * lutSize + rIdx
+                            val y = gIdx
+                            
+                            val pixel = pixels[y * width + x]
+                            val r = Color.red(pixel)
+                            val g = Color.green(pixel)
+                            val b = Color.blue(pixel)
+                            
+                            val rNorm = (r / 255f).coerceIn(0f, 1f)
+                            val gNorm = (g / 255f).coerceIn(0f, 1f)
+                            val bNorm = (b / 255f).coerceIn(0f, 1f)
+                            
+                            values[dataIndex++] = (rNorm * 65535f + 0.5f).toInt().toShort()
+                            values[dataIndex++] = (gNorm * 65535f + 0.5f).toInt().toShort()
+                            values[dataIndex++] = (bNorm * 65535f + 0.5f).toInt().toShort()
+                        }
+                    }
+                }
+            } else {
+                bitmap.recycle()
+                return false
+            }
+
+            bitmap.recycle()
+
+            val cubeData = CubeData(lutSize, values)
+            writePLutFile(cubeData, plutOutputStream, curve)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    private fun isHald(width: Int, height: Int): Boolean {
+        if (width != height || width < 1) return false
+        val levelFloat = Math.cbrt(width.toDouble())
+        val levelRound = levelFloat.roundToInt()
+        return levelRound * levelRound * levelRound == width && levelRound >= 1
+    }
+
+    private fun determineHaldLevel(width: Int): Int? {
+        if (width < 1) return null
+        val levelFloat = Math.cbrt(width.toDouble())
+        val levelRound = levelFloat.roundToInt()
+        return if (levelRound * levelRound * levelRound == width && levelRound >= 1) {
+            levelRound
+        } else {
+            null
+        }
+    }
+
+    private fun isUnwrappedCube(width: Int, height: Int): Boolean {
+        if (width <= height || height < 1) return false
+        val size = width.toDouble() * height
+        val root = Math.cbrt(size).roundToInt()
+        return width % root == 0 && height == root && root * root * root == width * height
+    }
+
+    private fun determineUnwrappedCubeRoot(width: Int, height: Int): Int? {
+        if (width <= height || height < 1) return null
+        val size = width.toDouble() * height
+        val root = Math.cbrt(size).roundToInt()
+        return if (width % root == 0 && height == root && root * root * root == width * height) {
+            root
+        } else {
+            null
         }
     }
 
@@ -179,7 +321,7 @@ object LutConverter {
                             for (i in 0..2) {
                                 var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
                                 value = max(0f, min(1f, value))
-                                data!![dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
+                                data[dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
                             }
                         }
                         tempDataList.clear()  // 释放临时列表内存
@@ -214,12 +356,12 @@ object LutConverter {
                                     parts[2].toFloat()
                                 )
 
-                                if (data != null && dataIndex < data!!.size) {
+                                if (data != null && dataIndex < data.size) {
                                     // 已经分配了数组，直接写入
                                     for (i in 0..2) {
                                         var value = (rgb[i] - domainMin[i]) / (domainMax[i] - domainMin[i])
                                         value = max(0f, min(1f, value))
-                                        data!![dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
+                                        data[dataIndex++] = (value * 65535f + 0.5f).toInt().toShort()
                                     }
                                 } else {
                                     // 还未分配数组，暂存数据
