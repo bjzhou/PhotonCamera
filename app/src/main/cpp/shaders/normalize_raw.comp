@@ -52,8 +52,15 @@ void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
     
-    // Bounds check
-    if (tx >= pc.width || ty >= pc.height) return;
+    // Global output coordinates
+    uint outX = pc.tileX + tx;
+    uint outY = pc.tileY + ty;
+
+    // Bounds check within this tile
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+    
+    // Ensure we don't go out of bounds of the full image
+    if (outX >= pc.width || outY >= pc.height) return;
     
     // Read Accumulator
     uint accIndex = ty * pc.bufferStride + tx;
@@ -82,7 +89,7 @@ void main() {
     }
 
     // Write Interleaved RGB (R, G, B, R, G, B...)
-    uint outIndex = (ty * pc.width + tx) * 3 + pc.planeIndex;
+    uint outIndex = (outY * pc.width + outX) * 3 + pc.planeIndex;
     
     // Scale to full uint16 range for the Linear RGB processor in Kotlin
     uint16_t outVal = uint16_t(clamp(resLinear * 65535.0, 0.0, 65535.0));

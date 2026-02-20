@@ -38,8 +38,13 @@ VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool enableSuperRes,
     mLensShadingMap.assign(lensShadingMap, lensShadingMap + size);
   }
 
-  numTilesX = 1;
-  numTilesY = 1;
+  if (mEnableSuperRes) {
+    numTilesX = 2;
+    numTilesY = 2;
+  } else {
+    numTilesX = 1;
+    numTilesY = 1;
+  }
 
   VulkanManager::getInstance().init();
   initVulkanResources();
@@ -680,6 +685,9 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   uint32_t inputW = width / 2;
   uint32_t inputH = height / 2;
 
+  uint32_t tileW = (outputW + numTilesX - 1) / numTilesX;
+  uint32_t tileH = (outputH + numTilesY - 1) / numTilesY;
+
   // Global Sampler
   VkSampler sampler;
   VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -714,7 +722,8 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   // Pre-allocate descriptor sets for each channel to avoid re-allocation in
   // loop
   allocInfo.pSetLayouts = &descriptorSetLayout; // Accumulate
-  for (int i = 0; i < 3; ++i) {
+  int totalBuffers = numTilesX * numTilesY * 4;
+  for (int i = 0; i < totalBuffers; ++i) {
     VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &accumSets[i]));
     // Constant bindings for this channel
     updateBufferDescriptorSet(device, accumSets[i], accumBuffers[i],
@@ -886,43 +895,54 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
       // Accumulate pass for reference frame (isFirstFrame = 1)
       vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, accumulatePipeline);
-      for (int c = 0; c < 3; ++c) {
-        updateImageDescriptorSet(device, accumSets[c], currView, sampler, 0);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipelineLayout, 0, 1, &accumSets[c], 0,
-                                nullptr);
+      for (int ty = 0; ty < numTilesY; ++ty) {
+        for (int tx = 0; tx < numTilesX; ++tx) {
+          uint32_t currentTileW = std::min(tileW, outputW - tx * tileW);
+          uint32_t currentTileH = std::min(tileH, outputH - ty * tileH);
+          for (int c = 0; c < 3; ++c) {
+            int bufIdx = (ty * numTilesX + tx) * 4 + c;
+            updateImageDescriptorSet(device, accumSets[bufIdx], currView,
+                                     sampler, 0);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    pipelineLayout, 0, 1, &accumSets[bufIdx], 0,
+                                    nullptr);
 
-        pc.isFirstFrame = 1;
-        pc.outputChannel = c;
-        pc.width = outputW;
-        pc.height = outputH;
-        pc.planeWidth = inputW;
-        pc.planeHeight = inputH;
-        pc.sensorWidth = width;
-        pc.sensorHeight = height;
-        pc.scale = (float)scale;
-        pc.cfaPattern = (uint32_t)frame.cfaPattern;
-        pc.tileSize = (uint32_t)tileSize;
-        pc.gridW = gridW;
-        pc.gridH = gridH;
-        pc.bufferStride = outputW + 16;
-        pc.tileW = outputW;
-        pc.tileH = outputH;
+            pc.isFirstFrame = 1;
+            pc.outputChannel = c;
+            pc.width = outputW;
+            pc.height = outputH;
+            pc.planeWidth = inputW;
+            pc.planeHeight = inputH;
+            pc.sensorWidth = width;
+            pc.sensorHeight = height;
+            pc.scale = (float)scale;
+            pc.cfaPattern = (uint32_t)frame.cfaPattern;
+            pc.tileSize = (uint32_t)tileSize;
+            pc.gridW = gridW;
+            pc.gridH = gridH;
+            pc.bufferStride = tileW + 16;
+            pc.tileX = tx * tileW;
+            pc.tileY = ty * tileH;
+            pc.tileW = currentTileW;
+            pc.tileH = currentTileH;
 
-        vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                           sizeof(pc), &pc);
-        vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+            vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (currentTileW + 15) / 16,
+                          (currentTileH + 15) / 16, 1);
 
-        VkBufferMemoryBarrier accumBarrier{
-            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-        accumBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        accumBarrier.dstAccessMask =
-            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        accumBarrier.buffer = accumBuffers[c];
-        accumBarrier.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                             nullptr, 1, &accumBarrier, 0, nullptr);
+            VkBufferMemoryBarrier accumBarrier{
+                VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+            accumBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            accumBarrier.dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            accumBarrier.buffer = accumBuffers[bufIdx];
+            accumBarrier.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                 nullptr, 1, &accumBarrier, 0, nullptr);
+          }
+        }
       }
 
       vm.endSingleTimeCommands(cb);
@@ -1001,43 +1021,55 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                           accumulatePipeline);
 
-        for (int c = 0; c < 3; ++c) {
-          updateImageDescriptorSet(device, accumSets[c], currView, sampler, 0);
-          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  pipelineLayout, 0, 1, &accumSets[c], 0,
-                                  nullptr);
+        for (int ty = 0; ty < numTilesY; ++ty) {
+          for (int tx = 0; tx < numTilesX; ++tx) {
+            uint32_t currentTileW = std::min(tileW, outputW - tx * tileW);
+            uint32_t currentTileH = std::min(tileH, outputH - ty * tileH);
+            for (int c = 0; c < 3; ++c) {
+              int bufIdx = (ty * numTilesX + tx) * 4 + c;
+              updateImageDescriptorSet(device, accumSets[bufIdx], currView,
+                                       sampler, 0);
+              vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                      pipelineLayout, 0, 1, &accumSets[bufIdx],
+                                      0, nullptr);
 
-          pc.isFirstFrame = 0;
-          pc.outputChannel = c; // 0=R, 1=G, 2=B
-          pc.width = outputW;
-          pc.height = outputH;
-          pc.planeWidth = inputW;
-          pc.planeHeight = inputH;
-          pc.sensorWidth = width;
-          pc.sensorHeight = height;
-          pc.scale = (float)scale;
-          pc.cfaPattern = (uint32_t)frame.cfaPattern;
-          pc.tileSize = (uint32_t)tileSize;
-          pc.gridW = gridW;
-          pc.gridH = gridH;
-          pc.bufferStride = outputW + 16;
-          pc.tileW = outputW;
-          pc.tileH = outputH;
+              pc.isFirstFrame = 0;
+              pc.outputChannel = c; // 0=R, 1=G, 2=B
+              pc.width = outputW;
+              pc.height = outputH;
+              pc.planeWidth = inputW;
+              pc.planeHeight = inputH;
+              pc.sensorWidth = width;
+              pc.sensorHeight = height;
+              pc.scale = (float)scale;
+              pc.cfaPattern = (uint32_t)frame.cfaPattern;
+              pc.tileSize = (uint32_t)tileSize;
+              pc.gridW = gridW;
+              pc.gridH = gridH;
+              pc.bufferStride = tileW + 16;
+              pc.tileX = tx * tileW;
+              pc.tileY = ty * tileH;
+              pc.tileW = currentTileW;
+              pc.tileH = currentTileH;
 
-          vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                             sizeof(pc), &pc);
-          vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+              vkCmdPushConstants(cb, pipelineLayout,
+                                 VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+                                 &pc);
+              vkCmdDispatch(cb, (currentTileW + 15) / 16,
+                            (currentTileH + 15) / 16, 1);
 
-          VkBufferMemoryBarrier accBarrier{
-              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-          accBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          accBarrier.dstAccessMask =
-              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-          accBarrier.buffer = accumBuffers[c];
-          accBarrier.size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 1, &accBarrier, 0, nullptr);
+              VkBufferMemoryBarrier accBarrier{
+                  VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+              accBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+              accBarrier.dstAccessMask =
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+              accBarrier.buffer = accumBuffers[bufIdx];
+              accBarrier.size = VK_WHOLE_SIZE;
+              vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                   nullptr, 1, &accBarrier, 0, nullptr);
+            }
+          }
         }
 
         vm.endSingleTimeCommands(cb);
@@ -1072,36 +1104,45 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     dAlloc.descriptorSetCount = 1;
     dAlloc.pSetLayouts = &normalizeSetLayout;
 
-    for (int c = 0; c < 3; ++c) {
-      VK_CHECK(vkAllocateDescriptorSets(device, &dAlloc, &normalizeSets[c]));
-      updateBufferDescriptorSet(device, normalizeSets[c], stagingBuffer,
-                                VK_WHOLE_SIZE, 0, 0);
-      updateBufferDescriptorSet(device, normalizeSets[c], accumBuffers[c],
-                                VK_WHOLE_SIZE, 1);
+    for (int ty = 0; ty < numTilesY; ++ty) {
+      for (int tx = 0; tx < numTilesX; ++tx) {
+        uint32_t currentTileW = std::min(tileW, outputW - tx * tileW);
+        uint32_t currentTileH = std::min(tileH, outputH - ty * tileH);
+        for (int c = 0; c < 3; ++c) {
+          int bufIdx = (ty * numTilesX + tx) * 4 + c;
+          VK_CHECK(vkAllocateDescriptorSets(device, &dAlloc,
+                                            &normalizeSets[bufIdx]));
+          updateBufferDescriptorSet(device, normalizeSets[bufIdx],
+                                    stagingBuffer, VK_WHOLE_SIZE, 0, 0);
+          updateBufferDescriptorSet(device, normalizeSets[bufIdx],
+                                    accumBuffers[bufIdx], VK_WHOLE_SIZE, 1);
 
-      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                              normalizePipelineLayout, 0, 1, &normalizeSets[c],
-                              0, nullptr);
+          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  normalizePipelineLayout, 0, 1,
+                                  &normalizeSets[bufIdx], 0, nullptr);
 
-      PushConstants pc{}; // Reset for normalize
-      pc.width = outputW;
-      pc.height = outputH;
-      pc.planeWidth = outputW;
-      pc.planeHeight = outputH;
-      pc.bufferStride = outputW + 16;
-      pc.tileX = 0;
-      pc.tileY = 0;
-      pc.tileW = outputW;
-      pc.tileH = outputH;
-      pc.planeIndex = (uint32_t)c;
-      pc.cfaPattern = (uint32_t)mCfaPattern;
-      pc.whiteLevel = mWhiteLevel;
-      memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
-      memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
+          PushConstants pc{}; // Reset for normalize
+          pc.width = outputW;
+          pc.height = outputH;
+          pc.planeWidth = outputW;
+          pc.planeHeight = outputH;
+          pc.bufferStride = tileW + 16;
+          pc.tileX = tx * tileW;
+          pc.tileY = ty * tileH;
+          pc.tileW = currentTileW;
+          pc.tileH = currentTileH;
+          pc.planeIndex = (uint32_t)c;
+          pc.cfaPattern = (uint32_t)mCfaPattern;
+          pc.whiteLevel = mWhiteLevel;
+          memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
+          memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
 
-      vkCmdPushConstants(cb, normalizePipelineLayout,
-                         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-      vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+          vkCmdPushConstants(cb, normalizePipelineLayout,
+                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+          vkCmdDispatch(cb, (currentTileW + 15) / 16, (currentTileH + 15) / 16,
+                        1);
+        }
+      }
     }
     vm.endSingleTimeCommands(cb);
 
