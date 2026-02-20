@@ -98,17 +98,30 @@ bool saveJxl(const void *pixels, int32_t width, int32_t height,
 
 bool loadJxl(const std::string &inputPath, std::vector<uint16_t> &outPixels,
              int32_t &outWidth, int32_t &outHeight, JxlDataType dataType) {
+  size_t outSize = 0;
+  void *data = loadJxlRaw(inputPath, outWidth, outHeight, dataType, outSize);
+  if (data == nullptr)
+    return false;
+
+  outPixels.resize(outSize / sizeof(uint16_t));
+  std::memcpy(outPixels.data(), data, outSize);
+  free(data);
+  return true;
+}
+
+void *loadJxlRaw(const std::string &inputPath, int32_t &outWidth,
+                 int32_t &outHeight, JxlDataType dataType, size_t &outSize) {
   std::ifstream is(inputPath, std::ios::binary | std::ios::ate);
   if (!is) {
-    LOGE("loadJxl: Failed to open file: %s", inputPath.c_str());
-    return false;
+    LOGE("loadJxlRaw: Failed to open file: %s", inputPath.c_str());
+    return nullptr;
   }
   std::streamsize size = is.tellg();
   is.seekg(0, std::ios::beg);
   std::vector<uint8_t> buffer(size);
   if (!is.read(reinterpret_cast<char *>(buffer.data()), size)) {
-    LOGE("loadJxl: Failed to read file: %s", inputPath.c_str());
-    return false;
+    LOGE("loadJxlRaw: Failed to read file: %s", inputPath.c_str());
+    return nullptr;
   }
 
   auto decoder = JxlDecoderMake(nullptr);
@@ -120,14 +133,14 @@ bool loadJxl(const std::string &inputPath, std::vector<uint16_t> &outPixels,
                                                      JxlThreadParallelRunner,
                                                      runner.get())) {
     LOGE("JxlDecoderSetParallelRunner failed");
-    return false;
+    return nullptr;
   }
 
   if (JXL_DEC_SUCCESS !=
       JxlDecoderSubscribeEvents(decoder.get(),
                                 JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE)) {
     LOGE("JxlDecoderSubscribeEvents failed");
-    return false;
+    return nullptr;
   }
 
   JxlDecoderSetInput(decoder.get(), buffer.data(), buffer.size());
@@ -143,44 +156,39 @@ bool loadJxl(const std::string &inputPath, std::vector<uint16_t> &outPixels,
       LOGE("Decoder error");
       if (pixels_buffer)
         free(pixels_buffer);
-      return false;
+      return nullptr;
     } else if (status == JXL_DEC_NEED_MORE_INPUT) {
       LOGE("Error, unexpected end of input");
       if (pixels_buffer)
         free(pixels_buffer);
-      return false;
+      return nullptr;
     } else if (status == JXL_DEC_BASIC_INFO) {
       if (JXL_DEC_SUCCESS != JxlDecoderGetBasicInfo(decoder.get(), &info)) {
         LOGE("JxlDecoderGetBasicInfo failed");
-        return false;
+        return nullptr;
       }
       outWidth = info.xsize;
       outHeight = info.ysize;
-      outPixels.resize(static_cast<size_t>(outWidth) * outHeight * 4);
     } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
       JxlPixelFormat format = {4, dataType, JXL_LITTLE_ENDIAN, 0};
-      size_t buffer_size;
       if (JXL_DEC_SUCCESS !=
-          JxlDecoderImageOutBufferSize(decoder.get(), &format, &buffer_size)) {
+          JxlDecoderImageOutBufferSize(decoder.get(), &format, &outSize)) {
         LOGE("JxlDecoderImageOutBufferSize failed");
-        return false;
+        return nullptr;
       }
-      pixels_buffer = malloc(buffer_size);
+      pixels_buffer = malloc(outSize);
       if (JXL_DEC_SUCCESS != JxlDecoderSetImageOutBuffer(decoder.get(), &format,
                                                          pixels_buffer,
-                                                         buffer_size)) {
+                                                         outSize)) {
         LOGE("JxlDecoderSetImageOutBuffer failed");
         free(pixels_buffer);
-        return false;
+        return nullptr;
       }
     } else if (status == JXL_DEC_FULL_IMAGE) {
-      std::memcpy(outPixels.data(), pixels_buffer,
-                  outPixels.size() * sizeof(uint16_t));
-      free(pixels_buffer);
-      pixels_buffer = nullptr;
+      // Nothing to do, pixels_buffer already contains the data
     } else if (status == JXL_DEC_SUCCESS) {
       break;
     }
   }
-  return true;
+  return pixels_buffer;
 }

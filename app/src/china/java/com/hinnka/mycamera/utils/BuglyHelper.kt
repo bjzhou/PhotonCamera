@@ -25,4 +25,8 @@ object BuglyHelper {
     fun log(tag: String, msg: String, throwable: Throwable? = null) {
         BuglyLog.e(tag, msg, throwable)
     }
+
+    fun error(throwable: Throwable) {
+        CrashReport.postCatchedException(throwable)
+    }
 }

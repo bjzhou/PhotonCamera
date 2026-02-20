@@ -46,7 +46,6 @@ class PhotoProcessor(
             )
         } else if (yuvFile.exists()) {
             val data = PhotoManager.loadYuvData(context, photoId) ?: return null
-
             return processYuv(
                 data,
                 metadata,

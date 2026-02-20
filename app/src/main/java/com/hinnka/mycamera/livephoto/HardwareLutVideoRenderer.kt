@@ -52,6 +52,8 @@ class HardwareLutVideoRenderer(
     private var aPositionLoc = -1
     private var aTexCoordLoc = -1
 
+    private var isInitialized = false
+
     // 空实现，不再需要
     fun updateConfig(lutConfig: LutConfig?, colorRecipeParams: ColorRecipeParams?) {
         // no-op
@@ -64,6 +66,7 @@ class HardwareLutVideoRenderer(
      * @param sharedDisplay 共享显示 (主渲染线程使用的 Display)
      */
     fun initialize(surface: Surface, sharedContext: EGLContext, sharedDisplay: EGLDisplay) {
+        if (isInitialized) return
         PLog.d(TAG, "Initializing with sharedContext: $sharedContext, sharedDisplay: $sharedDisplay")
         
         // 必须使用相同的 EGLDisplay，否则 context sharing 可能失败
@@ -118,6 +121,7 @@ class HardwareLutVideoRenderer(
         }
         
         initGL()
+        isInitialized = true
         PLog.d(TAG, "EGL initialized successfully. Using Shared Display: ${sharedDisplay != EGL14.EGL_NO_DISPLAY}")
     }
 
@@ -166,6 +170,8 @@ class HardwareLutVideoRenderer(
      * @param textureId 2D 纹理 ID (GL_TEXTURE_2D)
      */
     fun renderFrame(textureId: Int, stMatrix: FloatArray, timestampUs: Long) {
+        if (!isInitialized) return
+
         val oldDisplay = EGL14.eglGetCurrentDisplay()
         val oldDrawSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
         val oldReadSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_READ)
@@ -216,7 +222,10 @@ class HardwareLutVideoRenderer(
             GLES30.glVertexAttribPointer(aTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
         }
 
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, indexBuffer)
+        indexBuffer?.let {
+            it.position(0)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, it)
+        }
 
         if (aPositionLoc != -1) GLES30.glDisableVertexAttribArray(aPositionLoc)
         if (aTexCoordLoc != -1) GLES30.glDisableVertexAttribArray(aTexCoordLoc)
@@ -242,5 +251,7 @@ class HardwareLutVideoRenderer(
         eglContext = EGL14.EGL_NO_CONTEXT
         eglSurface = EGL14.EGL_NO_SURFACE
         shaderProgram = 0
+        isInitialized = false
     }
+
 }

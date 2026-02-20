@@ -54,7 +54,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
             // 通知 SurfaceProvider 已准备好
             post {
-                onSurfaceReady?.invoke(currentSurface!!)
+                val surface = currentSurface ?: return@post
+                onSurfaceReady?.invoke(surface)
             }
         }
 

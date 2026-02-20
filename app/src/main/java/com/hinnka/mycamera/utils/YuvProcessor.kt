@@ -186,5 +186,10 @@ object YuvProcessor {
      */
     external fun loadCompressedArgb(inputPath: String): ByteBuffer?
 
+    /**
+     * 将 ARGB 数据 (16-bit) 压缩并保存到文件
+     */
+    external fun saveCompressedArgb(buffer: ByteBuffer, width: Int, height: Int, outputPath: String): Boolean
+
     external fun free(buffer: ByteBuffer)
 }

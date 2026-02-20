@@ -808,40 +808,55 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
     JNIEnv *env, jobject /* this */, jstring inputPath) {
 
   const char *path = env->GetStringUTFChars(inputPath, nullptr);
-  std::vector<uint16_t> pixels;
   int32_t width, height;
+  size_t dataSize = 0;
 
   // 使用 JXL_TYPE_FLOAT16 读取数据，以便于 OpenGL GLES 3.0 处理
-  if (!loadJxl(path, pixels, width, height, JXL_TYPE_FLOAT16)) {
-    env->ReleaseStringUTFChars(inputPath, path);
-    return nullptr;
-  }
+  void *pixels = loadJxlRaw(path, width, height, JXL_TYPE_FLOAT16, dataSize);
   env->ReleaseStringUTFChars(inputPath, path);
 
-  jshortArray result = env->NewShortArray((jsize)(pixels.size() + 2));
-  if (result == nullptr) {
-    LOGE("loadCompressedArgb: Failed to allocate result array");
+  if (pixels == nullptr) {
     return nullptr;
   }
 
-  size_t dataSize = pixels.size() * sizeof(uint16_t);
-  void *nativeBuffer = malloc(dataSize);
-  memcpy(nativeBuffer, pixels.data(), dataSize);
+  // 直接返回像素数据，不再添加 4 字节宽高头，以保持与旧版本兼容
+  return env->NewDirectByteBuffer(pixels, dataSize);
+}
 
-  return env->NewDirectByteBuffer(nativeBuffer, dataSize);
+/**
+ * 将 RGBA 数据 (FP16) 压缩并保存到文件
+ * 注意：输入 buffer 应该直接包含像素数据，不含宽高头
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_utils_YuvProcessor_saveCompressedArgb(
+    JNIEnv *env, jobject /* this */, jobject buffer, jint width, jint height,
+    jstring outputPath) {
+
+  if (buffer == nullptr || outputPath == nullptr)
+    return JNI_FALSE;
+
+  void *pixels = env->GetDirectBufferAddress(buffer);
+  if (pixels == nullptr) {
+    LOGE("saveCompressedArgb: Failed to get buffer address");
+    return JNI_FALSE;
+  }
+
+  const char *path = env->GetStringUTFChars(outputPath, nullptr);
+  bool success = saveJxl(pixels, width, height, JXL_TYPE_FLOAT16, path);
+  env->ReleaseStringUTFChars(outputPath, path);
+
+  return success ? JNI_TRUE : JNI_FALSE;
 }
 
 /**
  * 释放内存
  */
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_freeNativeBuffer(
-    JNIEnv *env, jobject /* this */, jobject rawDataBuffer) {
-  if (rawDataBuffer == nullptr)
+JNIEXPORT void JNICALL Java_com_hinnka_mycamera_utils_YuvProcessor_free(
+    JNIEnv *env, jobject /* this */, jobject buffer) {
+  if (buffer == nullptr)
     return;
-  void *nativePtr = env->GetDirectBufferAddress(rawDataBuffer);
+  void *nativePtr = env->GetDirectBufferAddress(buffer);
   if (nativePtr != nullptr) {
-    LOGI("Freeing native buffer: %p", nativePtr);
     free(nativePtr);
   }
 }

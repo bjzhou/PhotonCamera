@@ -91,6 +91,7 @@ object PLog {
     fun e(tag: String, message: String, throwable: Throwable? = null) {
         addLog(LogLevel.ERROR, tag, message, throwable)
         if (throwable != null) {
+            BuglyHelper.error(throwable)
             Log.e("PLog_$tag", message, throwable)
         } else {
             Log.e("PLog_$tag", message)

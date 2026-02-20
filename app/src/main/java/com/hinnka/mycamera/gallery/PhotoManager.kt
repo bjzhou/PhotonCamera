@@ -631,7 +631,7 @@ object PhotoManager {
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
-            val dngFile = File(photoDir, DNG_FILE)
+            val yuvFile = File(photoDir, YUV_FILE)
 
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
@@ -654,29 +654,6 @@ object PhotoManager {
                 lensShadingWidth = rawMetadata.lensShadingMapWidth,
                 lensShadingHeight = rawMetadata.lensShadingMapHeight,
             ) ?: return@withContext
-//            val byteOutstream = ByteArrayOutputStream()
-//            byteOutstream.use { outputStream ->
-//                try {
-//                    val scale = if (useSuperResolution) 2 else 1
-//                    RawProcessor.saveToDng(
-//                        byteBuffer.asReadOnlyBuffer(), characteristics,
-//                        captureResult, outputStream, firstImageWidth * scale, firstImageHeight * scale, rotation
-//                    )
-//                } catch (e: Throwable) {
-//                    // Fallback: If scaled DNG is not supported by hardware,
-//                    // save the first original frame to maintain DNG availability.
-//                    PLog.e(TAG, "SR DNG dimensions not supported, falling back to original frame DNG", e)
-//                    RawProcessor.saveToDng(firstImageData, characteristics, captureResult, outputStream,
-//                        firstImageWidth, firstImageHeight, rotation)
-//                }
-//            }
-//            val array = byteOutstream.toByteArray()
-//            FileOutputStream(dngFile).use {
-//                it.write(array)
-//            }
-//            if (shouldAutoSave) {
-//                exportDng(context, array, metadata)
-//            }
 
             val result: Bitmap = run {
                 // Construct metadata for Linear RGB
@@ -690,7 +667,7 @@ object PhotoManager {
                     // Keep original CCM and other params
                 )
 
-                RawDemosaicProcessor.getInstance().process(
+                val bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     byteBuffer,
                     firstImageWidth,
@@ -702,6 +679,14 @@ object PhotoManager {
                     rotation,
                     sharpeningValue = 0.4f
                 )
+
+                bitmap?.let {
+                    val buffer = ByteBuffer.allocateDirect(it.width * it.height * 8)
+                    it.copyPixelsToBuffer(buffer)
+                    YuvProcessor.saveCompressedArgb(buffer, it.width, it.height, yuvFile.absolutePath)
+                }
+
+                bitmap
             } ?: return@withContext
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->

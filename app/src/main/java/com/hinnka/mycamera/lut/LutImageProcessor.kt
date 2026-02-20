@@ -398,20 +398,28 @@ class LutImageProcessor {
         val positionHandle = GLES30.glGetAttribLocation(program, "aPosition")
         val texCoordHandle = GLES30.glGetAttribLocation(program, "aTexCoord")
 
-        GLES30.glEnableVertexAttribArray(positionHandle)
-        GLES30.glEnableVertexAttribArray(texCoordHandle)
+        if (positionHandle >= 0) {
+            vertexBuffer?.let {
+                GLES30.glEnableVertexAttribArray(positionHandle)
+                it.position(0)
+                GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, it)
+            }
+        }
+        if (texCoordHandle >= 0) {
+            texCoordBuffer?.let {
+                GLES30.glEnableVertexAttribArray(texCoordHandle)
+                it.position(0)
+                GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, it)
+            }
+        }
 
-        vertexBuffer?.position(0)
-        GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
+        indexBuffer?.let {
+            it.position(0)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, it)
+        }
 
-        texCoordBuffer?.position(0)
-        GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
-
-        indexBuffer?.position(0)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, indexBuffer)
-
-        GLES30.glDisableVertexAttribArray(positionHandle)
-        GLES30.glDisableVertexAttribArray(texCoordHandle)
+        if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
+        if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
 
         // 使用 PBO 优化 glReadPixels
         if (pboId == 0) {

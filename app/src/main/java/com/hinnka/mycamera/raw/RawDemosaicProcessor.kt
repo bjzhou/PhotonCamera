@@ -109,11 +109,6 @@ class RawDemosaicProcessor {
         xw: Float, yw: Float
     ): DngRawData?
 
-    /**
-     * Native 方法：释放 DirectByteBuffer
-     */
-    private external fun freeNativeBuffer(buffer: ByteBuffer)
-
     companion object {
         private const val TAG = "RawDemosaicProcessor"
 
@@ -143,7 +138,6 @@ class RawDemosaicProcessor {
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
     // GL 资源
-    private var demosaicProgram = 0
     private var combinedProgram = 0
     private var sharpenProgram = 0
     private var passthroughProgram = 0
@@ -188,12 +182,12 @@ class RawDemosaicProcessor {
     private var dhtWidth = 0
     private var dhtHeight = 0
 
-    // Guided Filter Pass 0 (Chroma) & NLM 降噪资源
+    // (Chroma) & NLM 降噪资源
     private var gfPass0Program = 0
     private var nlmPassHProgram = 0
     private var nlmPassVProgram = 0
 
-    // Guided Filter 中间纹理: ping-pong (RGBA16F)
+    // NLM 中间纹理: ping-pong (RGBA16F)
     private var gfTexId = intArrayOf(0, 0)
     private var gfFboId = intArrayOf(0, 0)
     private var gfWidth = 0
@@ -209,54 +203,6 @@ class RawDemosaicProcessor {
 
     // Linear Program (New)
     private var linearProgram = 0
-    private var uLinearRawTextureLoc = 0
-    private var uLinearImageSizeLoc = 0
-    private var uLinearColorCorrectionMatrixLoc = 0
-    private var uLinearTexMatrixLoc = 0
-
-    // Passthrough Uniform 位置
-    private var uPassTextureLoc = 0
-    private var uPassTexMatrixLoc = 0
-
-    // Combined Program Uniform 位置
-    private var uCombinedInputTextureLoc = 0
-    private var uCombinedLutTextureLoc = 0
-    private var uCombinedLutSizeLoc = 0
-    private var uCombinedLutEnabledLoc = 0
-    private var uCombinedExposureGainLoc = 0
-    private var uCombinedTexMatrixLoc = 0
-    private var uCombinedLogCoeffsLoc = 0
-    private var uCombinedLogLimitsLoc = 0
-    private var uCombinedLogTypeLoc = 0
-
-    // Sharpen Program Uniform 位置
-    private var uSharpenInputTextureLoc = 0
-    private var uSharpenTexelSizeLoc = 0
-    private var uSharpenValueLoc = 0
-    private var uSharpenTexMatrixLoc = 0
-
-    // 后期处理 Uniform 位置
-    private var uNoiseReductionLoc = 0
-    private var uChromaNoiseReductionLoc = 0
-
-    // Guided Filter Uniform 位置 (Pass 0)
-    private var gfPass0InputTexLoc = 0
-    private var gfPass0TexelSizeLoc = 0
-    private var gfPass0TexMatrixLoc = 0
-    private var gfPass0HLoc = 0
-
-    // NLM Pass H Uniforms
-    private var nlmPassHInputTexLoc = 0
-    private var nlmPassHTexelSizeLoc = 0
-    private var nlmPassHTexMatrixLoc = 0
-    private var nlmPassHHLoc = 0
-
-    // NLM Pass V Uniforms
-    private var nlmPassVInputTexLoc = 0
-    private var nlmPassVBlurTexLoc = 0
-    private var nlmPassVTexelSizeLoc = 0
-    private var nlmPassVTexMatrixLoc = 0
-    private var nlmPassVHLoc = 0
 
     private var lensShadingTextureId = 0
     private var dummyShadingTextureId = 0
@@ -616,11 +562,6 @@ class RawDemosaicProcessor {
             GLES30.glAttachShader(linearProgram, fShaderLinear)
             GLES30.glLinkProgram(linearProgram)
 
-            uLinearRawTextureLoc = GLES30.glGetUniformLocation(linearProgram, "uRawTexture")
-            uLinearImageSizeLoc = GLES30.glGetUniformLocation(linearProgram, "uImageSize")
-            uLinearColorCorrectionMatrixLoc = GLES30.glGetUniformLocation(linearProgram, "uColorCorrectionMatrix")
-            uLinearTexMatrixLoc = GLES30.glGetUniformLocation(linearProgram, "uTexMatrix")
-
             GLES30.glDeleteShader(fShaderLinear)
         }
 
@@ -632,16 +573,6 @@ class RawDemosaicProcessor {
             GLES30.glAttachShader(combinedProgram, fShaderCombined)
             GLES30.glLinkProgram(combinedProgram)
 
-            uCombinedInputTextureLoc = GLES30.glGetUniformLocation(combinedProgram, "uInputTexture")
-            uCombinedLutTextureLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutTexture")
-            uCombinedLutSizeLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutSize")
-            uCombinedLutEnabledLoc = GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled")
-            uCombinedExposureGainLoc = GLES30.glGetUniformLocation(combinedProgram, "uExposureGain")
-            uCombinedTexMatrixLoc = GLES30.glGetUniformLocation(combinedProgram, "uTexMatrix")
-            uCombinedLogCoeffsLoc = GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs")
-            uCombinedLogLimitsLoc = GLES30.glGetUniformLocation(combinedProgram, "uLogLimits")
-            uCombinedLogTypeLoc = GLES30.glGetUniformLocation(combinedProgram, "uLogType")
-
             GLES30.glDeleteShader(fShaderCombined)
         }
 
@@ -652,11 +583,6 @@ class RawDemosaicProcessor {
             GLES30.glAttachShader(sharpenProgram, vShader)
             GLES30.glAttachShader(sharpenProgram, fShaderSharpen)
             GLES30.glLinkProgram(sharpenProgram)
-
-            uSharpenInputTextureLoc = GLES30.glGetUniformLocation(sharpenProgram, "uInputTexture")
-            uSharpenTexelSizeLoc = GLES30.glGetUniformLocation(sharpenProgram, "uTexelSize")
-            uSharpenValueLoc = GLES30.glGetUniformLocation(sharpenProgram, "uSharpening")
-            uSharpenTexMatrixLoc = GLES30.glGetUniformLocation(sharpenProgram, "uTexMatrix")
 
             GLES30.glDeleteShader(fShaderSharpen)
         }
@@ -672,16 +598,13 @@ class RawDemosaicProcessor {
             GLES30.glAttachShader(passthroughProgram, fShaderPass)
             GLES30.glLinkProgram(passthroughProgram)
 
-            uPassTextureLoc = GLES30.glGetUniformLocation(passthroughProgram, "uTexture")
-            uPassTexMatrixLoc = GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix")
-
             GLES30.glDeleteShader(fShaderPass)
         }
 
         GLES30.glDeleteShader(vShader)
         PLog.d(
             TAG,
-            "Shader programs created: demosaic=$demosaicProgram, combined=$combinedProgram, passthrough=$passthroughProgram"
+            "Shader programs created: combined=$combinedProgram, passthrough=$passthroughProgram"
         )
     }
 
@@ -842,29 +765,6 @@ class RawDemosaicProcessor {
         nlmPassHProgram = createGfProgram(vShader, NLMShaders.NLM_PASS_H, "NLM_PassH")
         nlmPassVProgram = createGfProgram(vShader, NLMShaders.NLM_PASS_V, "NLM_PassV")
 
-        // 缓存 Uniform 位置
-        if (gfPass0Program != 0) {
-            gfPass0InputTexLoc = GLES30.glGetUniformLocation(gfPass0Program, "uInputTexture")
-            gfPass0TexelSizeLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexelSize")
-            gfPass0TexMatrixLoc = GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix")
-            gfPass0HLoc = GLES30.glGetUniformLocation(gfPass0Program, "uH")
-        }
-
-        if (nlmPassHProgram != 0) {
-            nlmPassHInputTexLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture")
-            nlmPassHTexelSizeLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize")
-            nlmPassHTexMatrixLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uTexMatrix")
-            nlmPassHHLoc = GLES30.glGetUniformLocation(nlmPassHProgram, "uH")
-        }
-
-        if (nlmPassVProgram != 0) {
-            nlmPassVInputTexLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture")
-            nlmPassVBlurTexLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture")
-            nlmPassVTexelSizeLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize")
-            nlmPassVTexMatrixLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uTexMatrix")
-            nlmPassVHLoc = GLES30.glGetUniformLocation(nlmPassVProgram, "uH")
-        }
-
         PLog.d(TAG, "Denoise programs: GF_Pass0=$gfPass0Program NLM_H=$nlmPassHProgram NLM_V=$nlmPassVProgram")
     }
 
@@ -983,10 +883,11 @@ class RawDemosaicProcessor {
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(gfPass0InputTexLoc, 0)
-        GLES30.glUniform2f(gfPass0TexelSizeLoc, texelW, texelH)
-        GLES30.glUniformMatrix4fv(gfPass0TexMatrixLoc, 1, false, identityMatrix, 0)
-        GLES30.glUniform1f(gfPass0HLoc, h)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(gfPass0Program, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(gfPass0Program, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix"),
+            1, false, identityMatrix, 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(gfPass0Program, "uH"), h)
         drawQuad(gfPass0Program)
 
         // ===== NLM Pass 1: Horizontal (gfChromaTexId -> gfFboId[0]) =====
@@ -996,10 +897,11 @@ class RawDemosaicProcessor {
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId)
-        GLES30.glUniform1i(nlmPassHInputTexLoc, 0)
-        GLES30.glUniform2f(nlmPassHTexelSizeLoc, texelW, texelH)
-        GLES30.glUniformMatrix4fv(nlmPassHTexMatrixLoc, 1, false, identityMatrix, 0)
-        GLES30.glUniform1f(nlmPassHHLoc, h)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassHProgram, "uH"), h)
         drawQuad(nlmPassHProgram)
 
         // ===== NLM Pass 2: Vertical (gfChromaTexId + gfTexId[0] -> gfFboId[1]) =====
@@ -1009,15 +911,16 @@ class RawDemosaicProcessor {
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId) // Original (Guide)
-        GLES30.glUniform1i(nlmPassVInputTexLoc, 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture"), 0)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfTexId[0])    // Blur Input
-        GLES30.glUniform1i(nlmPassVBlurTexLoc, 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
 
-        GLES30.glUniform2f(nlmPassVTexelSizeLoc, texelW, texelH)
-        GLES30.glUniformMatrix4fv(nlmPassVTexMatrixLoc, 1, false, identityMatrix, 0)
-        GLES30.glUniform1f(nlmPassVHLoc, h)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassVProgram, "uH"), h)
         drawQuad(nlmPassVProgram)
 
         checkGlError("renderNLMDenoise")
@@ -1477,12 +1380,12 @@ class RawDemosaicProcessor {
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D,
             0,
-            GLES30.GL_RGBA,
+            GLES30.GL_RGBA16F,
             width,
             height,
             0,
             GLES30.GL_RGBA,
-            GLES30.GL_UNSIGNED_BYTE,
+            GLES30.GL_HALF_FLOAT,
             null
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
@@ -1675,20 +1578,25 @@ class RawDemosaicProcessor {
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(uCombinedInputTextureLoc, 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uInputTexture"), 0)
 
         lutConfig?.let { uploadLut3DTexture(it) }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
-        GLES30.glUniform1i(uCombinedLutTextureLoc, 1)
-        GLES30.glUniform1f(uCombinedLutSizeLoc, lutConfig?.size?.toFloat() ?: 0f)
-        GLES30.glUniform1i(uCombinedLutEnabledLoc, if (lutConfig != null) 1 else 0)
-        GLES30.glUniform1f(uCombinedExposureGainLoc, sceneStats.exposureGain)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLutTexture"), 1)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(combinedProgram, "uLutSize"),
+            lutConfig?.size?.toFloat() ?: 0f)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled"),
+            if (lutConfig != null) 1 else 0)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(combinedProgram, "uExposureGain"),
+            sceneStats.exposureGain)
 
         // Log 曲线参数
-        GLES30.glUniform4f(uCombinedLogCoeffsLoc, logCurve.a, logCurve.b, logCurve.c, logCurve.d)
-        GLES30.glUniform4f(uCombinedLogLimitsLoc, logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2)
-        GLES30.glUniform1i(uCombinedLogTypeLoc, logCurve.type)
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs"),
+            logCurve.a, logCurve.b, logCurve.c, logCurve.d)
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(combinedProgram, "uLogLimits"),
+            logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLogType"), logCurve.type)
 
         val customCurveEnable = if (logCurve == LogCurve.SRGB && baseLut == null) 1 else 0
         val customCurveLoc = GLES30.glGetUniformLocation(combinedProgram, "uCustomCurveEnable")
@@ -1696,7 +1604,8 @@ class RawDemosaicProcessor {
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(uCombinedTexMatrixLoc, 1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(combinedProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0)
         drawQuad(combinedProgram)
         checkGlError("renderCombinedPass")
     }
@@ -1716,14 +1625,17 @@ class RawDemosaicProcessor {
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
-        GLES30.glUniform1i(uSharpenInputTextureLoc, 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(sharpenProgram, "uInputTexture"), 0)
 
-        GLES30.glUniform2f(uSharpenTexelSizeLoc, 1.0f / metadata.width, 1.0f / metadata.height)
-        GLES30.glUniform1f(uSharpenValueLoc, sharpeningValue)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(sharpenProgram, "uTexelSize"),
+            1.0f / metadata.width, 1.0f / metadata.height)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sharpenProgram, "uSharpening"),
+            sharpeningValue)
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(uSharpenTexMatrixLoc, 1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(sharpenProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0)
 
         drawQuad(sharpenProgram)
         checkGlError("renderSharpenPass")
@@ -1736,13 +1648,16 @@ class RawDemosaicProcessor {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
-        GLES30.glUniform1i(uLinearRawTextureLoc, 0)
-        GLES30.glUniform2f(uLinearImageSizeLoc, metadata.width.toFloat(), metadata.height.toFloat())
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(linearProgram, "uRawTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(linearProgram, "uImageSize"),
+            metadata.width.toFloat(), metadata.height.toFloat())
         val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
-        GLES30.glUniformMatrix3fv(uLinearColorCorrectionMatrixLoc, 1, false, transposedCCM, 0)
+        GLES30.glUniformMatrix3fv(GLES30.glGetUniformLocation(linearProgram, "uColorCorrectionMatrix"),
+            1, false, transposedCCM, 0)
         val identity = FloatArray(16)
         GlMatrix.setIdentityM(identity, 0)
-        GLES30.glUniformMatrix4fv(uLinearTexMatrixLoc, 1, false, identity, 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(linearProgram, "uTexMatrix"),
+            1, false, identity, 0)
         drawQuad(linearProgram)
     }
 
@@ -1773,10 +1688,11 @@ class RawDemosaicProcessor {
         GlMatrix.scaleM(texMatrix, 0, cropW / width, cropH / height, 1.0f)
         GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
-        GLES30.glUniformMatrix4fv(uPassTexMatrixLoc, 1, false, texMatrix, 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
+            1, false, texMatrix, 0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(uPassTextureLoc, 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(passthroughProgram, "uTexture"), 0)
         drawQuad(passthroughProgram)
         checkGlError("renderOutputPass")
     }
@@ -1785,23 +1701,29 @@ class RawDemosaicProcessor {
         val positionHandle = GLES30.glGetAttribLocation(program, "aPosition")
         val texCoordHandle = GLES30.glGetAttribLocation(program, "aTexCoord")
         if (positionHandle >= 0) {
-            GLES30.glEnableVertexAttribArray(positionHandle)
-            vertexBuffer?.position(0)
-            GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
+            vertexBuffer?.let {
+                GLES30.glEnableVertexAttribArray(positionHandle)
+                it.position(0)
+                GLES30.glVertexAttribPointer(positionHandle, 2, GLES30.GL_FLOAT, false, 0, it)
+            }
         }
         if (texCoordHandle >= 0) {
-            GLES30.glEnableVertexAttribArray(texCoordHandle)
-            texCoordBuffer?.position(0)
-            GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
+            texCoordBuffer?.let {
+                GLES30.glEnableVertexAttribArray(texCoordHandle)
+                it.position(0)
+                GLES30.glVertexAttribPointer(texCoordHandle, 2, GLES30.GL_FLOAT, false, 0, it)
+            }
         }
-        indexBuffer?.position(0)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, indexBuffer)
+        indexBuffer?.let {
+            it.position(0)
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, it)
+        }
         if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
     }
 
     private fun readPixels(width: Int, height: Int): Bitmap {
-        val pixelSize = width * height * 4
+        val pixelSize = width * height * 8
 
         // 使用 PBO 优化 glReadPixels
         if (pboId == 0) {
@@ -1814,7 +1736,7 @@ class RawDemosaicProcessor {
         GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, 0)
 
         // 映射内存并读取
         val mappedBuffer = GLES30.glMapBufferRange(
@@ -1824,7 +1746,7 @@ class RawDemosaicProcessor {
             GLES30.GL_MAP_READ_BIT
         ) as? ByteBuffer
 
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16)
 
         if (mappedBuffer != null) {
             bitmap.copyPixelsFromBuffer(mappedBuffer)
@@ -1887,7 +1809,6 @@ class RawDemosaicProcessor {
 
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
 
-        if (demosaicProgram != 0) GLES30.glDeleteProgram(demosaicProgram)
         if (combinedProgram != 0) GLES30.glDeleteProgram(combinedProgram)
         if (sharpenProgram != 0) GLES30.glDeleteProgram(sharpenProgram)
         if (passthroughProgram != 0) GLES30.glDeleteProgram(passthroughProgram)

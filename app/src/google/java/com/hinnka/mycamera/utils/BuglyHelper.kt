@@ -15,4 +15,7 @@ object BuglyHelper {
 
     fun log(tag: String, msg: String, throwable: Throwable? = null) {
     }
+
+    fun error(throwable: Throwable) {
+    }
 }

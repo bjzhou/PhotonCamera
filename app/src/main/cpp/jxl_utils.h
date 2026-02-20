@@ -15,4 +15,8 @@ bool saveJxl(const void *pixels, int32_t width, int32_t height,
 bool loadJxl(const std::string &inputPath, std::vector<uint16_t> &outPixels,
              int32_t &outWidth, int32_t &outHeight, JxlDataType dataType);
 
+// 更加内存高效的加载方式
+void *loadJxlRaw(const std::string &inputPath, int32_t &outWidth,
+                 int32_t &outHeight, JxlDataType dataType, size_t &outSize);
+
 #endif // JXL_UTILS_H
