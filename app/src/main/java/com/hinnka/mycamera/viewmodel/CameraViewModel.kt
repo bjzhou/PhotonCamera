@@ -480,7 +480,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         burstImages.clear()
         burstImageCount = 0
         burstPhotoId = UUID.randomUUID().toString()
-        shutterSoundPlayer.playBurst()
+        if (isShutterSoundEnabled) {
+            shutterSoundPlayer.playBurst()
+        }
         cameraController.startBurstCapture()
         viewModelScope.launch {
             processBurst()
