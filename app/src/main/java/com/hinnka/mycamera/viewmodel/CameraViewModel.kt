@@ -2,11 +2,13 @@ package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.net.Uri
+import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +24,7 @@ import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
+import com.hinnka.mycamera.ghost.GhostService
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -50,25 +53,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val cameraController = Camera2Controller(application)
 
-    // 用户偏好设置仓库
-    private val userPreferencesRepository = UserPreferencesRepository(application)
 
     // 内容仓库（单例，与 GalleryViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
-    private val lutImageProcessor = contentRepository.imageProcessor
+
+    private val userPreferencesRepository = contentRepository.userPreferencesRepository
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     val isPurchased = billingManager.isPurchased
-
-    // 边框渲染器
-    private val frameRenderer = FrameRenderer(application)
-    private val photoProcessor = PhotoProcessor(
-        contentRepository.lutManager,
-        lutImageProcessor,
-        contentRepository.frameManager,
-        frameRenderer
-    )
 
     // 快门音效播放器
     private val shutterSoundPlayer = ShutterSoundPlayer(application)
@@ -182,6 +175,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP010 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val ghostMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.ghostMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 软件处理参数 Flow
@@ -1426,7 +1423,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     characteristics,
                     captureResult,
                     shouldAutoSave,
-                    photoProcessor,
+                    contentRepository.photoProcessor,
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
@@ -1546,7 +1543,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     characteristics,
                     captureResult,
                     shouldAutoSave,
-                    photoProcessor,
+                    contentRepository.photoProcessor,
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
@@ -1655,7 +1652,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoId,
                     image,
                     shouldAutoSave,
-                    photoProcessor,
+                    contentRepository.photoProcessor,
                     photoQualityValue,
                 )
 //                PLog.d(TAG, "Image saved: $photoId")
@@ -1736,7 +1733,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         cameraController.release()
         contentRepository.lutManager.clearCache()
-        lutImageProcessor.release()
         contentRepository.frameManager.clearCache()
         shutterSoundPlayer.release()
 
@@ -1758,6 +1754,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setDroMode(mode: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveDroMode(mode)
+        }
+    }
+
+    fun toggleGhostMode() {
+        val newMode = !ghostMode.value
+        viewModelScope.launch {
+            userPreferencesRepository.saveGhostMode(newMode)
         }
     }
 }

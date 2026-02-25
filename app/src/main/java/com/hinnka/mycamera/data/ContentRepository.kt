@@ -3,6 +3,8 @@ package com.hinnka.mycamera.data
 import android.content.Context
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FrameManager
+import com.hinnka.mycamera.frame.FrameRenderer
+import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
@@ -45,6 +47,19 @@ class ContentRepository private constructor(context: Context) {
 
     private val _availableFrames = MutableStateFlow<List<FrameInfo>>(emptyList())
     val availableFrames: StateFlow<List<FrameInfo>> = _availableFrames.asStateFlow()
+
+    // 边框渲染器
+    val frameRenderer = FrameRenderer(appContext)
+
+    val photoProcessor = PhotoProcessor(
+        lutManager,
+        imageProcessor,
+        frameManager,
+        frameRenderer
+    )
+
+    // 用户偏好设置仓库
+    val userPreferencesRepository = UserPreferencesRepository(appContext)
 
     /**
      * 初始化内容

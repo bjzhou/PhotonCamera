@@ -1,5 +1,10 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.content.Intent
+import android.os.Environment
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -9,7 +14,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -40,6 +44,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.R
@@ -51,6 +56,7 @@ import com.hinnka.mycamera.ui.components.LutControlPanel
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.rememberBackgroundPainter
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlin.math.abs
@@ -87,6 +93,7 @@ fun CameraScreen(
     val useMultiFrame by viewModel.useMultiFrame.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
+    val ghostMode by viewModel.ghostMode.collectAsState()
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -96,6 +103,15 @@ fun CameraScreen(
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
 
     val burstCapturingCount = viewModel.burstImageCount
+
+    var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
+
+    val ghostLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { _ ->
+            // Results are handled via the ON_RESUME lifecycle effect to avoid self-reference issues
+        }
+    )
 
     // 当打开滤镜面板时，生成预览图
     LaunchedEffect(activePanel) {
@@ -110,6 +126,32 @@ fun CameraScreen(
             viewModel.checkAndRecoverCamera()
         }
         galleryViewModel.refreshLatestPhoto()
+
+        // Handle automated ghost mode permission sequence
+        if (isGhostPermissionFlowActive) {
+            val hasOverlay = Settings.canDrawOverlays(context)
+            val hasFiles = Environment.isExternalStorageManager()
+
+            if (hasOverlay && !hasFiles) {
+                // Overlay granted, now request files
+                ghostLauncher.launch(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        ("package:${context.packageName}").toUri()
+                    )
+                )
+            } else if (hasOverlay && hasFiles) {
+                // All permissions granted
+                isGhostPermissionFlowActive = false
+                if (!ghostMode) {
+                    viewModel.toggleGhostMode()
+                }
+            } else if (!hasOverlay) {
+                // If overlay is still missing after returning, user might have cancelled
+                // We stop the automatic flow to avoid getting stuck
+                isGhostPermissionFlowActive = false
+            }
+        }
     }
 
     // 监听照片保存完成事件，立即刷新缩略图
@@ -130,6 +172,8 @@ fun CameraScreen(
         mutableStateOf(size)
     }
 
+    var showGhostPermissionDialog by remember { mutableStateOf(false) }
+
     if (viewModel.showPaymentDialog) {
         val activity = context.findActivity()
         PaymentDialog(
@@ -139,6 +183,74 @@ fun CameraScreen(
                     viewModel.purchase(activity)
                 }
                 viewModel.showPaymentDialog = false
+            }
+        )
+    }
+
+    if (showGhostPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showGhostPermissionDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.ghost_mode_dialog_title),
+                    style = MaterialTheme.typography.titleLarge
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.ghost_mode_dialog_description),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.ghost_mode_permissions_required),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.ghost_mode_overlay_permission),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.ghost_mode_file_permission),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showGhostPermissionDialog = false
+                        isGhostPermissionFlowActive = true
+                        if (!Settings.canDrawOverlays(context)) {
+                            ghostLauncher.launch(
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    ("package:${context.packageName}").toUri()
+                                )
+                            )
+                        } else if (!Environment.isExternalStorageManager()) {
+                            ghostLauncher.launch(
+                                Intent(
+                                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    ("package:${context.packageName}").toUri()
+                                )
+                            )
+                        } else {
+                            isGhostPermissionFlowActive = false
+                            viewModel.toggleGhostMode()
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.ghost_mode_dialog_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGhostPermissionDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
             }
         )
     }
@@ -444,6 +556,14 @@ fun CameraScreen(
             onFilterManageClick = {
                 activePanel = ActivePanel.NONE
                 onFilterManagementClick()
+            },
+            ghostMode = ghostMode,
+            onGhostModeToggle = {
+                if (it && (!Settings.canDrawOverlays(context) || !Environment.isExternalStorageManager())) {
+                    showGhostPermissionDialog = true
+                } else {
+                    viewModel.toggleGhostMode()
+                }
             },
             onMoreSettingsClick = {
                 activePanel = ActivePanel.NONE

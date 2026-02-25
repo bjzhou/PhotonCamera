@@ -67,6 +67,7 @@ data class UserPreferences(
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
     val rawLuts: Map<String, String> = emptyMap(),
     val useP010: Boolean = false,
+    val ghostMode: Boolean = false,
 )
 
 /**
@@ -120,6 +121,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val COLOR_SPACE = stringPreferencesKey("color_space")
         private val LOG_CURVE = stringPreferencesKey("log_curve")
         private val USE_P010 = booleanPreferencesKey("use_p010")
+        private val GHOST_MODE = booleanPreferencesKey("ghost_mode")
     }
 
     /**
@@ -167,6 +169,7 @@ class UserPreferencesRepository(private val context: Context) {
                 logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
+                ghostMode = preferences[GHOST_MODE] ?: false,
             )
         }
 
@@ -547,6 +550,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseP010(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_P010] = enabled
+        }
+    }
+
+    /**
+     * 保存是否启用幽灵模式
+     */
+    suspend fun saveGhostMode(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[GHOST_MODE] = enabled
         }
     }
 }

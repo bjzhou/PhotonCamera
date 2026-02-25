@@ -50,17 +50,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 内容仓库（单例，与 CameraViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
-    private val lutImageProcessor = contentRepository.imageProcessor
-    private val frameRenderer = FrameRenderer(application)
-    private val photoProcessor = PhotoProcessor(
-        contentRepository.lutManager,
-        lutImageProcessor,
-        contentRepository.frameManager,
-        frameRenderer
-    )
 
     // 用户偏好设置仓库
-    private val userPreferencesRepository = UserPreferencesRepository(application)
+    private val userPreferencesRepository = contentRepository.userPreferencesRepository
 
     // 软件处理参数
     val sharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
@@ -80,6 +72,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
+
+    val defaultLutId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.lutId }
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -945,7 +939,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         return PhotoTransformation(
             metadata = metadata,
-            photoProcessor = photoProcessor,
+            photoProcessor = contentRepository.photoProcessor,
             sharpening = photoSharpening,
             noiseReduction = photoNoiseReduction,
             chromaNoiseReduction = photoChromaNoiseReduction
@@ -994,7 +988,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     bitmap
                 } else {
                     // 预览生成
-                    val result = photoProcessor.processBitmap(
+                    val result = contentRepository.photoProcessor.processBitmap(
                         bitmap, finalMetadata,
                         finalS, finalNR, finalCNR
                     )
@@ -1105,7 +1099,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: photo.metadata ?: PhotoMetadata()
             val context = getApplication<Application>()
-            PhotoManager.exportPhoto(context, photo.id, bitmap, photoProcessor, metadata,
+            PhotoManager.exportPhoto(context, photo.id, bitmap, contentRepository.photoProcessor, metadata,
                 sharpening.value, noiseReduction.value,
                 chromaNoiseReduction.value, photoQuality.firstOrNull() ?: 95, suffix) { success ->
                 if (success) {
@@ -1123,7 +1117,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val metadata = photo.metadata ?: PhotoManager.loadMetadata(context, photo.id) ?: PhotoMetadata()
 
             // 处理照片：跟随用户设置
-            val processedBitmap = photoProcessor.process(
+            val processedBitmap = contentRepository.photoProcessor.process(
                 context, photo.id, metadata,
                 sharpening.value, noiseReduction.value, chromaNoiseReduction.value
             ) ?: return@withContext null
@@ -1160,8 +1154,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 var successCount = 0
 
                 withContext(Dispatchers.IO) {
+                    val lutId = defaultLutId.firstOrNull() ?: contentRepository.getAvailableLuts().firstOrNull { it.isDefault }?.id
                     uris.forEach { uri ->
-                        val photoId = PhotoManager.importPhoto(context, uri)
+                        val photoId = PhotoManager.importPhoto(context, uri, lutId)
                         if (photoId != null) {
                             successCount++
                         }
@@ -1182,7 +1177,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
-        lutImageProcessor.release()
         contentRepository.lutManager.clearCache()
     }
 

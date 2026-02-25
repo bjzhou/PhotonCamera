@@ -243,6 +243,104 @@ object PhotoManager {
         }
     }
 
+    /**
+     * @return thumbnail of the photo
+     */
+    suspend fun updateExternalPhoto(
+        context: Context,
+        id: String,
+        uri: Uri,
+        photoProcessor: PhotoProcessor,
+        metadata: PhotoMetadata,
+        photoQuality: Int = 95
+    ): Bitmap? {
+        return withContext(Dispatchers.IO) {
+            try {
+                // 读取照片
+                val processedBitmap = photoProcessor.process(
+                    context, id, metadata,
+                    0f, 0f, 0f
+                ) ?: return@withContext null
+
+                val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
+                val isLivePhoto = videoFile.exists()
+
+                val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
+                FileOutputStream(tempExportFile).use { outputStream ->
+                    processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                }
+
+                ExifWriter.writeExif(
+                    tempExportFile, metadata.toCaptureInfo().copy(
+                        imageWidth = processedBitmap.width,
+                        imageHeight = processedBitmap.height
+                    )
+                )
+
+                if (isLivePhoto) {
+                    val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
+                    try {
+                        PLog.d(
+                            TAG,
+                            "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
+                        )
+
+                        // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
+                        val latestMetadata = loadMetadata(context, id) ?: metadata
+                        val success = MotionPhotoWriter.write(
+                            tempExportFile.absolutePath,
+                            videoFile.absolutePath,
+                            tempMotionPhotoFile.absolutePath,
+                            latestMetadata.presentationTimestampUs ?: 0L,
+                            context
+                        )
+
+                        PLog.d(TAG, "MotionPhotoWriter result: $success")
+
+                        context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                            if (success) {
+                                tempMotionPhotoFile.inputStream().use { input -> input.copyTo(outputStream) }
+                                PLog.d(
+                                    TAG,
+                                    "Exported Live Photo successfully: ${tempMotionPhotoFile.length()} bytes"
+                                )
+                            } else {
+                                // Fallback to normal JPEG (with EXIF)
+                                PLog.w(TAG, "Motion Photo synthesis failed, falling back to JPEG")
+                                tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                            }
+                        }
+                    } finally {
+                        tempMotionPhotoFile.delete()
+                    }
+                } else {
+                    // 3b. Normal Export: Copy Temp File (with EXIF) to MediaStore
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+                        tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
+                    }
+                }
+
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Images.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+                }
+                context.contentResolver.update(uri, contentValues, null, null)
+
+                // Save exported URI to metadata
+                val currentMetadata = loadMetadata(context, id) ?: metadata
+                val updatedMetadata = currentMetadata.copy(
+                    exportedUris = currentMetadata.exportedUris + uri.toString()
+                )
+                saveMetadata(context, id, updatedMetadata)
+                PLog.d(TAG, "Exported URI saved: $uri for photo $id")
+
+                ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to export photo", e)
+                null
+            }
+        }
+    }
+
     suspend fun exportDng(context: Context, data: ByteArray, metadata: PhotoMetadata) =
         withContext(Dispatchers.IO) {
             try {
@@ -1127,7 +1225,7 @@ object PhotoManager {
     /**
      * 从系统相册导入照片
      */
-    suspend fun importPhoto(context: Context, uri: Uri): String? {
+    suspend fun importPhoto(context: Context, uri: Uri, lutId: String?): String? {
         return withContext(Dispatchers.IO) {
             try {
                 val photoId = UUID.randomUUID().toString()
@@ -1136,6 +1234,12 @@ object PhotoManager {
                 val dngFile = File(photoDir, DNG_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
+
+
+                // 2. 读取元数据以获取旋转信息
+                val metadata = PhotoMetadata.fromUri(context, uri).copy(
+                    lutId = lutId
+                )
 
                 // 1. 检测是否为 RAW 文件
                 val mimeType = context.contentResolver.getType(uri)
@@ -1156,8 +1260,6 @@ object PhotoManager {
                         }
                     }
 
-                    // 2. 读取元数据以获取旋转信息
-                    val metadata = PhotoMetadata.fromUri(context, uri)
 
                     // 3. 处理 RAW 以生成 JPEG 预览
                     val processedBitmap = RawDemosaicProcessor.getInstance().process(context,
@@ -1178,18 +1280,19 @@ object PhotoManager {
                             width = processedBitmap.width,
                             height = processedBitmap.height,
                             rotation = 0,
-                            isImported = true
                         )
                         metadataFile.writeText(updatedMetadata.toJson())
 
                         processedBitmap.recycle()
                     } else {
                         // 降级：如果 RAW 处理失败，尝试直接解码（某些 DNG 包含内置预览图）
-                        tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
+                        // 传递元数据确保旋转信息被正确处理
+                        tempImportJpeg(uri, context, metadata, photoFile, metadataFile, thumbnailFile)
                     }
                 } else {
                     // --- 常规 JPEG 处理逻辑 ---
-                    tempImportJpeg(uri, context, photoFile, metadataFile, thumbnailFile)
+                    // 传递元数据确保旋转信息被正确处理
+                    tempImportJpeg(uri, context, metadata, photoFile, metadataFile, thumbnailFile)
                 }
 
                 // Check for Motion Photo after import
@@ -1249,6 +1352,7 @@ object PhotoManager {
     private suspend fun tempImportJpeg(
         uri: Uri,
         context: Context,
+        metadata: PhotoMetadata,
         photoFile: File,
         metadataFile: File,
         thumbnailFile: File
@@ -1260,6 +1364,8 @@ object PhotoManager {
                 input.copyTo(output)
             }
         }
+
+        var updatedMetadata = metadata
 
         val exif = ExifInterface(tempFile)
         val orientation = exif.getAttributeInt(
@@ -1283,6 +1389,12 @@ object PhotoManager {
                 )
                 newExif.saveAttributes()
 
+                updatedMetadata = metadata.copy(
+                    width = rotatedBitmap.width,
+                    height = rotatedBitmap.height,
+                    rotation = 0,
+                )
+
                 if (rotatedBitmap != bitmap) {
                     rotatedBitmap.recycle()
                 }
@@ -1298,8 +1410,7 @@ object PhotoManager {
             tempFile.delete()
         }
 
-        val metadata = PhotoMetadata.fromUri(context, uri)
-        metadataFile.writeText(metadata.toJson())
+        metadataFile.writeText(updatedMetadata.toJson())
         generateThumbnail(photoFile, thumbnailFile)
     }
 

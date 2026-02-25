@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Masks
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -15,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,6 +39,8 @@ fun CameraTopSheet(
     availableNrLevels: IntArray,
     onNRLevelChange: (Int) -> Unit,
     onFilterManageClick: () -> Unit,
+    ghostMode: Boolean,
+    onGhostModeToggle: (Boolean) -> Unit,
     onMoreSettingsClick: () -> Unit,
     useMultiFrame: Boolean,
     onMultiFrameToggle: (Boolean) -> Unit,
@@ -176,6 +181,13 @@ fun CameraTopSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
 
+                QuickSettingToggle(
+                    title = stringResource(R.string.ghost_mode),
+                    checked = ghostMode,
+                    onCheckedChange = onGhostModeToggle,
+                    modifier = Modifier.weight(1f)
+                )
+
                 // Filter Management Button
                 QuickSettingButton(
                     title = stringResource(R.string.settings_filter_management),
@@ -184,18 +196,18 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                QuickSettingButton(
+                /*QuickSettingButton(
                     title = stringResource(R.string.settings_title),
                     icon = Icons.Default.Settings,
                     onClick = onMoreSettingsClick,
                     modifier = Modifier.weight(1f)
-                )
+                )*/
             }
 
-//            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // More Settings Button
-            /*Surface(
+            Surface(
                 onClick = onMoreSettingsClick,
                 color = Color.White.copy(alpha = 0.05f),
                 shape = RoundedCornerShape(12.dp),
@@ -235,7 +247,7 @@ fun CameraTopSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-            }*/
+            }
         }
     }
 }
@@ -278,7 +290,7 @@ fun QuickSettingValue(
 @Composable
 fun QuickSettingButton(
     title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {

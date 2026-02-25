@@ -2,7 +2,10 @@ package com.hinnka.mycamera
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -51,6 +54,12 @@ import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import androidx.core.net.toUri
+import androidx.lifecycle.lifecycleScope
+import com.hinnka.mycamera.ghost.GhostService
+import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
 
 /**
  * 路由常量
@@ -74,29 +83,19 @@ class MainActivity : ComponentActivity() {
     private val cameraViewModel: CameraViewModel by viewModels()
     private val galleryViewModel: GalleryViewModel by viewModels()
 
-    private val permissions = arrayOf(
-        Manifest.permission.CAMERA,
-        Manifest.permission.RECORD_AUDIO
-    )
+    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+    } else {
+        arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+    }
 
     private var hasPermissions by mutableStateOf(false)
+    private var pendingRoute by mutableStateOf<String?>(null)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         hasPermissions = result.values.all { it }
-    }
-
-    private val deletePhotoLauncher = registerForActivityResult(
-        ActivityResultContracts.StartIntentSenderForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            // 用户确认删除，删除应用内部的照片
-            galleryViewModel.deletePhotoAfterConfirmation()
-        } else {
-            // 用户取消删除
-            galleryViewModel.clearDeleteRequest()
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -112,6 +111,21 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
+        intent?.getStringExtra("route")?.let {
+            pendingRoute = it
+        }
+
+        lifecycleScope.launch {
+            cameraViewModel.ghostMode.collect { ghostMode ->
+                PLog.d("MainActivity", "ghostMode: $ghostMode")
+                if (ghostMode) {
+                    MyCameraApplication.ghostService.start()
+                } else {
+                    MyCameraApplication.ghostService.stop()
+                }
+            }
+        }
+
         setContent {
             PhotonCameraTheme {
                 Surface(
@@ -119,7 +133,12 @@ class MainActivity : ComponentActivity() {
                     color = Color.Black
                 ) {
                     if (hasPermissions) {
-                        NavigationHost(cameraViewModel, galleryViewModel)
+                        NavigationHost(
+                            cameraViewModel = cameraViewModel,
+                            galleryViewModel = galleryViewModel,
+                            pendingRoute = pendingRoute,
+                            onRouteHandled = { pendingRoute = null }
+                        )
                     } else {
                         PermissionScreen(
                             onRequestPermission = {
@@ -141,6 +160,13 @@ class MainActivity : ComponentActivity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra("route")?.let {
+            pendingRoute = it
+        }
+    }
+
     private fun hideSystemUI() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
@@ -154,15 +180,25 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun NavigationHost(
     cameraViewModel: CameraViewModel,
-    galleryViewModel: GalleryViewModel
+    galleryViewModel: GalleryViewModel,
+    pendingRoute: String? = null,
+    onRouteHandled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val navController = rememberNavController()
+
+    androidx.compose.runtime.LaunchedEffect(pendingRoute) {
+        pendingRoute?.let {
+            navController.navigate(it)
+            onRouteHandled()
+        }
+    }
     navController.addOnDestinationChangedListener { _, destination, _ ->
         BuglyHelper.setUserScene(context, destination.route.hashCode())
     }
     val containerSize = LocalWindowInfo.current.containerSize
-    cameraViewModel.isExpanded = (containerSize.width * 1f / containerSize.height) > AspectRatio.RATIO_4_3.getValue(false)
+    cameraViewModel.isExpanded =
+        (containerSize.width * 1f / containerSize.height) > AspectRatio.RATIO_4_3.getValue(false)
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(

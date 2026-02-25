@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "com.hinnka.mycamera"
-        minSdk = 29
+        minSdk = 30
         targetSdk = 36
         versionCode = 27
         versionName = "1.8.2"
@@ -114,6 +114,8 @@ dependencies {
     // DataStore for user preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation(libs.androidx.animation.core)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.lifecycle.process)
 
     // Bugly for china flavor
     "chinaImplementation"("com.tencent.bugly:crashreport:latest.release")
