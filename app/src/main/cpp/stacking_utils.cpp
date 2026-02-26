@@ -90,6 +90,8 @@ inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
   }
 
   float val = sum;
+  if (!std::isfinite(val))
+    return 0.0f; // 发生异常采样时返回 0，避免黑点
   if (val < 0.0f)
     val = 0.0f;
   if (val > 65535.0f)
@@ -114,7 +116,11 @@ inline float computeLocalVariance(const std::vector<uint16_t> &data, int width,
     }
   }
   float mean = sum / (float)count;
-  return (sumSq / (float)count) - (mean * mean);
+  float variance = (sumSq / (float)count) - (mean * mean);
+  // Ensure variance is not slightly negative due to precision and not NaN
+  if (std::isnan(variance) || variance < 0.0f)
+    return 0.0f;
+  return variance;
 }
 
 std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
@@ -331,7 +337,6 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       int cx = tx * tileSize + tileSize / 2;
       int cy = ty * tileSize + tileSize / 2;
 
-
       int lkHalfWin = 12;
 
       // Pre-compute spatial gradients (Ix, Iy) and the Hessian matrix (sumIxIx,
@@ -404,6 +409,11 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
         }
       }
 
+      if (!std::isfinite(lkDx) || !std::isfinite(lkDy)) {
+        lkDx = (float)(bestDx + subDx) * 2.0f; // Fallback to initial estimate
+        lkDy = (float)(bestDy + subDy) * 2.0f;
+      }
+
       rawOffsets[ty * gridW + tx] = {lkDx, lkDy};
     }
   }
@@ -433,10 +443,16 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
           float diffY = neighbor.y - center.y;
           float distSq = diffX * diffX + diffY * diffY;
 
+          if (!std::isfinite(distSq) || !std::isfinite(neighbor.x) ||
+              !std::isfinite(neighbor.y))
+            continue;
+
           // Bilateral weight: exponential decay with flow difference
           // sigma = 0.5px: neighbors with >1px flow difference get very low
           // weight
           float w = std::exp(-distSq / (2.0f * 0.5f * 0.5f));
+          if (!std::isfinite(w))
+            w = 0.01f;
 
           sumX += neighbor.x * w;
           sumY += neighbor.y * w;
@@ -549,6 +565,8 @@ inline float sampleBicubicPlane(const std::vector<uint16_t> &data, int width,
   }
 
   // Bicubic 可能会产生负值（下冲），必须 Clamp 住
+  if (!std::isfinite(sum))
+    return 0.0f;
   return std::max(0.0f, std::min(65535.0f, sum));
 }
 
@@ -588,23 +606,34 @@ ImageStacker::ImageStacker(int width, int height, bool enableSuperRes)
 inline int calculateWeight(int diff, float variance) {
   // Advanced de-ghosting based on noise statistics
   // sigma^2 = variance + base_noise
-  float sigma = std::sqrt(variance + 1600.0f); // Base noise ~40 in 16-bit
+  float sigmaSq = variance + 1600.0f;
+  if (std::isnan(sigmaSq) || sigmaSq <= 0.0f)
+    sigmaSq = 1600.0f;
+  float sigma = std::sqrt(sigmaSq);
   float threshold = 3.0f * sigma;
 
   // Relax thresholdHigh in high frequency regions (large variance)
   // to preserve more details where misalignment might cause larger differences.
   float factorHigh = 4.0f + std::min(8.0f, variance / 5000.0f);
+  if (std::isnan(factorHigh))
+    factorHigh = 4.0f;
   float thresholdHigh = threshold * factorHigh;
 
   if (diff < (int)threshold)
     return 256;
-  if (diff > (int)thresholdHigh)
+  if (diff > (int)thresholdHigh || std::isnan(thresholdHigh))
     return 0;
 
   // Interpolate linearly between threshold (weight=256) and thresholdHigh
   // (weight=0)
-  return (int)(256.0f * (thresholdHigh - (float)diff) /
-               (thresholdHigh - threshold));
+  float range = thresholdHigh - threshold;
+  if (range <= 1.0f)
+    return 0;
+
+  float weight = 256.0f * (thresholdHigh - (float)diff) / range;
+  if (std::isnan(weight))
+    return 0;
+  return (int)std::max(0.0f, std::min(256.0f, weight));
 }
 
 void ImageStacker::addFrame(const uint8_t *yData, const uint8_t *uData,
@@ -801,8 +830,12 @@ void ImageStacker::processFrame(int index) {
 
         if (x % scale == 0 && y % scale == 0 && weight > 128) {
           int refIdx = (y / scale) * width + (x / scale);
-          referenceY[refIdx] =
-              (uint16_t)((referenceY[refIdx] * 7 + targetVal) / 8);
+          // 使用原子操作或简单的竞争忽略（这里对画质影响极小，且可以避免黑点）
+          // 但为了安全，我们检查一下 targetVal 是否合理
+          if (targetVal > 0 && targetVal < 65535) {
+            referenceY[refIdx] =
+                (uint16_t)((referenceY[refIdx] * 7 + targetVal) / 8);
+          }
         }
       }
     }
@@ -856,10 +889,13 @@ void ImageStacker::processFrame(int index) {
 
         if (x % scale == 0 && y % scale == 0 && weight > 128) {
           int refIdx = (y / scale) * uvRefWidth + (x / scale);
-          referenceU[refIdx] =
-              (uint16_t)((referenceU[refIdx] * 7 + targetU) / 8);
-          referenceV[refIdx] =
-              (uint16_t)((referenceV[refIdx] * 7 + targetV) / 8);
+          if (targetU > 0 && targetU < 65535 && targetV > 0 &&
+              targetV < 65535) {
+            referenceU[refIdx] =
+                (uint16_t)((referenceU[refIdx] * 7 + targetU) / 8);
+            referenceV[refIdx] =
+                (uint16_t)((referenceV[refIdx] * 7 + targetV) / 8);
+          }
         }
       }
     }

@@ -124,7 +124,7 @@ void main() {
     float length = sqrt(diff * diff + 4.0 * varIxIy * varIxIy);
     
     float cos2t, sin2t;
-    if (length < 1e-9) {
+    if (length < 1e-9 || isnan(length)) {
         cos2t = 1.0;
         sin2t = 0.0;
     } else {
@@ -132,5 +132,9 @@ void main() {
         sin2t = 2.0 * varIxIy / length;
     }
     
-    kernelParams.data[y * pc.width + x] = vec4(k1, k2, cos2t, sin2t);
+    vec4 result = vec4(k1, k2, cos2t, sin2t);
+    if (any(isnan(result)) || any(isinf(result))) {
+        result = vec4(1.0, 1.0, 1.0, 0.0); // Safe fallback (Identity kernel)
+    }
+    kernelParams.data[y * pc.width + x] = result;
 }

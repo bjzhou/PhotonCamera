@@ -178,10 +178,16 @@ void main() {
     // Clamp Motion (Trust Region)
     float maxJump = 2.0; // Max 2 pixel update per iteration for faster convergence
     float len = length(delta);
-    if (len > maxJump) {
+    if (isnan(len) || isinf(len)) {
+        delta = vec2(0.0);
+    } else if (len > maxJump) {
         delta *= (maxJump / len);
     }
     
     // Update Alignment
-    alignBuffer.offsets[tileIdx] = currentFlow + delta;
+    vec2 updatedFlow = currentFlow + delta;
+    if (isnan(updatedFlow.x) || isnan(updatedFlow.y) || isinf(updatedFlow.x) || isinf(updatedFlow.y)) {
+        updatedFlow = currentFlow; // Maintain previous if result is invalid
+    }
+    alignBuffer.offsets[tileIdx] = updatedFlow;
 }

@@ -135,12 +135,8 @@ void main() {
     vec2 normalizedUV = (vec2(x, y) + 0.5) * pixelSize;
     
     vec2 finalUV;
-    if (abs(pc.t0) + abs(pc.t4) < 0.001) {
-        finalUV = normalizedUV; 
-    } else {
-        finalUV.x = normalizedUV.x * pc.t0 + normalizedUV.y * pc.t1 + pc.t2;
-        finalUV.y = normalizedUV.x * pc.t3 + normalizedUV.y * pc.t4 + pc.t5;
-    }
+    finalUV.x = normalizedUV.x * pc.t0 + normalizedUV.y * pc.t1 + pc.t2;
+    finalUV.y = normalizedUV.x * pc.t3 + normalizedUV.y * pc.t4 + pc.t5;
     
     // 2. Alignment
     vec2 nativeSize = vec2(float(pc.width) / pc.scale, float(pc.height) / pc.scale);
@@ -148,8 +144,7 @@ void main() {
     float motionError = 0.0;
     
     if (pc.isFirstFrame == 0) {
-        // Bilinear interpolation of flow field for smooth sub-tile alignment
-        // Use gridW/gridH directly instead of hardcoded tile size
+        // ... (bilinear sampling of offsets) ...
         vec2 gCoord = finalUV * vec2(float(pc.gridW), float(pc.gridH)) - 0.5;
         ivec2 g0 = ivec2(floor(gCoord));
         vec2 gf = gCoord - vec2(g0);
@@ -162,6 +157,9 @@ void main() {
         vec2 f01 = alignmentGrid.offsets[g1.y * pc.gridW + g0.x];
         vec2 f11 = alignmentGrid.offsets[g1.y * pc.gridW + g1.x];
         alignment = mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
+        
+        // Clamp alignment to prevent extreme smears from failures in flat areas
+        alignment = clamp(alignment, vec2(-128.0), vec2(128.0));
         
         // Bilinear interpolation of motion prior error
         float e00 = motionPrior.errors[g0.y * pc.gridW + g0.x];
@@ -206,8 +204,11 @@ void main() {
         else if (ratio >= T2) centerRobustness = 0.0;
         else centerRobustness = (T2 - ratio) / (T2 - T1);
         
+        if (isnan(centerRobustness) || isinf(centerRobustness)) centerRobustness = 0.0;
+        
         // Gentle motion error penalty
         centerRobustness *= (1.0 / (1.0 + motionError * 0.005));
+        if (isnan(centerRobustness)) centerRobustness = 0.0;
     }
 
     // Accumulate neighbors
@@ -237,7 +238,12 @@ void main() {
             float w = exp(-0.5 * (u*u * kp.x * 0.25 + v*v * kp.y * 0.25));
             
             float combinedWeight = w * robustness;
-            accumulator.data[outIndex] += vec4(sampleColor * combinedWeight, combinedWeight);
+            if (isnan(combinedWeight) || isinf(combinedWeight)) combinedWeight = 0.0;
+            
+            vec4 increment = vec4(sampleColor * combinedWeight, combinedWeight);
+            if (!any(isnan(increment)) && !any(isinf(increment))) {
+                accumulator.data[outIndex] += increment;
+            }
         }
     }
 }

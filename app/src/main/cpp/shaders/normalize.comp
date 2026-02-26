@@ -46,6 +46,9 @@ void main() {
         vec4 accum = accumulator.data[index];
         
         vec3 color = accum.rgb / max(accum.a, 0.001);
+        if (any(isnan(color)) || any(isinf(color))) {
+            color = vec3(0.0);
+        }
         color = clamp(color, 0.0, 1.0);
         
         uint r = uint(clamp(color.r * 255.0, 0.0, 255.0));
