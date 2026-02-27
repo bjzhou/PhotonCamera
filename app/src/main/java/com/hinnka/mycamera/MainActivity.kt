@@ -1,8 +1,8 @@
 package com.hinnka.mycamera
 
 import android.Manifest
-import android.content.pm.PackageManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
@@ -16,8 +16,16 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,9 +61,6 @@ import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
-import androidx.lifecycle.lifecycleScope
-import com.hinnka.mycamera.utils.PLog
-import kotlinx.coroutines.launch
 
 /**
  * 路由常量
@@ -107,20 +112,8 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
-        intent?.getStringExtra("route")?.let {
-            pendingRoute = it
-        }
+        handleIntent(intent)
 
-        lifecycleScope.launch {
-            cameraViewModel.phantomMode.collect { phantomMode ->
-                PLog.d("MainActivity", "phantomMode: $phantomMode")
-                if (phantomMode) {
-                    MyCameraApplication.phantomService.start()
-                } else {
-                    MyCameraApplication.phantomService.stop()
-                }
-            }
-        }
 
         setContent {
             PhotonCameraTheme {
@@ -158,8 +151,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        intent ?: return
         intent.getStringExtra("route")?.let {
             pendingRoute = it
+        }
+        intent.getBooleanExtra("show_ghost_permissions", false).let {
+            cameraViewModel.showGhostPermissions = it
         }
     }
 

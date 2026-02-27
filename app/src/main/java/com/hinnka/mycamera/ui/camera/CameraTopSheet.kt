@@ -309,7 +309,7 @@ fun QuickSettingButton(
             Text(
                 text = title,
                 color = Color.White,
-                fontSize = 14.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Normal
             )
             Icon(

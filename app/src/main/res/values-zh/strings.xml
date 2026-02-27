@@ -320,10 +320,15 @@
     <string name="settings_color_space_description">选择 RAW 处理的目标色彩空间。</string>
     <string name="settings_log_curve">RAW 伽马</string>
     <string name="ghost_mode">幻影模式</string>
+    <string name="close_ghost_mode">关闭幻影模式</string>
     <string name="ghost_mode_dialog_title">开启幻影模式</string>
     <string name="ghost_mode_dialog_description">开启后，App 将在后台自动为系统相机拍摄的照片（DCIM/Camera 目录）应用当前选择的 LUT 效果。</string>
     <string name="ghost_mode_permissions_required">需开启以下权限：</string>
     <string name="ghost_mode_overlay_permission">• 悬浮窗权限：允许 App 在后台稳定运行而不被系统清理，确保监测的连续性。</string>
     <string name="ghost_mode_file_permission">• 所有文件管理权限：准许 App 直接读写系统相机照片，为您提供无感的自动修图体验。</string>
     <string name="ghost_mode_dialog_confirm">同意并前往设置</string>
+    <string name="settings_phantom_button_hidden">隐藏悬浮按钮</string>
+    <string name="settings_phantom_button_hidden_description">在幻影模式下隐藏屏幕上的悬浮按钮。你仍可以通过快捷设置或应用快捷方式来控制。</string>
+    <string name="settings_launch_camera_on_phantom_mode">启动系统相机</string>
+    <string name="settings_launch_camera_on_phantom_mode_description">通过快捷设置或应用快捷方式开启幻影模式时，自动启动系统相机。</string>
 </resources>

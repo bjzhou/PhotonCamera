@@ -54,6 +54,24 @@
                     android:name="android.support.FILE_PROVIDER_PATHS"
                     android:resource="@xml/file_paths" />
         </provider>
+
+        <service
+                android:name=".phantom.PhantomTileService"
+                android:label="@string/ghost_mode"
+                android:icon="@drawable/ic_camera_qs"
+                android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+                android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <activity
+                android:name=".phantom.PhantomShortcutActivity"
+                android:exported="true"
+                android:taskAffinity="${applicationId}.phantom"
+                android:label="@string/ghost_mode"
+                android:theme="@android:style/Theme.NoDisplay" />
     </application>
 
 </manifest>

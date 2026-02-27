@@ -175,6 +175,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.phantomMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.phantomButtonHidden }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val launchCameraOnPhantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.launchCameraOnPhantomMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
     val noiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.noiseReduction }
@@ -201,6 +209,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var burstPhotoId: String? = null
     var burstImageCount by mutableStateOf(0)
         private set
+
+    var showGhostPermissions by mutableStateOf(false)
 
     init {
         cameraController.initialize()
@@ -902,6 +912,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         reopenCamera()
     }
+
     /**
      * 设置是否启用 Live Photo
      */
@@ -1755,6 +1766,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val newMode = !phantomMode.value
         viewModelScope.launch {
             userPreferencesRepository.savePhantomMode(newMode)
+        }
+    }
+
+    fun setPhantomButtonHidden(hidden: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhantomButtonHidden(hidden)
+        }
+    }
+
+    fun setLaunchCameraOnPhantomMode(launch: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
         }
     }
 }

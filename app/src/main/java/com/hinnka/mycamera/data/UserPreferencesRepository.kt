@@ -68,6 +68,8 @@ data class UserPreferences(
     val rawLuts: Map<String, String> = emptyMap(),
     val useP010: Boolean = false,
     val phantomMode: Boolean = false,
+    val phantomButtonHidden: Boolean = false,
+    val launchCameraOnPhantomMode: Boolean = false,
 )
 
 /**
@@ -122,6 +124,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val LOG_CURVE = stringPreferencesKey("log_curve")
         private val USE_P010 = booleanPreferencesKey("use_p010")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
+        private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
+        private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
     }
 
     /**
@@ -170,6 +174,8 @@ class UserPreferencesRepository(private val context: Context) {
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
+                phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
+                launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
             )
         }
 
@@ -490,6 +496,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[BACKGROUND_IMAGE] = image
         }
     }
+
     /**
      * 保存是否启用 GPU 加速
      */
@@ -559,6 +566,24 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun savePhantomMode(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PHANTOM_MODE] = enabled
+        }
+    }
+
+    /**
+     * 保存是否隐藏幻影模式悬浮按钮
+     */
+    suspend fun savePhantomButtonHidden(hidden: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PHANTOM_BUTTON_HIDDEN] = hidden
+        }
+    }
+
+    /**
+     * 保存是否在启动幻影模式时启动系统相机
+     */
+    suspend fun saveLaunchCameraOnPhantomMode(launch: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] = launch
         }
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Recomposer
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -200,6 +201,22 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         initComposeView()
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(appLifecycleObserver)
+
+        if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            showFloatingWindow()
+            registerObserver()
+        }
+
+        lifecycleScope.launch {
+            userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }.collect { hidden ->
+                if (isWindowShown) {
+                    updateWindowParams(hidden)
+                    composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                } else if (!ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                    showFloatingWindow()
+                }
+            }
+        }
     }
 
     private val appLifecycleObserver = LifecycleEventObserver { _, event ->
@@ -273,10 +290,31 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         }
     }
 
+    private fun updateWindowParams(hidden: Boolean) {
+        if (hidden) {
+            windowParams.width = 1
+            windowParams.height = 1
+            windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            windowParams.alpha = 0f
+        } else {
+            windowParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+            windowParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+            windowParams.flags = windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            windowParams.alpha = 1f
+        }
+    }
+
     private fun initComposeView() {
         composeView = ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
+                val phantomButtonHiddenFlow = remember {
+                    userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
+                }
+                val phantomButtonHidden by phantomButtonHiddenFlow.collectAsState(initial = false)
+
+                if (phantomButtonHidden) return@setContent
+
                 val scope = rememberCoroutineScope()
                 var expanded by remember { mutableStateOf(false) }
 
@@ -384,9 +422,13 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private fun showFloatingWindow() {
         if (!Settings.canDrawOverlays(context)) return
         if (isWindowShown) return
-        composeView?.let {
-            windowManager.addView(it, windowParams)
-            isWindowShown = true
+        lifecycleScope.launch {
+            val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }.firstOrNull() ?: false
+            updateWindowParams(hidden)
+            composeView?.let {
+                windowManager.addView(it, windowParams)
+                isWindowShown = true
+            }
         }
     }
 

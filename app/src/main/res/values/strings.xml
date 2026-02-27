@@ -319,11 +319,16 @@
     <string name="settings_log_curve_description">Choose the transfer function for RAW processing (Log Curve).</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Enable 10-bit YUV output for better image data precision. Effective on supported devices when RAW is disabled.</string>
-    <string name="ghost_mode">Ghost Mode</string>
-    <string name="ghost_mode_dialog_title">Enable Ghost Mode</string>
+    <string name="ghost_mode">Phantom Mode</string>
+    <string name="close_ghost_mode">Close Phantom Mode</string>
+    <string name="ghost_mode_dialog_title">Enable Phantom Mode</string>
     <string name="ghost_mode_dialog_description">When enabled, the app will automatically apply the current LUT to photos taken by the system camera (DCIM/Camera directory) in the background.</string>
     <string name="ghost_mode_permissions_required">Permissions required:</string>
     <string name="ghost_mode_overlay_permission">• Overlay Permission: Allows the app to run stably in the background to ensure continuous monitoring.</string>
     <string name="ghost_mode_file_permission">• All Files Access: Allows the app to read and write system camera photos for a seamless auto-editing experience.</string>
     <string name="ghost_mode_dialog_confirm">Agree and Go to Settings</string>
+    <string name="settings_phantom_button_hidden">Hide Floating Button</string>
+    <string name="settings_phantom_button_hidden_description">Hide the floating button in Phantom Mode. You can still control it via Quick Settings or App Shortcuts.</string>
+    <string name="settings_launch_camera_on_phantom_mode">Launch System Camera</string>
+    <string name="settings_launch_camera_on_phantom_mode_description">Automatically launch the system camera when enabling Phantom Mode via Quick Settings or App Shortcut.</string>
 </resources>

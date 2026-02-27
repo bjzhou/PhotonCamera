@@ -173,6 +173,13 @@ fun CameraScreen(
 
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
 
+    LaunchedEffect(viewModel.showGhostPermissions) {
+        if (viewModel.showGhostPermissions) {
+            showGhostPermissionDialog = true
+            viewModel.showGhostPermissions = false
+        }
+    }
+
     if (viewModel.showPaymentDialog) {
         val activity = context.findActivity()
         PaymentDialog(
