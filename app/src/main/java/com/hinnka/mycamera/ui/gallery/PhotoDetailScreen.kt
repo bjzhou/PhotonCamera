@@ -237,7 +237,7 @@ fun PhotoDetailScreen(
         bottomBar = {
             Surface(
                 color = Color.Black.copy(alpha = 0.8f),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding()
             ) {
                 Row(
                     modifier = Modifier

@@ -178,7 +178,7 @@ fun GalleryScreen(
             ) {
                 Surface(
                     color = Color(0xFF1A1A1A),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().navigationBarsPadding()
                 ) {
                     Row(
                         modifier = Modifier

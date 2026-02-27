@@ -104,6 +104,7 @@ fun SettingsScreen(
         modifier = modifier
             .fillMaxSize()
             .paint(backgroundPainter, contentScale = ContentScale.Crop)
+            .navigationBarsPadding()
     ) {
         // 顶部标题栏
         TopAppBar(

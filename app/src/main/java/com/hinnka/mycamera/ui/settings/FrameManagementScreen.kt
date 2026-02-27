@@ -152,6 +152,7 @@ fun FrameManagementScreen(
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor)
+            .navigationBarsPadding()
     ) {
         // 顶部标题栏
         TopAppBar(

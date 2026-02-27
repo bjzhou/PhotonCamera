@@ -9,6 +9,7 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.fadeIn
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -103,7 +105,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // 启用全屏模式
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         hideSystemUI()
         OrientationObserver.observe(this)
 
@@ -167,7 +172,7 @@ class MainActivity : ComponentActivity() {
     private fun hideSystemUI() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
-            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.hide(WindowInsetsCompat.Type.statusBars())
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
@@ -371,7 +376,8 @@ fun PermissionScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .navigationBarsPadding(),
         contentAlignment = Alignment.Center
     ) {
         Column(

@@ -267,6 +267,7 @@ fun CameraScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .paint(backgroundPainter, contentScale = ContentScale.Crop)
+                .navigationBarsPadding()
         ) {
             // 顶部控制条
             CameraTopBar(
