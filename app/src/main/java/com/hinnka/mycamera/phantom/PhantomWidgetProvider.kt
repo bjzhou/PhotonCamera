@@ -15,6 +15,7 @@ import com.hinnka.mycamera.MainActivity
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.utils.DeviceUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,6 +29,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         private const val ACTION_TOGGLE_PHANTOM = "com.hinnka.mycamera.phantom.ACTION_TOGGLE_PHANTOM"
         private const val ACTION_OPEN_APP = "com.hinnka.mycamera.phantom.ACTION_OPEN_APP"
         private const val ACTION_OPEN_FILTERS = "com.hinnka.mycamera.phantom.ACTION_OPEN_FILTERS"
+        private const val ACTION_OPEN_FRAMES = "com.hinnka.mycamera.phantom.ACTION_OPEN_FRAMES"
         private const val ACTION_OPEN_GALLERY = "com.hinnka.mycamera.phantom.ACTION_OPEN_GALLERY"
     }
 
@@ -99,6 +101,14 @@ class PhantomWidgetProvider : AppWidgetProvider() {
                 context.startActivity(mainIntent)
             }
 
+            ACTION_OPEN_FRAMES -> {
+                val mainIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("route", com.hinnka.mycamera.Routes.FRAME_MANAGEMENT)
+                }
+                context.startActivity(mainIntent)
+            }
+
             ACTION_OPEN_GALLERY -> {
                 val mainIntent = Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -135,6 +145,14 @@ class PhantomWidgetProvider : AppWidgetProvider() {
     ) {
         val views = RemoteViews(context.packageName, R.layout.phantom_widget)
 
+        if (DeviceUtil.isChinaFlavor) {
+            views.setViewVisibility(R.id.btn_frames, View.GONE)
+            views.setViewVisibility(R.id.btn_phantom, View.VISIBLE)
+        } else {
+            views.setViewVisibility(R.id.btn_frames, View.VISIBLE)
+            views.setViewVisibility(R.id.btn_phantom, View.GONE)
+        }
+
         // Update Phantom Toggle
         views.setViewVisibility(R.id.phantom_icon, if (isActive) View.VISIBLE else View.GONE)
         views.setViewVisibility(R.id.phantom_icon_off, if (isActive) View.GONE else View.VISIBLE)
@@ -143,6 +161,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.btn_phantom, getPendingSelfIntent(context, ACTION_TOGGLE_PHANTOM))
         views.setOnClickPendingIntent(R.id.btn_app, getPendingSelfIntent(context, ACTION_OPEN_APP))
         views.setOnClickPendingIntent(R.id.btn_filters, getPendingSelfIntent(context, ACTION_OPEN_FILTERS))
+        views.setOnClickPendingIntent(R.id.btn_frames, getPendingSelfIntent(context, ACTION_OPEN_FRAMES))
         views.setOnClickPendingIntent(R.id.btn_recent_header, getPendingSelfIntent(context, ACTION_OPEN_GALLERY))
 
         // Update Recent Photos

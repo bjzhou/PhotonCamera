@@ -66,6 +66,25 @@
             </FrameLayout>
 
             <FrameLayout
+                    android:id="@+id/btn_frames"
+                    android:visibility="gone"
+                    android:layout_width="0dp"
+                    android:layout_height="56dp"
+                    android:layout_marginEnd="4dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/btn_secondary_bg"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                <ImageView
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/border_bottom"
+                        android:tint="@android:color/white" />
+            </FrameLayout>
+
+            <FrameLayout
                     android:id="@+id/btn_phantom"
                     android:layout_width="0dp"
                     android:layout_height="56dp"

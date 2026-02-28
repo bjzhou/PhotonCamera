@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BorderBottom
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.utils.DeviceUtil
 
 @Composable
 fun CameraTopSheet(
@@ -37,6 +39,7 @@ fun CameraTopSheet(
     availableNrLevels: IntArray,
     onNRLevelChange: (Int) -> Unit,
     onFilterManageClick: () -> Unit,
+    onFrameManageClick: () -> Unit,
     phantomMode: Boolean,
     onPhantomModeToggle: (Boolean) -> Unit,
     onMoreSettingsClick: () -> Unit,
@@ -179,12 +182,14 @@ fun CameraTopSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
 
-                QuickSettingToggle(
-                    title = stringResource(R.string.ghost_mode),
-                    checked = phantomMode,
-                    onCheckedChange = onPhantomModeToggle,
-                    modifier = Modifier.weight(1f)
-                )
+                if (DeviceUtil.isChinaFlavor) {
+                    QuickSettingToggle(
+                        title = stringResource(R.string.ghost_mode),
+                        checked = phantomMode,
+                        onCheckedChange = onPhantomModeToggle,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
 
                 // Filter Management Button
                 QuickSettingButton(
@@ -193,6 +198,15 @@ fun CameraTopSheet(
                     onClick = onFilterManageClick,
                     modifier = Modifier.weight(1f)
                 )
+
+                if (!DeviceUtil.isChinaFlavor) {
+                    QuickSettingButton(
+                        title = stringResource(R.string.settings_frame_management),
+                        icon = Icons.Default.BorderBottom,
+                        onClick = onFrameManageClick,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
 
                 /*QuickSettingButton(
                     title = stringResource(R.string.settings_title),

@@ -80,6 +80,7 @@ fun CameraScreen(
     onGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onFilterManagementClick: () -> Unit,
+    onFrameManagementClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -249,7 +250,6 @@ fun CameraScreen(
                         } else {
                             isGhostPermissionFlowActive = false
                             viewModel.togglePhantomMode()
-                            viewModel.addPhantomShortcut()
                         }
                     }
                 ) {
@@ -566,6 +566,10 @@ fun CameraScreen(
             onFilterManageClick = {
                 activePanel = ActivePanel.NONE
                 onFilterManagementClick()
+            },
+            onFrameManageClick = {
+                activePanel = ActivePanel.NONE
+                onFrameManagementClick()
             },
             phantomMode = phantomMode,
             onPhantomModeToggle = {

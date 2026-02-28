@@ -8,6 +8,7 @@ import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.phantom.PhantomShortcutActivity
 import com.hinnka.mycamera.utils.BuglyHelper
+import com.hinnka.mycamera.utils.DeviceUtil
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -31,7 +32,9 @@ class MyCameraApplication : Application() {
                     } else {
                         phantomService.stop()
                     }
-                    updateShortcuts(phantomMode)
+                    if (DeviceUtil.isChinaFlavor) {
+                        updateShortcuts(phantomMode)
+                    }
                     updateWidgets(this@MyCameraApplication)
                 }
         }

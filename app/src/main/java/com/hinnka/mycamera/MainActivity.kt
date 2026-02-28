@@ -241,6 +241,9 @@ fun NavigationHost(
                             onFilterManagementClick = {
                                 navController.navigate(Routes.FILTER_MANAGEMENT)
                             },
+                            onFrameManagementClick = {
+                                navController.navigate(Routes.FRAME_MANAGEMENT)
+                            },
                             modifier = Modifier.weight(1f)
                         )
                         PhotoDetailScreen(
@@ -271,7 +274,10 @@ fun NavigationHost(
                         },
                         onFilterManagementClick = {
                             navController.navigate(Routes.FILTER_MANAGEMENT)
-                        }
+                        },
+                        onFrameManagementClick = {
+                            navController.navigate(Routes.FRAME_MANAGEMENT)
+                        },
                     )
                 }
             }
