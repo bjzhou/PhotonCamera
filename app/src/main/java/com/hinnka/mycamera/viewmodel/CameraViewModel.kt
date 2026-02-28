@@ -575,6 +575,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setAspectRatio(ratio: AspectRatio) {
         cameraController.setAspectRatio(ratio)
+        reopenCamera()
         // 保存到用户偏好设置
         viewModelScope.launch {
             userPreferencesRepository.saveAspectRatio(ratio.name)
@@ -1791,10 +1792,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (shortcutManager.isRequestPinShortcutSupported) {
             val pinShortcutInfo = ShortcutInfo.Builder(context, "phantom_toggle").build()
             val pinnedShortcutCallbackIntent = shortcutManager.createShortcutResultIntent(pinShortcutInfo)
-            val successCallback = PendingIntent.getBroadcast(context,0,
-                pinnedShortcutCallbackIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            shortcutManager.requestPinShortcut(pinShortcutInfo,
-                successCallback.intentSender)
+            val successCallback = PendingIntent.getBroadcast(
+                context, 0,
+                pinnedShortcutCallbackIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            shortcutManager.requestPinShortcut(
+                pinShortcutInfo,
+                successCallback.intentSender
+            )
         }
     }
 }

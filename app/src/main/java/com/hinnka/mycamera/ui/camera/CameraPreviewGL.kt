@@ -101,32 +101,28 @@ fun CameraPreviewGL(
             AndroidView(
                 factory = { ctx ->
                     CameraGLSurfaceView(ctx).apply {
-                        this.onSurfaceReady = { _ ->
-
-                            // SurfaceTexture 已经准备好，可以开始预览
-                            getSurfaceTexture()?.let { surfaceTexture ->
-                                setPreviewSize(previewSize.width, previewSize.height)
-                                if (!surfaceTextureNotified) {
-                                    surfaceTextureNotified = true
-                                    onSurfaceTextureReady(surfaceTexture)
-                                }
-                            }
-                        }
-
-                        this.onSurfaceDestroyed = {
-                            surfaceTextureNotified = false
-                            onSurfaceDestroyed()
-                        }
-
-                        this.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
-                        this.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
-                        this.setLivePhotoRecorder(livePhotoRecorder)
-
                         // 通知 GLSurfaceView 已准备好
                         onGLSurfaceViewReady?.invoke(this)
                     }
                 },
                 update = { glSurfaceView ->
+                    // 更新闭包捕获的状态
+                    glSurfaceView.onSurfaceReady = { _ ->
+                        // SurfaceTexture 已经准备好，可以开始预览
+                        glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
+                            glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
+                            // 取消从这里回调，统一在 update 中处理
+                        }
+                    }
+
+                    glSurfaceView.onSurfaceDestroyed = {
+                        surfaceTextureNotified = false
+                        onSurfaceDestroyed()
+                    }
+
+                    glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
+                    glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
+
                     viewWidth = glSurfaceView.width
                     viewHeight = glSurfaceView.height
                     glSurfaceView.setSensorOrientation(sensorOrientation)
@@ -134,15 +130,21 @@ fun CameraPreviewGL(
                     glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                     glSurfaceView.setCalibrationOffset(calibrationOffset)
 
-                    // 如果尺寸有变化且 SurfaceTexture 已准备好，重新通知
-                    if (viewWidth > 0 && viewHeight > 0 && !surfaceTextureNotified) {
+                    // 统一控制逻辑：
+                    // 当 SurfaceTexture 准备好，且尺寸已准备好，我们通知外部。
+                    // 但是如果 previewSize.width 或 previewSize.height 发了改变（被代理到了这里），
+                    // 我们只需更新 glSurfaceView 的参数，不需要重新打开相机，否则会打断正在开启的相机。
+                    // 因此，只要 surfaceTextureNotified 为 true，就不会再触发 onSurfaceTextureReady。
+                    // 如果需要重新打开相机，由外部自己掌控，这里只负责 GL 的同步。
+                    if (viewWidth > 0 && viewHeight > 0) {
                         glSurfaceView.getSurfaceTexture()?.let { surfaceTexture ->
                             glSurfaceView.setPreviewSize(previewSize.width, previewSize.height)
-                            surfaceTextureNotified = true
-                            onSurfaceTextureReady(surfaceTexture)
+                            if (!surfaceTextureNotified) {
+                                surfaceTextureNotified = true
+                                onSurfaceTextureReady(surfaceTexture)
+                            }
                         }
                     }
-
                     val colorRecipeEnabled = !colorRecipeParams.isDefault()
                     // 更新 LUT 设置
                     if (currentLut != null) {

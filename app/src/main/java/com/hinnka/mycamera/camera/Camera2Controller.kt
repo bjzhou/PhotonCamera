@@ -845,7 +845,10 @@ class Camera2Controller(private val context: Context) {
 
         // 8. 统计信息设置
         if (availableLensShadingMapModes.contains(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)) {
-            builder.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+            builder.set(
+                CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
+                CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON
+            )
         }
     }
 
@@ -1777,8 +1780,6 @@ class Camera2Controller(private val context: Context) {
      * 设置画面比例
      */
     fun setAspectRatio(ratio: AspectRatio) {
-        val cameraId = _state.value.currentCameraId
-        if (cameraId.isEmpty()) return
         _state.value = _state.value.copy(aspectRatio = ratio)
     }
 
@@ -2157,10 +2158,21 @@ class Camera2Controller(private val context: Context) {
 
             PLog.d(
                 TAG, "RAW MultiFrame Histogram-Adaptive Manual Capture (LV=${String.format("%.2f", lv)}): " +
-                        "saturated=${String.format("%.2f", (histogram.getOrElse(255) { 0 }.toDouble() / histogram.sum().toDouble().coerceAtLeast(1.0)) * 100)}%, " +
+                        "saturated=${
+                            String.format(
+                                "%.2f",
+                                (histogram.getOrElse(255) { 0 }.toDouble() / histogram.sum().toDouble()
+                                    .coerceAtLeast(1.0)) * 100
+                            )
+                        }%, " +
                         "scale=${String.format("%.2f", scaleFactor)}, " +
                         "target: ISO=$targetIso (from $currentIso), " +
-                        "Shutter=${String.format("%.2f", targetShutter / 1_000_000.0)}ms (from ${String.format("%.2f", currentShutter / 1_000_000.0)}ms), " +
+                        "Shutter=${String.format("%.2f", targetShutter / 1_000_000.0)}ms (from ${
+                            String.format(
+                                "%.2f",
+                                currentShutter / 1_000_000.0
+                            )
+                        }ms), " +
                         "reduction=${String.format("%.2f", actualReductionEv)}EV"
             )
         } catch (e: Exception) {
