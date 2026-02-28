@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -117,6 +118,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private val processPhotoTaskMap = mutableMapOf<String, Deferred<*>>()
 
     private var processingInfo: ProcessingInfo? by mutableStateOf(null)
+    private var expanded by mutableStateOf(false)
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
@@ -316,9 +318,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 if (phantomButtonHidden) return@setContent
 
                 val scope = rememberCoroutineScope()
-                var expanded by remember { mutableStateOf(false) }
-
-                LaunchedEffect(expanded) {
+                val processingInfo = this@PhantomService.processingInfo
+                LaunchedEffect(expanded, processingInfo) {
                     if (expanded) {
                         delay(2000L)
                         expanded = false
@@ -328,6 +329,13 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 Row(
                     modifier = Modifier
                         .padding(4.dp)
+                        .onSizeChanged {
+                            composeView?.let { view ->
+                                if (view.isAttachedToWindow) {
+                                    windowManager.updateViewLayout(view, windowParams)
+                                }
+                            }
+                        }
                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
                         .padding(4.dp)
                         .pointerInput(Unit) {
@@ -351,7 +359,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     ).apply {
                                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                         if (processingInfo?.thumbnail != null) {
-                                            putExtra("route", Routes.photoDetail(0))
+                                            val photoId = processingInfo?.photoId
+                                            putExtra("photoId", photoId)
+                                            putExtra("route", Routes.photoDetail(photoId = photoId))
                                         }
                                     })
                             }
@@ -375,6 +385,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 .clip(CircleShape)
                         )
                     }
+
                     if (expanded) {
                         Spacer(modifier = Modifier.width(8.dp))
                         IconButton(onClick = {
@@ -422,12 +433,17 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private fun showFloatingWindow() {
         if (!Settings.canDrawOverlays(context)) return
         if (isWindowShown) return
+        isWindowShown = true
         lifecycleScope.launch {
             val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }.firstOrNull() ?: false
             updateWindowParams(hidden)
             composeView?.let {
-                windowManager.addView(it, windowParams)
-                isWindowShown = true
+                try {
+                    windowManager.addView(it, windowParams)
+                } catch (e: Exception) {
+                    isWindowShown = false
+                    PLog.e(TAG, "Error adding floating window", e)
+                }
             }
         }
     }
@@ -436,6 +452,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         if (isWindowShown) {
             composeView?.let { windowManager.removeView(it) }
             isWindowShown = false
+            expanded = false
         }
     }
 

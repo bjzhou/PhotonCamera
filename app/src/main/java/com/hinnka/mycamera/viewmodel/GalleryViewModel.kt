@@ -110,9 +110,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             s.map { systemPhoto ->
                 val systemUriString = systemPhoto.uri.toString()
                 p.find {
-                    isSameSystemUri(it.metadata?.sourceUri, systemUriString) ||
+                    it.metadata?.sourceUri == systemUriString ||
                             it.metadata?.exportedUris?.any { exportedUri ->
-                                isSameSystemUri(exportedUri, systemUriString)
+                                exportedUri == systemUriString
                             } == true
                 } ?: systemPhoto
             }
@@ -270,11 +270,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 加载当前选中的 Tab 内容
      */
     fun loadCurrentTabData() {
-        // 始终刷新内部照片元数据，以确保系统相册关联（sourceUri/exportedUris）是最新的
-        loadPhotos()
-
-        if (selectedTab == GalleryTab.SYSTEM) {
-            loadSystemPhotos(reset = true)
+        when (selectedTab) {
+            GalleryTab.SYSTEM -> loadSystemPhotos(reset = true)
+            GalleryTab.PHOTON -> loadPhotos()
         }
     }
 
@@ -284,9 +282,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun selectTab(tab: GalleryTab) {
         if (selectedTab != tab) {
             selectedTab = tab
-            if (tab == GalleryTab.SYSTEM && _systemPhotos.value.isEmpty()) {
-                loadSystemPhotos(reset = true)
-            }
+            loadCurrentTabData()
         }
     }
 
@@ -313,6 +309,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (!reset && (!hasMoreSystemPhotos || _isSystemLoadingMore.value)) return
 
         viewModelScope.launch {
+            val loadCount = if (reset) max(pageSize, _systemPhotos.value.size) else pageSize
+            val loadOffset = if (reset) 0 else systemOffset
+
             if (reset) {
                 if (_systemPhotos.value.isEmpty()) {
                     _isLoading.value = true
@@ -324,15 +323,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
 
             try {
-                val newPhotos = repository.getSystemPhotos(systemOffset, pageSize)
+                val newPhotos = repository.getSystemPhotos(loadOffset, loadCount)
                 if (reset) {
                     _systemPhotos.value = newPhotos
+                    systemOffset = newPhotos.size
+                    hasMoreSystemPhotos = newPhotos.size >= loadCount
                 } else {
                     _systemPhotos.value += newPhotos
+                    systemOffset += newPhotos.size
+                    hasMoreSystemPhotos = newPhotos.size >= loadCount
                 }
-
-                systemOffset += newPhotos.size
-                hasMoreSystemPhotos = newPhotos.size >= pageSize
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to load system photos", e)
             } finally {
@@ -347,60 +347,34 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun loadPhotos() {
         viewModelScope.launch {
-            if (_photos.value.isEmpty()) {
-                _isLoading.value = true
-            }
+            if (_photos.value.isEmpty()) _isLoading.value = true
             try {
-                // 1. Get basic list from repository (fast: file list only)
-                val newList = repository.getPhotosSync()
-
-                // 2. Reuse existing objects to preserve metadata and avoid UI replacement
-                val currentPhotos = _photos.value.associateBy { it.id }
-                val mergedList = newList.map { photo ->
-                    currentPhotos[photo.id] ?: photo
-                }
-
                 val context = getApplication<Application>()
+                val newList = repository.getPhotosSync()
+                val currentMap = _photos.value.associateBy { it.id }
 
-                // 3. Eagerly load metadata for the first ~30 items (visible area)
-                // Always refresh metadata for the first 30 items to ensure recent exports/mappings are picked up
-                val topItemsToLoad = mergedList.take(30)
-                val topItemsLoaded = if (topItemsToLoad.isNotEmpty()) {
-                    withContext(Dispatchers.IO) {
-                        topItemsToLoad.map { photo ->
-                            async {
-                                loadSpecificPhotoMetadata(context, photo)
-                            }
-                        }.awaitAll()
-                    }
-                } else emptyList()
-
-                val topMap = topItemsLoaded.associateBy { it.id }
-                val updatedWithTop = mergedList.map { photo ->
-                    topMap[photo.id] ?: photo
-                }
-
-                // Update UI for the first time
-                _photos.value = updatedWithTop
-                _latestPhoto.value = updatedWithTop.firstOrNull()
+                // 1. 合并基础列表（保留现有元数据）
+                val mergedList = newList.map { currentMap[it.id] ?: it }
+                _photos.value = mergedList
+                _latestPhoto.value = mergedList.firstOrNull()
                 _isLoading.value = false
 
-                // 4. Load the rest of the metadata in background
-                val remainingToLoad = updatedWithTop.filter { it.metadata == null }
-                if (remainingToLoad.isNotEmpty()) {
-                    val fullyUpdatedList = withContext(Dispatchers.IO) {
-                        remainingToLoad.map { photo ->
-                            async { loadSpecificPhotoMetadata(context, photo) }
-                        }.awaitAll()
+                // 2. 辅助函数：分批异步加载元数据
+                suspend fun updateMetadata(items: List<PhotoData>) {
+                    if (items.isEmpty()) return
+                    val updatedItems = withContext(Dispatchers.IO) {
+                        items.map { async { loadSpecificPhotoMetadata(context, it) } }.awaitAll()
                     }
-
-                    // Final update: merge background results back into the list
-                    val finalMap = fullyUpdatedList.associateBy { it.id }
-                    val finalPhotos = updatedWithTop.map { photo ->
-                        finalMap[photo.id] ?: photo
+                    val updatedMap = updatedItems.associateBy { it.id }
+                    _photos.update { current ->
+                        current.map { updatedMap[it.id] ?: it }
                     }
-                    _photos.value = finalPhotos
                 }
+
+                // 3. 两阶段加载：优先刷新前 30 张（确保最新状态），随后补充其余缺失的元数据
+                updateMetadata(mergedList.take(30))
+                updateMetadata(mergedList.drop(30).filter { it.metadata == null })
+
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to load photos", e)
                 _isLoading.value = false
@@ -490,6 +464,43 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     _photos.value = listOf(updatedPhoto) + currentPhotos
                 }
             }
+        }
+    }
+
+    /**
+     * 快速加载指定照片并置顶（用于 Phantom 模式跳转）
+     */
+    fun quickLoadPhoto(photoId: String) {
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val photo = withContext(Dispatchers.IO) {
+                val photoFile = PhotoManager.getPhotoFile(context, photoId)
+                if (!photoFile.exists()) return@withContext null
+
+                val videoFile = PhotoManager.getVideoFile(context, photoId)
+                val isBurstPhoto = PhotoManager.hasBurstPhotos(context, photoId)
+                val data = PhotoData(
+                    id = photoId,
+                    uri = Uri.fromFile(photoFile),
+                    thumbnailUri = Uri.fromFile(PhotoManager.getThumbnailFile(context, photoId)),
+                    displayName = photoFile.name,
+                    dateAdded = photoFile.lastModified(),
+                    size = photoFile.length(),
+                    isMotionPhoto = videoFile.exists(),
+                    isBurstPhoto = isBurstPhoto
+                )
+                loadSpecificPhotoMetadata(context, data)
+            } ?: return@launch
+
+            val currentList = _photos.value.toMutableList()
+            val index = currentList.indexOfFirst { it.id == photoId }
+            if (index != -1) {
+                currentList.removeAt(index)
+            }
+            currentList.add(0, photo)
+            _photos.value = currentList
+            _latestPhoto.value = photo
+            PLog.d(TAG, "Quickly loaded and topped photo: $photoId")
         }
     }
 
@@ -1458,30 +1469,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             PLog.d(TAG, "Custom content refreshed via ContentRepository")
         }
-    }
-
-    private fun isSameSystemUri(uri1: String?, uri2: String?): Boolean {
-        if (uri1 == null || uri2 == null) return uri1 == uri2
-        if (uri1 == uri2) return true
-
-        // Try to compare by MediaStore ID if both are MediaStore URIs
-        try {
-            val u1 = Uri.parse(uri1)
-            val u2 = Uri.parse(uri2)
-
-            val isMediaStore1 = u1.authority?.contains("media") == true
-            val isMediaStore2 = u2.authority?.contains("media") == true
-
-            if (isMediaStore1 && isMediaStore2) {
-                val id1 = u1.lastPathSegment
-                val id2 = u2.lastPathSegment
-                return id1 != null && id1 == id2
-            }
-        } catch (e: Exception) {
-            // Fallback to string comparison (already done above)
-        }
-
-        return false
     }
 
     /**

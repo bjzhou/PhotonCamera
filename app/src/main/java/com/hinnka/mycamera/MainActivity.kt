@@ -62,6 +62,7 @@ import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
+import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 
 /**
@@ -70,14 +71,16 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 object Routes {
     const val CAMERA = "camera"
     const val GALLERY = "gallery"
-    const val PHOTO_DETAIL = "photo_detail/{index}"
+    const val PHOTO_DETAIL = "photo_detail/{tab}/{index}?photoId={photoId}"
     const val BURST_DETAIL = "burst_detail/{photoId}"
     const val PHOTO_EDIT = "photo_edit"
     const val SETTINGS = "settings"
     const val FILTER_MANAGEMENT = "filter_management"
     const val FRAME_MANAGEMENT = "frame_management"
 
-    fun photoDetail(index: Int) = "photo_detail/$index"
+    fun photoDetail(tab: GalleryTab = GalleryTab.PHOTON, index: Int = 0, photoId: String? = null) =
+        "photo_detail/$tab/$index" + (if (photoId != null) "?photoId=$photoId" else "")
+
     fun burstDetail(photoId: String) = "burst_detail/$photoId"
 }
 
@@ -164,6 +167,9 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("route")?.let {
             pendingRoute = it
         }
+        intent.getStringExtra("photoId")?.let {
+            galleryViewModel.quickLoadPhoto(it)
+        }
         intent.getBooleanExtra("show_ghost_permissions", false).let {
             cameraViewModel.showGhostPermissions = it
         }
@@ -229,7 +235,7 @@ fun NavigationHost(
                                 navController.navigate(Routes.GALLERY)
                                 val latestPhoto = galleryViewModel.latestPhoto.value
                                 if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
-                                    navController.navigate(Routes.photoDetail(0))
+                                    navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
                                 }
                             },
                             onSettingsClick = {
@@ -260,7 +266,7 @@ fun NavigationHost(
                             navController.navigate(Routes.GALLERY)
                             val latestPhoto = galleryViewModel.latestPhoto.value
                             if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
-                                navController.navigate(Routes.photoDetail(0))
+                                navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
                             }
                         },
                         onSettingsClick = {
@@ -279,20 +285,32 @@ fun NavigationHost(
                     onBack = {
                         navController.popBackStack()
                     },
-                    onPhotoClick = { index ->
-                        navController.navigate(Routes.photoDetail(index))
+                    onPhotoClick = { tab, index ->
+                        navController.navigate(Routes.photoDetail(tab, index))
                     }
                 )
             }
 
             composable(
                 route = Routes.PHOTO_DETAIL,
-                arguments = listOf(navArgument("index") { type = NavType.IntType })
+                arguments = listOf(
+                    navArgument("tab") { type = NavType.StringType },
+                    navArgument("index") { type = NavType.IntType },
+                    navArgument("photoId") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
             ) { backStackEntry ->
                 val index = backStackEntry.arguments?.getInt("index") ?: 0
+                val tab = backStackEntry.arguments?.getString("tab") ?: GalleryTab.PHOTON.name
+                val photoId = backStackEntry.arguments?.getString("photoId")
+                galleryViewModel.selectTab(GalleryTab.valueOf(tab))
                 PhotoDetailScreen(
                     viewModel = galleryViewModel,
                     initialIndex = index,
+                    photoId = photoId,
                     onBack = {
                         navController.popBackStack()
                     },

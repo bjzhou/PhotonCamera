@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -50,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.hinnka.mycamera.R
@@ -67,7 +70,7 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 fun GalleryScreen(
     viewModel: GalleryViewModel,
     onBack: () -> Unit,
-    onPhotoClick: (Int) -> Unit,
+    onPhotoClick: (GalleryTab, Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val photos by viewModel.currentPhotos.collectAsState()
@@ -125,7 +128,7 @@ fun GalleryScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     // 监听生命周期，onResume 时刷新列表
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -373,7 +376,7 @@ fun GalleryScreen(
                                     viewModel.togglePhotoSelection(photo)
                                 } else {
                                     viewModel.setCurrentPhoto(index)
-                                    onPhotoClick(index)
+                                    onPhotoClick(selectedTab, index)
                                 }
                             },
                             onLongClick = {
@@ -589,7 +592,7 @@ private fun PhotoGridItem(
             }
 
             // 导入标记
-            if (photo.metadata?.isImported == true) {
+            if (viewModel.selectedTab == GalleryTab.PHOTON && photo.metadata?.isImported == true) {
                 Box(
                     modifier = Modifier
                         .padding(3.dp)
@@ -603,6 +606,24 @@ private fun PhotoGridItem(
                         fontWeight = FontWeight.Bold
                     )
                 }
+            }
+        }
+
+        // 关联标记 (System Tab 专用，表示该照片在 App 内有对应版本)
+        if (viewModel.selectedTab == GalleryTab.SYSTEM && photo.metadata != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
+                    .padding(2.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoFixHigh,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(12.dp)
+                )
             }
         }
     }

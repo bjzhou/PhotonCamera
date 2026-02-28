@@ -74,6 +74,7 @@ import java.io.File
 fun PhotoDetailScreen(
     viewModel: GalleryViewModel,
     initialIndex: Int = 0,
+    photoId: String? = null,
     isExpanded: Boolean = false,
     onBack: () -> Unit = {},
     onEdit: () -> Unit,
@@ -148,18 +149,39 @@ fun PhotoDetailScreen(
     }
 
     val pagerState = rememberPagerState(
-        initialPage = initialIndex,
+        initialPage = remember(photos, initialIndex, photoId) {
+            if (photoId != null) {
+                val index = photos.indexOfFirst { it.id == photoId }
+                if (index != -1) index else initialIndex
+            } else {
+                initialIndex
+            }
+        },
         pageCount = { photos.size }
     )
 
-    // 同步当前索引
-    LaunchedEffect(pagerState.currentPage) {
+    // 同步当前索引，并在快到底部时加载更多系统照片
+    LaunchedEffect(pagerState.currentPage, photos.size) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
+
+        if (viewModel.selectedTab == GalleryTab.SYSTEM && pagerState.currentPage >= photos.size - 5) {
+            viewModel.loadSystemPhotos(reset = false)
+        }
     }
 
     LaunchedEffect(photos.size, isExpanded) {
         if (isExpanded) {
             pagerState.scrollToPage(0)
+        }
+    }
+
+    // 当 photoId 提供时，确保在照片列表加载后自动跳转到该照片
+    LaunchedEffect(photos, photoId) {
+        if (photoId != null) {
+            val index = photos.indexOfFirst { it.id == photoId }
+            if (index != -1 && index != pagerState.currentPage) {
+                pagerState.scrollToPage(index)
+            }
         }
     }
 
