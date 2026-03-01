@@ -157,7 +157,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     if (isPending != 0) return
                     if (isTrashed != 0) return
                     if (size <= MIN_IMPORT_SIZE) return
-                    if (!relativePath.contains("DCIM/Camera", ignoreCase = true)) return
+                    if (!relativePath.contains("DCIM/Camera", ignoreCase = true) && !relativePath.contains("DCIM/100IMAGE", ignoreCase = true)) return
 
                     val path = data.ifEmpty {
                         val dir = File(Environment.getExternalStorageDirectory(), relativePath)
