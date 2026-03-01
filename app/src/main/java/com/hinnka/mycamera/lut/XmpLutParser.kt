@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -30,7 +31,7 @@ object XmpLutParser {
         }
     }
 
-    fun parse(inputStream: InputStream, outputStream: OutputStream, curve: LutCurve = LutCurve.SRGB): Boolean {
+    fun parse(inputStream: InputStream, outputStream: OutputStream, colorSpace: ColorSpace = ColorSpace.SRGB, curve: LutCurve = LutCurve.SRGB): Boolean {
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
         val builder = factory.newDocumentBuilder()
@@ -88,7 +89,7 @@ object XmpLutParser {
             lutData = resampleSize(lutData, 33)
         }
 
-        return writePlutFile(outputStream, lutData, curve)
+        return writePlutFile(outputStream, lutData, colorSpace, curve)
     }
 
     private fun resampleLut(lutData: LutData, curve: LutCurve): LutData {
@@ -290,22 +291,26 @@ object XmpLutParser {
         }
 
         val nopValue = IntArray(divisions)
+        val step = 65535.0 / (divisions - 1.0)
         for (i in 0 until divisions) {
-            nopValue[i] = ((i * 0xFFFF + (divisions / 2)) / (divisions - 1))
+            nopValue[i] = (i * step + 0.5).toInt()
         }
 
         val size = divisions * divisions * divisions
         val samples = ShortArray(size * 3)
 
-        for (bd in 0 until divisions) {
+        for (rd in 0 until divisions) {
             for (gd in 0 until divisions) {
-                for (rd in 0 until divisions) {
+                for (bd in 0 until divisions) {
+                    val rf_res = buffer.short.toInt()
+                    val gf_res = buffer.short.toInt()
+                    val bf_res = buffer.short.toInt()
+
+                    val rf = (rf_res + nopValue[rd]).coerceIn(0, 65535)
+                    val gf = (gf_res + nopValue[gd]).coerceIn(0, 65535)
+                    val bf = (bf_res + nopValue[bd]).coerceIn(0, 65535)
+
                     val index = ((bd * divisions + gd) * divisions + rd) * 3
-
-                    val bf = ((buffer.short.toInt() and 0xFFFF) + nopValue[bd]) and 0xFFFF
-                    val gf = ((buffer.short.toInt() and 0xFFFF) + nopValue[gd]) and 0xFFFF
-                    val rf = ((buffer.short.toInt() and 0xFFFF) + nopValue[rd]) and 0xFFFF
-
                     samples[index] = rf.toShort()
                     samples[index + 1] = gf.toShort()
                     samples[index + 2] = bf.toShort()
@@ -316,17 +321,18 @@ object XmpLutParser {
         return LutData(divisions, samples)
     }
 
-    private fun writePlutFile(outputStream: OutputStream, lut: LutData, curve: LutCurve): Boolean {
+    private fun writePlutFile(outputStream: OutputStream, lut: LutData, colorSpace: ColorSpace, curve: LutCurve): Boolean {
         val size = lut.divisions
         val count = size * size * size * 3
         val expectedSizeInBytes = count * 2 // 16-bit
-        val buffer = ByteBuffer.allocate(20 + expectedSizeInBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val buffer = ByteBuffer.allocate(24 + expectedSizeInBytes).order(ByteOrder.LITTLE_ENDIAN)
 
         buffer.putInt(MAGIC_PLUT)
-        buffer.putInt(2) // version
+        buffer.putInt(3) // version
         buffer.putInt(size)
         buffer.putInt(1) // dataType: 1 = UINT16
         buffer.putInt(curve.ordinal)
+        buffer.putInt(colorSpace.ordinal)
 
         for (s in lut.samples) {
             buffer.putShort(s)

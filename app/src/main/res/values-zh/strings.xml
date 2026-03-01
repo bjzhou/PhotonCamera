@@ -336,4 +336,6 @@
     <string name="settings_phantom_button_hidden_description">在幻影模式下隐藏屏幕上的悬浮按钮。你仍可以通过快捷设置或应用快捷方式来控制。</string>
     <string name="settings_launch_camera_on_phantom_mode">启动系统相机</string>
     <string name="settings_launch_camera_on_phantom_mode_description">通过快捷设置或应用快捷方式开启幻影模式时，自动启动系统相机。</string>
+    <string name="color_space">色彩空间</string>
+    <string name="advanced_options">高级选项</string>
 </resources>

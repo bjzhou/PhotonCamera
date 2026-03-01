@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.ColorSpace
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -19,7 +20,8 @@ data class LutConfig(
     val byteBuffer: ByteBuffer? = null,
     val title: String = "",
     val configDataType: Int = CONFIG_DATA_TYPE_UINT8,
-    val curve: LutCurve = LutCurve.SRGB
+    val curve: LutCurve = LutCurve.SRGB,
+    val colorSpace: ColorSpace = ColorSpace.SRGB
 ) {
     companion object {
         const val CONFIG_DATA_TYPE_UINT8 = 0
@@ -90,31 +92,6 @@ data class LutConfig(
         val count = size * size * size * 3
         val expectedCapacity = if (configDataType == CONFIG_DATA_TYPE_UINT16) count * 2 else count
         return size > 0 && (data?.size == count || byteBuffer?.capacity() == expectedCapacity)
-    }
-
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-
-        other as LutConfig
-
-        if (size != other.size) return false
-        if (data != null) {
-            if (other.data == null || !data.contentEquals(other.data)) return false
-        } else if (other.data != null) return false
-
-        if (byteBuffer != other.byteBuffer) return false
-        if (title != other.title) return false
-
-        return true
-    }
-
-    override fun hashCode(): Int {
-        var result = size
-        result = 31 * result + (data?.contentHashCode() ?: 0)
-        result = 31 * result + (byteBuffer?.hashCode() ?: 0)
-        result = 31 * result + title.hashCode()
-        return result
     }
 }
 

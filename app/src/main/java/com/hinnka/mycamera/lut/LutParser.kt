@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 import android.content.Context
 import android.util.Log
+import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
 import java.io.InputStream
@@ -51,6 +52,9 @@ object LutParser {
         val dataType = buffer.int
         val curveOrdinal = if (version >= 2) buffer.int else LutCurve.SRGB.ordinal
         val curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB }
+        
+        val colorSpaceOrdinal = if (version >= 3) buffer.int else ColorSpace.SRGB.ordinal
+        val colorSpace = ColorSpace.entries.getOrElse(colorSpaceOrdinal) { ColorSpace.SRGB }
 
         val count = size * size * size * 3
         val bytesPerComponent = if (dataType == 1) 2 else 1
@@ -72,7 +76,8 @@ object LutParser {
                 byteBuffer = directBuffer,
                 title = title,
                 configDataType = if (dataType == 1) LutConfig.CONFIG_DATA_TYPE_UINT16 else LutConfig.CONFIG_DATA_TYPE_UINT8,
-                curve = curve
+                curve = curve,
+                colorSpace = colorSpace
             )
         } else {
             // 未来可以支持 Float32

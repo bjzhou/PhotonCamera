@@ -8,6 +8,7 @@ import kotlin.math.max
 import kotlin.math.min
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.roundToInt
 
@@ -20,7 +21,7 @@ import kotlin.math.roundToInt
 object LutConverter {
 
     private const val MAGIC_PLUT = "PLUT"
-    private const val VERSION = 2
+    private const val VERSION = 3
     private const val DATA_TYPE_UINT16 = 1
 
     /**
@@ -41,6 +42,7 @@ object LutConverter {
     fun convertCubeToplut(
         cubeInputStream: InputStream,
         plutOutputStream: OutputStream,
+        colorSpace: ColorSpace = ColorSpace.SRGB,
         curve: LutCurve = LutCurve.SRGB
     ): Boolean {
         return try {
@@ -53,7 +55,7 @@ object LutConverter {
 
             // 不再进行重采样，而是直接写入原始数据并记录曲线类型
             // 写入 .plut 格式
-            writePLutFile(cubeData, plutOutputStream, curve)
+            writePLutFile(cubeData, plutOutputStream, colorSpace, curve)
 
             true
         } catch (e: Exception) {
@@ -73,6 +75,7 @@ object LutConverter {
     fun convertPngToplut(
         pngInputStream: InputStream,
         plutOutputStream: OutputStream,
+        colorSpace: ColorSpace = ColorSpace.SRGB,
         curve: LutCurve = LutCurve.SRGB
     ): Boolean {
         return try {
@@ -160,7 +163,7 @@ object LutConverter {
             if (cubeData.size > 65) {
                 cubeData = resampleSize(cubeData, 33)
             }
-            writePLutFile(cubeData, plutOutputStream, curve)
+            writePLutFile(cubeData, plutOutputStream, colorSpace, curve)
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -447,8 +450,8 @@ object LutConverter {
     /**
      * 写入 .plut 文件
      */
-    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, curve: LutCurve) {
-        val buffer = ByteBuffer.allocate(20 + cubeData.data.size * 2)
+    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, colorSpace: ColorSpace, curve: LutCurve) {
+        val buffer = ByteBuffer.allocate(24 + cubeData.data.size * 2)
             .order(ByteOrder.LITTLE_ENDIAN)
 
         // Magic
@@ -465,6 +468,9 @@ object LutConverter {
 
         // Curve Type
         buffer.putInt(curve.ordinal)
+        
+        // Color Space
+        buffer.putInt(colorSpace.ordinal)
 
         // Data
         val shortBuffer = buffer.asShortBuffer()

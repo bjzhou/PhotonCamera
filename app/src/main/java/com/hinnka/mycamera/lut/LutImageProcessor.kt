@@ -66,6 +66,7 @@ class LutImageProcessor {
     private var uLutIntensityLoc = 0
     private var uLutEnabledLoc = 0
     private var uLutCurveLoc = 0
+    private var uLutColorSpaceLoc = 0
     private var uMVPMatrixLoc = 0
 
     // 色彩配方 Uniform 位置
@@ -382,6 +383,7 @@ class LutImageProcessor {
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.ordinal ?: 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutColorSpace"), lutConfig?.colorSpace?.ordinal ?: 0)
 
         // 设置色彩配方参数
         GLES30.glUniform1i(
@@ -627,6 +629,7 @@ class LutImageProcessor {
         uLutIntensityLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutIntensity")
         uLutEnabledLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutEnabled")
         uLutCurveLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutCurve")
+        uLutColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutColorSpace")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
 
         // 获取色彩配方 uniform 位置
@@ -951,6 +954,7 @@ class LutImageProcessor {
             uniform float uLutIntensity;
             uniform bool uLutEnabled;
             uniform int uLutCurve;
+            uniform int uLutColorSpace;
 
             // 色彩配方控制
             uniform bool uColorRecipeEnabled;
@@ -981,13 +985,18 @@ class LutImageProcessor {
             float log10(float x) { return log(x) * 0.4342944819; }
             vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
 
+            vec3 linearToSrgb(vec3 l) {
+                return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
+            }
+
             vec3 srgbToLinear(vec3 c) {
                 return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
             }
 
-            vec3 applyLutCurve(vec3 rgb, int curveType) {
-                if (curveType == 0) return rgb; // SRGB
-                vec3 l = srgbToLinear(rgb);
+            vec3 applyLutCurve(vec3 l, int curveType) {
+                if (curveType == 0) { // sRGB
+                    return linearToSrgb(l);
+                }
                 if (curveType == 1) return l; // LINEAR
                 if (curveType == 2) { // V-Log
                     return mix(5.6 * l + 0.125, 0.241514 * log10(l + 0.00873) + 0.598206, step(0.01, l));
@@ -1009,6 +1018,31 @@ class LutImageProcessor {
                     float hb = 1.0 - 4.0 * ha;
                     float hc = 0.5 - ha * log(4.0 * ha);
                     return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
+                }
+                return l;
+            }
+
+            vec3 applyLutColorSpace(vec3 rgb, int colorSpace) {
+                if (colorSpace == 0) return rgb; // sRGB
+                
+                // Matrices for Linear sRGB to target color space (aligned with ColorSpace.kt)
+                if (colorSpace == 1) { // DCI-P3 (Bradford adapted)
+                    return mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * rgb;
+                }
+                if (colorSpace == 2) { // BT2020
+                    return mat3(0.627404, 0.069097, 0.016391, 0.329283, 0.919540, 0.088013, 0.043313, 0.011362, 0.895595) * rgb;
+                }
+                if (colorSpace == 3) { // ARRI4
+                    return mat3(0.565837, 0.088626, 0.017750, 0.340331, 0.809347, 0.109448, 0.093832, 0.102028, 0.872802) * rgb;
+                }
+                if (colorSpace == 4) { // AppleLog2
+                    return mat3(0.608104, 0.062316, 0.031133, 0.259353, 0.804609, 0.133756, 0.132543, 0.133076, 0.835112) * rgb;
+                }
+                if (colorSpace == 5) { // S-Gamut3.Cine
+                    return mat3(0.645679, 0.087530, 0.036957, 0.259115, 0.759700, 0.129281, 0.095206, 0.152770, 0.833762) * rgb;
+                }
+                if (colorSpace == 6) { // ACES_AP1
+                    return mat3(0.613083, 0.070004, 0.020491, 0.341167, 0.918063, 0.106764, 0.045750, 0.011934, 0.872745) * rgb;
                 }
                 return rgb;
             }
@@ -1174,7 +1208,9 @@ class LutImageProcessor {
 
                 // === LUT 处理（在色彩配方之后） ===
                 if (uLutEnabled && uLutIntensity > 0.0) {
-                    vec3 lutInColor = applyLutCurve(color.rgb, uLutCurve);
+                    vec3 linearRGB = srgbToLinear(color.rgb);
+                    vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
+                    vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
                     vec3 lutCoord = lutInColor * scale + offset;

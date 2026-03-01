@@ -336,4 +336,6 @@
     <string name="settings_phantom_button_hidden_description">Hide the floating button in Phantom Mode. You can still control it via Quick Settings or App Shortcuts.</string>
     <string name="settings_launch_camera_on_phantom_mode">Launch System Camera</string>
     <string name="settings_launch_camera_on_phantom_mode_description">Automatically launch the system camera when enabling Phantom Mode via Quick Settings or App Shortcut.</string>
+    <string name="color_space">Color Space</string>
+    <string name="advanced_options">Advanced Options</string>
 </resources>

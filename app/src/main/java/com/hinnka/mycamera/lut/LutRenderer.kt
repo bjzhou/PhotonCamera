@@ -80,6 +80,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uLutIntensityLocation: Int = 0
     private var uLutEnabledLocation: Int = 0
     private var uLutCurveLocation: Int = 0
+    private var uLutColorSpaceLocation: Int = 0
 
     // 色彩配方 Uniform 位置
     private var uColorRecipeEnabledLocation: Int = 0
@@ -469,6 +470,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1f(uLutIntensityLocation, lutIntensity)
         GLES30.glUniform1i(uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
         GLES30.glUniform1i(uLutCurveLocation, currentLutConfig?.curve?.ordinal ?: 0)
+        GLES30.glUniform1i(uLutColorSpaceLocation, currentLutConfig?.colorSpace?.ordinal ?: 0)
 
         // 设置色彩配方 Uniforms
         GLES30.glUniform1i(uColorRecipeEnabledLocation, if (colorRecipeEnabled) 1 else 0)
@@ -573,6 +575,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         uLutIntensityLocation = GLES30.glGetUniformLocation(programId, "uLutIntensity")
         uLutEnabledLocation = GLES30.glGetUniformLocation(programId, "uLutEnabled")
         uLutCurveLocation = GLES30.glGetUniformLocation(programId, "uLutCurve")
+        uLutColorSpaceLocation = GLES30.glGetUniformLocation(programId, "uLutColorSpace")
 
         // 获取色彩配方 Uniform 位置
         uColorRecipeEnabledLocation = GLES30.glGetUniformLocation(programId, "uColorRecipeEnabled")

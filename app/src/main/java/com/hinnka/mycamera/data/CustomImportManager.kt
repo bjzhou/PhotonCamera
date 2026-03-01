@@ -7,6 +7,7 @@ import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutCurve
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
+import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -82,7 +83,7 @@ class CustomImportManager(private val context: Context) {
      * @param curve 输入曲线类型（可选）
      * @return 导入成功的 LUT ID，失败返回 null
      */
-    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, curve: LutCurve = LutCurve.SRGB): String? {
+    fun importLut(uri: Uri, displayName: String? = null, category: String? = null, colorSpace: ColorSpace = ColorSpace.SRGB, curve: LutCurve = LutCurve.SRGB): String? {
         return try {
             val fileName = getFileName(uri) ?: "lut_${System.currentTimeMillis()}.cube"
             val lutId = "custom_${UUID.randomUUID()}"
@@ -93,10 +94,10 @@ class CustomImportManager(private val context: Context) {
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(plutFile).use { outputStream ->
                     val success = if (fileName.endsWith(".xmp", ignoreCase = true)) {
-                        XmpLutParser.parse(inputStream, outputStream, curve = curve)
+                        XmpLutParser.parse(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
                     } else if (fileName.endsWith(".png", ignoreCase = true)) {
-                        LutConverter.convertPngToplut(inputStream, outputStream, curve = curve)
-                    } else LutConverter.convertCubeToplut(inputStream, outputStream, curve = curve)
+                        LutConverter.convertPngToplut(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
+                    } else LutConverter.convertCubeToplut(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
 
                     if (!success) {
                         plutFile.delete()

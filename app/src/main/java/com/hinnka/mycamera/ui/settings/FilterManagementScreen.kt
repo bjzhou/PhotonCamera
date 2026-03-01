@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.lut.LutCurve
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -780,7 +781,9 @@ fun FilterManagementScreen(
 
         // 导入时分类选择对话框
         if (showImportCategoryDialog && pendingImportUris.isNotEmpty()) {
+            var selectedColorSpace by remember { mutableStateOf(ColorSpace.SRGB) }
             var selectedCurve by remember { mutableStateOf(LutCurve.SRGB) }
+            var showAdvancedOptions by remember { mutableStateOf(false) }
             AlertDialog(
                 onDismissRequest = {
                     //showImportCategoryDialog = false
@@ -836,43 +839,117 @@ fun FilterManagementScreen(
                             }
                         }
 
-                        var expanded by remember { mutableStateOf(false) }
                         Spacer(modifier = Modifier.height(12.dp))
-                        
-                        ExposedDropdownMenuBox(
-                            expanded = expanded,
-                            onExpandedChange = { expanded = !expanded },
-                            modifier = Modifier.fillMaxWidth()
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { showAdvancedOptions = !showAdvancedOptions }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            OutlinedTextField(
-                                value = selectedCurve.name,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text(stringResource(R.string.input_curve)) },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                                    focusedBorderColor = Color(0xFFFF6B35),
-                                    focusedLabelColor = Color(0xFFFF6B35),
-                                    unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier.fillMaxWidth().menuAnchor()
+                            Text(
+                                text = stringResource(R.string.advanced_options),
+                                fontSize = 14.sp,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.weight(1f)
                             )
-                            ExposedDropdownMenu(
+                            Icon(
+                                imageVector = if (showAdvancedOptions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.7f)
+                            )
+                        }
+
+                        if (showAdvancedOptions) {
+                            var expanded by remember { mutableStateOf(false) }
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            ExposedDropdownMenuBox(
                                 expanded = expanded,
-                                onDismissRequest = { expanded = false },
-                                modifier = Modifier.background(Color(0xFF2C2C2C))
+                                onExpandedChange = { expanded = !expanded },
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                LutCurve.entries.forEach { curve ->
-                                    DropdownMenuItem(
-                                        text = { Text(curve.name) },
-                                        onClick = {
-                                            selectedCurve = curve
-                                            expanded = false
-                                        },
-                                        colors = MenuDefaults.itemColors(
-                                            textColor = if (selectedCurve == curve) Color(0xFFFF6B35) else Color.White
+                                OutlinedTextField(
+                                    value = selectedCurve.name,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text(stringResource(R.string.input_curve)) },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
+                                        focusedBorderColor = Color(0xFFFF6B35),
+                                        focusedLabelColor = Color(0xFFFF6B35),
+                                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = expanded,
+                                    onDismissRequest = { expanded = false },
+                                    modifier = Modifier.background(Color(0xFF2C2C2C))
+                                ) {
+                                    LutCurve.entries.forEach { curve ->
+                                        DropdownMenuItem(
+                                            text = { Text(curve.name) },
+                                            onClick = {
+                                                selectedCurve = curve
+                                                expanded = false
+                                            },
+                                            colors = MenuDefaults.itemColors(
+                                                textColor = if (selectedCurve == curve) Color(
+                                                    0xFFFF6B35
+                                                ) else Color.White
+                                            )
                                         )
-                                    )
+                                    }
+                                }
+                            }
+
+                            var colorSpaceExpanded by remember { mutableStateOf(false) }
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            ExposedDropdownMenuBox(
+                                expanded = colorSpaceExpanded,
+                                onExpandedChange = { colorSpaceExpanded = !colorSpaceExpanded },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedColorSpace.name,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text(stringResource(R.string.color_space)) },
+                                    trailingIcon = {
+                                        ExposedDropdownMenuDefaults.TrailingIcon(
+                                            expanded = colorSpaceExpanded
+                                        )
+                                    },
+                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
+                                        focusedBorderColor = Color(0xFFFF6B35),
+                                        focusedLabelColor = Color(0xFFFF6B35),
+                                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = colorSpaceExpanded,
+                                    onDismissRequest = { colorSpaceExpanded = false },
+                                    modifier = Modifier.background(Color(0xFF2C2C2C))
+                                ) {
+                                    ColorSpace.entries.forEach { colorSpace ->
+                                        DropdownMenuItem(
+                                            text = { Text(colorSpace.name) },
+                                            onClick = {
+                                                selectedColorSpace = colorSpace
+                                                colorSpaceExpanded = false
+                                            },
+                                            colors = MenuDefaults.itemColors(
+                                                textColor = if (selectedColorSpace == colorSpace) Color(
+                                                    0xFFFF6B35
+                                                ) else Color.White
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -883,7 +960,8 @@ fun FilterManagementScreen(
                         onClick = {
                             val targetCategory = categoryText
                             val urisToImport = pendingImportUris
-                            val curveToUse = selectedCurve // Capture state
+                            val curveToUse = selectedCurve
+                            val colorSpace = selectedColorSpace
                             showImportCategoryDialog = false
                             pendingImportUris = emptyList()
 
@@ -896,7 +974,7 @@ fun FilterManagementScreen(
                                 urisToImport.forEachIndexed { index, uri ->
                                     importProgress = Pair(index + 1, urisToImport.size)
                                     val result = withContext(Dispatchers.IO) {
-                                        customImportManager.importLut(uri, category = targetCategory, curve = curveToUse)
+                                        customImportManager.importLut(uri, category = targetCategory, colorSpace = colorSpace, curve = curveToUse)
                                     }
                                     if (result != null) {
                                         successCount++
