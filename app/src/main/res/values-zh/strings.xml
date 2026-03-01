@@ -134,6 +134,8 @@
     <string name="settings_vibration_description">拍照时产生震动反馈</string>
     <string name="settings_volume_key_action">音量键功能</string>
     <string name="settings_volume_key_action_description">设置音量键在拍摄时的操作</string>
+    <string name="settings_mirror_front_camera">自拍镜像</string>
+    <string name="settings_mirror_front_camera_description">镜像前置摄像头的照片以匹配预览画面</string>
     <string name="settings_volume_key_action_none">系统音量</string>
     <string name="settings_volume_key_action_capture">快门/拍摄</string>
     <string name="settings_volume_key_action_exposure">曝光补偿</string>

@@ -148,6 +148,18 @@ object BitmapUtils {
         }
     }
 
+    /**
+     * 水平翻转 Bitmap
+     */
+    fun flipHorizontal(bitmap: Bitmap): Bitmap {
+        val matrix = Matrix().apply { postScale(-1f, 1f) }
+        val flipped = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (flipped != bitmap) {
+            bitmap.recycle()
+        }
+        return flipped
+    }
+
     fun Bitmap.toByteArray(): ByteArray {
         val stream = ByteArrayOutputStream()
         this.compress(Bitmap.CompressFormat.JPEG, 100, stream)

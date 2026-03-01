@@ -186,6 +186,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .map { it.launchCameraOnPhantomMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val mirrorFrontCamera: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.mirrorFrontCamera }
+
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
     val noiseReduction: Flow<Float> = userPreferencesRepository.userPreferences.map { it.noiseReduction }
@@ -1381,6 +1383,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
+            val shouldMirror = lensFacing == CameraCharacteristics.LENS_FACING_FRONT &&
+                    (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
+
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
@@ -1402,7 +1407,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
                 exposureBias = state.value.exposureBias,
-                droMode = droModeString
+                droMode = droModeString,
+                isMirrored = shouldMirror
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1438,7 +1444,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     exposureBias = state.value.exposureBias,
-                    droMode = droModeForProcessing
+                    droMode = droModeForProcessing,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -1487,6 +1493,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 (sensorOrientation + deviceRotation) % 360
             }
 
+            val shouldMirror = lensFacing == CameraCharacteristics.LENS_FACING_FRONT &&
+                    (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
+
             // 获取用户配置的摄像头方向偏移
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val orientationOffset = userPrefs?.cameraOrientationOffsets?.get(currentCameraId) ?: 0
@@ -1517,7 +1526,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
                 exposureBias = state.value.exposureBias,
-                droMode = droModeString
+                droMode = droModeString,
+                isMirrored = shouldMirror
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1599,6 +1609,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 应用方向偏移
         val rotation = (baseRotation + orientationOffset) % 360
 
+        val shouldMirror = lensFacing == CameraCharacteristics.LENS_FACING_FRONT &&
+                (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
+
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
         val metadata = PhotoMetadata(
             lutId = lutIdToSave,
@@ -1619,6 +1632,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             focalLength = captureInfo.formatFocalLength(),
             focalLength35mm = captureInfo.formatFocalLength35mm(),
             aperture = captureInfo.formatAperture(),
+            isMirrored = shouldMirror
         )
 
         PhotoManager.preparePhoto(
@@ -1782,6 +1796,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setLaunchCameraOnPhantomMode(launch: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
+        }
+    }
+    /**
+     * 设置是否启用自拍镜像
+     */
+    fun setMirrorFrontCamera(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveMirrorFrontCamera(enabled)
         }
     }
 }

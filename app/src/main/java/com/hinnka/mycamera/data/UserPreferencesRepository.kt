@@ -70,6 +70,7 @@ data class UserPreferences(
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
+    val mirrorFrontCamera: Boolean = true,
 )
 
 /**
@@ -126,6 +127,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
+        private val MIRROR_FRONT_CAMERA = booleanPreferencesKey("mirror_front_camera")
     }
 
     /**
@@ -176,6 +178,7 @@ class UserPreferencesRepository(private val context: Context) {
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
+                mirrorFrontCamera = preferences[MIRROR_FRONT_CAMERA] ?: true,
             )
         }
 
@@ -584,6 +587,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveLaunchCameraOnPhantomMode(launch: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] = launch
+        }
+    }
+
+    /**
+     * 保存是否启用自拍镜像
+     */
+    suspend fun saveMirrorFrontCamera(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[MIRROR_FRONT_CAMERA] = enabled
         }
     }
 }

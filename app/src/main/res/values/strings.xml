@@ -136,6 +136,8 @@
     <string name="settings_vibration_description">Vibrate when taking a photo</string>
     <string name="settings_volume_key_action">Volume Key Action</string>
     <string name="settings_volume_key_action_description">Choose what volume keys do during capture</string>
+    <string name="settings_mirror_front_camera">Selfie Mirror</string>
+    <string name="settings_mirror_front_camera_description">Mirror front camera photos to match preview</string>
     <string name="settings_volume_key_action_none">Volume Control</string>
     <string name="settings_volume_key_action_capture">Shutter</string>
     <string name="settings_volume_key_action_exposure">Exposure Comp.</string>

@@ -2470,8 +2470,8 @@ class Camera2Controller(private val context: Context) {
      */
     fun stopBurstCapture() {
         PLog.d(TAG, "Stop Burst Capture")
-        _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
         captureSession?.abortCaptures()
         resetPreviewAfterCapture()
+        _state.value = _state.value.copy(burstCapturing = false, isCapturing = false)
     }
 }

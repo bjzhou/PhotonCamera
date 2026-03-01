@@ -57,7 +57,8 @@ data class PhotoMetadata(
     val presentationTimestampUs: Long? = null,
     // DRO 模式
     val droMode: String? = null,
-    val software: String? = null
+    val software: String? = null,
+    val isMirrored: Boolean = false
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
@@ -180,6 +181,7 @@ data class PhotoMetadata(
             // DRO 模式
             put("droMode", droMode ?: JSONObject.NULL)
             put("software", software ?: JSONObject.NULL)
+            put("isMirrored", isMirrored)
         }.toString(2)
     }
 
@@ -266,7 +268,8 @@ data class PhotoMetadata(
                     exportedUris = exportedUris,
                     presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),
                     droMode = if (obj.isNull("droMode")) null else obj.optString("droMode"),
-                    software = if (obj.isNull("software")) null else obj.optString("software")
+                    software = if (obj.isNull("software")) null else obj.optString("software"),
+                    isMirrored = obj.optBoolean("isMirrored", false)
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

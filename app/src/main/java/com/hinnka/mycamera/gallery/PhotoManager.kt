@@ -527,7 +527,7 @@ object PhotoManager {
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             // 创建预览用的 Bitmap
-            val previewBitmap = createBitmap(metadata.width, metadata.height)
+            var previewBitmap = createBitmap(metadata.width, metadata.height)
 
             PLog.d(TAG, "saveYuvPhoto: ${metadata.width} ${metadata.height}")
 
@@ -538,6 +538,11 @@ object PhotoManager {
                     yuvFile.absolutePath, previewBitmap
                 )
             }
+
+            if (metadata.isMirrored) {
+                previewBitmap = BitmapUtils.flipHorizontal(previewBitmap)
+            }
+
             if (success) {
                 FileOutputStream(tempFile).use { outputStream ->
                     previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
@@ -609,7 +614,7 @@ object PhotoManager {
                 exportDng(context, photoId, array, metadata)
             }
 
-            val bitmap = RawDemosaicProcessor.getInstance().process(
+            var bitmap = RawDemosaicProcessor.getInstance().process(
                 context,
                 dngFile.absolutePath,
                 aspectRatio,
@@ -619,6 +624,11 @@ object PhotoManager {
                 sharpeningValue = 0.4f,
                 droMode = droMode
             ) ?: return@withContext
+
+            if (metadata.isMirrored) {
+                bitmap = BitmapUtils.flipHorizontal(bitmap)
+            }
+
             FileOutputStream(tempFile).use { outputStream ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
             }
@@ -727,13 +737,14 @@ object PhotoManager {
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId)
+            val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
 
-            val result = MultiFrameStacker.processBurst(
+            var result = MultiFrameStacker.processBurst(
                 images,
                 rotation,
                 aspectRatio,
@@ -741,6 +752,11 @@ object PhotoManager {
                 useSuperResolution,
                 useGpuAcceleration
             ) ?: return@withContext
+
+            if (metadata.isMirrored) {
+                result = BitmapUtils.flipHorizontal(result)
+            }
+
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->
                 result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
@@ -837,7 +853,7 @@ object PhotoManager {
                     // Keep original CCM and other params
                 )
 
-                val bitmap = RawDemosaicProcessor.getInstance().process(
+                var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     byteBuffer,
                     firstImageWidth * if (useSuperResolution) 2 else 1,
@@ -849,6 +865,10 @@ object PhotoManager {
                     rotation,
                     sharpeningValue = 0.4f
                 )
+
+                if (metadata.isMirrored && bitmap != null) {
+                    bitmap = BitmapUtils.flipHorizontal(bitmap)
+                }
 
                 bitmap?.let {
                     val buffer = ByteBuffer.allocateDirect(it.width * it.height * 8)

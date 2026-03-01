@@ -121,6 +121,7 @@ fun SettingsScreen(
     val phantomMode by viewModel.phantomMode.collectAsState()
     val phantomButtonHidden by viewModel.phantomButtonHidden.collectAsState()
     val launchCameraOnPhantomMode by viewModel.launchCameraOnPhantomMode.collectAsState()
+    val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -458,6 +459,18 @@ fun SettingsScreen(
                     description = stringResource(R.string.settings_shutter_sound_description),
                     checked = shutterSoundEnabled,
                     onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_mirror_front_camera),
+                    description = stringResource(R.string.settings_mirror_front_camera_description),
+                    checked = mirrorFrontCamera,
+                    onCheckedChange = { viewModel.setMirrorFrontCamera(it) }
                 )
 
                 HorizontalDivider(
