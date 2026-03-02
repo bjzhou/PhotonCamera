@@ -836,48 +836,43 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+: 收集所有导出的 URIs
-            viewModelScope.launch {
-                val context = getApplication<Application>()
-                val allExportedUris = mutableListOf<Uri>()
+        // Android 11+: 收集所有导出的 URIs
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val allExportedUris = mutableListOf<Uri>()
 
-                withContext(Dispatchers.IO) {
-                    toDelete.forEach { photo ->
-                        val metadata = PhotoManager.loadMetadata(context, photo.id)
-                        metadata?.exportedUris?.forEach { uriString ->
-                            try {
-                                allExportedUris.add(Uri.parse(uriString))
-                            } catch (e: Exception) {
-                                PLog.e(TAG, "Invalid URI: $uriString", e)
-                            }
+            withContext(Dispatchers.IO) {
+                toDelete.forEach { photo ->
+                    val metadata = PhotoManager.loadMetadata(context, photo.id)
+                    metadata?.exportedUris?.forEach { uriString ->
+                        try {
+                            allExportedUris.add(Uri.parse(uriString))
+                        } catch (e: Exception) {
+                            PLog.e(TAG, "Invalid URI: $uriString", e)
                         }
                     }
                 }
+            }
 
-                if (allExportedUris.isNotEmpty()) {
-                    // 有导出的照片，需要用户确认
-                    try {
-                        val pendingIntent = MediaStore.createDeleteRequest(
-                            context.contentResolver,
-                            allExportedUris
-                        )
-                        pendingDeletePhotos = toDelete
-                        batchDeletePendingIntent = pendingIntent
-                        PLog.d(TAG, "Set batch delete pending intent for ${toDelete.size} photos")
-                    } catch (e: Exception) {
-                        PLog.e(TAG, "Failed to create batch delete request", e)
-                        // 创建请求失败，直接删除应用内照片
-                        deleteBatchPhotosOnlyInternal(toDelete)
-                    }
-                } else {
-                    // 没有导出的照片，直接删除应用内照片
+            if (allExportedUris.isNotEmpty()) {
+                // 有导出的照片，需要用户确认
+                try {
+                    val pendingIntent = MediaStore.createDeleteRequest(
+                        context.contentResolver,
+                        allExportedUris
+                    )
+                    pendingDeletePhotos = toDelete
+                    batchDeletePendingIntent = pendingIntent
+                    PLog.d(TAG, "Set batch delete pending intent for ${toDelete.size} photos")
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to create batch delete request", e)
+                    // 创建请求失败，直接删除应用内照片
                     deleteBatchPhotosOnlyInternal(toDelete)
                 }
+            } else {
+                // 没有导出的照片，直接删除应用内照片
+                deleteBatchPhotosOnlyInternal(toDelete)
             }
-        } else {
-            // Android 10 及以下: 直接删除
-            deleteBatchPhotosDirectly(toDelete)
         }
     }
 

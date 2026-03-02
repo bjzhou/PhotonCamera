@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
+import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -129,7 +130,7 @@ class GalleryRepository(private val context: Context) {
         val photos = mutableListOf<PhotoData>()
         val photoIds = PhotoManager.getPhotoIds(context)
 
-        photoIds.take(limit).forEach { id ->
+        photoIds.forEach { id ->
             val photoFile = PhotoManager.getPhotoFile(context, id)
 
             if (photoFile.exists()) {
@@ -150,6 +151,6 @@ class GalleryRepository(private val context: Context) {
             }
         }
 
-        return photos
+        return photos.take(limit)
     }
 }

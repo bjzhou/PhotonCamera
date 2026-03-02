@@ -1213,12 +1213,29 @@ object PhotoManager {
                 if (photoDir.exists()) {
                     photoDir.deleteRecursively()
                 }
-
                 PLog.d(TAG, "Photo deleted: $photoId")
+                deleteEmptyDirs(getPhotosBaseDir(context))
                 true
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to delete photo: $photoId", e)
                 false
+            }
+        }
+    }
+
+    fun deleteEmptyDirs(root: File) {
+        if (!root.exists() || !root.isDirectory) return
+        root.walkBottomUp().forEach { file ->
+            if (file.isDirectory) {
+                val contents = file.listFiles()
+                if (contents != null && contents.isEmpty()) {
+                    val deleted = file.delete()
+                    if (deleted) {
+                        // PLog.d(TAG, "已清理空文件夹: ${file.absolutePath}")
+                    } else {
+                        PLog.e(TAG, "无法删除文件夹 (可能权限不足): ${file.absolutePath}")
+                    }
+                }
             }
         }
     }
