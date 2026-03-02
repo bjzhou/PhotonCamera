@@ -21,7 +21,8 @@ data class LutConfig(
     val title: String = "",
     val configDataType: Int = CONFIG_DATA_TYPE_UINT8,
     val curve: LutCurve = LutCurve.SRGB,
-    val colorSpace: ColorSpace = ColorSpace.SRGB
+    val colorSpace: ColorSpace = ColorSpace.SRGB,
+    val outputColorSpace: android.graphics.ColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB),
 ) {
     companion object {
         const val CONFIG_DATA_TYPE_UINT8 = 0

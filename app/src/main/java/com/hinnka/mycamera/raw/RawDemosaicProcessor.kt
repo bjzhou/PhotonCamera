@@ -236,6 +236,12 @@ class RawDemosaicProcessor {
             }
             try {
                 baseLut = LutParser.parseFromAssets(context, "$rawFolder/$lutFileName")
+                //暂时简单处理输出色彩空间P3
+                if (lutFileName.contains("P3")) {
+                    baseLut = baseLut?.copy(
+                        outputColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3),
+                    )
+                }
                 PLog.d(TAG, "RAW LUT updated to: $lutFileName")
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to load RAW LUT: $lutFileName", e)
@@ -499,7 +505,7 @@ class RawDemosaicProcessor {
 
             // 8. 读取结果
             val readStart = System.currentTimeMillis()
-            val finalBitmap = readPixels(finalWidth, finalHeight)
+            val finalBitmap = readPixels(finalWidth, finalHeight, baseLut?.outputColorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
             PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
 
             PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
@@ -1780,7 +1786,7 @@ class RawDemosaicProcessor {
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
     }
 
-    private fun readPixels(width: Int, height: Int): Bitmap {
+    private fun readPixels(width: Int, height: Int, colorSpace: android.graphics.ColorSpace): Bitmap {
         val pixelSize = width * height * 8
 
         // 使用 PBO 优化 glReadPixels
@@ -1804,8 +1810,7 @@ class RawDemosaicProcessor {
             GLES30.GL_MAP_READ_BIT
         ) as? ByteBuffer
 
-        val bitmap = createBitmap(width, height, Bitmap.Config.RGBA_F16,
-            colorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3))
+        val bitmap = createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace)
 
         if (mappedBuffer != null) {
             bitmap.copyPixelsFromBuffer(mappedBuffer)

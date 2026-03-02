@@ -69,6 +69,7 @@ class LutImageProcessor {
     private var uLutEnabledLoc = 0
     private var uLutCurveLoc = 0
     private var uLutColorSpaceLoc = 0
+    private var uInputColorSpaceLoc = 0
     private var uMVPMatrixLoc = 0
 
     // 色彩配方 Uniform 位置
@@ -189,6 +190,7 @@ class LutImageProcessor {
         argbData: ShortBuffer,
         width: Int,
         height: Int,
+        colorSpace: ColorSpace,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
@@ -245,7 +247,7 @@ class LutImageProcessor {
         val outputBitmap = performRender(
             width, height,
             if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
-            ColorSpace.get(ColorSpace.Named.DISPLAY_P3),
+            colorSpace,
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
@@ -327,7 +329,7 @@ class LutImageProcessor {
         val outputBitmap = performRender(
             width, height,
             if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
-            ColorSpace.get(ColorSpace.Named.DISPLAY_P3),
+            bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
@@ -389,6 +391,9 @@ class LutImageProcessor {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.ordinal ?: 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutColorSpace"), lutConfig?.colorSpace?.ordinal ?: 0)
+        
+        val inputColorSpaceId = if (inputColorSpace == ColorSpace.get(ColorSpace.Named.DISPLAY_P3)) 1 else 0
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputColorSpace"), inputColorSpaceId)
 
         // 设置色彩配方参数
         GLES30.glUniform1i(
@@ -635,6 +640,7 @@ class LutImageProcessor {
         uLutEnabledLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutEnabled")
         uLutCurveLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutCurve")
         uLutColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutColorSpace")
+        uInputColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uInputColorSpace")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
 
         // 获取色彩配方 uniform 位置
@@ -960,6 +966,7 @@ class LutImageProcessor {
             uniform bool uLutEnabled;
             uniform int uLutCurve;
             uniform int uLutColorSpace;
+            uniform int uInputColorSpace;
 
             // 色彩配方控制
             uniform bool uColorRecipeEnabled;
@@ -1213,6 +1220,14 @@ class LutImageProcessor {
 
                 // === LUT 处理（在色彩配方之后） ===
                 if (uLutEnabled && uLutIntensity > 0.0) {
+                    bool isP3 = (uInputColorSpace == 1);
+                    if (isP3) {
+                         // P3 -> sRGB (Linear 转换)
+                         vec3 linearP3 = srgbToLinear(color.rgb);
+                         // P3 to sRGB inverse matrix
+                         color.rgb = linearToSrgb(mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearP3);
+                    }
+
                     vec3 linearRGB = srgbToLinear(color.rgb);
                     vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
                     vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
@@ -1221,6 +1236,13 @@ class LutImageProcessor {
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
                     color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+
+                    if (isP3) {
+                        // sRGB -> P3 (Linear 转换)
+                        vec3 linearSrgb = srgbToLinear(color.rgb);
+                        // sRGB to P3 matrix (与 applyLutColorSpace 中 case 1 一致)
+                        color.rgb = linearToSrgb(mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * linearSrgb);
+                    }
                 }
                 
                 // --- 4. 锐化 ---

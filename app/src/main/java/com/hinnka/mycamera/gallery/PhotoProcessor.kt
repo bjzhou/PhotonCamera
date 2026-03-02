@@ -3,6 +3,7 @@ package com.hinnka.mycamera.gallery
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ColorSpace
 import android.os.Build
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.frame.FrameManager
@@ -153,6 +154,7 @@ class PhotoProcessor(
             input.asShortBuffer(),
             metadata.width,
             metadata.height,
+            ColorSpace.get(metadata.colorSpace),
             lutConfig,
             colorRecipeParams,
             finalSharpening,

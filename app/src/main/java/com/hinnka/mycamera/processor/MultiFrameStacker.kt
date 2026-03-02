@@ -42,7 +42,8 @@ object MultiFrameStacker {
         aspectRatio: AspectRatio?,
         outputPath: String? = null,
         enableSuperResolution: Boolean = false,
-        useVulkan: Boolean = true
+        useVulkan: Boolean = true,
+        colorSpace: ColorSpace,
     ): Bitmap? {
         if (images.isEmpty()) return null
 
@@ -75,7 +76,7 @@ object MultiFrameStacker {
                     val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
                     val targetW = dimensions.width() * scale
                     val targetH = dimensions.height() * scale
-                    val previewBitmap = createBitmap(targetW, targetH)
+                    val previewBitmap = createBitmap(targetW, targetH, colorSpace = colorSpace)
 
                     processVulkanStackNative(stackerPtr, previewBitmap, rotation)
 
@@ -120,8 +121,7 @@ object MultiFrameStacker {
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
             val targetW = dimensions.width() * scale
             val targetH = dimensions.height() * scale
-            val previewBitmap = createBitmap(targetW, targetH,
-                colorSpace = ColorSpace.get(ColorSpace.Named.DISPLAY_P3))
+            val previewBitmap = createBitmap(targetW, targetH, colorSpace = colorSpace)
 
             processStackNative(
                 stackerPtr,

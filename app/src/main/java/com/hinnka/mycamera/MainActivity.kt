@@ -2,6 +2,7 @@ package com.hinnka.mycamera
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -110,6 +111,12 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         hideSystemUI()
+
+        val isWideColorGamutSupported = resources.configuration.isScreenWideColorGamut
+        if (isWideColorGamutSupported) {
+            window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+        }
+
         OrientationObserver.observe(this)
 
         // 检查权限

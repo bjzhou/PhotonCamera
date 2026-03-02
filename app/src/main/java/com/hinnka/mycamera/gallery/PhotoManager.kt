@@ -282,6 +282,8 @@ object PhotoManager {
                 0f, 0f, 0f
             ) ?: return null
 
+            PLog.d(TAG, "processedBitmap = ${processedBitmap.colorSpace?.name}")
+
             val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
             val photoFile = getPhotoFile(context, id)
 
@@ -561,7 +563,7 @@ object PhotoManager {
                     exportPhoto(
                         context,
                         photoId,
-                        previewBitmap,
+                        null,
                         photoProcessor,
                         metadata,
                         sharpeningValue,
@@ -759,7 +761,8 @@ object PhotoManager {
                 aspectRatio,
                 yuvFile.absolutePath,
                 useSuperResolution,
-                useGpuAcceleration
+                useGpuAcceleration,
+                ColorSpace.get(metadata.colorSpace)
             ) ?: return@withContext
 
             if (metadata.isMirrored) {
