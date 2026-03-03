@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import android.util.LruCache
 import androidx.collection.MutableIntFloatMap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -52,6 +53,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val TAG = "GalleryViewModel"
+        private const val PREVIEW_CACHE_SIZE = 5 // 缓存 5 张预览图
     }
 
 
@@ -202,6 +204,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // 正在刷新的照片 ID 集合
     val refreshingPhotos = mutableStateListOf<String>()
+
+    // 预览图 LRU 缓存，按 Bitmap 字节数计算大小
+    private val previewBitmapCache = object : LruCache<String, Bitmap>(
+        // 限制缓存大小为可用内存的 1/8
+        (Runtime.getRuntime().maxMemory() / 8).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return value.allocationByteCount
+        }
+    }
 
     // 可用的 LUT 列表
     var availableLuts: List<LutInfo> by mutableStateOf(emptyList())
@@ -394,44 +406,47 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private suspend fun loadSpecificPhotoMetadata(context: Context, photo: PhotoData): PhotoData {
-        var metadata = PhotoManager.loadMetadata(context, photo.id)
-        var updatedPhoto = if (metadata != null) {
-            photo.copy(
-                metadata = metadata,
-                isMotionPhoto = photo.isMotionPhoto || metadata.presentationTimestampUs != null
-            )
-        } else {
-            photo
-        }
-
-        // If dimensions are missing, load from file header
-        if (updatedPhoto.width == 0 || updatedPhoto.height == 0) {
-            try {
-                val photoFile = PhotoManager.getPhotoFile(context, photo.id)
-                if (photoFile.exists()) {
-                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(photoFile.absolutePath, options)
-                    updatedPhoto = updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
-
-                    // Cache dimensions back to metadata
-                    val currentMeta = metadata ?: PhotoMetadata()
-                    val newMetadata = currentMeta.copy(width = options.outWidth, height = options.outHeight)
-                    PhotoManager.saveMetadata(context, photo.id, newMetadata)
-                    updatedPhoto = updatedPhoto.copy(metadata = newMetadata)
-                }
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to load dimensions for ${photo.id}", e)
+    private suspend fun loadSpecificPhotoMetadata(context: Context, photo: PhotoData): PhotoData =
+        withContext(Dispatchers.IO) {
+            var metadata = PhotoManager.loadMetadata(context, photo.id)
+            var updatedPhoto = if (metadata != null) {
+                photo.copy(
+                    metadata = metadata,
+                    isMotionPhoto = photo.isMotionPhoto || metadata.presentationTimestampUs != null
+                )
+            } else {
+                photo
             }
-        } else if (metadata != null) {
-            // Already has width/height from metadata
-            updatedPhoto = updatedPhoto.copy(width = metadata.width, height = metadata.height)
-        }
 
-        // Update the metadata field of the photo object directly? No, copy it.
-        // The callers (async) will collect these.
-        return updatedPhoto
-    }
+            // If dimensions are missing, load from file header
+            if (updatedPhoto.width == 0 || updatedPhoto.height == 0) {
+                try {
+                    val photoFile = PhotoManager.getPhotoFile(context, photo.id)
+                    if (photoFile.exists()) {
+                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(photoFile.absolutePath, options)
+                        updatedPhoto =
+                            updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
+
+                        // Cache dimensions back to metadata
+                        val currentMeta = metadata ?: PhotoMetadata()
+                        val newMetadata =
+                            currentMeta.copy(width = options.outWidth, height = options.outHeight)
+                        PhotoManager.saveMetadata(context, photo.id, newMetadata)
+                        updatedPhoto = updatedPhoto.copy(metadata = newMetadata)
+                    }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Failed to load dimensions for ${photo.id}", e)
+                }
+            } else if (metadata != null) {
+                // Already has width/height from metadata
+                updatedPhoto = updatedPhoto.copy(width = metadata.width, height = metadata.height)
+            }
+
+            // Update the metadata field of the photo object directly? No, copy it.
+            // The callers (async) will collect these.
+            return@withContext updatedPhoto
+        }
 
     /**
      * 刷新最新照片
@@ -458,10 +473,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         val photoFile = PhotoManager.getPhotoFile(context, it.id)
                         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         BitmapFactory.decodeFile(photoFile.absolutePath, options)
-                        updatedPhoto = updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
+                        updatedPhoto =
+                            updatedPhoto.copy(width = options.outWidth, height = options.outHeight)
 
                         metadata?.let { m ->
-                            val newMetadata = m.copy(width = options.outWidth, height = options.outHeight)
+                            val newMetadata =
+                                m.copy(width = options.outWidth, height = options.outHeight)
                             PhotoManager.saveMetadata(context, it.id, newMetadata)
                         }
                     } catch (e: Exception) {
@@ -524,33 +541,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             val context = getApplication<Application>()
 
-            // 如果是系统相册，尝试通过 sourceUri 关联已导入的光子相册照片
-            if (selectedTab == GalleryTab.SYSTEM) {
-                val associatedPhoto = _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
-                if (associatedPhoto != null) {
-                    currentPhotoMetadata = associatedPhoto.metadata
+            // 在 IO 线程加载元数据
+            val metadata = withContext(Dispatchers.IO) {
+                if (selectedTab == GalleryTab.SYSTEM) {
+                    val associatedPhoto =
+                        _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
+                    associatedPhoto?.metadata ?: PhotoMetadata.fromUri(context, photo.uri)
                 } else {
-                    currentPhotoMetadata = PhotoMetadata.fromUri(context, photo.uri)
+                    PhotoManager.loadMetadata(context, photo.id)
                 }
-            } else {
-                currentPhotoMetadata = PhotoManager.loadMetadata(context, photo.id)
             }
 
-            // 更新编辑状态
-            currentPhotoMetadata?.let { metadata ->
-                editLutId.value = metadata.lutId
-                editFrameId.value = metadata.frameId
-
-                // 智能初始化：导入的照片默认值为 0，App 拍摄的默认跟随全局设置
-                val defaultVal = if (metadata.isImported) 0f else 1f // 辅助判定是否需要使用全局
-                editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+            // 在主线程批量更新状态（单次 recomposition）
+            currentPhotoMetadata = metadata
+            metadata?.let { m ->
+                editLutId.value = m.lutId
+                editFrameId.value = m.frameId
+                editSharpening.value =
+                    m.sharpening ?: (if (m.isImported) 0f else sharpening.value)
                 editNoiseReduction.value =
-                    metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+                    m.noiseReduction
+                        ?: (if (m.isImported) 0f else noiseReduction.value)
                 editChromaNoiseReduction.value =
-                    metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+                    m.chromaNoiseReduction
+                        ?: (if (m.isImported) 0f else chromaNoiseReduction.value)
 
                 // 加载 LUT 配置
-                editLutId.value?.let { id ->
+                m.lutId?.let { id ->
                     editLutConfig = withContext(Dispatchers.IO) {
                         contentRepository.lutManager.loadLut(id)
                     }
@@ -612,11 +629,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 设置当前查看的照片
+     * 设置当前查看的照片索引
      */
     fun setCurrentPhoto(index: Int) {
-        currentPhotoIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
-        loadCurrentPhotoMetadata()
+        val newIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
+        if (currentPhotoIndex != newIndex) {
+            currentPhotoIndex = newIndex
+            loadCurrentPhotoMetadata()
+        }
+    }
+
+    /**
+     * 根据 ID 设置当前查看的照片
+     */
+    fun setCurrentPhotoById(id: String) {
+        val index = currentPhotos.value.indexOfFirst { it.id == id }
+        if (index != -1) {
+            setCurrentPhoto(index)
+        }
     }
 
     /**
@@ -842,7 +872,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     )
                     pendingDeletePhotos = toDelete
                     batchDeletePendingIntent = pendingIntent
-                    PLog.d(TAG, "Set system batch delete pending intent for ${toDelete.size} photos")
+                    PLog.d(
+                        TAG,
+                        "Set system batch delete pending intent for ${toDelete.size} photos"
+                    )
                 } catch (e: Exception) {
                     PLog.e(TAG, "Failed to create system batch delete request", e)
                 }
@@ -1047,18 +1080,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 进入编辑模式
      */
-    fun enterEditMode() {
+    fun enterEditMode(photo: PhotoData? = null) {
+        photo?.let {
+            setCurrentPhotoById(it.id)
+        }
         isEditing = true
         // 从当前元数据恢复编辑状态
         currentPhotoMetadata?.let { metadata ->
             editLutId.value = metadata.lutId
             editFrameId.value = metadata.frameId
             // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
-            editSharpening.value = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+            editSharpening.value =
+                metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
             editNoiseReduction.value =
                 metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
             editChromaNoiseReduction.value =
-                metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+                metadata.chromaNoiseReduction
+                    ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
         } ?: run {
             editLutId.value = null
             editFrameId.value = null
@@ -1124,7 +1162,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             customProperties = properties
         )
         viewModelScope.launch {
-            editFrameId.value?.let { contentRepository.frameManager.saveCustomProperties(it, properties) }
+            editFrameId.value?.let {
+                contentRepository.frameManager.saveCustomProperties(
+                    it,
+                    properties
+                )
+            }
         }
     }
 
@@ -1163,10 +1206,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         // 使用照片自己的 metadata 中保存的处理参数，如果没有则使用全局设置
         // 导入的照片默认不应用处理（除非用户编辑过）
-        val photoSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
-        val photoNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+        val photoSharpening =
+            metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+        val photoNoiseReduction =
+            metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
         val photoChromaNoiseReduction =
-            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+            metadata.chromaNoiseReduction
+                ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
 
         return PhotoTransformation(
             metadata = metadata,
@@ -1175,6 +1221,30 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             noiseReduction = photoNoiseReduction,
             chromaNoiseReduction = photoChromaNoiseReduction
         )
+    }
+
+    /**
+     * 生成预览缓存 key
+     */
+    private fun previewCacheKey(photoId: String, metadataHash: Int, refreshKey: Long): String {
+        return "${photoId}_${metadataHash}_${refreshKey}"
+    }
+
+    /**
+     * 清除指定照片的预览缓存
+     */
+    fun invalidatePreviewCache(photoId: String) {
+        val snapshot = previewBitmapCache.snapshot()
+        snapshot.keys.filter { it.startsWith("${photoId}_") }.forEach {
+            previewBitmapCache.remove(it)
+        }
+    }
+
+    /**
+     * 清除所有预览缓存
+     */
+    fun invalidateAllPreviewCache() {
+        previewBitmapCache.evictAll()
     }
 
     /**
@@ -1196,7 +1266,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val finalCNR: Float
 
                 val metadata =
-                    photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id) ?: PhotoMetadata()
+                    photo.metadata ?: PhotoManager.loadMetadata(getApplication(), photo.id)
+                    ?: PhotoMetadata()
 
                 if (useGlobalEdit) {
                     finalMetadata = (currentPhotoMetadata ?: metadata).copy(
@@ -1212,17 +1283,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     finalCNR = editChromaNoiseReduction.value
                 } else {
                     finalMetadata = metadata
-                    finalS = finalMetadata.sharpening ?: (if (finalMetadata.isImported) 0f else sharpening.value)
+                    finalS = finalMetadata.sharpening
+                        ?: (if (finalMetadata.isImported) 0f else sharpening.value)
                     finalNR =
-                        finalMetadata.noiseReduction ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
+                        finalMetadata.noiseReduction
+                            ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
                     finalCNR = finalMetadata.chromaNoiseReduction
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
+                // 非编辑模式且非查看原图时，尝试从缓存读取
+                val refreshKey = photoRefreshKeys[photo.id] ?: 0L
+                val metadataHash = metadata.toJson().hashCode()
+                val cacheKey = if (!useGlobalEdit && !showOrigin && bitmap == null) {
+                    previewCacheKey(photo.id, metadataHash, refreshKey)
+                } else null
+
+                cacheKey?.let {
+                    val cached = previewBitmapCache.get(it)
+                    if (cached != null && !cached.isRecycled) {
+                        return@withContext cached
+                    }
+                }
+
                 val bitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
-                    PhotoManager.loadBitmap(context, photo.id, 4096)
+                    PhotoManager.loadBitmap(context, photo.id, 2560)
                 } else {
-                    PhotoManager.loadBitmap(context, photo.uri, 4096)
+                    PhotoManager.loadBitmap(context, photo.uri, 2560)
                 } ?: return@withContext null
 
                 if (showOrigin) {
@@ -1234,7 +1321,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         finalS, finalNR, finalCNR
                     )
                     // 估计平均亮度
-                    currentBrightness[photo.id] = estimateAverageBrightness(result ?: bitmap)
+                    currentBrightness[photo.id] = estimateAverageBrightness(result)
+
+                    // 存入缓存
+                    if (cacheKey != null) {
+                        previewBitmapCache.put(cacheKey, result)
+                    }
+
                     result
                 }
             } catch (e: CancellationException) {
@@ -1265,7 +1358,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 // 处理系统相册照片：自动导入并关联
                 val targetPhotoId = if (selectedTab == GalleryTab.SYSTEM) {
                     // 检查是否已经导入过
-                    val existing = _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
+                    val existing =
+                        _photos.value.find { it.metadata?.sourceUri == photo.uri.toString() }
                     existing?.id ?: PhotoManager.importPhoto(
                         context,
                         photo.uri,
@@ -1316,6 +1410,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
 
                     exitEditMode()
+                    invalidatePreviewCache(targetPhotoId)
                 }
                 onComplete(success)
             } catch (e: Exception) {
@@ -1339,6 +1434,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (result != null) {
                     // 更新刷新密钥以强制 UI 重新加载
                     photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                    invalidatePreviewCache(photo.id)
 
                     // 触发列表更新
                     val updatedPhotos = _photos.value.map { p ->
@@ -1369,7 +1465,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         onComplete: (Boolean) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: photo.metadata ?: PhotoMetadata()
+            val metadata = PhotoManager.loadMetadata(getApplication(), photo.id) ?: photo.metadata
+            ?: PhotoMetadata()
             val context = getApplication<Application>()
             PhotoManager.exportPhoto(
                 context, photo.id, bitmap, contentRepository.photoProcessor, metadata,
@@ -1388,7 +1485,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun prepareSharedPhoto(photo: PhotoData): File? = withContext(Dispatchers.IO) {
         try {
             val context = getApplication<Application>()
-            val metadata = photo.metadata ?: PhotoManager.loadMetadata(context, photo.id) ?: PhotoMetadata()
+            val metadata =
+                photo.metadata ?: PhotoManager.loadMetadata(context, photo.id) ?: PhotoMetadata()
 
             // 处理照片：跟随用户设置
             val processedBitmap = contentRepository.photoProcessor.process(
@@ -1403,7 +1501,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val sharedFile = File(sharedDir, "share_${photo.id}.jpg")
             FileOutputStream(sharedFile).use { out ->
                 // 使用用户设置的照片质量
-                processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality.firstOrNull() ?: 95, out)
+                processedBitmap.compress(
+                    Bitmap.CompressFormat.JPEG,
+                    photoQuality.firstOrNull() ?: 95,
+                    out
+                )
             }
 
             processedBitmap.recycle()

@@ -149,7 +149,8 @@ fun PhotoDetailScreen(
     }
 
     val pagerState = rememberPagerState(
-        initialPage = remember(photos, initialIndex, photoId) {
+        initialPage = remember(initialIndex, photoId) {
+            // 初始页只在首次组合时计算，后续通过 LaunchedEffect 跳转
             if (photoId != null) {
                 val index = photos.indexOfFirst { it.id == photoId }
                 if (index != -1) index else initialIndex
@@ -686,8 +687,9 @@ private fun ZoomableImage(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
+        // 使用 hashCode() 代替 toJson() 序列化，避免 composition 时做 JSON 序列化
         val metadataHash = remember(photo.metadata) {
-            photo.metadata?.toJson()?.hashCode() ?: 0
+            photo.metadata?.hashCode() ?: 0
         }
 
         var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -710,7 +712,7 @@ private fun ZoomableImage(
             val imageModel = remember(photo.id, metadataHash, bitmap) {
                 ImageRequest.Builder(context)
                     .data(bitmap)
-                    .crossfade(true) // 禁用交叉淡入淡出，避免缩放时的抖动
+                    .crossfade(false) // 禁用交叉淡入淡出，避免滑动时同时渲染两张大图
                     .build()
             }
 
