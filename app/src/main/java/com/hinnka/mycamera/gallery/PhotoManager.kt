@@ -130,7 +130,8 @@ object PhotoManager {
                 // 保存到指定目录
                 val date = metadata.dateTaken ?: System.currentTimeMillis()
 
-                val lutName = metadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
+                val lutName =
+                    metadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
                 var withSuffix = suffix?.let { "_$it" } ?: ""
                 lutName?.let {
                     withSuffix += ".$lutName"
@@ -538,7 +539,8 @@ object PhotoManager {
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             // 创建预览用的 Bitmap
-            var previewBitmap = createBitmap(metadata.width, metadata.height, colorSpace = ColorSpace.get(metadata.colorSpace))
+            var previewBitmap =
+                createBitmap(metadata.width, metadata.height, colorSpace = ColorSpace.get(metadata.colorSpace))
 
             PLog.d(TAG, "saveYuvPhoto: ${metadata.width} ${metadata.height} ${metadata.colorSpace.name}")
 
@@ -755,15 +757,32 @@ object PhotoManager {
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
 
+            var currentUseSuperResolution = useSuperResolution
             var result = MultiFrameStacker.processBurst(
                 images,
                 rotation,
                 aspectRatio,
                 yuvFile.absolutePath,
-                useSuperResolution,
+                currentUseSuperResolution,
                 useGpuAcceleration,
                 ColorSpace.get(metadata.colorSpace)
-            ) ?: return@withContext
+            )
+
+            if (result == null && currentUseSuperResolution) {
+                PLog.w(TAG, "processBurst failed with SR, retrying without SR")
+                currentUseSuperResolution = false
+                result = MultiFrameStacker.processBurst(
+                    images,
+                    rotation,
+                    aspectRatio,
+                    yuvFile.absolutePath,
+                    currentUseSuperResolution,
+                    useGpuAcceleration,
+                    ColorSpace.get(metadata.colorSpace)
+                )
+            }
+
+            if (result == null) return@withContext
 
             if (metadata.isMirrored) {
                 result = BitmapUtils.flipHorizontal(result)
@@ -839,9 +858,10 @@ object PhotoManager {
                 droMode
             )
 
-            val byteBuffer = MultiFrameStacker.processBurstRaw(
+            var currentUseSuperResolution = useSuperResolution
+            var byteBuffer = MultiFrameStacker.processBurstRaw(
                 images, characteristics,
-                useSuperResolution,
+                currentUseSuperResolution,
                 useGpuAcceleration,
                 masterBlackLevel = rawMetadata.blackLevel,
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
@@ -850,13 +870,33 @@ object PhotoManager {
                 lensShading = rawMetadata.lensShadingMap,
                 lensShadingWidth = rawMetadata.lensShadingMapWidth,
                 lensShadingHeight = rawMetadata.lensShadingMapHeight,
-            ) ?: return@withContext
+            )
+
+            if (byteBuffer == null && currentUseSuperResolution) {
+                PLog.w(TAG, "processBurstRaw failed with SR, retrying without SR")
+                currentUseSuperResolution = false
+                byteBuffer = MultiFrameStacker.processBurstRaw(
+                    images, characteristics,
+                    currentUseSuperResolution,
+                    useGpuAcceleration,
+                    masterBlackLevel = rawMetadata.blackLevel,
+                    whiteLevel = rawMetadata.whiteLevel.toInt(),
+                    whiteBalanceGains = rawMetadata.whiteBalanceGains,
+                    noiseModel = rawMetadata.noiseProfile,
+                    lensShading = rawMetadata.lensShadingMap,
+                    lensShadingWidth = rawMetadata.lensShadingMapWidth,
+                    lensShadingHeight = rawMetadata.lensShadingMapHeight,
+                )
+            }
+
+            val finalByteBuffer = byteBuffer ?: return@withContext
 
             val result: Bitmap = run {
                 // Construct metadata for Linear RGB
+                val finalScale = if (currentUseSuperResolution) 2 else 1
                 val linearMetadata = rawMetadata.copy(
-                    width = firstImageWidth * if (useSuperResolution) 2 else 1,
-                    height = firstImageHeight * if (useSuperResolution) 2 else 1,
+                    width = firstImageWidth * finalScale,
+                    height = firstImageHeight * finalScale,
                     cfaPattern = RawMetadata.CFA_LINEAR_RGB,
                     blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
                     whiteLevel = 65535f,
@@ -867,10 +907,10 @@ object PhotoManager {
 
                 var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
-                    byteBuffer,
-                    firstImageWidth * if (useSuperResolution) 2 else 1,
-                    firstImageHeight * if (useSuperResolution) 2 else 1,
-                    firstImageWidth * (if (useSuperResolution) 2 else 1) * 6, // 3 channels * 2 bytes
+                    finalByteBuffer,
+                    firstImageWidth * finalScale,
+                    firstImageHeight * finalScale,
+                    firstImageWidth * finalScale * 6, // 3 channels * 2 bytes
                     linearMetadata,
                     aspectRatio,
                     metadata.cropRegion,
@@ -1163,7 +1203,16 @@ object PhotoManager {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return null
         }
-        return MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
+        if (uri.scheme != "content") {
+            PLog.w(TAG, "createSystemDeleteRequest: URI scheme must be content, but was ${uri.scheme}")
+            return null
+        }
+        return try {
+            MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to create system delete request for $uri", e)
+            null
+        }
     }
 
     /**
@@ -1190,10 +1239,14 @@ object PhotoManager {
                 return null
             }
 
-            // 将字符串 URI 转换为 Uri 对象列表
+            // 将字符串 URI 转换为 Uri 对象列表，并过滤非法 URI
             val uriList = exportedUris.mapNotNull { uriString ->
                 try {
-                    Uri.parse(uriString)
+                    val uri = Uri.parse(uriString)
+                    if (uri.scheme == "content") uri else {
+                        PLog.w(TAG, "Ignoring non-content URI: $uriString")
+                        null
+                    }
                 } catch (e: Exception) {
                     PLog.e(TAG, "Invalid URI: $uriString", e)
                     null

@@ -116,9 +116,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
-            // Map system photos to their internal associated copies if they exist
             s.map { systemPhoto ->
-                photonMap[systemPhoto.uri.toString()] ?: systemPhoto
+                photonMap[systemPhoto.uri.toString()]?.let { photonPhoto ->
+                    systemPhoto.copy(
+                        metadata = photonPhoto.metadata,
+                        thumbnailUri = photonPhoto.thumbnailUri,
+                        isMotionPhoto = systemPhoto.isMotionPhoto || photonPhoto.isMotionPhoto,
+                        isBurstPhoto = systemPhoto.isBurstPhoto || photonPhoto.isBurstPhoto,
+                        width = if (systemPhoto.width > 0) systemPhoto.width else photonPhoto.width,
+                        height = if (systemPhoto.height > 0) systemPhoto.height else photonPhoto.height
+                    )
+                } ?: systemPhoto
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -813,9 +821,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             // 系统相册批量删除
             viewModelScope.launch {
                 val context = getApplication<Application>()
-                val uris = toDelete.map { photo ->
+                val uris = toDelete.mapNotNull { photo ->
                     // 如果是本地关联的照片，优先取 sourceUri；否则直接取 photo.uri
-                    photo.metadata?.sourceUri?.let { Uri.parse(it) } ?: photo.uri
+                    val uri = photo.metadata?.sourceUri?.let { Uri.parse(it) } ?: photo.uri
+                    if (uri.scheme == "content") uri else {
+                        PLog.w(TAG, "Ignoring non-content URI in system delete: $uri")
+                        null
+                    }
+                }
+
+                if (uris.isEmpty()) {
+                    exitSelectionMode()
+                    return@launch
                 }
 
                 try {
@@ -857,12 +874,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
-            if (allExportedUris.isNotEmpty()) {
+            val validExportedUris = allExportedUris.filter { it.scheme == "content" }
+
+            if (validExportedUris.isNotEmpty()) {
                 // 有导出的照片，需要用户确认
                 try {
                     val pendingIntent = MediaStore.createDeleteRequest(
                         context.contentResolver,
-                        allExportedUris
+                        validExportedUris
                     )
                     pendingDeletePhotos = toDelete
                     batchDeletePendingIntent = pendingIntent

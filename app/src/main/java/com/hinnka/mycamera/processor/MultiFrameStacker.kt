@@ -76,7 +76,12 @@ object MultiFrameStacker {
                     val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
                     val targetW = dimensions.width() * scale
                     val targetH = dimensions.height() * scale
-                    val previewBitmap = createBitmap(targetW, targetH, colorSpace = colorSpace)
+                    val previewBitmap = try {
+                        createBitmap(targetW, targetH, colorSpace = colorSpace)
+                    } catch (e: OutOfMemoryError) {
+                        PLog.e(TAG, "OOM creating Vulkan stack bitmap ($targetW x $targetH)", e)
+                        return null
+                    }
 
                     processVulkanStackNative(stackerPtr, previewBitmap, rotation)
 
@@ -121,7 +126,12 @@ object MultiFrameStacker {
             val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
             val targetW = dimensions.width() * scale
             val targetH = dimensions.height() * scale
-            val previewBitmap = createBitmap(targetW, targetH, colorSpace = colorSpace)
+            val previewBitmap = try {
+                createBitmap(targetW, targetH, colorSpace = colorSpace)
+            } catch (e: OutOfMemoryError) {
+                PLog.e(TAG, "OOM creating legacy stack bitmap ($targetW x $targetH)", e)
+                return null
+            }
 
             processStackNative(
                 stackerPtr,
@@ -182,8 +192,13 @@ object MultiFrameStacker {
 
                     // RGB output (3 channels * 16-bit = 6 bytes per pixel)
                     val scale = if (enableSuperResolution) 2 else 1
-                    val stackedBuffer = ByteBuffer.allocateDirect(width * scale * height * scale * 6)
-                        .order(ByteOrder.nativeOrder())
+                    val stackedBuffer = try {
+                        ByteBuffer.allocateDirect(width * scale * height * scale * 6)
+                            .order(ByteOrder.nativeOrder())
+                    } catch (e: OutOfMemoryError) {
+                        PLog.e(TAG, "OOM allocating Vulkan RAW buffer (SR=$enableSuperResolution)", e)
+                        return null
+                    }
 
                     val success = processVulkanRawStackNative(vulkanStackerPtr, stackedBuffer)
                     if (success) {
@@ -227,8 +242,13 @@ object MultiFrameStacker {
             clearStagedRawFramesNative(stackerPtr)
 
             val scale = if (enableSuperResolution) 2 else 1
-            val stackedBuffer = ByteBuffer.allocateDirect(width * scale * height * scale * 2)
-                .order(ByteOrder.nativeOrder())
+            val stackedBuffer = try {
+                ByteBuffer.allocateDirect(width * scale * height * scale * 2)
+                    .order(ByteOrder.nativeOrder())
+            } catch (e: OutOfMemoryError) {
+                PLog.e(TAG, "OOM allocating CPU RAW buffer (SR=$enableSuperResolution)", e)
+                return null
+            }
             processRawStackWithBufferNative(stackerPtr, stackedBuffer)
 
             PLog.i(TAG, "CPU RAW stacking completed successfully")

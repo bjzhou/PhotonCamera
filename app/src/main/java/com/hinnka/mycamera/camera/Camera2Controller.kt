@@ -800,7 +800,7 @@ class Camera2Controller(private val context: Context) {
             device.createCaptureSession(sessionConfig)
 
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to create preview session", e)
+            PLog.e(TAG, "Failed to create preview session")
         }
     }
 
@@ -818,11 +818,11 @@ class Camera2Controller(private val context: Context) {
             PLog.d(TAG, "Preview started")
 
         } catch (e: CameraAccessException) {
-            PLog.e(TAG, "Failed to start preview", e)
+            PLog.e(TAG, "Failed to start preview")
         } catch (e: IllegalStateException) {
-            PLog.e(TAG, "Failed to start preview - illegal state", e)
+            PLog.e(TAG, "Failed to start preview - illegal state")
         } catch (e: IllegalArgumentException) {
-            PLog.e(TAG, "Failed to start preview - unconfigured surface", e)
+            PLog.e(TAG, "Failed to start preview - unconfigured surface")
         }
     }
 

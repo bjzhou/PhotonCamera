@@ -157,7 +157,11 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     if (isPending != 0) return
                     if (isTrashed != 0) return
                     if (size <= MIN_IMPORT_SIZE) return
-                    if (!relativePath.contains("DCIM/Camera", ignoreCase = true) && !relativePath.contains("DCIM/100IMAGE", ignoreCase = true)) return
+                    if (!relativePath.contains(
+                            "DCIM/Camera",
+                            ignoreCase = true
+                        ) && !relativePath.contains("DCIM/100IMAGE", ignoreCase = true)
+                    ) return
 
                     val path = data.ifEmpty {
                         val dir = File(Environment.getExternalStorageDirectory(), relativePath)
@@ -407,7 +411,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         IconButton(onClick = {
                             scope.launch {
                                 userPreferencesRepository.savePhantomMode(false)
-                                stop()
                             }
                         }) {
                             Icon(
@@ -435,13 +438,18 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private fun showFloatingWindow() {
         if (!Settings.canDrawOverlays(context)) return
         if (isWindowShown) return
-        isWindowShown = true
+
         lifecycleScope.launch {
             val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }.firstOrNull() ?: false
             updateWindowParams(hidden)
-            composeView?.let {
+
+            // 关键：将状态标记与实际 addView 放在同一个调度周期或确保同步
+            composeView?.let { view ->
                 try {
-                    windowManager.addView(it, windowParams)
+                    if (!view.isAttachedToWindow) {
+                        isWindowShown = true // 确定要添加后再设为 true
+                        windowManager.addView(view, windowParams)
+                    }
                 } catch (e: Exception) {
                     isWindowShown = false
                     PLog.e(TAG, "Error adding floating window", e)
@@ -452,13 +460,22 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
     private fun removeFloatingWindow() {
         if (isWindowShown) {
-            composeView?.let { windowManager.removeView(it) }
+            composeView?.let {
+                if (it.isAttachedToWindow) {
+                    try {
+                        windowManager.removeViewImmediate(it) // 使用同步移除
+                    } catch (e: Exception) {
+                        PLog.e(TAG, "Error removing window", e)
+                    }
+                }
+            }
             isWindowShown = false
             expanded = false
         }
     }
 
     fun stop() {
+        if (registry.currentState == Lifecycle.State.DESTROYED) return
         registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)

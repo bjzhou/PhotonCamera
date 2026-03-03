@@ -48,7 +48,11 @@ class RawDemosaicProcessor {
     /**
      * 将 DngRawData 转换为 RawMetadata
      */
-    private fun convertDngRawDataToMetadata(dngRawData: DngRawData, exposureBias: Float, droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF): RawMetadata {
+    private fun convertDngRawDataToMetadata(
+        dngRawData: DngRawData,
+        exposureBias: Float,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+    ): RawMetadata {
         // CFA 模式：使用从 JNI 传递过来的实际值
         val cfaPattern = dngRawData.cfaPattern
 
@@ -74,7 +78,12 @@ class RawDemosaicProcessor {
         }
 
         val activeArray = if (dngRawData.activeArray != null && dngRawData.activeArray.size == 4) {
-            Rect(dngRawData.activeArray[0], dngRawData.activeArray[1], dngRawData.activeArray[2], dngRawData.activeArray[3])
+            Rect(
+                dngRawData.activeArray[0],
+                dngRawData.activeArray[1],
+                dngRawData.activeArray[2],
+                dngRawData.activeArray[3]
+            )
         } else null
 
         return RawMetadata(
@@ -404,7 +413,10 @@ class RawDemosaicProcessor {
 
             // Check GL_MAX_TEXTURE_SIZE and downscale if needed
             if (actualWidth > maxTextureSize || actualHeight > maxTextureSize) {
-                PLog.w(TAG, "Input ${actualWidth}x${actualHeight} exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize, downscaling")
+                PLog.w(
+                    TAG,
+                    "Input ${actualWidth}x${actualHeight} exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize, downscaling"
+                )
                 val scaleX = maxTextureSize.toFloat() / actualWidth
                 val scaleY = maxTextureSize.toFloat() / actualHeight
                 val scaleFactor = minOf(scaleX, scaleY, 1f)
@@ -433,11 +445,16 @@ class RawDemosaicProcessor {
                             val sx1 = (sx0 + 1).coerceIn(0, actualWidth - 1)
                             val fx = sx - sx0
                             for (c in 0 until srcChannels) {
-                                val v00 = (src.get((sy0 * actualWidth + sx0) * srcChannels + c).toInt() and 0xFFFF).toFloat()
-                                val v10 = (src.get((sy0 * actualWidth + sx1) * srcChannels + c).toInt() and 0xFFFF).toFloat()
-                                val v01 = (src.get((sy1 * actualWidth + sx0) * srcChannels + c).toInt() and 0xFFFF).toFloat()
-                                val v11 = (src.get((sy1 * actualWidth + sx1) * srcChannels + c).toInt() and 0xFFFF).toFloat()
-                                val v = v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy
+                                val v00 =
+                                    (src.get((sy0 * actualWidth + sx0) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v10 =
+                                    (src.get((sy0 * actualWidth + sx1) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v01 =
+                                    (src.get((sy1 * actualWidth + sx0) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v11 =
+                                    (src.get((sy1 * actualWidth + sx1) * srcChannels + c).toInt() and 0xFFFF).toFloat()
+                                val v =
+                                    v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy
                                 dst.put((dy * newWidth + dx) * srcChannels + c, v.toInt().coerceIn(0, 65535).toShort())
                             }
                         }
@@ -452,18 +469,26 @@ class RawDemosaicProcessor {
                 actualMetadata = actualMetadata.copy(width = newWidth, height = newHeight)
             }
 
-            val bounds = BitmapUtils.calculateProcessedRect(actualWidth, actualHeight, aspectRatio, cropRegion, actualRotation)
+            val bounds =
+                BitmapUtils.calculateProcessedRect(actualWidth, actualHeight, aspectRatio, cropRegion, actualRotation)
             val finalWidth = bounds.width()
             val finalHeight = bounds.height()
 
             // 4. 第一步：全分辨率处理 (Linear CCM)
             setupFullResFramebuffer(actualWidth, actualHeight)
-            uploadRawTextureFromBuffer(actualRawData, actualWidth, actualHeight, actualRowStride, RawMetadata.CFA_LINEAR_RGB)
+            uploadRawTextureFromBuffer(
+                actualRawData,
+                actualWidth,
+                actualHeight,
+                actualRowStride,
+                RawMetadata.CFA_LINEAR_RGB
+            )
             renderLinearPass(actualMetadata)
 
             // 场景分析: 从 GPU demosaic 纹理读回精确的 Linear RGB 数据
             // 计算平均亮度
-            val sceneStats = analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, logCurve, actualMetadata)
+            val sceneStats =
+                analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, logCurve, actualMetadata)
 
             // NLM 降噪 (Combined 之后)
             val denoiseStart = System.currentTimeMillis()
@@ -505,10 +530,14 @@ class RawDemosaicProcessor {
 
             // 8. 读取结果
             val readStart = System.currentTimeMillis()
-            val finalBitmap = readPixels(finalWidth, finalHeight, baseLut?.outputColorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+            val finalBitmap = readPixels(
+                finalWidth,
+                finalHeight,
+                baseLut?.outputColorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
+            )
             PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
 
-            PLog.d(TAG, "RAW processing complete: ${finalBitmap.width}x${finalBitmap.height}")
+            PLog.d(TAG, "RAW processing complete: ${finalBitmap?.width}x${finalBitmap?.height}")
             finalBitmap
         } finally {
             dngRawDataCleanup?.close()
@@ -850,14 +879,30 @@ class RawDemosaicProcessor {
         val cf = IntArray(1)
         GLES30.glGenTextures(1, ct, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
-        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_RGBA16F,
+            width,
+            height,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_HALF_FLOAT,
+            null
+        )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glGenFramebuffers(1, cf, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, ct[0], 0)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            ct[0],
+            0
+        )
         gfChromaTexId = ct[0]; gfChromaFboId = cf[0]
 
         // 创建双缓冲 (RGBA16F) 用于中间 pass
@@ -935,7 +980,10 @@ class RawDemosaicProcessor {
         val noiseCorrection = (noiseBase * 0.1f).coerceIn(0f, 0.02f)
 
         val h = (baseH + dynamicH + noiseCorrection).coerceIn(0.01f, 0.1f)
-        PLog.d(TAG, "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, h=$h")
+        PLog.d(
+            TAG,
+            "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, h=$h"
+        )
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -949,8 +997,10 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(gfPass0Program, "uInputTexture"), 0)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(gfPass0Program, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix"),
-            1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(gfPass0Program, "uH"), h)
         drawQuad(gfPass0Program)
 
@@ -963,8 +1013,10 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gfChromaTexId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture"), 0)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexMatrix"),
-            1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(nlmPassHProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassHProgram, "uH"), h)
         drawQuad(nlmPassHProgram)
 
@@ -982,8 +1034,10 @@ class RawDemosaicProcessor {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
 
         GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexMatrix"),
-            1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(nlmPassVProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassVProgram, "uH"), h)
         drawQuad(nlmPassVProgram)
 
@@ -1648,18 +1702,28 @@ class RawDemosaicProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lut3DTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLutTexture"), 1)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(combinedProgram, "uLutSize"),
-            lutConfig?.size?.toFloat() ?: 0f)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled"),
-            if (lutConfig != null) 1 else 0)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(combinedProgram, "uExposureGain"),
-            sceneStats.exposureGain)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(combinedProgram, "uLutSize"),
+            lutConfig?.size?.toFloat() ?: 0f
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled"),
+            if (lutConfig != null) 1 else 0
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(combinedProgram, "uExposureGain"),
+            sceneStats.exposureGain
+        )
 
         // Log 曲线参数
-        GLES30.glUniform4f(GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs"),
-            logCurve.a, logCurve.b, logCurve.c, logCurve.d)
-        GLES30.glUniform4f(GLES30.glGetUniformLocation(combinedProgram, "uLogLimits"),
-            logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2)
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(combinedProgram, "uLogCoeffs"),
+            logCurve.a, logCurve.b, logCurve.c, logCurve.d
+        )
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(combinedProgram, "uLogLimits"),
+            logCurve.e, logCurve.f, logCurve.cut1, logCurve.cut2
+        )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uLogType"), logCurve.type)
 
         val customCurveEnable = if (logCurve == LogCurve.SRGB && baseLut == null) 1 else 0
@@ -1668,8 +1732,10 @@ class RawDemosaicProcessor {
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(combinedProgram, "uTexMatrix"),
-            1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(combinedProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
         drawQuad(combinedProgram)
         checkGlError("renderCombinedPass")
     }
@@ -1691,15 +1757,21 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(sharpenProgram, "uInputTexture"), 0)
 
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(sharpenProgram, "uTexelSize"),
-            1.0f / metadata.width, 1.0f / metadata.height)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(sharpenProgram, "uSharpening"),
-            sharpeningValue)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(sharpenProgram, "uTexelSize"),
+            1.0f / metadata.width, 1.0f / metadata.height
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(sharpenProgram, "uSharpening"),
+            sharpeningValue
+        )
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(sharpenProgram, "uTexMatrix"),
-            1, false, identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(sharpenProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
 
         drawQuad(sharpenProgram)
         checkGlError("renderSharpenPass")
@@ -1713,15 +1785,21 @@ class RawDemosaicProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(linearProgram, "uRawTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(linearProgram, "uImageSize"),
-            metadata.width.toFloat(), metadata.height.toFloat())
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(linearProgram, "uImageSize"),
+            metadata.width.toFloat(), metadata.height.toFloat()
+        )
         val transposedCCM = transposeMatrix3x3(metadata.colorCorrectionMatrix)
-        GLES30.glUniformMatrix3fv(GLES30.glGetUniformLocation(linearProgram, "uColorCorrectionMatrix"),
-            1, false, transposedCCM, 0)
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(linearProgram, "uColorCorrectionMatrix"),
+            1, false, transposedCCM, 0
+        )
         val identity = FloatArray(16)
         GlMatrix.setIdentityM(identity, 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(linearProgram, "uTexMatrix"),
-            1, false, identity, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(linearProgram, "uTexMatrix"),
+            1, false, identity, 0
+        )
         drawQuad(linearProgram)
     }
 
@@ -1752,8 +1830,10 @@ class RawDemosaicProcessor {
         GlMatrix.scaleM(texMatrix, 0, cropW / width, cropH / height, 1.0f)
         GlMatrix.rotateM(texMatrix, 0, -rotation.toFloat(), 0f, 0f, 1f)
         GlMatrix.translateM(texMatrix, 0, -0.5f, -0.5f, 0f)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
-            1, false, texMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(passthroughProgram, "uTexMatrix"),
+            1, false, texMatrix, 0
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(passthroughProgram, "uTexture"), 0)
@@ -1786,7 +1866,7 @@ class RawDemosaicProcessor {
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
     }
 
-    private fun readPixels(width: Int, height: Int, colorSpace: android.graphics.ColorSpace): Bitmap {
+    private fun readPixels(width: Int, height: Int, colorSpace: android.graphics.ColorSpace): Bitmap? {
         val pixelSize = width * height * 8
 
         // 使用 PBO 优化 glReadPixels
@@ -1810,10 +1890,17 @@ class RawDemosaicProcessor {
             GLES30.GL_MAP_READ_BIT
         ) as? ByteBuffer
 
-        val bitmap = createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace)
+        val bitmap = try {
+            createBitmap(width, height, Bitmap.Config.RGBA_F16, colorSpace = colorSpace)
+        } catch (e: OutOfMemoryError) {
+            PLog.e(TAG, "OOM creating output bitmap ($width x $height)", e)
+            null
+        }
 
-        if (mappedBuffer != null) {
+        if (bitmap != null && mappedBuffer != null) {
             bitmap.copyPixelsFromBuffer(mappedBuffer)
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+        } else if (mappedBuffer != null) {
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
         }
 

@@ -471,7 +471,7 @@ class LivePhotoRecorder(
                         encoderRef.releaseOutputBuffer(outputBufferIndex, false)
                     }
                 } catch (e: Exception) {
-                    PLog.e(TAG, "Error draining video encoder", e)
+                    PLog.e(TAG, "Error draining video encoder")
                     break
                 }
             }
