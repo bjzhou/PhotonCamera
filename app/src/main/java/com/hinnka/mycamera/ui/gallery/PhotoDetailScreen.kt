@@ -610,6 +610,9 @@ fun PhotoDetailScreen(
             title = { Text(stringResource(R.string.photo_info)) },
             text = {
                 Column {
+                    if (viewModel.selectedTab == GalleryTab.SYSTEM) {
+                        InfoRow(stringResource(R.string.name), currentPhoto.displayName)
+                    }
                     InfoRow(stringResource(R.string.photo_info_date), currentPhoto.getFormattedDate())
                     InfoRow(stringResource(R.string.photo_info_resolution), currentPhoto.getResolution())
 //                    InfoRow(stringResource(R.string.photo_info_size), currentPhoto.getFormattedSize())

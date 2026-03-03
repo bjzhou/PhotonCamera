@@ -196,6 +196,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var currentPhotoMetadata: PhotoMetadata? by mutableStateOf(null)
         private set
 
+    private var currentPhotoMetadataId: String? = null
+
     // 当前照片的平均亮度（调试用）
     val currentBrightness = SnapshotStateMap<String, Float>()
 
@@ -538,6 +540,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun loadCurrentPhotoMetadata() {
         val photo = getCurrentPhoto() ?: return
+
+        // 如果已经加载了该照片的元数据，且不是正在编辑模式（编辑模式下可能需要刷新），则跳过
+        if (!isEditing && currentPhotoMetadataId == photo.id) {
+            return
+        }
+
+        // 优先使用 PhotoData 中已有的元数据（由 loadPhotos 预加载）
+        photo.metadata?.let { m ->
+            currentPhotoMetadataId = photo.id
+            applyMetadataToEditState(m)
+            return
+        }
+
         viewModelScope.launch {
             val context = getApplication<Application>()
 
@@ -552,22 +567,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
-            // 在主线程批量更新状态（单次 recomposition）
-            currentPhotoMetadata = metadata
-            metadata?.let { m ->
-                editLutId.value = m.lutId
-                editFrameId.value = m.frameId
-                editSharpening.value =
-                    m.sharpening ?: (if (m.isImported) 0f else sharpening.value)
-                editNoiseReduction.value =
-                    m.noiseReduction
-                        ?: (if (m.isImported) 0f else noiseReduction.value)
-                editChromaNoiseReduction.value =
-                    m.chromaNoiseReduction
-                        ?: (if (m.isImported) 0f else chromaNoiseReduction.value)
+            // 在主线程更新状态
+            applyMetadataToEditState(metadata)
+        }
+    }
 
-                // 加载 LUT 配置
-                m.lutId?.let { id ->
+    private fun applyMetadataToEditState(metadata: PhotoMetadata?) {
+        val photo = getCurrentPhoto()
+        currentPhotoMetadataId = photo?.id
+        currentPhotoMetadata = metadata
+        metadata?.let { m ->
+            editLutId.value = m.lutId
+            editFrameId.value = m.frameId
+            editSharpening.value = m.sharpening ?: 0f
+            editNoiseReduction.value = m.noiseReduction ?: 0f
+            editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
+
+            // 加载 LUT 配置
+            m.lutId?.let { id ->
+                viewModelScope.launch {
                     editLutConfig = withContext(Dispatchers.IO) {
                         contentRepository.lutManager.loadLut(id)
                     }
@@ -633,8 +651,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun setCurrentPhoto(index: Int) {
         val newIndex = index.coerceIn(0, (currentPhotos.value.size - 1).coerceAtLeast(0))
-        if (currentPhotoIndex != newIndex) {
-            currentPhotoIndex = newIndex
+        val indexChanged = currentPhotoIndex != newIndex
+        currentPhotoIndex = newIndex
+
+        // 即使索引没变（如点击第一张图进入详情），如果元数据为空也需要加载
+        if (indexChanged || currentPhotoMetadata == null) {
             loadCurrentPhotoMetadata()
         }
     }
@@ -1081,9 +1102,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 进入编辑模式
      */
     fun enterEditMode(photo: PhotoData? = null) {
-        photo?.let {
+        val targetPhoto = photo ?: getCurrentPhoto()
+        PLog.d(TAG, "Entering edit mode for photo: ${targetPhoto?.id}, current index: $currentPhotoIndex")
+        targetPhoto?.let {
             setCurrentPhotoById(it.id)
+
+            // 如果元数据还没加载，先尝试从 photo 对象或磁盘加载
+            if (currentPhotoMetadataId != it.id) {
+                val context = getApplication<Application>()
+                val metadata = it.metadata ?: runBlocking {
+                    withContext(Dispatchers.IO) {
+                        PhotoManager.loadMetadata(context, it.id)
+                    }
+                }
+                applyMetadataToEditState(metadata)
+            }
         }
+
         isEditing = true
         // 从当前元数据恢复编辑状态
         currentPhotoMetadata?.let { metadata ->

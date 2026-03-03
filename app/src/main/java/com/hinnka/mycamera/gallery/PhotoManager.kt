@@ -59,16 +59,12 @@ object PhotoManager {
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private fun getPhotosBaseDir(context: Context): File {
-        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
-        return dir
+        return File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
     }
 
-    private fun getPhotoDir(context: Context, photoId: String): File {
+    private fun getPhotoDir(context: Context, photoId: String, create: Boolean = false): File {
         val dir = File(getPhotosBaseDir(context), photoId)
-        if (!dir.exists()) {
+        if (create && !dir.exists()) {
             dir.mkdirs()
         }
         return dir
@@ -444,7 +440,7 @@ object PhotoManager {
     ) = withContext(Dispatchers.IO) {
         try {
             val photoId = photoId ?: UUID.randomUUID().toString()
-            val photoDir = getPhotoDir(context, photoId)
+            val photoDir = getPhotoDir(context, photoId, true)
             val photoFile = File(photoDir, PHOTO_FILE)
             val videoFile = File(photoDir, VIDEO_FILE)
             val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
@@ -495,7 +491,7 @@ object PhotoManager {
         photoId: String,
         livePhotoVideoDeferred: Deferred<Pair<File, Long>?>? = null
     ) {
-        val photoDir = getPhotoDir(context, photoId)
+        val photoDir = getPhotoDir(context, photoId, true)
         val videoFile = File(photoDir, VIDEO_FILE)
         val livePhotoResult = livePhotoVideoDeferred?.await()
         livePhotoResult?.first?.let { cacheVideoFile ->
@@ -529,7 +525,7 @@ object PhotoManager {
         photoQuality: Int = 95
     ) = withContext(Dispatchers.IO) {
         try {
-            val photoDir = getPhotoDir(context, photoId)
+            val photoDir = getPhotoDir(context, photoId, true)
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
@@ -598,7 +594,7 @@ object PhotoManager {
         droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         try {
-            val photoDir = getPhotoDir(context, photoId)
+            val photoDir = getPhotoDir(context, photoId, true)
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
@@ -749,7 +745,7 @@ object PhotoManager {
         useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
-            val photoDir = getPhotoDir(context, photoId)
+            val photoDir = getPhotoDir(context, photoId, true)
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             // 预先准备所有文件路径
@@ -834,7 +830,7 @@ object PhotoManager {
         droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         try {
-            val photoDir = getPhotoDir(context, photoId)
+            val photoDir = getPhotoDir(context, photoId, true)
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
@@ -1036,7 +1032,7 @@ object PhotoManager {
         photoProcessor: PhotoProcessor,
         photoQuality: Int = 95
     ) {
-        val photoDir = getPhotoDir(context, photoId)
+        val photoDir = getPhotoDir(context, photoId, true)
         val mainPhotoFile = File(photoDir, PHOTO_FILE)
         val burstDir = File(photoDir, BURST_DIR)
         if (!burstDir.exists()) {
@@ -1096,7 +1092,7 @@ object PhotoManager {
     suspend fun setMainBurstPhoto(context: Context, photoId: String, burstFile: File): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val photoDir = getPhotoDir(context, photoId)
+                val photoDir = getPhotoDir(context, photoId, true)
                 val mainPhotoFile = File(photoDir, PHOTO_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
@@ -1291,7 +1287,7 @@ object PhotoManager {
     fun deleteEmptyDirs(root: File) {
         if (!root.exists() || !root.isDirectory) return
         root.walkBottomUp().forEach { file ->
-            if (file.isDirectory) {
+            if (file.isDirectory && file != root) {
                 val contents = file.listFiles()
                 if (contents != null && contents.isEmpty()) {
                     val deleted = file.delete()
@@ -1337,7 +1333,8 @@ object PhotoManager {
     suspend fun saveMetadata(context: Context, photoId: String, metadata: PhotoMetadata): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val file = getMetadataFile(context, photoId)
+                val dir = getPhotoDir(context, photoId, true)
+                val file = File(dir, METADATA_FILE)
                 file.writeText(metadata.toJson())
                 true
             } catch (e: Exception) {
@@ -1365,7 +1362,7 @@ object PhotoManager {
 
     fun loadBitmap(context: Context, uri: Uri, maxEdge: Int? = null): Bitmap? {
         val source = ImageDecoder.createSource(context.contentResolver, uri)
-        return runCatching {
+        val bitmap = runCatching {
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 if (maxEdge != null) {
@@ -1378,7 +1375,16 @@ object PhotoManager {
                     }
                 }
             }
-        }.getOrNull()
+        }.getOrNull() ?: return null
+
+        return try {
+            val orientation = context.contentResolver.openInputStream(uri)?.use { input ->
+                ExifInterface(input).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+            rotateImageIfRequired(bitmap, orientation)
+        } catch (e: Exception) {
+            bitmap
+        }
     }
 
     /**
@@ -1409,7 +1415,7 @@ object PhotoManager {
         return withContext(Dispatchers.IO) {
             try {
                 val photoId = photoId ?: UUID.randomUUID().toString()
-                val photoDir = getPhotoDir(context, photoId)
+                val photoDir = getPhotoDir(context, photoId, true)
                 val photoFile = File(photoDir, PHOTO_FILE)
                 val dngFile = File(photoDir, DNG_FILE)
                 val metadataFile = File(photoDir, METADATA_FILE)
@@ -1502,7 +1508,7 @@ object PhotoManager {
     suspend fun refreshRawPreview(context: Context, photoId: String): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
-                val photoDir = getPhotoDir(context, photoId)
+                val photoDir = getPhotoDir(context, photoId, true)
                 val photoFile = File(photoDir, PHOTO_FILE)
                 val dngFile = File(photoDir, DNG_FILE)
                 val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
@@ -1603,7 +1609,7 @@ object PhotoManager {
     /**
      * 根据 EXIF 方向信息旋转图片
      */
-    private fun rotateImageIfRequired(img: Bitmap, orientation: Int): Bitmap {
+    internal fun rotateImageIfRequired(img: Bitmap, orientation: Int): Bitmap {
         return when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> {
                 rotateImage(img, 90f)
@@ -1648,7 +1654,7 @@ object PhotoManager {
     /**
      * 旋转图片
      */
-    private fun rotateImage(img: Bitmap, degree: Float): Bitmap {
+    internal fun rotateImage(img: Bitmap, degree: Float): Bitmap {
         val matrix = Matrix()
         matrix.postRotate(degree)
         return Bitmap.createBitmap(img, 0, 0, img.width, img.height, matrix, true)
@@ -1657,7 +1663,7 @@ object PhotoManager {
     /**
      * 翻转图片
      */
-    private fun flipImage(img: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
+    internal fun flipImage(img: Bitmap, horizontal: Boolean, vertical: Boolean): Bitmap {
         val matrix = Matrix()
         matrix.postScale(
             if (horizontal) -1f else 1f,
