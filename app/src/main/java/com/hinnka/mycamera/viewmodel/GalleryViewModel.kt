@@ -569,6 +569,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
             // 在主线程更新状态
             applyMetadataToEditState(metadata)
+
+            // 缓存到列表，避免下次滑动到这张图时重复加载
+            if (metadata != null) {
+                if (selectedTab == GalleryTab.SYSTEM) {
+                    _systemPhotos.update { current ->
+                        current.map { if (it.id == photo.id) it.copy(metadata = metadata) else it }
+                    }
+                } else {
+                    _photos.update { current ->
+                        current.map { if (it.id == photo.id) it.copy(metadata = metadata) else it }
+                    }
+                }
+            }
         }
     }
 
@@ -596,10 +609,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun loadThumbnail(photo: PhotoData): Bitmap? {
         val context = getApplication<Application>()
-        val inputStream = context.contentResolver.openInputStream(photo.thumbnailUri)
-        val bitmap = BitmapFactory.decodeStream(inputStream)
-        inputStream?.close()
-        return bitmap
+        return try {
+            if (photo.thumbnailUri.scheme == "content") {
+                context.contentResolver.loadThumbnail(photo.thumbnailUri, android.util.Size(512, 512), null)
+            } else {
+                val inputStream = context.contentResolver.openInputStream(photo.thumbnailUri)
+                val options = BitmapFactory.Options().apply {
+                    // PhotonCamera thumbnails are 512x512, no need to downsample much, but safe is better
+                    inJustDecodeBounds = true
+                    BitmapFactory.decodeStream(inputStream, null, this)
+                    inputStream?.close()
+
+                    inSampleSize = 1
+                    if (outWidth > 1024 || outHeight > 1024) {
+                        inSampleSize = 2
+                    }
+                    inJustDecodeBounds = false
+                }
+                val inputStream2 = context.contentResolver.openInputStream(photo.thumbnailUri)
+                val bitmap = BitmapFactory.decodeStream(inputStream2, null, options)
+                inputStream2?.close()
+                bitmap
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load thumbnail for ${photo.id}", e)
+            null
+        }
     }
 
     /**
@@ -1327,40 +1362,50 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
                 }
 
-                // 非编辑模式且非查看原图时，尝试从缓存读取
+                // 使用多级缓存优化性能
                 val refreshKey = photoRefreshKeys[photo.id] ?: 0L
                 val metadataHash = metadata.toJson().hashCode()
-                val cacheKey = if (!useGlobalEdit && !showOrigin && bitmap == null) {
+
+                // 1. 完全处理后的预览图缓存 (LUT + 边框已应用)
+                val previewCacheKey = if (!useGlobalEdit && !showOrigin && bitmap == null) {
                     previewCacheKey(photo.id, metadataHash, refreshKey)
                 } else null
 
-                cacheKey?.let {
+                previewCacheKey?.let {
                     val cached = previewBitmapCache.get(it)
                     if (cached != null && !cached.isRecycled) {
                         return@withContext cached
                     }
                 }
 
-                val bitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
-                    PhotoManager.loadBitmap(context, photo.id, 2560)
-                } else {
-                    PhotoManager.loadBitmap(context, photo.uri, 2560)
+                // 2. 原始底图缓存 (4096px 状态，用于快速重新应用编辑)
+                val sourceCacheKey = "${photo.id}_source_${refreshKey}"
+                val currentBitmap = bitmap ?: previewBitmapCache.get(sourceCacheKey) ?: run {
+                    val loaded = if (selectedTab == GalleryTab.PHOTON) {
+                        PhotoManager.loadBitmap(context, photo.id, 4096)
+                    } else {
+                        PhotoManager.loadBitmap(context, photo.uri, 4096)
+                    }
+                    if (loaded != null) {
+                        previewBitmapCache.put(sourceCacheKey, loaded)
+                    }
+                    loaded
                 } ?: return@withContext null
 
                 if (showOrigin) {
-                    bitmap
+                    currentBitmap
                 } else {
                     // 预览生成
                     val result = contentRepository.photoProcessor.processBitmap(
-                        bitmap, finalMetadata,
+                        currentBitmap, finalMetadata,
                         finalS, finalNR, finalCNR
                     )
                     // 估计平均亮度
                     currentBrightness[photo.id] = estimateAverageBrightness(result)
 
                     // 存入缓存
-                    if (cacheKey != null) {
-                        previewBitmapCache.put(cacheKey, result)
+                    if (previewCacheKey != null) {
+                        previewBitmapCache.put(previewCacheKey, result)
                     }
 
                     result

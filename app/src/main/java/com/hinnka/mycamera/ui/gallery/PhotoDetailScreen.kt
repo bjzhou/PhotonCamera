@@ -3,6 +3,7 @@ package com.hinnka.mycamera.ui.gallery
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.ColorSpace
 import android.net.Uri
 import android.util.Log
 import android.view.LayoutInflater
@@ -90,6 +91,8 @@ fun PhotoDetailScreen(
     var showExportDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
+
+    val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
 
     // Activity Result Launcher for delete confirmation
     val deletePhotoLauncher = rememberLauncherForActivityResult(
@@ -467,6 +470,7 @@ fun PhotoDetailScreen(
                             }) {
                                 ZoomableImage(
                                     photo = photo,
+                                    colorSpace = currentColorSpace,
                                     showOrigin = showOrigin,
                                     viewModel = viewModel,
                                     onZoomChange = { zoomed ->
@@ -626,6 +630,9 @@ fun PhotoDetailScreen(
                             InfoRow("平均亮度", "%.2f".format(viewModel.currentBrightness[currentPhoto.id]))
                         }
                     }
+                    currentColorSpace.value?.let {
+                        InfoRow(stringResource(R.string.color_space), it.name)
+                    }
                 }
             },
             confirmButton = {
@@ -669,6 +676,7 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun ZoomableImage(
     photo: PhotoData,
+    colorSpace: MutableState<ColorSpace?>,
     showOrigin: Boolean,
     viewModel: GalleryViewModel,
     onZoomChange: (Boolean) -> Unit,
@@ -706,6 +714,7 @@ private fun ZoomableImage(
                     delay(500)
                     loadBitmap()
                 }
+                colorSpace.value = bitmap?.colorSpace
                 isLoading = bitmap == null
             }
             loadBitmap()

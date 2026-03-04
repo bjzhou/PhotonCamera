@@ -1361,10 +1361,17 @@ object PhotoManager {
     }
 
     fun loadBitmap(context: Context, uri: Uri, maxEdge: Int? = null): Bitmap? {
+        var infoSize: android.util.Size? = null
+        var infoMimeType: String? = null
         val source = ImageDecoder.createSource(context.contentResolver, uri)
+
         val bitmap = runCatching {
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                // 记录原始信息
+                infoSize = info.size
+                infoMimeType = info.mimeType
+
                 if (maxEdge != null) {
                     val width = info.size.width
                     val height = info.size.height
@@ -1376,16 +1383,45 @@ object PhotoManager {
                 }
             }
         }.getOrNull() ?: return null
+        val isDng = infoMimeType?.contains("dng", ignoreCase = true) == true
+
+        if (!isDng) return bitmap
 
         return try {
             val orientation = context.contentResolver.openInputStream(uri)?.use { input ->
                 ExifInterface(input).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
             } ?: ExifInterface.ORIENTATION_NORMAL
-            rotateImageIfRequired(bitmap, orientation)
+
+            // 如果方向正常，直接返回
+            if (orientation == ExifInterface.ORIENTATION_NORMAL || orientation == ExifInterface.ORIENTATION_UNDEFINED) {
+                return bitmap
+            }
+
+            val (infoW, infoH) = infoSize?.let { it.width to it.height } ?: (0 to 0)
+
+            // 准确判断方向是否已被处理：
+            // 1. 检查当前方向是否涉及宽高交换
+            val rotationSwapsSize = orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+                    orientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+                    orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+                    orientation == ExifInterface.ORIENTATION_TRANSVERSE
+
+            val alreadyHandled = if (rotationSwapsSize && infoW != infoH && infoW > 0) {
+                // 如果是 90/270 度旋转且非正方形，检查 Bitmap 宽高比是否相对于原图已反转
+                // (bitmapW > bitmapH) 不等于 (infoW > infoH) 说明发生了交换，即已被处理
+                (bitmap.width > bitmap.height) != (infoW > infoH)
+            } else true
+
+            if (alreadyHandled) {
+                bitmap
+            } else {
+                rotateImageIfRequired(bitmap, orientation)
+            }
         } catch (e: Exception) {
             bitmap
         }
     }
+
 
     /**
      * 从 URI 获取文件名

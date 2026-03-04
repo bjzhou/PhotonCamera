@@ -16,14 +16,12 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
 import androidx.exifinterface.media.ExifInterface
-import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
-import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -2226,9 +2224,9 @@ class Camera2Controller(private val context: Context) {
             val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
             focalLengths?.firstOrNull()?.let {
                 focalLength = it * zoomRatio
-                // 计算等效35mm焦距
-                focalLength35mm = calculate35mmEquivalent(characteristics, it)?.times(zoomRatio)?.roundToInt()
             }
+            // 计算等效35mm焦距
+            focalLength35mm = calculate35mmEquivalent(characteristics)?.times(zoomRatio)?.roundToInt()
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to get camera characteristics for EXIF", e)
@@ -2247,7 +2245,7 @@ class Camera2Controller(private val context: Context) {
             // 重新计算35mm等效焦距
             try {
                 val characteristics = cachedCharacteristics ?: cameraManager.getCameraCharacteristics(cameraId)
-                focalLength35mm = calculate35mmEquivalent(characteristics, it)?.times(zoomRatio)?.roundToInt()
+                focalLength35mm = calculate35mmEquivalent(characteristics)?.times(zoomRatio)?.roundToInt()
             } catch (e: Exception) {
                 // 忽略
             }
@@ -2277,21 +2275,30 @@ class Camera2Controller(private val context: Context) {
      *
      * 基于传感器尺寸计算裁切系数
      */
-    private fun calculate35mmEquivalent(
-        characteristics: CameraCharacteristics,
-        focalLength: Float
-    ): Int? {
-        return try {
+    private fun calculate35mmEquivalent(characteristics: CameraCharacteristics): Int? {
+        try {
+            val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
             val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-            if (sensorSize != null) {
-                // 35mm 全画幅传感器宽度为 36mm
-                val cropFactor = 36f / sensorSize.width
-                (focalLength * cropFactor).toInt()
-            } else {
-                null
+
+            if (focalLengths == null || focalLengths.isEmpty() || sensorSize == null) {
+                return null
             }
+
+            val focalLength = focalLengths[0]
+
+            // 计算传感器对角线
+            val sensorDiagonal = kotlin.math.sqrt(
+                (sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height).toDouble()
+            ).toFloat()
+
+            // 35mm 全画幅对角线 (36mm x 24mm)
+            val filmDiagonal = 43.2666f
+
+            if (sensorDiagonal <= 0) return null
+
+            return (focalLength * filmDiagonal / sensorDiagonal).roundToInt()
         } catch (e: Exception) {
-            null
+            return null
         }
     }
 
