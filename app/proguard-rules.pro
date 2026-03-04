@@ -32,3 +32,6 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# Keep LutRecipe and its components for AI JSON parsing
+-keep class com.hinnka.mycamera.lut.creator.** { *; }
