@@ -210,6 +210,7 @@
     <string name="recipe_param_film_grain">그레인</string>
     <string name="recipe_param_vignette">비네팅</string>
     <string name="recipe_param_bleach_bypass">블리치 바이패스</string>
+    <string name="recipe_param_halation">할레이션</string>
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->

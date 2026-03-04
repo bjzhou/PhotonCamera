@@ -59,6 +59,17 @@ class LutImageProcessor {
     private var nlmWidth = 0
     private var nlmHeight = 0
 
+    // HDF (Highlight Diffusion) 光晕效果资源
+    private var hdfExtractBlurHProgram = 0
+    private var hdfBlurVProgram = 0
+    private var hdfCompositeProgram = 0
+    private var hdfTexId = IntArray(2)      // ping-pong 纹理 (1/4 分辨率)
+    private var hdfFboId = IntArray(2)      // ping-pong FBO
+    private var hdfCompositeTexId = 0       // 全分辨率合成输出纹理
+    private var hdfCompositeFboId = 0       // 全分辨率合成 FBO
+    private var hdfWidth = 0
+    private var hdfHeight = 0
+
     private var isInitialized = false
 
     // Uniform 位置
@@ -164,6 +175,7 @@ class LutImageProcessor {
             // 初始化 shader 和缓冲区
             initShaderProgram()
             initNLMPrograms()
+            initHDFPrograms()
             initBuffers()
 
             isInitialized = true
@@ -218,6 +230,7 @@ class LutImageProcessor {
         val filmGrain = colorRecipeParams?.filmGrain ?: 0f
         val vignette = colorRecipeParams?.vignette ?: 0f
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
+        val halation = colorRecipeParams?.halation ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
 
         // 后期处理参数
@@ -243,15 +256,24 @@ class LutImageProcessor {
             uploadLutTexture(lutConfig)
         }
 
+        val inputTexId = if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId
+
+        // HDF 光晕效果预处理（在主 shader 之前，需要模糊的光晕纹理）
+        val hdfEnabled = halation > 0f
+        if (hdfEnabled) {
+            renderHDFBlur(inputTexId, width, height, halation)
+        }
+
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
-            if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
+            inputTexId,
             colorSpace,
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
+            halation,
             intensity, sharpening
             // GL_RGBA16 已自动归一化，使用标准 shader
         )
@@ -297,6 +319,7 @@ class LutImageProcessor {
         val filmGrain = colorRecipeParams?.filmGrain ?: 0f
         val vignette = colorRecipeParams?.vignette ?: 0f
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
+        val halation = colorRecipeParams?.halation ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
 
         // 后期处理参数（仅在软件处理模式下生效）
@@ -325,15 +348,24 @@ class LutImageProcessor {
             uploadLutTexture(lutConfig)
         }
 
+        val inputTexId = if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId
+
+        // HDF 光晕效果预处理
+        val hdfEnabled = halation > 0f
+        if (hdfEnabled) {
+            renderHDFBlur(inputTexId, width, height, halation)
+        }
+
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
-            if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId,
+            inputTexId,
             bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
             lutConfig,
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
+            halation,
             intensity, sharpening
         )
 
@@ -362,6 +394,7 @@ class LutImageProcessor {
         filmGrain: Float,
         vignette: Float,
         bleachBypass: Float,
+        halation: Float,
         intensity: Float,
         sharpening: Float
     ): Bitmap {
@@ -413,6 +446,14 @@ class LutImageProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFilmGrain"), filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
+        }
+
+        // 设置 HDF 参数
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHalation"), halation)
+        if (halation > 0f) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfCompositeTexId)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHdfTexture"), 2)
         }
 
         // 设置后期处理参数
@@ -683,6 +724,30 @@ class LutImageProcessor {
         PLog.d(TAG, "NLM programs initialized: Chroma=$nlmChromaProgram H=$nlmPassHProgram V=$nlmPassVProgram")
     }
 
+    private fun initHDFPrograms() {
+        fun createProgram(vShader: Int, fSource: String): Int {
+            val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fSource)
+            if (vShader == 0 || fShader == 0) return 0
+            val program = GLES30.glCreateProgram()
+            GLES30.glAttachShader(program, vShader)
+            GLES30.glAttachShader(program, fShader)
+            GLES30.glLinkProgram(program)
+            GLES30.glDeleteShader(fShader)
+            return program
+        }
+
+        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
+        hdfExtractBlurHProgram = createProgram(vShader, HDF_EXTRACT_BLUR_H_SHADER)
+        hdfBlurVProgram = createProgram(vShader, HDF_BLUR_V_SHADER)
+        hdfCompositeProgram = createProgram(vShader, HDF_COMPOSITE_SHADER)
+        GLES30.glDeleteShader(vShader)
+
+        PLog.d(
+            TAG,
+            "HDF programs initialized: ExtractH=$hdfExtractBlurHProgram BlurV=$hdfBlurVProgram Composite=$hdfCompositeProgram"
+        )
+    }
+
     private fun setupNLMFramebuffers(width: Int, height: Int) {
         if (nlmWidth == width && nlmHeight == height && nlmChromaTexId != 0) return
         nlmWidth = width
@@ -855,6 +920,147 @@ class LutImageProcessor {
         checkGlError("renderNLMDenoise")
     }
 
+    /**
+     * 设置 HDF 光晕效果 FBO
+     * 使用 1/4 分辨率进行模糊，然后在全分辨率合成
+     */
+    private fun setupHDFFramebuffers(width: Int, height: Int) {
+        val dsW = width / 4
+        val dsH = height / 4
+        if (hdfWidth == dsW && hdfHeight == dsH && hdfTexId[0] != 0) return
+        hdfWidth = dsW
+        hdfHeight = dsH
+
+        // 清理旧资源
+        for (i in 0..1) {
+            if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
+            if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
+        }
+        if (hdfCompositeTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfCompositeTexId), 0)
+        if (hdfCompositeFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfCompositeFboId), 0)
+
+        // 创建 1/4 分辨率 ping-pong FBO
+        for (i in 0..1) {
+            val t = IntArray(1)
+            val f = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
+                dsW, dsH, 0,
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glGenFramebuffers(1, f, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D, t[0], 0
+            )
+            hdfTexId[i] = t[0]
+            hdfFboId[i] = f[0]
+        }
+
+        // 创建全分辨率合成 FBO
+        val ct = IntArray(1)
+        val cf = IntArray(1)
+        GLES30.glGenTextures(1, ct, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
+            width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glGenFramebuffers(1, cf, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, ct[0], 0
+        )
+        hdfCompositeTexId = ct[0]
+        hdfCompositeFboId = cf[0]
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    /**
+     * 渲染 HDF 光晕效果
+     * 3 pass: 高光提取+水平模糊 → 垂直模糊 → 全分辨率合成
+     */
+    private fun renderHDFBlur(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+        halation: Float
+    ) {
+        setupHDFFramebuffers(width, height)
+        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0 || hdfCompositeProgram == 0) return
+
+        val dsW = width / 4
+        val dsH = height / 4
+        val texelW = 1.0f / dsW
+        val texelH = 1.0f / dsH
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+
+        val threshold = 0.95f - halation * 0.25f
+
+        // Pass 1: 提取高光 + 水平高斯模糊 (1/4 分辨率)
+        GLES30.glUseProgram(hdfExtractBlurHProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdfFboId[0])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uThreshold"), threshold)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uStrength"), halation)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(hdfExtractBlurHProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(hdfExtractBlurHProgram)
+
+        // Pass 2: 垂直高斯模糊 (1/4 分辨率)
+        GLES30.glUseProgram(hdfBlurVProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdfFboId[1])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[0])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfBlurVProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(hdfBlurVProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(hdfBlurVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(hdfBlurVProgram)
+
+        // Pass 3: 全分辨率合成 (Screen blend)
+        GLES30.glUseProgram(hdfCompositeProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdfCompositeFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uOriginalTexture"), 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uBloomTexture"), 1)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(hdfCompositeProgram, "uStrength"), halation)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(hdfCompositeProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(hdfCompositeProgram)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        checkGlError("renderHDFBlur")
+    }
+
     private fun checkGlError(op: String) {
         val error = GLES30.glGetError()
         if (error != GLES30.GL_NO_ERROR) {
@@ -983,6 +1189,17 @@ class LutImageProcessor {
             if (nlmPassFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmPassFboId[i]), 0)
         }
 
+        // 释放 HDF 资源
+        if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
+        if (hdfBlurVProgram != 0) GLES30.glDeleteProgram(hdfBlurVProgram)
+        if (hdfCompositeProgram != 0) GLES30.glDeleteProgram(hdfCompositeProgram)
+        for (i in 0..1) {
+            if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
+            if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
+        }
+        if (hdfCompositeTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfCompositeTexId), 0)
+        if (hdfCompositeFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfCompositeFboId), 0)
+
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
         EGL14.eglDestroyContext(eglDisplay, eglContext)
@@ -1040,6 +1257,10 @@ class LutImageProcessor {
             uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
+            
+            // HDF 光晕效果
+            uniform float uHalation;      // 0.0 ~ 1.0 (光晕强度)
+            uniform sampler2D uHdfTexture; // 光晕合成纹理
             
             // 后期处理参数
             uniform float uSharpening;
@@ -1279,6 +1500,12 @@ class LutImageProcessor {
                     color.rgb = clamp(color.rgb, 0.0, 1.0);
                 }
 
+                // === HDF 光晕效果（在色彩配方之后，LUT 之前） ===
+                if (uHalation > 0.0) {
+                    vec3 hdfColor = texture(uHdfTexture, vTexCoord).rgb;
+                    color.rgb = hdfColor;
+                }
+
                 // === LUT 处理（在色彩配方之后） ===
                 // 假定 LUT 始终为 sRGB 色彩空间进行计算，进行管线优化：
                 // 省略了 applyLutColorSpace 以及避免了多次线性和非线性空间的来回切换。
@@ -1336,5 +1563,134 @@ class LutImageProcessor {
                 "uniform sampler2D uImageTexture;\n" +
                 "vec4 sampleImage(vec2 uv) { return texture(uImageTexture, uv); }\n" +
                 SHADER_BODY
+
+        // === HDF (Highlight Diffusion Filter) Shaders ===
+
+        /**
+         * Pass 1: 提取高光区域 + 水平高斯模糊
+         * 输入全分辨率图像，在 1/4 分辨率下提取并模糊
+         */
+        private val HDF_EXTRACT_BLUR_H_SHADER = """
+            #version 300 es
+            precision highp float;
+            
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            
+            uniform sampler2D uInputTexture;
+            uniform vec2 uTexelSize;
+            uniform float uThreshold;
+            uniform float uStrength;
+            
+            void main() {
+                // 从全分辨率采样（自动降采样，因为 FBO 是 1/4 分辨率）
+                vec3 color = texture(uInputTexture, vTexCoord).rgb;
+                
+                // 计算亮度
+                float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                
+                // 柔和的高光提取：使用 smoothstep 而非硬阈值
+                // 模拟理光 HDF 的物理滤镜特性：所有光线都会被扩散，但高光区域最明显
+                float highlightMask = smoothstep(uThreshold, uThreshold + 0.3, luma);
+                // 混合一些中间调以获得更自然的扩散
+                float midMask = smoothstep(uThreshold - 0.2, uThreshold, luma) * 0.3;
+                float mask = highlightMask + midMask * uStrength;
+                
+                vec3 highlight = color * mask;
+                
+                // 饱和度补偿：增强提取出的高光的色彩，使扩散出来的光晕不至于太苍白
+                float hLuma = dot(highlight, vec3(0.2126, 0.7152, 0.0722));
+                highlight = mix(vec3(hLuma), highlight, 1.5); // 1.5倍饱和度增强
+                
+                // 13-tap 水平高斯模糊 (sigma ≈ 4.0)
+                float weights[7] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216, 0.0020, 0.0001);
+                
+                vec3 sum = highlight * weights[0];
+                for (int i = 1; i < 7; i++) {
+                    float offset = float(i) * uTexelSize.x * 5.0;
+                    
+                    vec3 colP = texture(uInputTexture, vTexCoord + vec2(offset, 0.0)).rgb;
+                    float lumaP = dot(colP, vec3(0.2126, 0.7152, 0.0722));
+                    float maskP = smoothstep(uThreshold - 0.2, uThreshold + 0.3, lumaP);
+                    sum += colP * maskP * weights[i];
+                    
+                    vec3 colM = texture(uInputTexture, vTexCoord - vec2(offset, 0.0)).rgb;
+                    float lumaM = dot(colM, vec3(0.2126, 0.7152, 0.0722));
+                    float maskM = smoothstep(uThreshold - 0.2, uThreshold + 0.3, lumaM);
+                    sum += colM * maskM * weights[i];
+                }
+                
+                fragColor = vec4(sum, 1.0);
+            }
+        """.trimIndent()
+
+        /**
+         * Pass 2: 垂直高斯模糊
+         */
+        private val HDF_BLUR_V_SHADER = """
+            #version 300 es
+            precision highp float;
+            
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            
+            uniform sampler2D uInputTexture;
+            uniform vec2 uTexelSize;
+            
+            void main() {
+                // 13-tap 垂直高斯模糊，同样增加步进
+                float weights[7] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216, 0.0020, 0.0001);
+                
+                vec3 sum = texture(uInputTexture, vTexCoord).rgb * weights[0];
+                for (int i = 1; i < 7; i++) {
+                    float offset = float(i) * uTexelSize.y * 2.5;
+                    sum += texture(uInputTexture, vTexCoord + vec2(0.0, offset)).rgb * weights[i];
+                    sum += texture(uInputTexture, vTexCoord - vec2(0.0, offset)).rgb * weights[i];
+                }
+                
+                fragColor = vec4(sum, 1.0);
+            }
+        """.trimIndent()
+
+        /**
+         * Pass 3: 合成（Screen 混合）
+         * 将模糊的高光以 Screen 混合模式叠加回原图
+         * Screen: result = 1 - (1 - base) * (1 - bloom)
+         * 这给出柔和的光晕效果，类似物理滤镜的光扩散
+         */
+        private val HDF_COMPOSITE_SHADER = """
+            #version 300 es
+            precision highp float;
+            
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            
+            uniform sampler2D uOriginalTexture;
+            uniform sampler2D uBloomTexture;
+            uniform float uStrength;
+            
+            void main() {
+                vec3 original = texture(uOriginalTexture, vTexCoord).rgb;
+                vec3 bloom = texture(uBloomTexture, vTexCoord).rgb;
+                
+                // 对光晕部分再次进行饱和度微调
+                float bLuma = dot(bloom, vec3(0.2126, 0.7152, 0.0722));
+                bloom = mix(vec3(bLuma), bloom, 1.2); 
+                
+                // 1. 模拟物理滤镜的光散失
+                vec3 attenuated = original * (1.0 - uStrength * 0.1);
+                
+                // 2. 使用平衡的混合模式
+                // Screen blend: result = 1 - (1 - a) * (1 - b)
+                vec3 screenBlend = vec3(1.0) - (vec3(1.0) - attenuated) * (vec3(1.0) - bloom * uStrength);
+                
+                // 3. 柔化对比度与暗部处理
+                float contrastReduction = 1.0 - uStrength * 0.05;
+                vec3 result = (screenBlend - 0.5) * contrastReduction + 0.5;
+                
+                // 4. 再次确保高光位不会出现由于增加光晕导致的突兀色偏
+                fragColor = vec4(clamp(result, 0.0, 1.0), texture(uOriginalTexture, vTexCoord).a);
+            }
+        """.trimIndent()
     }
 }

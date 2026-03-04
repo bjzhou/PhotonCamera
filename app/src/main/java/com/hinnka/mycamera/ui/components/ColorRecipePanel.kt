@@ -56,7 +56,8 @@ fun ColorRecipePanel(
             RecipeParam.VIGNETTE,
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
-            RecipeParam.BLEACH_BYPASS
+            RecipeParam.BLEACH_BYPASS,
+            RecipeParam.HALATION
         )
     )
 
@@ -209,7 +210,8 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
 
         RecipeParam.FADE,
         RecipeParam.FILM_GRAIN,
-        RecipeParam.BLEACH_BYPASS -> String.format("%.2f", value)
+        RecipeParam.BLEACH_BYPASS,
+        RecipeParam.HALATION -> String.format("%.2f", value)
 
         RecipeParam.LUT_INTENSITY -> String.format("%.2f", value)
     }
@@ -232,6 +234,7 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.FILM_GRAIN -> Color(0xFF9E9E9E) // 灰色
         RecipeParam.VIGNETTE -> Color(0xFF795548) // 棕色
         RecipeParam.BLEACH_BYPASS -> Color(0xFF00BCD4) // 青色
+        RecipeParam.HALATION -> Color(0xFFFF7043) // 暖橙色（光晕）
         RecipeParam.LUT_INTENSITY -> Color(0xFF9E9E9E) // 灰色
     }
 }

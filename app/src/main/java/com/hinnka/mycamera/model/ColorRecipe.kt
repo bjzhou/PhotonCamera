@@ -20,6 +20,7 @@ data class ColorRecipeParams(
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
+    val halation: Float = 0f,       // 0.0 ~ 1.0 (光晕/高光扩散强度，0为无效果，模拟 GR3 HDF)
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
 ) {
     /**
@@ -37,7 +38,8 @@ data class ColorRecipeParams(
                 shadows == 0f &&
                 filmGrain == 0f &&
                 vignette == 0f &&
-                bleachBypass == 0f
+                bleachBypass == 0f &&
+                halation == 0f
     }
 
     /**
@@ -56,6 +58,7 @@ data class ColorRecipeParams(
                 filmGrain == other.filmGrain &&
                 vignette == other.vignette &&
                 bleachBypass == other.bleachBypass &&
+                halation == other.halation &&
                 lutIntensity == other.lutIntensity
     }
 
@@ -90,6 +93,7 @@ enum class RecipeParam(
     FILM_GRAIN(R.string.recipe_param_film_grain, 0.0f, 1.0f, 0f),
     VIGNETTE(R.string.recipe_param_vignette, -1.0f, 1.0f, 0f),
     BLEACH_BYPASS(R.string.recipe_param_bleach_bypass, 0.0f, 1.0f, 0f),
+    HALATION(R.string.recipe_param_halation, 0.0f, 1.0f, 0f),
     LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
 
     /**
@@ -116,6 +120,7 @@ enum class RecipeParam(
             FILM_GRAIN -> params.filmGrain
             VIGNETTE -> params.vignette
             BLEACH_BYPASS -> params.bleachBypass
+            HALATION -> params.halation
             LUT_INTENSITY -> params.lutIntensity
         }
     }
@@ -138,6 +143,7 @@ enum class RecipeParam(
             FILM_GRAIN -> params.copy(filmGrain = clampedValue)
             VIGNETTE -> params.copy(vignette = clampedValue)
             BLEACH_BYPASS -> params.copy(bleachBypass = clampedValue)
+            HALATION -> params.copy(halation = clampedValue)
             LUT_INTENSITY -> params.copy(lutIntensity = clampedValue)
         }
     }

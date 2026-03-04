@@ -48,6 +48,7 @@ class LutManager(private val context: Context) {
         private fun filmGrainKey(lutId: String) = floatPreferencesKey("${lutId}_filmGrain")
         private fun vignetteKey(lutId: String) = floatPreferencesKey("${lutId}_vignette")
         private fun bleachBypassKey(lutId: String) = floatPreferencesKey("${lutId}_bleachBypass")
+        private fun halationKey(lutId: String) = floatPreferencesKey("${lutId}_halation")
         private fun lutIntensityKey(lutId: String) = floatPreferencesKey("${lutId}_lutIntensity")
     }
 
@@ -78,6 +79,7 @@ class LutManager(private val context: Context) {
                 filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
+                halation = preferences[halationKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f
             )
         }
@@ -215,6 +217,7 @@ class LutManager(private val context: Context) {
             preferences[filmGrainKey(lutId)] = params.filmGrain
             preferences[vignetteKey(lutId)] = params.vignette
             preferences[bleachBypassKey(lutId)] = params.bleachBypass
+            preferences[halationKey(lutId)] = params.halation
             preferences[lutIntensityKey(lutId)] = params.lutIntensity
         }
         PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
@@ -241,6 +244,7 @@ class LutManager(private val context: Context) {
                 filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
+                halation = preferences[halationKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f
             )
         }.firstOrNull() ?: ColorRecipeParams.DEFAULT
@@ -275,6 +279,7 @@ class LutManager(private val context: Context) {
             preferences.remove(filmGrainKey(lutId))
             preferences.remove(vignetteKey(lutId))
             preferences.remove(bleachBypassKey(lutId))
+            preferences.remove(halationKey(lutId))
             preferences.remove(lutIntensityKey(lutId))
         }
         PLog.d(TAG, "Color recipe params deleted for LUT [$lutId]")

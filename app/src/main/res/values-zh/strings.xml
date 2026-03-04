@@ -218,6 +218,7 @@
     <string name="recipe_param_film_grain">颗粒</string>
     <string name="recipe_param_vignette">晕影</string>
     <string name="recipe_param_bleach_bypass">留银冲洗</string>
+    <string name="recipe_param_halation">光晕</string>
     <string name="recipe_param_lut_intensity">滤镜强度</string>
 
     <!-- Color Recipe Tabs -->

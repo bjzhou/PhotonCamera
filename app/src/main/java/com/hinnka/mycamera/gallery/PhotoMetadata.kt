@@ -140,6 +140,7 @@ data class PhotoMetadata(
                     put("filmGrain", colorRecipeParams.filmGrain.toDouble())
                     put("vignette", colorRecipeParams.vignette.toDouble())
                     put("bleachBypass", colorRecipeParams.bleachBypass.toDouble())
+                    put("halation", colorRecipeParams.halation.toDouble())
                     put("lutIntensity", colorRecipeParams.lutIntensity.toDouble())
                 })
             } else {
@@ -230,6 +231,7 @@ data class PhotoMetadata(
                         filmGrain = colorRecipeParamsObj.optDouble("filmGrain", 0.0).toFloat(),
                         vignette = colorRecipeParamsObj.optDouble("vignette", 0.0).toFloat(),
                         bleachBypass = colorRecipeParamsObj.optDouble("bleachBypass", 0.0).toFloat(),
+                        halation = colorRecipeParamsObj.optDouble("halation", 0.0).toFloat(),
                         lutIntensity = colorRecipeParamsObj.optDouble("lutIntensity", 1.0).toFloat()
                     )
                 } else {

@@ -210,6 +210,7 @@
     <string name="recipe_param_film_grain">นอยซ์แบบฟิล์ม</string>
     <string name="recipe_param_vignette">ขอบมืด</string>
     <string name="recipe_param_bleach_bypass">การข้ามกระบวนการล้าง (Bleach Bypass)</string>
+    <string name="recipe_param_halation">แสงเรืองรอง (Halation)</string>
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
