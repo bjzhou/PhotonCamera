@@ -4,8 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 
 object LocalImageAnalyzer {
 
@@ -38,6 +40,7 @@ object LocalImageAnalyzer {
 
         val hueCounts = IntArray(8)
         val hueSatSums = FloatArray(8)
+        val hueLumaSums = FloatArray(8)
         val hsv = FloatArray(3)
 
         var totalPixels = 0
@@ -81,7 +84,13 @@ object LocalImageAnalyzer {
                 val g = Color.green(color) / 255f
                 val b = Color.blue(color) / 255f
 
-                val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
+                // Use proper linear conversion and Oklab L for all analysis
+                val lr = OklchConverter.srgbToLinear(r)
+                val lg = OklchConverter.srgbToLinear(g)
+                val lb = OklchConverter.srgbToLinear(b)
+                val oklab = OklchConverter.linearSrgbToOklab(lr, lg, lb)
+                val luma = oklab[0]
+                
                 lumaList[idx++] = luma
                 totalLuma += luma
 
@@ -89,23 +98,21 @@ object LocalImageAnalyzer {
                 if (r > b + 0.05f) warmCount++ else if (b > r + 0.05f) coolCount++
                 if (g > (r + b) / 2f + 0.05f) greenCount++ else if ((r + b) / 2f > g + 0.05f) magentaCount++
 
-                Color.colorToHSV(color, hsv)
-                val hue = hsv[0]
-                val sat = hsv[1]
-                totalSatSum += sat
-                val hueRad = Math.toRadians(hue.toDouble())
+                val (L, C, H) = OklchConverter.oklabToOklch(oklab[0], oklab[1], oklab[2])
+                totalSatSum += C
+                val hueRad = Math.toRadians(H.toDouble())
 
-                // Saturation weighted vector
-                val vx = (Math.cos(hueRad) * sat).toFloat()
-                val vy = (Math.sin(hueRad) * sat).toFloat()
+                // Saturation weighted vector (using Oklab Chroma)
+                val vx = (Math.cos(hueRad) * C).toFloat()
+                val vy = (Math.sin(hueRad) * C).toFloat()
 
-                // Luma region assignment for Split Toning & Shadows/Highlights
-                if (luma > 0.7f) {
+                // Luma region assignment (using Oklab L)
+                if (luma > 0.8f) {
                     hlCount++
                     hlX += vx
                     hlY += vy
                     highlightLumaSum += luma
-                } else if (luma < 0.3f) {
+                } else if (luma < 0.2f) {
                     shCount++
                     shX += vx
                     shY += vy
@@ -117,19 +124,20 @@ object LocalImageAnalyzer {
                 }
 
                 // HSL Shifts bucket assignment
-                if (sat > 0.01f) { // Include almost all pixels with some color info
+                if (C > 0.01f) { 
                     val bucket = when {
-                        hue < 15f || hue >= 345f -> 0 // Red
-                        hue < 45f -> 1 // Orange
-                        hue < 75f -> 2 // Yellow
-                        hue < 165f -> 3 // Green
-                        hue < 195f -> 4 // Cyan
-                        hue < 255f -> 5 // Blue
-                        hue < 285f -> 6 // Purple
+                        H < 29f || H >= 330f + (360 - 330 + 29) / 2f -> 0 // Red
+                        H < 60f -> 1 // Orange
+                        H < 105f -> 2 // Yellow
+                        H < 140f -> 3 // Green
+                        H < 195f -> 4 // Cyan
+                        H < 260f -> 5 // Blue
+                        H < 295f -> 6 // Purple
                         else -> 7 // Magenta
                     }
                     hueCounts[bucket]++
-                    hueSatSums[bucket] += sat
+                    hueSatSums[bucket] += C
+                    hueLumaSums[bucket] += luma
                 }
             }
 
@@ -151,24 +159,29 @@ object LocalImageAnalyzer {
         val contrastEst = ((p90 - p10) - 0.65f) * 0.2f
 
         // Highlights & Shadows
+        // Highlights & Shadows
         val avgHighlightLuma = if (hlCount > 0) highlightLumaSum / hlCount else 0.85f
         val avgShadowLuma = if (shCount > 0) shadowLumaSum / shCount else 0.15f
-        val highlightsEst = ((avgHighlightLuma - 0.85f) * 0.8f).coerceIn(-0.3f, 0.3f)
-        val shadowsEst = ((avgShadowLuma - 0.15f) * 0.8f).coerceIn(-0.3f, 0.3f)
+        // Reduce parametric weights: curve handles tone mapping better
+        val highlightsEst = ((avgHighlightLuma - 0.85f) * 0.3f).coerceIn(-0.15f, 0.15f)
+        val shadowsEst = ((avgShadowLuma - 0.15f) * 0.5f).coerceIn(-0.2f, 0.2f)
 
-        // 5. Build Macro Tone Curve (CDF Histogram Matching)
+        // 5. Build Macro Tone Curve (Look extraction)
         val lumaCurve = mutableListOf<List<Float>>()
-        // Allow higher lift for faded film blacks (up to 0.18)
-        lumaCurve.add(listOf(0f, lumaList.first().coerceIn(0f, 0.18f)))
+        lumaCurve.add(listOf(0f, lumaList.first().coerceIn(0f, 0.12f))) 
         for (i in 1..9) {
-            val pX = i * 0.1f // 0.1, 0.2 ... 0.9 input neutral
+            val pX = i * 0.1f
             val pY = lumaList[(lumaList.size * pX).toInt()]
-            // Strongly favor the original photo's histogram (80% photo / 20% linear anchor)
-            val blendedY = pX * 0.2f + pY * 0.8f
+            
+            // Balanced weights to preserve curve style: 60% histogram influence
+            // Use smooth threshold to protect highlights (L > 0.85)
+            val protection = max(0f, (pX - 0.85f) / 0.15f).pow(1.5f)
+            val photoWeight = (0.6f * (1f - protection)).coerceIn(0f, 0.6f)
+            
+            val blendedY = pX * (1f - photoWeight) + pY * photoWeight
             lumaCurve.add(listOf(pX, blendedY.coerceIn(0f, 1f)))
         }
-        // Allow deeper compressed highlights
-        lumaCurve.add(listOf(1f, lumaList.last().coerceIn(0.85f, 1f)))
+        lumaCurve.add(listOf(1f, 1f))
 
         // 2. White Balance / Temperature & Tint
         val tempEst = if (warmCount + coolCount > 0) {
@@ -193,8 +206,8 @@ object LocalImageAnalyzer {
             var h = Math.toDegrees(Math.atan2(avgY.toDouble(), avgX.toDouble())).toFloat()
             if (h < 0) h += 360f
             // Extract Oklab chroma and scale broadly to 0.0-1.0 mapping range. 
-            // Reduced max multiplier from 2.0 to 1.0 to prevent overly thick color grading
-            val s = min(1f, Math.sqrt((avgX * avgX + avgY * avgY).toDouble()).toFloat()) * 1.0f * satMultiplier
+            // Reduce saturation extraction weight to prevent overly aggressive color casts
+            val s = min(1f, Math.sqrt((avgX * avgX + avgY * avgY).toDouble()).toFloat()) * 0.4f * satMultiplier
             return ToningTarget(hue = h, saturation = s)
         }
 
@@ -205,51 +218,62 @@ object LocalImageAnalyzer {
         val midToning = getToningTarget(midX, midY, midCount, 0.1f)
 
         // 4. HSL Shifts Evaluator
-        val avgSatGlobal = if (totalPixels > 0) totalSatSum / totalPixels else 0f
+        val neutralSat = 0.08f // Baseline in Oklab Chroma (C) is much lower than HSV Sat
+        val avgSatGlobal = if (totalPixels > 0) totalSatSum / totalPixels else neutralSat
+        val saturationEst = (1.0f + ln(max(0.01f, avgSatGlobal / neutralSat)) * 0.4f).coerceIn(0.7f, 1.4f)
+        
+        val hueLumaBaselines = floatArrayOf(0.4f, 0.6f, 0.8f, 0.65f, 0.6f, 0.35f, 0.45f, 0.5f)
 
-        fun getShiftSat(bucketIndex: Int): Float {
-            // Use global average as baseline if this specific color is missing
-            val bucketAvgSat = if (hueCounts[bucketIndex] > totalPixels * 0.005f) {
-                hueSatSums[bucketIndex] / hueCounts[bucketIndex]
-            } else {
-                avgSatGlobal
-            }
-
-            val neutralSat = 0.35f // "Standard" photo saturation baseline in HSV
-            // Using a multiplier that maps 0.0 to ~ -1.0
-            return ((bucketAvgSat - neutralSat) * 2.85f).coerceIn(-1.0f, 1.0f)
+        val rawShifts = Array(8) { bucketIndex ->
+            if (hueCounts[bucketIndex] < totalPixels * 0.005f) return@Array Shift()
+            val bucketAvgSat = hueSatSums[bucketIndex] / hueCounts[bucketIndex]
+            val bucketAvgLuma = hueLumaSums[bucketIndex] / hueCounts[bucketIndex]
+            val baseLuma = hueLumaBaselines[bucketIndex]
+            
+            // Raw scales
+            Shift(
+                sScale = (1.0f + ln(max(0.1f, bucketAvgSat / neutralSat))).coerceIn(0.4f, 2.0f),
+                lScale = (1.0f + ln(max(0.1f, bucketAvgLuma / baseLuma)) * 0.5f).coerceIn(0.5f, 1.6f)
+            )
         }
+
+        // Banding Prevention: Circular smoothing on HSL buckets (moving average)
+        fun getSmoothedShift(index: Int): Shift {
+            var sumS = 0f
+            var sumL = 0f
+            val neighbors = listOf(-1, 0, 1) // kernel
+            for (offset in neighbors) {
+                val i = (index + offset + 8) % 8
+                sumS += rawShifts[i].sScale
+                sumL += rawShifts[i].lScale
+            }
+            return Shift(sScale = sumS / 3f, lScale = sumL / 3f)
+        }
+
+        val smoothedHsl = HslShifts(
+            red = getSmoothedShift(0),
+            orange = getSmoothedShift(1),
+            yellow = getSmoothedShift(2),
+            green = getSmoothedShift(3),
+            cyan = getSmoothedShift(4),
+            blue = getSmoothedShift(5),
+            purple = getSmoothedShift(6),
+            magenta = getSmoothedShift(7)
+        )
 
         LutRecipe(
             colorFeatures = ColorFeatures(
                 tone = Tone(
                     exposure = exposureEst,
                     contrast = contrastEst,
+                    saturation = saturationEst,
                     highlights = highlightsEst,
                     shadows = shadowsEst
                 ),
-                balance = Balance(
-                    temperature = tempEst,
-                    tint = tintEst
-                ),
-                splitToning = SplitToning(
-                    shadows = shToning,
-                    midtones = midToning,
-                    highlights = hlToning
-                ),
-                hslShifts = HslShifts(
-                    red = Shift(sShift = getShiftSat(0)),
-                    orange = Shift(sShift = getShiftSat(1)),
-                    yellow = Shift(sShift = getShiftSat(2)),
-                    green = Shift(sShift = getShiftSat(3)),
-                    cyan = Shift(sShift = getShiftSat(4)),
-                    blue = Shift(sShift = getShiftSat(5)),
-                    purple = Shift(sShift = getShiftSat(6)),
-                    magenta = Shift(sShift = getShiftSat(7))
-                ),
-                curves = Curves(
-                    luma = lumaCurve
-                )
+                balance = Balance(temperature = tempEst, tint = tintEst),
+                splitToning = SplitToning(shadows = shToning, midtones = midToning, highlights = hlToning),
+                hslShifts = smoothedHsl,
+                curves = Curves(luma = lumaCurve)
             )
         )
     }

@@ -34,10 +34,11 @@ data class ColorFeatures(
 data class Tone(
     val exposure: Float = 0f,
     val contrast: Float = 0f,
+    val saturation: Float = 1f,   // Multiplier: 1.0 is neutral, 0.0 is grayscale
     val highlights: Float = 0f,
     val shadows: Float = 0f,
-    val whitePoint: Float = 0f,
-    val blackPoint: Float = 0f
+    val whitePoint: Float = 1f,   // Absolute: 1.0 is full white
+    val blackPoint: Float = 0f    // Absolute: 0.0 is full black
 )
 
 
@@ -86,9 +87,9 @@ data class HslShifts(
 
 @Keep
 data class Shift(
-    val hShift: Float = 0f, // Degrees
-    val sShift: Float = 0f,
-    val lShift: Float = 0f
+    val hShift: Float = 0f, // Offset in [-1.0, 1.0] where 1.0 is full rotation (360 deg)
+    val sScale: Float = 1f, // Multiplier: 1.0 is neutral
+    val lScale: Float = 1f  // Multiplier: 1.0 is neutral
 )
 
 

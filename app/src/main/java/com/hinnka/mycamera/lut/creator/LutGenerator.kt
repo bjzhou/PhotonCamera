@@ -50,36 +50,52 @@ object LutGenerator {
         val oklab = OklchConverter.linearSrgbToOklab(lr, lg, lb)
         var (L, C, H) = OklchConverter.oklabToOklch(oklab[0], oklab[1], oklab[2])
 
+        // Apply Global Saturation
+        C *= features.tone.saturation.coerceAtLeast(0f)
+
         // 2. Global Contrast / Tone (applied on Lightness L)
         L = applyCurve(L, features.curves.luma)
         L = applyContrast(L, features.tone.contrast)
         L = applyHighlightsShadows(L, features.tone.highlights, features.tone.shadows)
 
-        // 3. Black/White point
-        L = L * (1f - features.tone.whitePoint - features.tone.blackPoint) + features.tone.blackPoint
+        // 3. Black/White point (Map [0,1] to [BlackPoint, WhitePoint])
+        val wp = features.tone.whitePoint
+        val bp = features.tone.blackPoint
+        L = (L * (wp - bp) + bp).coerceIn(0f, 1f)
 
         // 4. HSL Shifts
         if (hasAnyHslShift(features.hslShifts)) {
             val shift = getHslShiftForHue(H, features.hslShifts)
+            
+            // Universal Damping Logic:
+            // 1. Chroma Gate: Only apply shifts to distinct colors. Protections neutrals (white/gray).
+            // Use a higher power (3.0) for a smoother 'fade-in' from gray.
+            val chromaGate = (C / 0.15f).pow(3.0f).coerceIn(0f, 1f)
+            
+            // 2. Luma Gate: Protect the poles (Pure White and Pure Black)
+            // Use a smoother sine-based or higher-power parabola to avoid mid-range jumps.
+            val lumaGate = sin(L * PI.toFloat()).pow(1.5f).coerceIn(0f, 1f)
+            
+            val finalDamp = (chromaGate * lumaGate).coerceIn(0f, 1f)
+            
+            val hShift = shift.hShift * finalDamp
+            val sScale = 1.0f + (shift.sScale - 1.0f) * finalDamp
+            val lScale = 1.0f + (shift.lScale - 1.0f) * finalDamp
+
             // H is 0-360 degrees
-            H += shift.hShift * 30f // Arbitrary scale for Hue shift, normally relative.
+            H += hShift * 360f 
             if (H < 0) H += 360f
             if (H >= 360f) H -= 360f
-
-            // C is saturation (chroma). It is unbounded, typically 0 to 0.32
-            // sShift from -1 to 1 should scale C.
-            // If sShift > 0, boost saturation. If < 0, reduce it.
-            C *= (1.0f + shift.sShift).coerceAtLeast(0f)
-
-            // L is Lightness 0.0 to 1.0. 
-            // lShift -1 to 1 should add to L.
-            L = (L + shift.lShift * 0.2f).coerceIn(0f, 1f)
+            
+            // Saturation and Lightness scaling
+            C *= sScale.coerceAtLeast(0f)
+            L = (L * lScale).coerceIn(0f, 1f)
         }
 
         // 5. Split Toning
-        // Toning the shadow and highlight regions
-        val shadowWeight = max(0f, 1.0f - (L / 0.5f)).pow(2.0f).coerceIn(0f, 1f)
-        val highlightWeight = max(0f, (L - 0.5f) / 0.5f).pow(2.0f).coerceIn(0f, 1f)
+        // Use wider, more overlapping curves for smoother blending
+        val shadowWeight = (1.0f - L).pow(2.5f).coerceIn(0f, 1f)
+        val highlightWeight = L.pow(2.5f).coerceIn(0f, 1f)
         val midtoneWeight = (1.0f - shadowWeight - highlightWeight).coerceIn(0f, 1f)
 
         var oklabOut = OklchConverter.oklchToOklab(L, C, H)
@@ -88,9 +104,7 @@ object LutGenerator {
 
         fun applyToning(target: ToningTarget, weight: Float) {
             if (target.saturation > 0f && weight > 0f) {
-                // Oklab Chroma (a/b axes) max bounds are roughly [-0.3, 0.3].
-                // So adding 0.1 is already a massive cinematic color shift.
-                val maxChromaShift = 0.1f
+                val maxChromaShift = 0.12f
                 val hRad = target.hue * Math.PI.toFloat() / 180f
                 ta += target.saturation * maxChromaShift * weight * cos(hRad)
                 tb += target.saturation * maxChromaShift * weight * sin(hRad)
@@ -103,6 +117,16 @@ object LutGenerator {
 
         // Convert back
         val rgb = OklchConverter.oklabToLinearSrgb(L, ta, tb)
+        
+        // Safety: Prevent negative or NaN values before WB and sRGB conversion.
+        rgb[0] = rgb[0].coerceAtLeast(0f)
+        rgb[1] = rgb[1].coerceAtLeast(0f)
+        rgb[2] = rgb[2].coerceAtLeast(0f)
+
+        // 6. RGB Channel Curves (Applied on Linear RGB)
+        rgb[0] = applyCurve(rgb[0], features.curves.red)
+        rgb[1] = applyCurve(rgb[1], features.curves.green)
+        rgb[2] = applyCurve(rgb[2], features.curves.blue)
 
         // White balance on Linear (simplified)
         if (features.balance.temperature != 0f || features.balance.tint != 0f) {
@@ -135,12 +159,12 @@ object LutGenerator {
     private fun applyHighlightsShadows(x: Float, highlights: Float, shadows: Float): Float {
         var ret = x
         if (shadows != 0f) {
-            val sWeight = 1f - x
-            ret += shadows * (sWeight * sWeight) * 0.5f
+            val sWeight = (1f - x).pow(2.0f)
+            ret += shadows * sWeight * 0.4f
         }
         if (highlights != 0f) {
-            val hWeight = x
-            ret += highlights * (hWeight * hWeight) * 0.5f
+            val hWeight = x.pow(2.0f)
+            ret += highlights * hWeight * 0.4f
         }
         return ret
     }
@@ -165,40 +189,65 @@ object LutGenerator {
     }
 
     private fun hasAnyHslShift(shifts: HslShifts): Boolean {
-        return shifts.red.hShift != 0f || shifts.red.sShift != 0f || shifts.red.lShift != 0f ||
-                shifts.green.hShift != 0f || shifts.green.sShift != 0f || shifts.green.lShift != 0f ||
-                shifts.blue.hShift != 0f || shifts.blue.sShift != 0f || shifts.blue.lShift != 0f
-        // checking major ones for quick exit
+        // Checking for any non-neutral values
+        return shifts.red.hShift != 0f || shifts.red.sScale != 1f || shifts.red.lScale != 1f ||
+                shifts.green.hShift != 0f || shifts.green.sScale != 1f || shifts.green.lScale != 1f ||
+                shifts.blue.hShift != 0f || shifts.blue.sScale != 1f || shifts.blue.lScale != 1f
     }
 
     private fun getHslShiftForHue(hue: Float, shifts: HslShifts): Shift {
-        // Precise Oklch Hue Angles mapping for color buckets (Red 29°, Orange 60°, Yellow 105°, Green 140°, Cyan 195°, Blue 260°, Purple 295°, Magenta 330°)
         val targets = listOf(
-            29f to shifts.red,
-            60f to shifts.orange, // Standard orange is ~60 in Oklch
-            105f to shifts.yellow,
-            140f to shifts.green,
-            195f to shifts.cyan,
-            260f to shifts.blue,
-            295f to shifts.purple,
-            330f to shifts.magenta,
-            389f to shifts.red // 360 + 29
+            29f to shifts.red, 60f to shifts.orange, 105f to shifts.yellow,
+            140f to shifts.green, 195f to shifts.cyan, 260f to shifts.blue,
+            295f to shifts.purple, 330f to shifts.magenta
         )
+        val n = targets.size
         val normalizedHue = if (hue < 29f) hue + 360f else hue
-        // Find adjacent anchors and interpolate
-        for (i in 0 until targets.size - 1) {
-            val (h1, s1) = targets[i]
-            val (h2, s2) = targets[i + 1]
-            if (normalizedHue in h1..h2) {
-                val t = (normalizedHue - h1) / (h2 - h1)
-                return Shift(
-                    hShift = s1.hShift * (1 - t) + s2.hShift * t,
-                    sShift = s1.sShift * (1 - t) + s2.sShift * t,
-                    lShift = s1.lShift * (1 - t) + s2.lShift * t
-                )
-            }
+
+        // Find the index of the anchor just before our hue
+        var i = 0
+        while (i < n) {
+            val h1 = if (i == 0) targets[0].first else targets[i].first
+            val h2 = if (i == n - 1) targets[0].first + 360f else targets[i+1].first
+            if (normalizedHue >= h1 && normalizedHue < h2) break
+            i++
         }
-        return Shift()
+        if (i >= n) i = n - 1
+
+        // Catmull-Rom Spline Interpolation (4 points: p0, p1, p2, p3)
+        // This ensures the slope (tangent) is continuous at every anchor point.
+        val idx0 = (i - 1 + n) % n
+        val idx1 = i
+        val idx2 = (i + 1) % n
+        val idx3 = (i + 2) % n
+
+        val p0 = targets[idx0].second
+        val p1 = targets[idx1].second
+        val p2 = targets[idx2].second
+        val p3 = targets[idx3].second
+
+        val h1 = targets[idx1].first
+        var h2 = targets[idx2].first
+        if (h2 <= h1) h2 += 360f
+        
+        val t = (normalizedHue - h1) / (h2 - h1)
+
+        fun catmullRom(v0: Float, v1: Float, v2: Float, v3: Float, t: Float): Float {
+            val t2 = t * t
+            val t3 = t2 * t
+            return 0.5f * (
+                (2f * v1) +
+                (-v0 + v2) * t +
+                (2f * v0 - 5f * v1 + 4f * v2 - v3) * t2 +
+                (-v0 + 3f * v1 - 3f * v2 + v3) * t3
+            )
+        }
+
+        return Shift(
+            hShift = catmullRom(p0.hShift, p1.hShift, p2.hShift, p3.hShift, t),
+            sScale = catmullRom(p0.sScale, p1.sScale, p2.sScale, p3.sScale, t),
+            lScale = catmullRom(p0.lScale, p1.lScale, p2.lScale, p3.lScale, t)
+        )
     }
 
     /**
