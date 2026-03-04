@@ -31,7 +31,12 @@ object XmpLutParser {
         }
     }
 
-    fun parse(inputStream: InputStream, outputStream: OutputStream, colorSpace: ColorSpace = ColorSpace.SRGB, curve: LutCurve = LutCurve.SRGB): Boolean {
+    fun parse(
+        inputStream: InputStream,
+        outputStream: OutputStream,
+        colorSpace: ColorSpace = ColorSpace.SRGB,
+        curve: LutCurve = LutCurve.SRGB
+    ): Boolean {
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
         val builder = factory.newDocumentBuilder()
@@ -291,9 +296,8 @@ object XmpLutParser {
         }
 
         val nopValue = IntArray(divisions)
-        val step = 65535.0 / (divisions - 1.0)
         for (i in 0 until divisions) {
-            nopValue[i] = (i * step + 0.5).toInt()
+            nopValue[i] = (i * 0x0FFFF + (divisions shr 1)) / (divisions - 1)
         }
 
         val size = divisions * divisions * divisions
@@ -302,13 +306,18 @@ object XmpLutParser {
         for (rd in 0 until divisions) {
             for (gd in 0 until divisions) {
                 for (bd in 0 until divisions) {
-                    val rf_res = buffer.short.toInt()
-                    val gf_res = buffer.short.toInt()
-                    val bf_res = buffer.short.toInt()
+                    // Read as unsigned 16-bit, matching Adobe SDK's Get_uint16()
+                    val rf_res = buffer.short.toInt() and 0xFFFF
+                    val gf_res = buffer.short.toInt() and 0xFFFF
+                    val bf_res = buffer.short.toInt() and 0xFFFF
 
-                    val rf = (rf_res + nopValue[rd]).coerceIn(0, 65535)
-                    val gf = (gf_res + nopValue[gd]).coerceIn(0, 65535)
-                    val bf = (bf_res + nopValue[bd]).coerceIn(0, 65535)
+                    // Add nopValue and wrap to uint16 range (modular arithmetic),
+                    // matching Adobe SDK's uint16 assignment truncation behavior.
+                    // Do NOT use coerceIn/clamp - that produces wrong results for
+                    // LUTs with large color shifts (e.g. black & white).
+                    val rf = (rf_res + nopValue[rd]) and 0xFFFF
+                    val gf = (gf_res + nopValue[gd]) and 0xFFFF
+                    val bf = (bf_res + nopValue[bd]) and 0xFFFF
 
                     val index = ((bd * divisions + gd) * divisions + rd) * 3
                     samples[index] = rf.toShort()
@@ -321,7 +330,12 @@ object XmpLutParser {
         return LutData(divisions, samples)
     }
 
-    private fun writePlutFile(outputStream: OutputStream, lut: LutData, colorSpace: ColorSpace, curve: LutCurve): Boolean {
+    private fun writePlutFile(
+        outputStream: OutputStream,
+        lut: LutData,
+        colorSpace: ColorSpace,
+        curve: LutCurve
+    ): Boolean {
         val size = lut.divisions
         val count = size * size * size * 3
         val expectedSizeInBytes = count * 2 // 16-bit
