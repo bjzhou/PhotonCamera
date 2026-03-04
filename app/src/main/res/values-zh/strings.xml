@@ -244,6 +244,12 @@
     <string name="settings_filter_management_description">管理滤镜，设置默认，排序</string>
     <string name="settings_frame_management">边框管理</string>
     <string name="settings_frame_management_description">管理边框，设置默认，排序</string>
+    <string name="settings_openai_api_key">OpenAI API Key</string>
+    <string name="settings_openai_api_key_desc">用于 AI 分析提取 LUT 配方的 API 秘钥</string>
+    <string name="settings_openai_base_url">OpenAI API 域名</string>
+    <string name="settings_openai_base_url_desc">允许设置兼容大语言模型的自定义接口地址</string>
+    <string name="settings_use_built_in_ai">使用内置体验服务</string>
+    <string name="settings_use_built_in_ai_desc">开启后使用内置的 AI 提取服务，无需配置 API Key。</string>
     <string name="filter_management_title">滤镜管理</string>
     <string name="frame_management_title">边框管理</string>
     <string name="category_all">所有</string>
@@ -257,6 +263,7 @@
     <string name="delete_filter_confirm_message">删除滤镜 "%s"？</string>
     <string name="delete_frame_confirm_message">删除边框 "%s"？</string>
     <string name="rename_dialog_title">重命名</string>
+    <string name="export_lut_cube">导出 .cube 文件</string>
     <string name="copy">复制</string>
     <string name="copy_lut_dialog_title">复制滤镜</string>
     <string name="copy_suffix"> (副本)</string>
@@ -346,4 +353,28 @@
     <string name="settings_widget_theme_system">跟随系统</string>
     <string name="settings_widget_theme_light">浅色</string>
     <string name="settings_widget_theme_dark">深色</string>
+
+    <!-- LUT Creator & UI -->
+    <string name="lut_creator_title">LUT 提取</string>
+    <string name="lut_creator_desc">选择图片分析色彩风格，并生成专属 LUT。</string>
+    <string name="lut_creator_use_ai">使用 AI 提取风格（需要在设置中配置 Key）</string>
+    <string name="lut_creator_custom_ai_instructions">自定义 AI 提示词（选填）</string>
+    <string name="lut_creator_custom_ai_hint">例如：让画面更有氛围感，加深对比度</string>
+    <string name="lut_creator_select_images">选择图片</string>
+    <string name="lut_creator_analyzing">正在分析图片风格…</string>
+    <string name="lut_creator_analysis_complete">分析完成！</string>
+    <string name="lut_creator_lut_name_hint">LUT 预设名称</string>
+    <string name="lut_creator_generate_save">生成并保存</string>
+    <string name="lut_creator_generating">正在生成 3D LUT 数据…</string>
+    <string name="lut_creator_success">LUT 生成成功！</string>
+    <string name="lut_creator_finish">完成</string>
+    <string name="lut_creator_error">错误：%s</string>
+    <string name="lut_creator_try_again">再试一次</string>
+
+    <string name="settings_ai_model">AI 提取模型</string>
+    <string name="settings_ai_model_desc">选择用于抽取色彩风格的 AI 模型。</string>
+    <string name="settings_ai_model_loading">加载模型中…</string>
+    <string name="settings_ai_model_select">点此选择模型…</string>
+    <string name="settings_ai_model_fetching">正在请求列表…</string>
+    <string name="settings_ai_model_empty">未找到任何可用模型</string>
 </resources>

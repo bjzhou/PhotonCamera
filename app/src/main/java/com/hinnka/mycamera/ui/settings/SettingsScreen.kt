@@ -46,6 +46,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -124,6 +126,12 @@ fun SettingsScreen(
     val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
     val widgetTheme by viewModel.widgetTheme.collectAsState()
     val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
+    val useBuiltInAiService by viewModel.useBuiltInAiService.collectAsState()
+    val openAIApiKey by viewModel.openAIApiKey.collectAsState()
+    val openAIUrl by viewModel.openAIUrl.collectAsState()
+    val openAIModel by viewModel.openAIModel.collectAsState()
+    val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
+    val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -248,6 +256,61 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_frame_management),
                     description = stringResource(R.string.settings_frame_management_description),
                     onClick = onFrameManagementClick
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_use_built_in_ai),
+                    description = stringResource(R.string.settings_use_built_in_ai_desc),
+                    checked = useBuiltInAiService,
+                    onCheckedChange = { viewModel.setUseBuiltInAiService(it) }
+                )
+
+                HorizontalDivider(
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                if (!useBuiltInAiService) {
+                    TextInputSettingItem(
+                        title = stringResource(R.string.settings_openai_api_key),
+                        description = stringResource(R.string.settings_openai_api_key_desc),
+                        value = openAIApiKey ?: "",
+                        onValueChange = { viewModel.setOpenAIApiKey(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+
+                    TextInputSettingItem(
+                        title = stringResource(R.string.settings_openai_base_url),
+                        description = stringResource(R.string.settings_openai_base_url_desc),
+                        value = openAIUrl ?: "",
+                        onValueChange = { viewModel.setOpenAIUrl(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+
+                DropdownSettingItem(
+                    title = stringResource(R.string.settings_ai_model),
+                    description = stringResource(R.string.settings_ai_model_desc),
+                    value = if (useBuiltInAiService) com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL else openAIModel
+                        ?: "",
+                    options = if (useBuiltInAiService) listOf(com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_MODEL) else availableOpenAIModels,
+                    isLoading = isFetchingAIModels,
+                    enabled = !useBuiltInAiService,
+                    onExpanded = { viewModel.fetchAvailableAIModels() },
+                    onOptionSelected = { viewModel.setOpenAIModel(it) }
                 )
             }
 
@@ -808,29 +871,24 @@ fun SettingsSection(
                             )
                         }
                     }
-
-                    Icon(
-                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier.size(24.dp)
-                    )
+                    if (isExpanded) {
+                        Icon(
+                            imageVector = Icons.Default.ExpandLess,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.6f)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
                 }
             }
 
-            if (isExpanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .then(if (isExpandable) Modifier.padding(top = 0.dp) else Modifier)
-                ) {
-                    if (isExpandable) {
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(bottom = 16.dp)
-                        )
-                    }
+            if (!isExpandable || isExpanded) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     content()
                 }
             }
@@ -844,7 +902,7 @@ fun SettingsSection(
 @Composable
 fun SwitchSettingItem(
     title: String,
-    description: String,
+    description: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -853,7 +911,7 @@ fun SwitchSettingItem(
         modifier = modifier
             .fillMaxWidth()
             .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 8.dp),
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -864,13 +922,15 @@ fun SwitchSettingItem(
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Normal
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = description,
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
+            if (description != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
         }
 
         Spacer(modifier = Modifier.width(16.dp))
@@ -885,6 +945,212 @@ fun SwitchSettingItem(
                 uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
             )
         )
+    }
+}
+
+/**
+ * 文本输入设置项
+ */
+@Composable
+fun TextInputSettingItem(
+    title: String,
+    description: String? = null,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            if (description != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+            if (value.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = value,
+                    color = Color(0xFFE5A324), // 主题色
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.4f)
+        )
+    }
+
+    if (showDialog) {
+        var tempValue by remember { mutableStateOf(value) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(text = title) },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = tempValue,
+                    onValueChange = { tempValue = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        onValueChange(tempValue)
+                        showDialog = false
+                    }
+                ) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { showDialog = false }
+                ) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            }
+        )
+    }
+}
+
+/**
+ * 下拉选择菜单设置项
+ */
+@Composable
+fun DropdownSettingItem(
+    title: String,
+    description: String? = null,
+    value: String,
+    options: List<String>,
+    isLoading: Boolean,
+    onExpanded: () -> Unit,
+    onOptionSelected: (String) -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val alpha = if (enabled) 1f else 0.4f
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) {
+                onExpanded()
+                expanded = true
+            }
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White.copy(alpha = alpha),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal
+            )
+            if (description != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    color = Color.White.copy(alpha = 0.6f * alpha),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (isLoading && options.isEmpty()) stringResource(R.string.settings_ai_model_loading) else value.ifEmpty {
+                    stringResource(
+                        R.string.settings_ai_model_select
+                    )
+                },
+                color = Color(0xFFE5A324).copy(alpha = alpha), // 主题色
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Box {
+            Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.4f)
+            )
+
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(Color(0xFF2C2C2E))
+            ) {
+                if (isLoading) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.settings_ai_model_fetching),
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        },
+                        onClick = { }
+                    )
+                } else if (options.isEmpty()) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.settings_ai_model_empty),
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        },
+                        onClick = { expanded = false }
+                    )
+                } else {
+                    options.forEach { option ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = option,
+                                    color = if (option == value) Color(0xFFE5A324) else Color.White
+                                )
+                            },
+                            onClick = {
+                                onOptionSelected(option)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

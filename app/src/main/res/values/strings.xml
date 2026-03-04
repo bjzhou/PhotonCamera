@@ -249,6 +249,12 @@
     <string name="settings_filter_management_description">Manage LUTs, set default, reorder</string>
     <string name="settings_frame_management">Frame Management</string>
     <string name="settings_frame_management_description">Manage frames, set default, reorder</string>
+    <string name="settings_openai_api_key">OpenAI API Key</string>
+    <string name="settings_openai_api_key_desc">API key required for AI-powered LUT analysis</string>
+    <string name="settings_openai_base_url">OpenAI Base URL</string>
+    <string name="settings_openai_base_url_desc">Set a custom API destination to support compatible language models</string>
+    <string name="settings_use_built_in_ai">Use Built-in Experience Service</string>
+    <string name="settings_use_built_in_ai_desc">Use the built-in AI extraction service without configuring your own API Key.</string>
     <string name="filter_management_title">LUT Management</string>
     <string name="frame_management_title">Frame Management</string>
     <string name="category_all">All</string>
@@ -262,6 +268,7 @@
     <string name="delete_filter_confirm_message">Delete LUT \"%s\"?</string>
     <string name="delete_frame_confirm_message">Delete frame \"%s\"?</string>
     <string name="rename_dialog_title">Rename</string>
+    <string name="export_lut_cube">Export .cube</string>
     <string name="copy">Copy</string>
     <string name="copy_lut_dialog_title">Copy LUT</string>
     <string name="copy_suffix"> (Copy)</string>
@@ -346,4 +353,28 @@
     <string name="settings_widget_theme_system">Follow System</string>
     <string name="settings_widget_theme_light">Light</string>
     <string name="settings_widget_theme_dark">Dark</string>
+
+    <!-- LUT Creator & UI -->
+    <string name="lut_creator_title">LUT Creator</string>
+    <string name="lut_creator_desc">Select images to analyze style and generate a custom LUT.</string>
+    <string name="lut_creator_use_ai">Use AI Analysis (Requires Key in Settings)</string>
+    <string name="lut_creator_custom_ai_instructions">Custom AI Instructions (Optional)</string>
+    <string name="lut_creator_custom_ai_hint">e.g., make it moodier, enhance reds</string>
+    <string name="lut_creator_select_images">Select Images</string>
+    <string name="lut_creator_analyzing">Analyzing image style...</string>
+    <string name="lut_creator_analysis_complete">Analysis Complete!</string>
+    <string name="lut_creator_lut_name_hint">LUT Name</string>
+    <string name="lut_creator_generate_save">Generate &amp; Save</string>
+    <string name="lut_creator_generating">Generating 3D Interpolated LUT...</string>
+    <string name="lut_creator_success">LUT Created Successfully!</string>
+    <string name="lut_creator_finish">Finish</string>
+    <string name="lut_creator_error">Error: %s</string>
+    <string name="lut_creator_try_again">Try Again</string>
+
+    <string name="settings_ai_model">AI Model</string>
+    <string name="settings_ai_model_desc">Select the model for AI Style Extraction.</string>
+    <string name="settings_ai_model_loading">Loading models…</string>
+    <string name="settings_ai_model_select">Select a model…</string>
+    <string name="settings_ai_model_fetching">Fetching…</string>
+    <string name="settings_ai_model_empty">No models found</string>
 </resources>

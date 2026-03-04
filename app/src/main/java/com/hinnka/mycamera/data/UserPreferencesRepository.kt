@@ -79,6 +79,10 @@ data class UserPreferences(
     val mirrorFrontCamera: Boolean = true,
     val widgetTheme: WidgetTheme = WidgetTheme.FOLLOW_SYSTEM,
     val saveLocation: Boolean = false,
+    val openAIApiKey: String? = null,
+    val openAIBaseUrl: String? = null,
+    val openAIModel: String? = null,
+    val useBuiltInAiService: Boolean = false
 )
 
 /**
@@ -138,6 +142,10 @@ class UserPreferencesRepository(private val context: Context) {
         private val MIRROR_FRONT_CAMERA = booleanPreferencesKey("mirror_front_camera")
         private val WIDGET_THEME = stringPreferencesKey("widget_theme")
         private val SAVE_LOCATION = booleanPreferencesKey("save_location")
+        private val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
+        private val OPENAI_BASE_URL = stringPreferencesKey("openai_base_url")
+        private val OPENAI_MODEL = stringPreferencesKey("openai_model")
+        private val USE_BUILT_IN_AI_SERVICE = booleanPreferencesKey("use_built_in_ai_service")
     }
 
     /**
@@ -191,6 +199,10 @@ class UserPreferencesRepository(private val context: Context) {
                 mirrorFrontCamera = preferences[MIRROR_FRONT_CAMERA] ?: true,
                 widgetTheme = WidgetTheme.valueOf(preferences[WIDGET_THEME] ?: WidgetTheme.FOLLOW_SYSTEM.name),
                 saveLocation = preferences[SAVE_LOCATION] ?: false,
+                openAIApiKey = preferences[OPENAI_API_KEY],
+                openAIBaseUrl = preferences[OPENAI_BASE_URL],
+                openAIModel = preferences[OPENAI_MODEL],
+                useBuiltInAiService = preferences[USE_BUILT_IN_AI_SERVICE] ?: false
             )
         }
 
@@ -626,6 +638,42 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveSaveLocation(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[SAVE_LOCATION] = enabled
+        }
+    }
+
+    /**
+     * 保存 OpenAI API Key
+     */
+    suspend fun saveOpenAIApiKey(key: String) {
+        context.dataStore.edit { preferences ->
+            preferences[OPENAI_API_KEY] = key
+        }
+    }
+
+    /**
+     * 保存 OpenAI Base URL
+     */
+    suspend fun saveOpenAIBaseUrl(url: String) {
+        context.dataStore.edit { preferences ->
+            preferences[OPENAI_BASE_URL] = url
+        }
+    }
+
+    /**
+     * 保存 OpenAI 选定模型
+     */
+    suspend fun saveOpenAIModel(model: String) {
+        context.dataStore.edit { preferences ->
+            preferences[OPENAI_MODEL] = model
+        }
+    }
+
+    /**
+     * 保存是否使用内置体验服务
+     */
+    suspend fun saveUseBuiltInAiService(use: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_BUILT_IN_AI_SERVICE] = use
         }
     }
 }

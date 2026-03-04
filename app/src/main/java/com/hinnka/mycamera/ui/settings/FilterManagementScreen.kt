@@ -38,6 +38,7 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -56,6 +57,7 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 fun FilterManagementScreen(
     viewModel: CameraViewModel,
     onBack: () -> Unit,
+    onLutCreatorClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentLutId by viewModel.currentLutId.collectAsState()
@@ -178,6 +180,33 @@ fun FilterManagementScreen(
             pendingImportUris = uris
             categoryText = ""
             showImportCategoryDialog = true
+        }
+    }
+
+    var pendingExportName by remember { mutableStateOf("") }
+    var pendingExportContent by remember { mutableStateOf("") }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { output ->
+                            output.write(pendingExportContent.toByteArray())
+                        }
+                        withContext(Dispatchers.Main) {
+                            android.widget.Toast.makeText(
+                                context,
+                                context.getString(R.string.export_success),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    } catch (e: Exception) {
+                        PLog.e("FilterManagementScreen", "Failed to export LUT", e)
+                    }
+                }
+            }
         }
     }
 
@@ -363,6 +392,18 @@ fun FilterManagementScreen(
                         )
                     }
 
+                    // 制作 LUT 按钮
+                    IconButton(
+                        onClick = onLutCreatorClick,
+                        enabled = !isImporting
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Palette,
+                            contentDescription = "Create LUT",
+                            tint = Color.White
+                        )
+                    }
+
                     // 导入按钮
                     IconButton(
                         onClick = {
@@ -534,6 +575,18 @@ fun FilterManagementScreen(
                                 {
                                     deletingLut = lutInfo
                                     showDeleteDialog = true
+                                }
+                            } else null,
+                            onExport = if (!isSelectionMode) {
+                                {
+                                    scope.launch {
+                                        val content = viewModel.getLutCubeString(lutInfo.id)
+                                        if (content != null) {
+                                            pendingExportContent = content
+                                            pendingExportName = "${lutInfo.getName()}.cube"
+                                            exportLauncher.launch(pendingExportName)
+                                        }
+                                    }
                                 }
                             } else null,
                             onEditCategory = if (!isSelectionMode) {
@@ -1348,6 +1401,7 @@ private fun FilterManagementItem(
     onCopy: (() -> Unit)? = null,
     onEditColorRecipe: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    onExport: (() -> Unit)? = null,
     onEditCategory: (() -> Unit)? = null,
     showCategory: Boolean = false,
     dragModifier: Modifier = Modifier,
@@ -1537,6 +1591,16 @@ private fun FilterManagementItem(
                         onClick = {
                             showMenu = false
                             onCopy?.invoke()
+                        }
+                    )
+
+                    // 导出 (所有滤镜可用)
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.export_lut_cube), color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Download, null, tint = Color.White.copy(alpha = 0.7f)) },
+                        onClick = {
+                            showMenu = false
+                            onExport?.invoke()
                         }
                     )
 

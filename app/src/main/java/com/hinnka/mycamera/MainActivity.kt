@@ -65,6 +65,8 @@ import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import com.hinnka.mycamera.lut.creator.LutCreatorScreen
+import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
 
 /**
  * 路由常量
@@ -78,6 +80,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val FILTER_MANAGEMENT = "filter_management"
     const val FRAME_MANAGEMENT = "frame_management"
+    const val LUT_CREATOR = "lut_creator"
 
     fun photoDetail(tab: GalleryTab = GalleryTab.PHOTON, index: Int = 0, photoId: String? = null) =
         "photo_detail/$tab/$index" + (if (photoId != null) "?photoId=$photoId" else "")
@@ -379,6 +382,21 @@ fun NavigationHost(
                 FilterManagementScreen(
                     viewModel = cameraViewModel,
                     onBack = {
+                        navController.popBackStack()
+                    },
+                    onLutCreatorClick = {
+                        navController.navigate(Routes.LUT_CREATOR)
+                    }
+                )
+            }
+
+            composable(Routes.LUT_CREATOR) {
+                val lutCreatorViewModel: LutCreatorViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+                LutCreatorScreen(
+                    viewModel = lutCreatorViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onSuccess = { lutId ->
+                        cameraViewModel.refreshCustomContent()
                         navController.popBackStack()
                     }
                 )

@@ -114,8 +114,10 @@ dependencies {
     // DataStore for user preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation(libs.androidx.animation.core)
-    implementation(libs.androidx.lifecycle.service)
     implementation(libs.androidx.lifecycle.process)
+
+    implementation(libs.okhttp)
+    implementation(libs.gson)
 
     // Bugly for china flavor
     "chinaImplementation"("com.tencent.bugly:crashreport:latest.release")

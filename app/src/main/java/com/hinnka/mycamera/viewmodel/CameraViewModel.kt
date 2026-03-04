@@ -25,6 +25,8 @@ import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.creator.LutGenerator
+import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
@@ -193,10 +195,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val mirrorFrontCamera: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.mirrorFrontCamera }
-    val widgetTheme: StateFlow<com.hinnka.mycamera.data.WidgetTheme> = userPreferencesRepository.userPreferences
-        .map { it.widgetTheme }
+    val widgetTheme = userPreferencesRepository.userPreferences.map { it.widgetTheme }
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM)
-    val saveLocationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.saveLocation }
+    val saveLocationEnabled = userPreferencesRepository.userPreferences.map { it.saveLocation }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val openAIApiKey = userPreferencesRepository.userPreferences.map { it.openAIApiKey }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+    val openAIUrl = userPreferencesRepository.userPreferences.map { it.openAIBaseUrl }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+    val openAIModel = userPreferencesRepository.userPreferences.map { it.openAIModel }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+    val useBuiltInAiService = userPreferencesRepository.userPreferences.map { it.useBuiltInAiService }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // 动态获取可用的 AI 模型列表 (UI 层按需触发刷新)
+    private val _availableOpenAIModels = MutableStateFlow<List<String>>(emptyList())
+    val availableOpenAIModels = _availableOpenAIModels.asStateFlow()
+
+    private val _isFetchingAIModels = MutableStateFlow(false)
+    val isFetchingAIModels = _isFetchingAIModels.asStateFlow()
 
     // 软件处理参数 Flow
     val sharpening: Flow<Float> = userPreferencesRepository.userPreferences.map { it.sharpening }
@@ -811,6 +828,71 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setSaveLocation(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveSaveLocation(enabled)
+        }
+    }
+
+    fun setOpenAIApiKey(key: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveOpenAIApiKey(key)
+        }
+    }
+
+    fun setOpenAIUrl(url: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveOpenAIBaseUrl(url)
+        }
+    }
+
+    fun setOpenAIModel(model: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveOpenAIModel(model)
+        }
+    }
+
+    fun setUseBuiltInAiService(use: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseBuiltInAiService(use)
+        }
+    }
+
+    /**
+     * 查询可用的 AI 模型列表
+     */
+    fun fetchAvailableAIModels() {
+        if (_isFetchingAIModels.value) return
+
+        viewModelScope.launch {
+            _isFetchingAIModels.value = true
+            val isBuiltIn = useBuiltInAiService.value
+            val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else openAIApiKey.value
+            val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else openAIUrl.value
+
+            if (apiKey.isNullOrBlank()) {
+                _isFetchingAIModels.value = false
+                return@launch
+            }
+            if (baseUrl.isNullOrBlank()) {
+                _isFetchingAIModels.value = false
+                return@launch
+            }
+
+            try {
+                val client = com.hinnka.mycamera.lut.creator.OpenAIApiClient(apiKey, baseUrl)
+                val result = client.getAvailableModels()
+                result.onSuccess { models ->
+                    _availableOpenAIModels.value = models
+                    // 如果当前选择的模型为空且有可用模型，自动选择第一个
+                    if (openAIModel.value.isNullOrBlank() && models.isNotEmpty()) {
+                        setOpenAIModel(models.first())
+                    }
+                }.onFailure { e ->
+                    PLog.e(TAG, "Failed to fetch AI models", e)
+                }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Error initializing OpenAIApiClient for model fetch", e)
+            } finally {
+                _isFetchingAIModels.value = false
+            }
         }
     }
 
@@ -1863,5 +1945,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             getApplication<Application>().sendBroadcast(intent)
         }
+    }
+
+    /**
+     * 获取 LUT 的 .cube 字符串内容
+     */
+    suspend fun getLutCubeString(lutId: String): String? = withContext(Dispatchers.IO) {
+        val lutInfo = contentRepository.lutManager.getLutInfo(lutId) ?: return@withContext null
+        val lutConfig = contentRepository.lutManager.loadLut(lutId) ?: return@withContext null
+
+        val floatBuffer = lutConfig.toFloatBuffer()
+        val floatArray = FloatArray(floatBuffer.capacity())
+        floatBuffer.position(0)
+        floatBuffer.get(floatArray)
+
+        LutGenerator.exportToCubeString(floatArray, lutConfig.size, lutInfo.getName())
     }
 }
