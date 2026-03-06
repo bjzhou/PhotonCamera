@@ -174,6 +174,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         vignette: Float,
         bleachBypass: Float,
         chromaticAberration: Float,
+        noise: Float,
+        lowRes: Float,
         halation: Float,
         lutIntensity: Float,
     ) {
@@ -190,6 +192,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.vignette = vignette
         renderer.bleachBypass = bleachBypass
         renderer.chromaticAberration = chromaticAberration
+        renderer.noise = noise
+        renderer.lowRes = lowRes
         renderer.halation = halation
         renderer.lutIntensity = lutIntensity
         requestRender()

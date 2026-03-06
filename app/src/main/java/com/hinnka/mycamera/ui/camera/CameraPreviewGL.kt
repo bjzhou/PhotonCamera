@@ -169,6 +169,8 @@ fun CameraPreviewGL(
                             vignette = colorRecipeParams.vignette,
                             bleachBypass = colorRecipeParams.bleachBypass,
                             chromaticAberration = colorRecipeParams.chromaticAberration,
+                            noise = colorRecipeParams.noise,
+                            lowRes = colorRecipeParams.lowRes,
                             halation = colorRecipeParams.halation,
                             lutIntensity = colorRecipeParams.lutIntensity,
                         )

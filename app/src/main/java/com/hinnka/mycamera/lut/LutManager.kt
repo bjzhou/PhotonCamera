@@ -50,6 +50,8 @@ class LutManager(private val context: Context) {
         private fun bleachBypassKey(lutId: String) = floatPreferencesKey("${lutId}_bleachBypass")
         private fun halationKey(lutId: String) = floatPreferencesKey("${lutId}_halation")
         private fun chromaticAberrationKey(lutId: String) = floatPreferencesKey("${lutId}_chromaticAberration")
+        private fun noiseKey(lutId: String) = floatPreferencesKey("${lutId}_noise")
+        private fun lowResKey(lutId: String) = floatPreferencesKey("${lutId}_lowRes")
         private fun lutIntensityKey(lutId: String) = floatPreferencesKey("${lutId}_lutIntensity")
         private fun remarksKey(lutId: String) =
             androidx.datastore.preferences.core.stringPreferencesKey("${lutId}_remarks")
@@ -84,6 +86,8 @@ class LutManager(private val context: Context) {
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 halation = preferences[halationKey(lutId)] ?: 0f,
                 chromaticAberration = preferences[chromaticAberrationKey(lutId)] ?: 0f,
+                noise = preferences[noiseKey(lutId)] ?: 0f,
+                lowRes = preferences[lowResKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
                 remarks = preferences[remarksKey(lutId)] ?: ""
             )
@@ -224,6 +228,8 @@ class LutManager(private val context: Context) {
             preferences[bleachBypassKey(lutId)] = params.bleachBypass
             preferences[halationKey(lutId)] = params.halation
             preferences[chromaticAberrationKey(lutId)] = params.chromaticAberration
+            preferences[noiseKey(lutId)] = params.noise
+            preferences[lowResKey(lutId)] = params.lowRes
             preferences[lutIntensityKey(lutId)] = params.lutIntensity
             preferences[remarksKey(lutId)] = params.remarks
         }
@@ -253,6 +259,8 @@ class LutManager(private val context: Context) {
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
                 halation = preferences[halationKey(lutId)] ?: 0f,
                 chromaticAberration = preferences[chromaticAberrationKey(lutId)] ?: 0f,
+                noise = preferences[noiseKey(lutId)] ?: 0f,
+                lowRes = preferences[lowResKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
                 remarks = preferences[remarksKey(lutId)] ?: ""
             )
@@ -290,6 +298,8 @@ class LutManager(private val context: Context) {
             preferences.remove(bleachBypassKey(lutId))
             preferences.remove(halationKey(lutId))
             preferences.remove(chromaticAberrationKey(lutId))
+            preferences.remove(noiseKey(lutId))
+            preferences.remove(lowResKey(lutId))
             preferences.remove(lutIntensityKey(lutId))
             preferences.remove(remarksKey(lutId))
         }

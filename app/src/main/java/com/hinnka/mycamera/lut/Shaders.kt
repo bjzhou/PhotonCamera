@@ -225,6 +225,10 @@ object Shaders {
     uniform float uVignette;      // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
     uniform float uChromaticAberration; // 0.0 ~ 1.0 (色散强度)
+    uniform float uNoise;         // 0.0 ~ 1.0 (噪点强度，包含亮度和彩色噪点)
+    uniform float uNoiseSeed;     // 用于每帧刷新噪点的随机种子
+    uniform float uLowRes;        // 0.0 ~ 1.0 (低分辨率强度，0为无效果)
+    uniform float uAspectRatio;   // 图像长宽比 (Width/Height)，用于确保低分像素块是正方形
 
     const vec3 W = vec3(0.2126, 0.7152, 0.0722);
 
@@ -295,26 +299,45 @@ object Shaders {
 
     void main()
     {
+        // === 预处理：模拟真实低分辨率效果（模糊+锯齿，而非纯碎的马赛克） ===
+        vec2 uvCoord = vTexCoord;
+        vec2 rcCoord = vRawCoord;
+        if (uLowRes > 0.005) {
+            // 算法改良：不再使用 floor() 产生的硬边缘，而是通过降采样+双线性插值模拟“糊”感
+            // 同时保留边缘的低分锯齿感
+            float blocksX = mix(512.0, 32.0, uLowRes); 
+            vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
+            
+            // 1. 计算当前像素所在的网格坐标
+            vec2 gridUV = floor(vTexCoord / gridSize) * gridSize + gridSize * 0.5;
+            vec2 gridRC = floor(vRawCoord / gridSize) * gridSize + gridSize * 0.5;
+            
+            // 2. 混合原始坐标和网格坐标，实现“糊”且有锯齿的效果
+            // 边缘会有锯齿，但平整区域通过插值变得平滑，避免彩色碎块
+            uvCoord = mix(vTexCoord, gridUV, 0.95);
+            rcCoord = mix(vRawCoord, gridRC, 0.95);
+        }
+
         // 从相机纹理采样原始颜色 (应用色散效果)
         vec4 color;
         if (uChromaticAberration > 0.001) {
             // 色散：基于 vRawCoord（0.0~1.0 原始平面）计算偏移
             vec2 center = vec2(0.5);
-            vec2 dir = vRawCoord - center;
+            vec2 dir = rcCoord - center;
             float dist = length(dir);
             float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
             
             // 关键：基于原始坐标偏移后，必须通过 uSTMatrix 转换回实际采样坐标
-            vec2 rCoord = (uSTMatrix * vec4(vRawCoord + dir * offset, 0.0, 1.0)).xy;
-            vec2 bCoord = (uSTMatrix * vec4(vRawCoord - dir * offset, 0.0, 1.0)).xy;
+            vec2 rCoord = (uSTMatrix * vec4(rcCoord + dir * offset, 0.0, 1.0)).xy;
+            vec2 bCoord = (uSTMatrix * vec4(rcCoord - dir * offset, 0.0, 1.0)).xy;
             
             float r = texture(uCameraTexture, rCoord).r;
-            float g = texture(uCameraTexture, vTexCoord).g;
+            float g = texture(uCameraTexture, uvCoord).g;
             float b = texture(uCameraTexture, bCoord).b;
-            float a = texture(uCameraTexture, vTexCoord).a;
+            float a = texture(uCameraTexture, uvCoord).a;
             color = vec4(r, g, b, a);
         } else {
-            color = texture(uCameraTexture, vTexCoord);
+            color = texture(uCameraTexture, uvCoord);
         }
 
         // Early exit 优化：无任何调整时直接输出
@@ -421,13 +444,40 @@ object Shaders {
                 }
             }
 
-            // 10. 颗粒
+            // 10. 颗粒 (静态底片颗粒)
             if (uFilmGrain > 0.001) {
-                float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
-                noise = (noise - 0.5) * 2.0;
+                float grainNoise = fract(sin(dot(uvCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
+                grainNoise = (grainNoise - 0.5) * 2.0;
                 luma = dot(color.rgb, W);
                 float grainMask = (1.0 - abs(luma - 0.5) * 2.0) * 0.5 + 0.5;
-                color.rgb += noise * uFilmGrain * 0.1 * grainMask;
+                color.rgb += grainNoise * uFilmGrain * 0.1 * grainMask;
+            }
+
+            // 11. 随机噪点 (增强的亮度和彩色噪点，动态刷新)
+            if (uNoise > 0.001) {
+                // 将浮点精度控制在适合 fract 的范围，避免伪影
+                vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
+                vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
+                
+                // 亮度噪点
+                float lumNoise = fract(sin(dot(noiseCoord, vec2(12.9898, 78.233))) * 43758.5453);
+                lumNoise = (lumNoise - 0.5) * 2.0;
+                
+                // 彩色噪点 (R, G, B 分别生成)
+                float colorNoiseR = fract(sin(dot(noiseCoord + vec2(1.1, 2.2), vec2(39.346, 11.135))) * 43758.5453);
+                float colorNoiseG = fract(sin(dot(noiseCoord + vec2(3.3, 4.4), vec2(73.156, 52.235))) * 43758.5453);
+                float colorNoiseB = fract(sin(dot(noiseCoord + vec2(5.5, 6.6), vec2(27.423, 83.136))) * 43758.5453);
+                vec3 colorNoise = (vec3(colorNoiseR, colorNoiseG, colorNoiseB) - 0.5) * 2.0;
+
+                luma = dot(color.rgb, W);
+                // 蒙版强度：中灰区域稍强，极端高光/阴影保留
+                float noiseMask = mix(0.5, 1.0, 1.0 - abs(luma - 0.5) * 1.5);
+                
+                // 混合：结合亮度和彩色噪点，使彩色噪点不那么突兀但又可见
+                vec3 finalNoise = mix(vec3(lumNoise), mix(vec3(lumNoise), colorNoise, 0.7), 0.8);
+                
+                // 基准强度为 0.3，效果较明显
+                color.rgb += finalNoise * uNoise * max(0.0, noiseMask);
             }
 
             color.rgb = clamp(color.rgb, 0.0, 1.0);

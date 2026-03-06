@@ -225,6 +225,8 @@
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
     <string name="recipe_param_halation">HDF</string>
     <string name="recipe_param_chromatic_aberration">CA</string>
+    <string name="recipe_param_noise">Noise</string>
+    <string name="recipe_param_low_res">Pixelate</string>
     <string name="recipe_param_lut_intensity">LUT</string>
 
     <!-- Color Recipe Tabs -->

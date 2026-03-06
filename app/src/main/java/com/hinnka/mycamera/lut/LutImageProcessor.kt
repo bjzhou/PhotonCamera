@@ -94,6 +94,10 @@ class LutImageProcessor {
     private var uFilmGrainLoc = 0
     private var uVignetteLoc = 0
     private var uBleachBypassLoc = 0
+    private var uNoiseLoc = 0
+    private var uNoiseSeedLoc = 0
+    private var uLowResLoc = 0
+    private var uAspectRatioLoc = 0
 
     // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
     private var uSharpeningLoc = 0
@@ -229,6 +233,8 @@ class LutImageProcessor {
         val bleachBypass = colorRecipeParams?.bleachBypass ?: 0f
         val halation = colorRecipeParams?.halation ?: 0f
         val chromaticAberration = colorRecipeParams?.chromaticAberration ?: 0f
+        val noise = colorRecipeParams?.noise ?: 0f
+        val lowRes = colorRecipeParams?.lowRes ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
 
         // 后期处理参数
@@ -271,7 +277,7 @@ class LutImageProcessor {
             colorRecipeEnabled,
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
-            halation, chromaticAberration,
+            halation, chromaticAberration, noise, lowRes,
             intensity, sharpening
             // GL_RGBA16 已自动归一化，使用标准 shader
         )
@@ -320,6 +326,8 @@ class LutImageProcessor {
         val halation = colorRecipeParams?.halation ?: 0f
         val chromaticAberration = colorRecipeParams?.chromaticAberration ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
+        val noise = colorRecipeParams?.noise ?: 0f
+        val lowRes = colorRecipeParams?.lowRes ?: 0f
 
         // 后期处理参数（仅在软件处理模式下生效）
         val sharpening: Float = sharpeningValue
@@ -365,7 +373,7 @@ class LutImageProcessor {
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
             halation, chromaticAberration,
-            intensity, sharpening
+            noise, lowRes, intensity, sharpening
         )
 
         outputBitmap
@@ -395,6 +403,8 @@ class LutImageProcessor {
         bleachBypass: Float,
         halation: Float,
         chromaticAberration: Float,
+        noise: Float,
+        lowRes: Float,
         intensity: Float,
         sharpening: Float
     ): Bitmap {
@@ -446,6 +456,16 @@ class LutImageProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFilmGrain"), filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uNoise"), noise)
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(program, "uNoiseSeed"),
+                (System.currentTimeMillis() % 10000) / 1000f
+            )
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uLowRes"), lowRes)
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(program, "uAspectRatio"),
+                width.toFloat() / Math.max(1, height).toFloat()
+            )
         }
 
         // 设置 HDF 参数
@@ -701,6 +721,10 @@ class LutImageProcessor {
         uFilmGrainLoc = GLES30.glGetUniformLocation(shaderProgram, "uFilmGrain")
         uVignetteLoc = GLES30.glGetUniformLocation(shaderProgram, "uVignette")
         uBleachBypassLoc = GLES30.glGetUniformLocation(shaderProgram, "uBleachBypass")
+        uNoiseLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoise")
+        uNoiseSeedLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoiseSeed")
+        uLowResLoc = GLES30.glGetUniformLocation(shaderProgram, "uLowRes")
+        uAspectRatioLoc = GLES30.glGetUniformLocation(shaderProgram, "uAspectRatio")
 
         uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
         uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
@@ -1215,6 +1239,10 @@ class LutImageProcessor {
             uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
+            uniform float uNoise;         // 0.0 ~ 1.0 (噪点)
+            uniform float uNoiseSeed;     // 噪点随机种子
+            uniform float uLowRes;        // 0.0 ~ 1.0 (低像素强度)
+            uniform float uAspectRatio;   // 图像长宽比
             
             // HDF 光晕效果
             uniform float uHalation;      // 0.0 ~ 1.0 (光晕强度)
@@ -1327,22 +1355,31 @@ class LutImageProcessor {
             }
 
             void main() {
+                // === 预处理：模拟真实低分辨率效果 ===
+                vec2 uvCoord = vTexCoord;
+                if (uLowRes > 0.005) {
+                    float blocksX = mix(512.0, 32.0, uLowRes); 
+                    vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
+                    vec2 gridUV = floor(vTexCoord / gridSize) * gridSize + gridSize * 0.5;
+                    uvCoord = mix(vTexCoord, gridUV, 0.95);
+                }
+
                 // 采样图像 (应用色散效果)
                 vec4 color;
                 if (uChromaticAberration > 0.0) {
                     vec2 center = vec2(0.5);
-                    vec2 dir = vTexCoord - center;
+                    vec2 dir = uvCoord - center;
                     float dist = length(dir);
                     float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
-                    vec2 rUV = vTexCoord + dir * offset;
-                    vec2 bUV = vTexCoord - dir * offset;
+                    vec2 rUV = uvCoord + dir * offset;
+                    vec2 bUV = uvCoord - dir * offset;
                     float r = sampleImage(rUV).r;
-                    float g = sampleImage(vTexCoord).g;
+                    float g = sampleImage(uvCoord).g;
                     float b = sampleImage(bUV).b;
-                    float a = sampleImage(vTexCoord).a;
+                    float a = sampleImage(uvCoord).a;
                     color = vec4(r, g, b, a);
                 } else {
-                    color = sampleImage(vTexCoord);
+                    color = sampleImage(uvCoord);
                 }
 
                 // === 色彩配方处理（按专业后期流程顺序） ===
@@ -1440,7 +1477,7 @@ class LutImageProcessor {
                     if (abs(uVignette) > 0.0) {
                         // 计算从中心到边缘的距离
                         vec2 center = vec2(0.5, 0.5);
-                        float dist = distance(vTexCoord, center);
+                        float dist = distance(uvCoord, center);
                         
                         // 使用 smoothstep 创建平滑过渡
                         float vignetteMask = smoothstep(0.8, 0.3, dist);
@@ -1458,10 +1495,10 @@ class LutImageProcessor {
                     // 10. 颗粒（Film Grain - 胶片颗粒感）
                     if (uFilmGrain > 0.0) {
                         // 使用纹理坐标生成伪随机噪声
-                        float noise = fract(sin(dot(vTexCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
+                        float grainNoise = fract(sin(dot(uvCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
                         
                         // 将噪声从 [0,1] 映射到 [-1,1]
-                        noise = (noise - 0.5) * 2.0;
+                        grainNoise = (grainNoise - 0.5) * 2.0;
                         
                         // 根据亮度自适应调整颗粒强度
                         float luma = getLuma(color.rgb);
@@ -1470,7 +1507,28 @@ class LutImageProcessor {
                         
                         // 应用颗粒（增强强度）
                         float grainStrength = uFilmGrain * 0.1 * grainMask;
-                        color.rgb += noise * grainStrength;
+                        color.rgb += grainNoise * grainStrength;
+                    }
+
+                    // 11. 随机噪点 (增强的亮度和彩色噪点，动态刷新)
+                    if (uNoise > 0.001) {
+                        vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
+                        vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
+                        
+                        float lumNoise = fract(sin(dot(noiseCoord, vec2(12.9898, 78.233))) * 43758.5453);
+                        lumNoise = (lumNoise - 0.5) * 2.0;
+                        
+                        float colorNoiseR = fract(sin(dot(noiseCoord + vec2(1.1, 2.2), vec2(39.346, 11.135))) * 43758.5453);
+                        float colorNoiseG = fract(sin(dot(noiseCoord + vec2(3.3, 4.4), vec2(73.156, 52.235))) * 43758.5453);
+                        float colorNoiseB = fract(sin(dot(noiseCoord + vec2(5.5, 6.6), vec2(27.423, 83.136))) * 43758.5453);
+                        vec3 colorNoise = (vec3(colorNoiseR, colorNoiseG, colorNoiseB) - 0.5) * 2.0;
+
+                        float luma = getLuma(color.rgb);
+                        float noiseMask = mix(0.5, 1.0, 1.0 - abs(luma - 0.5) * 1.5);
+                        
+                        vec3 finalNoise = mix(vec3(lumNoise), mix(vec3(lumNoise), colorNoise, 0.7), 0.8);
+                        
+                        color.rgb += finalNoise * uNoise * max(0.0, noiseMask);
                     }
 
                     // Clamp 到合法范围
@@ -1479,7 +1537,7 @@ class LutImageProcessor {
 
                 // === HDF 光晕效果（在色彩配方之后，LUT 之前） ===
                 if (uHalation > 0.0) {
-                    vec3 bloom = texture(uHdfTexture, vTexCoord).rgb;
+                    vec3 bloom = texture(uHdfTexture, uvCoord).rgb;
                     
                     // 1. 色彩色散处理：增强饱和度同时避免过度饱和导致的伪影
                     float bLuma = dot(bloom, vec3(0.2126, 0.7152, 0.0722));
@@ -1534,14 +1592,14 @@ class LutImageProcessor {
                 // --- 4. 锐化 ---
                 if (uSharpening > 0.0) {
                     // 使用基于亮度的 Unsharp Mask，避免色彩污染
-                    vec3 inputColor = sampleImage(vTexCoord).rgb;
+                    vec3 inputColor = sampleImage(uvCoord).rgb;
                     float inputLuma = getLuma(inputColor);
 
                     float neighborsLuma = 0.0;
-                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb);
-                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(uTexelSize.x, 0.0)).rgb);
-                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(0.0, -uTexelSize.y)).rgb);
-                    neighborsLuma += getLuma(sampleImage(vTexCoord + vec2(0.0, uTexelSize.y)).rgb);
+                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(-uTexelSize.x, 0.0)).rgb);
+                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(uTexelSize.x, 0.0)).rgb);
+                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(0.0, -uTexelSize.y)).rgb);
+                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(0.0, uTexelSize.y)).rgb);
                     float blurLuma = neighborsLuma * 0.25;
 
                     float detail = inputLuma - blurLuma;

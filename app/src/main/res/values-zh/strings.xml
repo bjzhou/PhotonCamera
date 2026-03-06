@@ -219,8 +219,10 @@
     <string name="recipe_param_vignette">晕影</string>
     <string name="recipe_param_bleach_bypass">留银冲洗</string>
     <string name="recipe_param_halation">HDF</string>
-    <string name="recipe_param_chromatic_aberration">色散</string>
-    <string name="recipe_param_lut_intensity">滤镜强度</string>
+    <string name="recipe_param_chromatic_aberration">色散(CA)</string>
+    <string name="recipe_param_noise">噪点</string>
+    <string name="recipe_param_low_res">低像素</string>
+    <string name="recipe_param_lut_intensity">LUT强度</string>
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_basic">基础</string>

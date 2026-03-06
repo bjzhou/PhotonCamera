@@ -97,6 +97,10 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uVignetteLocation: Int = 0
     private var uBleachBypassLocation: Int = 0
     private var uChromaticAberrationLocation: Int = 0
+    private var uNoiseLocation: Int = 0
+    private var uNoiseSeedLocation: Int = 0
+    private var uLowResLocation: Int = 0
+    private var uAspectRatioLocation: Int = 0
     private var uSTMatrixFragLocation: Int = 0
 
     // HDF 实时预览资源
@@ -189,6 +193,12 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var chromaticAberration: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile
+    var noise: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile
+    var lowRes: Float = 0f // 0.0 ~ 1.0
 
     @Volatile
     var halation: Float = 0f // 0.0 ~ 1.0
@@ -513,6 +523,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uFilmGrainLocation, filmGrain)
             GLES30.glUniform1f(uVignetteLocation, vignette)
             GLES30.glUniform1f(uBleachBypassLocation, bleachBypass)
+            GLES30.glUniform1f(uNoiseLocation, noise)
+            GLES30.glUniform1f(uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
+            GLES30.glUniform1f(uLowResLocation, lowRes)
+            GLES30.glUniform1f(uAspectRatioLocation, viewportWidth.toFloat() / Math.max(1, viewportHeight).toFloat())
         }
 
         // 色散效果独立于色彩配方，始终更新
@@ -620,6 +634,10 @@ class LutRenderer : GLSurfaceView.Renderer {
         uVignetteLocation = GLES30.glGetUniformLocation(programId, "uVignette")
         uBleachBypassLocation = GLES30.glGetUniformLocation(programId, "uBleachBypass")
         uChromaticAberrationLocation = GLES30.glGetUniformLocation(programId, "uChromaticAberration")
+        uNoiseLocation = GLES30.glGetUniformLocation(programId, "uNoise")
+        uNoiseSeedLocation = GLES30.glGetUniformLocation(programId, "uNoiseSeed")
+        uLowResLocation = GLES30.glGetUniformLocation(programId, "uLowRes")
+        uAspectRatioLocation = GLES30.glGetUniformLocation(programId, "uAspectRatio")
         uSTMatrixFragLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
 
         // Attribute 位置
