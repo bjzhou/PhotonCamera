@@ -1,5 +1,6 @@
 #include "vulkan_stacker.h"
 #include "accumulate.comp.h"
+#include "common.h"
 #include "normalize.comp.h"
 #include "structure_tensor.comp.h"
 #include "yuv_to_rgba.comp.h"
@@ -89,8 +90,8 @@ void VulkanImageStacker::initVulkanResources() {
   }
 
   // Initialize Alignment Grid Buffer early
-  gridW = (width + 15) / 16;
-  gridH = (height + 15) / 16;
+  gridW = (width + 31) / 32;
+  gridH = (height + 31) / 32;
   VkDeviceSize alignBufferSize = gridW * gridH * sizeof(Point);
   VkBufferCreateInfo alignInfo{};
   alignInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -528,11 +529,13 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   VulkanImage input;
   // Use existing conversion if available (from first frame) to compatible with
   // immutable sampler
+  TIME_START(importBuffer);
   if (!VulkanBufferImporter::importHardwareBuffer(buffer, input,
                                                   this->ycbcrConversion)) {
     LOGE("processFrame: Failed to import hardware buffer");
     return false;
   }
+  TIME_END(importBuffer);
 
   bool currentIsFirstFrame = isFirstFrame;
   LOGI("processFrame: Start. isFirstFrame=%d", currentIsFirstFrame);
@@ -701,6 +704,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   AHardwareBuffer_describe(buffer, &desc);
 
   void *lockedData = nullptr;
+  TIME_START(cpuAlignment);
   if (AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1,
                            nullptr, &lockedData) == 0) {
     // Create a 8-bit grayscale image for alignment
@@ -738,9 +742,9 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       gridH = alignment.gridH;
 
       // Safety check: ensure we don't exceed allocated buffer size
-      // Buffer was allocated with 16px tile grid
-      uint32_t allocatedGridW = (width + 15) / 16;
-      uint32_t allocatedGridH = (height + 15) / 16;
+      // Buffer was allocated with 32px tile grid
+      uint32_t allocatedGridW = (width + 31) / 32;
+      uint32_t allocatedGridH = (height + 31) / 32;
       uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
 
       size_t copyCount = std::min((size_t)alignment.offsets.size(),
@@ -787,6 +791,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       }
     }
   }
+  TIME_END(cpuAlignment);
 
   // 3. Prepare Push Constants
   float transform[6] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
@@ -816,7 +821,13 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
 
   LOGI("processFrame: Dispatching. Alpha=%f, Beta=%f, Scale=%f, Grid=%dx%d",
        pc.noiseAlpha, pc.noiseBeta, pc.scale, gridW, gridH);
+  // --- START PIPELINING SYNC POINT ---
+  // Wait for the PREVIOUS frame's GPU task to finish before we start recording
+  // new commands. This allows the cpuAlignment above (~100ms) to run in
+  // parallel with previous GPU work (~70ms).
+  vkQueueWaitIdle(vm.getComputeQueue());
 
+  TIME_START(gpuDispatch);
   // 3. Command Buffer Recording
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
@@ -1027,11 +1038,8 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
                        0, nullptr, 0, nullptr);
 
   vm.endSingleTimeCommands(cb);
-  vkQueueWaitIdle(vm.getComputeQueue());
+  TIME_END(gpuDispatch);
 
-  vkFreeDescriptorSets(device, descriptorPool, numTiles, accumSets.data());
-  vkFreeDescriptorSets(device, descriptorPool, numTiles, tensorSets.data());
-  vkFreeDescriptorSets(device, descriptorPool, 1, &yuvToRgbaSet);
   isFirstFrame = false;
   input.release(device);
   return true;
@@ -1079,39 +1087,45 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   }
 
   // 1. Calculate scores for all pending frames
+  TIME_START(scoreCalculation);
   for (auto &frame : pendingFrames) {
     frame.score = calculateYuvScore(frame.buffer, width, height);
   }
+  TIME_END(scoreCalculation);
 
   // 2. Sort pendingFrames by score descending
   std::sort(
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
 
-  LOGI("processStack: Processing %zu frames", pendingFrames.size());
+//  LOGI("processStack: Processing %zu frames", pendingFrames.size());
 
+  VulkanManager &vm = VulkanManager::getInstance();
+  VkDevice device = vm.getDevice();
+  if (device == VK_NULL_HANDLE) {
+    LOGE("processStack: Vulkan device is NULL or NOT INITIALIZED");
+    return false;
+  }
+
+  TIME_START(allFramesProcessing);
   int frameIdx = 0;
   for (auto &frame : pendingFrames) {
-    LOGI("processStack: Processing frame %d, score %f", frameIdx, frame.score);
+//    LOGI("processStack: Processing frame %d, score %f", frameIdx, frame.score);
     if (!processFrame(frame.buffer)) {
       LOGE("processStack: Failed to process frame %d", frameIdx);
     } else {
-      LOGI("processStack: Successfully processed frame %d", frameIdx);
+//      LOGI("processStack: Successfully processed frame %d", frameIdx);
     }
     AHardwareBuffer_release(frame.buffer);
     frameIdx++;
   }
   pendingFrames.clear();
+  vkQueueWaitIdle(vm.getComputeQueue());
+  vkResetDescriptorPool(device, descriptorPool, 0);
+  TIME_END(allFramesProcessing);
 
   if (!outBitmap || isFirstFrame) // Check again after processing
     return false;
-
-  VulkanManager &vm = VulkanManager::getInstance();
-  VkDevice device = vm.getDevice();
-  if (device == VK_NULL_HANDLE) {
-    LOGE("processStack: Vulkan device is NULL");
-    return false;
-  }
 
   uint32_t scale = enableSuperRes ? 2 : 1;
   uint32_t sensorW = width * scale;
@@ -1257,10 +1271,13 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
                        VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1,
                        &hostBarrier, 0, nullptr);
 
+  TIME_START(normalizationDispatch);
   vm.endSingleTimeCommands(cb);
   vkQueueWaitIdle(vm.getComputeQueue());
+  TIME_END(normalizationDispatch);
 
   // 2. Map and copy to bitmap
+  TIME_START(outputCopy);
   void *hostData;
   vkMapMemory(device, stagingMemory, 0, outSize, 0, &hostData);
 
@@ -1273,6 +1290,7 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
     }
   }
   vkUnmapMemory(device, stagingMemory);
+  TIME_END(outputCopy);
 
   vkFreeDescriptorSets(device, descriptorPool, numTiles, normalizeSets.data());
 

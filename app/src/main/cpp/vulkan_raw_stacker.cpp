@@ -664,6 +664,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     return false;
 
   // 1. Calculate scores and sort (Highest score first = Reference)
+  TIME_START(scoreCalculation);
   for (auto &frame : pendingFrames) {
     if (frame.score == 0.0f) {
       frame.score = calculateFrameScore(frame.rawData.data(), width, height,
@@ -673,6 +674,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   std::sort(
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
+  TIME_END(scoreCalculation);
 
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
@@ -754,6 +756,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   // =====================================================================
   // Phase 1: Upload all frames to GPU and build proxies/pyramids
   // =====================================================================
+  TIME_START(phase1_UploadAndPyramid);
   struct UploadedFrame {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
@@ -862,10 +865,11 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       vm.endSingleTimeCommands(cb);
     }
   }
+  TIME_END(phase1_UploadAndPyramid);
 
-  // =====================================================================
   // Phase 2: Structure tensor pass on reference frame (global, once)
   // =====================================================================
+  TIME_START(phase2_StructureTensor);
   {
     VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
@@ -915,10 +919,12 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
     vm.endSingleTimeCommands(cb);
   }
+  TIME_END(phase2_StructureTensor);
 
   // =====================================================================
   // Phase 3: Pre-compute alignment for each non-reference frame
   // =====================================================================
+  TIME_START(phase3_CoarseAlignment);
   struct FrameAlignment {
     TileAlignment coarseAlign;
   };
@@ -927,11 +933,12 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     frameAlignments[i].coarseAlign =
         computeTileAlignment(referencePyramid, uploadedFrames[i].pyramid, 64);
   }
+  TIME_END(phase3_CoarseAlignment);
 
-  // =====================================================================
   // Phase 4: Sequential tile processing
   // For each tile: clear accum → accumulate all frames → normalize
   // =====================================================================
+  TIME_START(phase4_TileProcessing);
   VkDeviceSize accumBufferSize =
       (VkDeviceSize)(tileW + 16) * (tileH + 16) * sizeof(float) * 2;
 
@@ -1174,11 +1181,13 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
     } // end for tx
   } // end for ty
+  TIME_END(phase4_TileProcessing);
 
   // =====================================================================
   // Phase 5: Read back result from staging buffer
   // =====================================================================
   {
+    TIME_START(phase5_OutputReadback);
     void *mapData;
     VK_CHECK(vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, &mapData));
     size_t reqSize = (size_t)outputW * outputH * 3 * sizeof(uint16_t);
@@ -1188,6 +1197,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       LOGE("Buffer too small! Req: %zu, Has: %zu", reqSize, bufferSize);
     }
     vkUnmapMemory(device, stagingMemory);
+    TIME_END(phase5_OutputReadback);
   }
 
   // =====================================================================

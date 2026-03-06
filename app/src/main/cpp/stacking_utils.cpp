@@ -1,4 +1,5 @@
 #include "stacking_utils.h"
+#include <arm_neon.h>
 #include <omp.h>
 
 #include "common.h" // For LOG macros
@@ -125,6 +126,7 @@ inline float computeLocalVariance(const std::vector<uint16_t> &data, int width,
 
 std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
                                     int levels) {
+  TIME_START(buildPyramid);
   std::vector<GrayImage> pyramid;
 
   // Level 0 is the original image (or copy of it)
@@ -141,11 +143,33 @@ std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
     next.height = prev.height / 2;
     next.data.resize(next.width * next.height);
 
-#pragma omp parallel for collapse(2) num_threads(4)
+#pragma omp parallel for num_threads(4)
     for (int y = 0; y < next.height; ++y) {
-      for (int x = 0; x < next.width; ++x) {
+      const uint8_t *pPrev0 = &prev.data[(2 * y) * prev.width];
+      const uint8_t *pPrev1 = &prev.data[(2 * y + 1) * prev.width];
+      uint8_t *pNext = &next.data[y * next.width];
 
-        // Simple 2x2 average (Box filter)
+      int x = 0;
+      // NEON average 16 pixels at a time
+      for (; x <= next.width - 16; x += 16) {
+        uint8x16_t row0_0 = vld1q_u8(pPrev0 + 2 * x);
+        uint8x16_t row0_1 = vld1q_u8(pPrev0 + 2 * x + 16);
+        uint8x16_t row1_0 = vld1q_u8(pPrev1 + 2 * x);
+        uint8x16_t row1_1 = vld1q_u8(pPrev1 + 2 * x + 16);
+
+        // De-interleave to get even and odd pixels
+        uint8x16x2_t vrow0 = vuzpq_u8(row0_0, row0_1);
+        uint8x16x2_t vrow1 = vuzpq_u8(row1_0, row1_1);
+
+        // Average horizontal, then vertical
+        uint8x16_t avgH0 = vrhaddq_u8(vrow0.val[0], vrow0.val[1]);
+        uint8x16_t avgH1 = vrhaddq_u8(vrow1.val[0], vrow1.val[1]);
+        uint8x16_t res = vrhaddq_u8(avgH0, avgH1);
+
+        vst1q_u8(pNext + x, res);
+      }
+      // Scalar tail
+      for (; x < next.width; ++x) {
         int sum = prev.data[(2 * y) * prev.width + (2 * x)] +
                   prev.data[(2 * y) * prev.width + (2 * x + 1)] +
                   prev.data[(2 * y + 1) * prev.width + (2 * x)] +
@@ -155,13 +179,13 @@ std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
     }
     pyramid.push_back(std::move(next));
   }
+  TIME_END(buildPyramid);
   return pyramid;
 }
 
-// Compute Sum of Absolute Differences (SAD)
+// Compute Sum of Absolute Differences (SAD) with NEON
 long long computeSAD(const GrayImage &ref, const GrayImage &target, int dx,
                      int dy) {
-  long long sad = 0;
   int margin = 2;
   int startX = std::max(margin, -dx + margin);
   int startY = std::max(margin, -dy + margin);
@@ -171,53 +195,84 @@ long long computeSAD(const GrayImage &ref, const GrayImage &target, int dx,
   if (startX >= endX || startY >= endY)
     return std::numeric_limits<long long>::max();
 
-  int samples = 0;
+  uint64_t totalSad = 0;
+  int width_to_process = endX - startX;
+
   for (int y = startY; y < endY; ++y) {
     const uint8_t *pRef = &ref.data[y * ref.width + startX];
     const uint8_t *pTgt = &target.data[(y + dy) * target.width + (startX + dx)];
-    for (int x = startX; x < endX; ++x) {
-      sad += std::abs((int)(*pRef) - (int)(*pTgt));
-      pRef++;
-      pTgt++;
+
+    uint32_t lineSad = 0;
+    int x = 0;
+    uint32x4_t vacc = vdupq_n_u32(0);
+    for (; x <= width_to_process - 16; x += 16) {
+      uint8x16_t vref = vld1q_u8(pRef + x);
+      uint8x16_t vtgt = vld1q_u8(pTgt + x);
+      uint8x16_t vdiff = vabdq_u8(vref, vtgt);
+      uint16x8_t vlow = vmovl_u8(vget_low_u8(vdiff));
+      uint16x8_t vhigh = vmovl_u8(vget_high_u8(vdiff));
+      vacc = vpadalq_u16(vacc, vlow);
+      vacc = vpadalq_u16(vacc, vhigh);
     }
-    samples += (endX - startX);
+    lineSad = vaddvq_u32(vacc);
+    for (; x < width_to_process; ++x) {
+      lineSad += std::abs((int)pRef[x] - (int)pTgt[x]);
+    }
+    totalSad += lineSad;
   }
 
-  return samples > 0 ? (sad * 1000) / samples
+  int samples = (endY - startY) * width_to_process;
+  return samples > 0 ? (long long)((totalSad * 1000) / samples)
                      : std::numeric_limits<long long>::max();
 }
 
 // Compute Sum of Absolute Differences (SAD) for a block
+// NEON Optimized version
 long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
                           int refX, int refY, int w, int h, int dx, int dy) {
-  long long sad = 0;
-  int count = 0;
+  // Ensure the block is inside the image bounds
+  if (refX < 0 || refY < 0 || refX + w > ref.width || refY + h > ref.height ||
+      refX + dx < 0 || refY + dy < 0 || refX + dx + w > target.width ||
+      refY + dy + h > target.height) {
+    return std::numeric_limits<long long>::max();
+  }
+
+  uint32_t totalSad = 0;
   for (int y = 0; y < h; ++y) {
-    int rY = refY + y;
-    int tY = rY + dy;
-    if (rY < 0 || rY >= ref.height || tY < 0 || tY >= target.height)
-      continue;
+    const uint8_t *pRef = &ref.data[(refY + y) * ref.width + refX];
+    const uint8_t *pTgt =
+        &target.data[(refY + y + dy) * target.width + refX + dx];
 
-    const uint8_t *pRef = &ref.data[rY * ref.width + refX];
-    const uint8_t *pTgt = &target.data[tY * target.width + refX + dx];
+    int x = 0;
+    // NEON path: process 16 pixels at a time
+    uint32x4_t vacc = vdupq_n_u32(0);
+    for (; x <= w - 16; x += 16) {
+      uint8x16_t vref = vld1q_u8(pRef + x);
+      uint8x16_t vtgt = vld1q_u8(pTgt + x);
+      uint8x16_t vdiff = vabdq_u8(vref, vtgt);
 
-    for (int x = 0; x < w; ++x) {
-      int rX = refX + x;
-      int tX = rX + dx;
-      if (rX < 0 || rX >= ref.width || tX < 0 || tX >= target.width)
-        continue;
-      sad += std::abs((int)pRef[x] - (int)pTgt[x]);
-      count++;
+      // Accumulate differences
+      uint16x8_t vlow = vmovl_u8(vget_low_u8(vdiff));
+      uint16x8_t vhigh = vmovl_u8(vget_high_u8(vdiff));
+      vacc = vpadalq_u16(vacc, vlow);
+      vacc = vpadalq_u16(vacc, vhigh);
+    }
+    totalSad += vaddvq_u32(vacc);
+
+    // Scalar tail
+    for (; x < w; ++x) {
+      totalSad += std::abs((int)pRef[x] - (int)pTgt[x]);
     }
   }
-  return count > 0 ? (sad * 256) / count
-                   : std::numeric_limits<long long>::max();
+
+  return (long long)((totalSad * 256) / (w * h));
 }
 
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
                                    int maxShift) {
-  const int tileSize = 16; // Grid step size (finer for better alignment)
+  TIME_START(computeTileAlignment);
+  const int tileSize = 32; // Increased from 16 to 32 for performance
   int width = refPyramid[0].width;
   int height = refPyramid[0].height;
 
@@ -295,9 +350,9 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       float bestDx_f = 0.0f;
       float bestDy_f = 0.0f;
 
-      // Local search
-      for (int dy = -2; dy <= 2; ++dy) {
-        for (int dx = -2; dx <= 2; ++dx) {
+      // Local search: Reduced range to 3x3 for performance
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
           int curDx = baseDx + dx;
           int curDy = baseDy + dy;
           // Use matchSizeL1 which is larger than stepL1 for stability
@@ -381,7 +436,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       float det = sumIxIx * sumIyIy - sumIxIy * sumIxIy;
 
       if (std::abs(det) > 1e-6f) { // Only iterate if the patch has texture
-        for (int iter = 0; iter < 6; ++iter) {
+        for (int iter = 0; iter < 3; ++iter) { // Reduced from 6 to 3
           float sumIxIt = 0, sumIyIt = 0;
 
           // Only compute the temporal difference It = I(x+p) - T(x) inside the
@@ -512,6 +567,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   }
   alignment.errorMap = std::move(errorMapDilated);
 
+  TIME_END(computeTileAlignment);
   return alignment;
 }
 

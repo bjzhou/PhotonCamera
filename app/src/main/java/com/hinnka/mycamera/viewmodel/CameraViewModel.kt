@@ -1591,7 +1591,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val aspectRatio = state.value.aspectRatio
             val frameIdToSave = currentFrameId
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = sharpening.firstOrNull() ?: 0f
+            val sharpeningValue = maxOf(sharpening.firstOrNull() ?: 0f, 0.4f)
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
