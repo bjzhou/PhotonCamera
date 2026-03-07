@@ -348,7 +348,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     systemOffset = newPhotos.size
                     hasMoreSystemPhotos = newPhotos.size >= loadCount
                 } else {
-                    _systemPhotos.value += newPhotos
+                    _systemPhotos.value = (_systemPhotos.value + newPhotos).distinctBy { it.id }
                     systemOffset += newPhotos.size
                     hasMoreSystemPhotos = newPhotos.size >= loadCount
                 }

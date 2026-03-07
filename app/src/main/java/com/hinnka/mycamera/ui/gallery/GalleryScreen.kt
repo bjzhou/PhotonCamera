@@ -363,7 +363,7 @@ fun GalleryScreen(
                 ) {
                     items(
                         items = currentPhotos,
-                        key = { it.id },
+                        key = { "${selectedTab.name}_${it.id}" },
                         contentType = { "photo" }
                     ) { photo ->
                         val index = currentPhotos.indexOf(photo)

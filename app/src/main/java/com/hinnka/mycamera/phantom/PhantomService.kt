@@ -23,11 +23,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -43,7 +41,6 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -127,7 +124,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val relativePath: String,
         val photoId: String,
         val thumbnail: Bitmap? = null,
-        val size: Long
+        val size: Long,
+        val newUri: Uri? = null,
+        val newName: String = "",
+        val newSize: Long = 0L
     )
 
     private var registry = LifecycleRegistry(this)
@@ -201,29 +201,36 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             ignoreCase = true
                         ) && !relativePath.contains("DCIM/100IMAGE", ignoreCase = true)
                     ) return
+                    if (name.startsWith("PhotonCamera")) return
 
                     val path = data.ifEmpty {
                         val dir = File(Environment.getExternalStorageDirectory(), relativePath)
                         File(dir, name).absolutePath
                     }
-                    PLog.d(TAG, "Content changed detected: path=$path size=$size")
+                    PLog.d(TAG, "Content changed detected: ${uri.lastPathSegment} $name size=$size")
                     processPhotoTaskMap[path]?.cancel()
                     processPhotoTaskMap[path] = lifecycleScope.async {
                         delay(200L)
                         if (isActive) {
                             // 在延迟后再次检查，此时上一个任务可能已经更新了 processingInfo
-                            if (
-                                processingInfo?.relativePath == relativePath
-                                && processingInfo?.name == name
-                                && processingInfo?.size == size
+                            val info = processingInfo
+                            if (info != null
+                                && info.relativePath == relativePath
+                                && info.name == name
+                                && info.size >= size
                             ) {
-                                PLog.d(
-                                    TAG,
-                                    "Ignore change for $path as it matches current state (size $size)"
-                                )
+                                PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
                                 return@async
                             }
-                            photoProcessTask(uri, name, relativePath)
+                            if (info != null
+                                && info.relativePath == relativePath
+                                && info.newName == name
+                                && info.newSize >= size
+                            ) {
+                                PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
+                                return@async
+                            }
+                            photoProcessTask(uri, name, size, relativePath)
                             processPhotoTaskMap.remove(path)
                         }
                     }
@@ -313,6 +320,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private suspend fun photoProcessTask(
         uri: Uri,
         name: String,
+        size: Long,
         relativePath: String
     ) = withContext(Dispatchers.IO) {
         val userPreferencesRepository =
@@ -332,6 +340,18 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         }
         if (!isActive) return@withContext
 
+        if (uri != processingInfo?.uri) {
+            if (name != processingInfo?.name || relativePath != processingInfo?.relativePath) {
+                processingInfo = ProcessingInfo(
+                    uri = uri,
+                    photoId = photoId,
+                    name = name,
+                    size = size,
+                    relativePath = relativePath,
+                )
+            }
+        }
+
         val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
         try {
             // 读取照片
@@ -339,8 +359,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 context, photoId, metadata,
                 0f, 0f, 0f
             ) ?: return@withContext
-
-            PLog.d(TAG, "processedBitmap = ${processedBitmap.colorSpace?.name}")
 
             val videoFile = PhotoManager.getVideoFile(context, photoId)
             val photoFile = PhotoManager.getPhotoFile(context, photoId)
@@ -356,8 +374,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 )
             )
 
-            var size = 0L
-            var filename = name
+            var newSize = 0L
+            var newName = name
 
             val writeUri = if (saveAsNew) {
                 val lutName =
@@ -367,25 +385,26 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     withSuffix += ".$lutName"
                 }
 
-                filename = name.replace(".jpg", "$withSuffix.jpg")
+                newName = "PhotonCamera_" + name.replace(".jpg", "$withSuffix.jpg")
 
-                this@PhantomService.processingInfo = ProcessingInfo(
-                    uri = uri,
-                    photoId = photoId,
-                    name = filename,
-                    relativePath = relativePath,
-                    size = size
+                processingInfo = processingInfo?.copy(
+                    newName = newName,
+                    newSize = newSize
                 )
 
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                if (processingInfo?.newUri != null) {
+                    processingInfo!!.newUri!!
+                } else {
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, newName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    }
+                    context.contentResolver.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        contentValues
+                    ) ?: uri
                 }
-                context.contentResolver.insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    contentValues
-                ) ?: uri
             } else {
                 uri
             }
@@ -393,10 +412,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             if (videoFile.exists()) {
                 val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
                 try {
-                    PLog.d(
-                        TAG,
-                        "Attempting to create Motion Photo for export: JPEG=${tempExportFile.length()}, Video=${videoFile.length()}"
-                    )
 
                     val creator = if (Build.MANUFACTURER.lowercase().contains("vivo") && videoFile.exists()) {
                         // Vivo Live Photo 照片中没有内嵌视频文件，存在视频文件说明非 Vivo Live Photo
@@ -415,14 +430,12 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         creator
                     )
 
-                    size = if (success) tempMotionPhotoFile.length() else tempExportFile.length()
+                    newSize = if (success) tempMotionPhotoFile.length() else tempExportFile.length()
 
-                    this@PhantomService.processingInfo = ProcessingInfo(
-                        uri = writeUri,
-                        photoId = photoId,
-                        name = filename,
-                        relativePath = relativePath,
-                        size = size
+                    processingInfo = processingInfo?.copy(
+                        newUri = writeUri,
+                        newName = newName,
+                        newSize = newSize
                     )
 
                     context.contentResolver.openOutputStream(writeUri, "wt")?.use { outputStream ->
@@ -444,14 +457,12 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             } else if (VivoLivePhotoCreator.isVivoPhoto(photoFile.absolutePath)) {
                 // 如果是 Vivo Photo，特殊处理
                 val vivoMetadata = VivoLivePhotoCreator.extractVivoMetadata(photoFile.absolutePath)
-                size = tempExportFile.length() + (vivoMetadata?.size?.toLong() ?: 0L)
+                newSize = tempExportFile.length() + (vivoMetadata?.size?.toLong() ?: 0L)
 
-                this@PhantomService.processingInfo = ProcessingInfo(
-                    uri = writeUri,
-                    photoId = photoId,
-                    name = filename,
-                    relativePath = relativePath,
-                    size = size
+                processingInfo = processingInfo?.copy(
+                    newUri = writeUri,
+                    newName = newName,
+                    newSize = newSize
                 )
                 context.contentResolver.openOutputStream(writeUri, "wt")?.use { outputStream ->
                     tempExportFile.inputStream().use { input -> input.copyTo(outputStream) }
@@ -460,13 +471,11 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
                 }
             } else {
-                size = tempExportFile.length()
-                this@PhantomService.processingInfo = ProcessingInfo(
-                    uri = writeUri,
-                    photoId = photoId,
-                    name = filename,
-                    relativePath = relativePath,
-                    size = size
+                newSize = tempExportFile.length()
+                processingInfo = processingInfo?.copy(
+                    newUri = writeUri,
+                    newName = newName,
+                    newSize = newSize
                 )
                 // 3b. Normal Export: Copy Temp File (with EXIF) to MediaStore
                 context.contentResolver.openOutputStream(writeUri, "wt")?.use { outputStream ->
@@ -480,16 +489,14 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 exportedUris = currentMetadata.exportedUris + writeUri.toString()
             )
             saveMetadata(context, photoId, updatedMetadata)
-            PLog.d(TAG, "Exported URI saved: $writeUri $name for photo $photoId")
+            PLog.d(TAG, "Exported URI saved: ${writeUri.lastPathSegment} $newName $newSize for photo $photoId")
 
             val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
-            this@PhantomService.processingInfo = ProcessingInfo(
-                uri = writeUri,
-                photoId = photoId,
-                name = filename,
-                relativePath = relativePath,
+            processingInfo = processingInfo?.copy(
                 thumbnail = thumbnail,
-                size = size
+                newUri = writeUri,
+                newName = newName,
+                newSize = newSize
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to export photo", e)
@@ -545,7 +552,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 if (phantomButtonHidden) return@setContent
 
                 val scope = rememberCoroutineScope()
-                val processingInfo = this@PhantomService.processingInfo
+                val processingInfo = processingInfo
                 LaunchedEffect(expanded, processingInfo, showFilterPicker) {
                     if (expanded && !showFilterPicker) {
                         delay(2000L)

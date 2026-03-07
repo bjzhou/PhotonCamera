@@ -558,147 +558,118 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
     input.ycbcrConversion = VK_NULL_HANDLE;
   }
 
-  // 1. Allocate and Update Descriptor Sets for each tile
-  // Need to increase pool size? initVulkanResources allocation was "Generous"
-  // (32 per tile). We added tensor sets.
+  // 1. Reuse or Allocate Descriptor Sets for each tile
   int numTiles = numTilesX * numTilesY;
 
-  // Pre-conversion Descriptor Set
-  {
+  if (yuvToRgbaSet == VK_NULL_HANDLE) {
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &yuvToRgbaLayout;
     VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &yuvToRgbaSet));
-
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfo.imageView = input.viewY;
-    imageInfo.sampler = input.sampler;
-
-    VkDescriptorImageInfo outInfo{};
-    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    outInfo.imageView = rgbFrame.viewY;
-    outInfo.sampler = VK_NULL_HANDLE;
-
-    VkWriteDescriptorSet writes[2] = {};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = yuvToRgbaSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &imageInfo;
-
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = yuvToRgbaSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &outInfo;
-
-    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
   }
 
+  // Descriptions for accum/tensor sets are constant for the life of the stacker
   for (int i = 0; i < numTiles; ++i) {
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &descriptorSetLayout;
-    VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &accumSets[i]));
+    if (accumSets[i] == VK_NULL_HANDLE) {
+      VkDescriptorSetAllocateInfo allocInfo{};
+      allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+      allocInfo.descriptorPool = descriptorPool;
+      allocInfo.descriptorSetCount = 1;
+      allocInfo.pSetLayouts = &descriptorSetLayout;
+      VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &accumSets[i]));
 
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfo.imageView = rgbFrame.viewY;
-    imageInfo.sampler = rgbFrame.sampler;
+      VkDescriptorImageInfo imageInfo{};
+      imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      imageInfo.imageView = rgbFrame.viewY;
+      imageInfo.sampler = rgbFrame.sampler;
 
-    VkDescriptorBufferInfo accumBufferInfo{};
-    accumBufferInfo.buffer = accumBuffers[i];
-    accumBufferInfo.offset = 0;
-    accumBufferInfo.range = VK_WHOLE_SIZE;
+      VkDescriptorBufferInfo accumBufferInfo{accumBuffers[i], 0, VK_WHOLE_SIZE};
+      VkDescriptorBufferInfo alignBufferInfo{alignmentBuffer, 0, VK_WHOLE_SIZE};
+      VkDescriptorBufferInfo kpBufferInfo{kernelParamsBuffer, 0, VK_WHOLE_SIZE};
+      VkDescriptorBufferInfo mpBufferInfo{motionPriorBuffer, 0, VK_WHOLE_SIZE};
 
-    VkDescriptorBufferInfo alignBufferInfo{};
-    alignBufferInfo.buffer = alignmentBuffer;
-    alignBufferInfo.offset = 0;
-    alignBufferInfo.range = VK_WHOLE_SIZE;
+      VkWriteDescriptorSet descriptorWrites[5] = {};
+      descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[0].dstSet = accumSets[i];
+      descriptorWrites[0].dstBinding = 0;
+      descriptorWrites[0].descriptorType =
+          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      descriptorWrites[0].descriptorCount = 1;
+      descriptorWrites[0].pImageInfo = &imageInfo;
 
-    VkDescriptorBufferInfo kpBufferInfo{};
-    kpBufferInfo.buffer = kernelParamsBuffer;
-    kpBufferInfo.offset = 0;
-    kpBufferInfo.range = VK_WHOLE_SIZE;
+      descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[1].dstSet = accumSets[i];
+      descriptorWrites[1].dstBinding = 1;
+      descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      descriptorWrites[1].descriptorCount = 1;
+      descriptorWrites[1].pBufferInfo = &accumBufferInfo;
 
-    VkDescriptorBufferInfo mpBufferInfo{};
-    mpBufferInfo.buffer = motionPriorBuffer;
-    mpBufferInfo.offset = 0;
-    mpBufferInfo.range = VK_WHOLE_SIZE;
+      descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[2].dstSet = accumSets[i];
+      descriptorWrites[2].dstBinding = 2;
+      descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      descriptorWrites[2].descriptorCount = 1;
+      descriptorWrites[2].pBufferInfo = &alignBufferInfo;
 
-    VkWriteDescriptorSet descriptorWrites[5] = {}; // Increased to 5
-    descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[0].dstSet = accumSets[i];
-    descriptorWrites[0].dstBinding = 0;
-    descriptorWrites[0].descriptorType =
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[0].descriptorCount = 1;
-    descriptorWrites[0].pImageInfo = &imageInfo;
+      descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[3].dstSet = accumSets[i];
+      descriptorWrites[3].dstBinding = 3;
+      descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      descriptorWrites[3].descriptorCount = 1;
+      descriptorWrites[3].pBufferInfo = &kpBufferInfo;
 
-    descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[1].dstSet = accumSets[i];
-    descriptorWrites[1].dstBinding = 1;
-    descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    descriptorWrites[1].descriptorCount = 1;
-    descriptorWrites[1].pBufferInfo = &accumBufferInfo;
+      descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[4].dstSet = accumSets[i];
+      descriptorWrites[4].dstBinding = 4;
+      descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      descriptorWrites[4].descriptorCount = 1;
+      descriptorWrites[4].pBufferInfo = &mpBufferInfo;
 
-    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[2].dstSet = accumSets[i];
-    descriptorWrites[2].dstBinding = 2;
-    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    descriptorWrites[2].descriptorCount = 1;
-    descriptorWrites[2].pBufferInfo = &alignBufferInfo;
+      vkUpdateDescriptorSets(device, 5, descriptorWrites, 0, nullptr);
+    }
 
-    descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[3].dstSet = accumSets[i];
-    descriptorWrites[3].dstBinding = 3;
-    descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    descriptorWrites[3].descriptorCount = 1;
-    descriptorWrites[3].pBufferInfo = &kpBufferInfo;
+    if (tensorSets[i] == VK_NULL_HANDLE) {
+      VkDescriptorSetAllocateInfo tensorAlloc{};
+      tensorAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+      tensorAlloc.descriptorPool = descriptorPool;
+      tensorAlloc.descriptorSetCount = 1;
+      tensorAlloc.pSetLayouts = &tensorSetLayout;
+      VK_CHECK(vkAllocateDescriptorSets(device, &tensorAlloc, &tensorSets[i]));
 
-    descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[4].dstSet = accumSets[i];
-    descriptorWrites[4].dstBinding = 4;
-    descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    descriptorWrites[4].descriptorCount = 1;
-    descriptorWrites[4].pBufferInfo = &mpBufferInfo;
+      VkDescriptorImageInfo imageInfo{};
+      imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      imageInfo.imageView = rgbFrame.viewY;
+      imageInfo.sampler = rgbFrame.sampler;
 
-    vkUpdateDescriptorSets(device, 5, descriptorWrites, 0, nullptr);
+      VkDescriptorBufferInfo kpBufferInfo{kernelParamsBuffer, 0, VK_WHOLE_SIZE};
 
-    // Also Allocate Tensor Sets
-    VkDescriptorSetAllocateInfo tensorAlloc{};
-    tensorAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    tensorAlloc.descriptorPool = descriptorPool;
-    tensorAlloc.descriptorSetCount = 1;
-    tensorAlloc.pSetLayouts = &tensorSetLayout;
-    VK_CHECK(vkAllocateDescriptorSets(device, &tensorAlloc, &tensorSets[i]));
+      VkWriteDescriptorSet tensorWrites[2] = {};
+      tensorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      tensorWrites[0].dstSet = tensorSets[i];
+      tensorWrites[0].dstBinding = 0;
+      tensorWrites[0].descriptorType =
+          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      tensorWrites[0].descriptorCount = 1;
+      tensorWrites[0].pImageInfo = &imageInfo;
 
-    VkWriteDescriptorSet tensorWrites[2] = {};
-    tensorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    tensorWrites[0].dstSet = tensorSets[i];
-    tensorWrites[0].dstBinding = 0;
-    tensorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    tensorWrites[0].descriptorCount = 1;
-    tensorWrites[0].pImageInfo = &imageInfo; // Same input image
+      tensorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      tensorWrites[1].dstSet = tensorSets[i];
+      tensorWrites[1].dstBinding = 1;
+      tensorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      tensorWrites[1].descriptorCount = 1;
+      tensorWrites[1].pBufferInfo = &kpBufferInfo;
 
-    tensorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    tensorWrites[1].dstSet = tensorSets[i];
-    tensorWrites[1].dstBinding = 1;
-    tensorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    tensorWrites[1].descriptorCount = 1;
-    tensorWrites[1].pBufferInfo = &kpBufferInfo; // Output to Kernel Params
-
-    vkUpdateDescriptorSets(device, 2, tensorWrites, 0, nullptr);
+      vkUpdateDescriptorSets(device, 2, tensorWrites, 0, nullptr);
+    }
   }
+
   // 2. Alignment logic on CPU (to get offsets)
   float offsetX = 0.0f, offsetY = 0.0f;
+  std::vector<Point> alignmentOffsets;
+  std::vector<float> alignmentErrorMap;
+  size_t copyCount = 0;
 
   AHardwareBuffer_Desc desc;
   AHardwareBuffer_describe(buffer, &desc);
@@ -714,7 +685,6 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
     currentY.data.resize(width * height);
 
     uint8_t *srcY = (uint8_t *)lockedData;
-    // Assume Y plane is first (standard for Android YUV)
     int stride = desc.stride;
     bool is10bit = (desc.format == 0x36); // AHARDWAREBUFFER_FORMAT_YCbCr_P010
 
@@ -737,57 +707,26 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       TileAlignment alignment =
           computeTileAlignment(referencePyramid, currentPyramid, 64);
 
-      // Update grid dimensions from alignment result
       gridW = alignment.gridW;
       gridH = alignment.gridH;
 
-      // Safety check: ensure we don't exceed allocated buffer size
-      // Buffer was allocated with 32px tile grid
       uint32_t allocatedGridW = (width + 31) / 32;
       uint32_t allocatedGridH = (height + 31) / 32;
       uint32_t maxAllocatedPoints = allocatedGridW * allocatedGridH;
 
-      size_t copyCount = std::min((size_t)alignment.offsets.size(),
-                                  (size_t)maxAllocatedPoints);
+      copyCount =
+          std::min(alignment.offsets.size(), (size_t)maxAllocatedPoints);
+      alignmentOffsets = std::move(alignment.offsets);
+      alignmentErrorMap = std::move(alignment.errorMap);
 
-      if (copyCount > 0) {
-        void *mapPtr = nullptr;
-        // Use VK_WHOLE_SIZE for safer mapping
-        VkResult res =
-            vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
-        if (res == VK_SUCCESS && mapPtr != nullptr) {
-          memcpy(mapPtr, alignment.offsets.data(), copyCount * sizeof(Point));
-          vkUnmapMemory(device, alignmentMemory);
-        } else {
-          LOGE("VulkanImageStacker: Failed to map alignment memory: %d", res);
-        }
-
-        void *mpMapPtr = nullptr;
-        VkResult resMP = vkMapMemory(device, motionPriorMemory, 0,
-                                     VK_WHOLE_SIZE, 0, &mpMapPtr);
-        if (resMP == VK_SUCCESS && mpMapPtr != nullptr) {
-          if (alignment.errorMap.size() >= copyCount) {
-            memcpy(mpMapPtr, alignment.errorMap.data(),
-                   copyCount * sizeof(float));
-          } else {
-            LOGE("VulkanImageStacker: Error Map size mismatch!");
-          }
-          vkUnmapMemory(device, motionPriorMemory);
-        } else {
-          LOGE("VulkanImageStacker: Failed to map MP memory: %d", resMP);
-        }
-      }
-
-      // Calculate global average offset for fallback (redundant but kept for
-      // safety)
       float sumX = 0, sumY = 0;
-      for (const auto &p : alignment.offsets) {
+      for (const auto &p : alignmentOffsets) {
         sumX += p.x;
         sumY += p.y;
       }
-      if (!alignment.offsets.empty()) {
-        offsetX = sumX / alignment.offsets.size();
-        offsetY = sumY / alignment.offsets.size();
+      if (!alignmentOffsets.empty()) {
+        offsetX = sumX / alignmentOffsets.size();
+        offsetY = sumY / alignmentOffsets.size();
       }
     }
   }
@@ -812,20 +751,60 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   pc.isFirstFrame = currentIsFirstFrame ? 1 : 0;
   pc.gridW = gridW;
   pc.gridH = gridH;
-  // Phase 6: High-ISO Capable Noise Model
-  // Because YUV is calculated at full native 1.0x resolution instead of a 0.5x
-  // downsampled guide image, the high-frequency pixel delta variance is larger
-  // than pure RAW. Expected native SD is 5-7% (Variance = 0.005).
   pc.noiseAlpha = 0.005f;
   pc.noiseBeta = 0.001f;
 
   LOGI("processFrame: Dispatching. Alpha=%f, Beta=%f, Scale=%f, Grid=%dx%d",
        pc.noiseAlpha, pc.noiseBeta, pc.scale, gridW, gridH);
+
   // --- START PIPELINING SYNC POINT ---
   // Wait for the PREVIOUS frame's GPU task to finish before we start recording
-  // new commands. This allows the cpuAlignment above (~100ms) to run in
-  // parallel with previous GPU work (~70ms).
+  // new commands or mapping shared buffers.
   vkQueueWaitIdle(vm.getComputeQueue());
+
+  // Safe to map alignment buffers and update frame-varying descriptors now
+  if (!currentIsFirstFrame && copyCount > 0) {
+    void *mapPtr = nullptr;
+    VkResult res =
+        vkMapMemory(device, alignmentMemory, 0, VK_WHOLE_SIZE, 0, &mapPtr);
+    if (res == VK_SUCCESS && mapPtr != nullptr) {
+      memcpy(mapPtr, alignmentOffsets.data(), copyCount * sizeof(Point));
+      vkUnmapMemory(device, alignmentMemory);
+    }
+
+    void *mpMapPtr = nullptr;
+    VkResult resMP =
+        vkMapMemory(device, motionPriorMemory, 0, VK_WHOLE_SIZE, 0, &mpMapPtr);
+    if (resMP == VK_SUCCESS && mpMapPtr != nullptr) {
+      memcpy(mpMapPtr, alignmentErrorMap.data(), copyCount * sizeof(float));
+      vkUnmapMemory(device, motionPriorMemory);
+    }
+  }
+
+  // Update yuvToRgbaSet with current input
+  {
+    VkDescriptorImageInfo imageInfo{input.sampler, input.viewY,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo outInfo{VK_NULL_HANDLE, rgbFrame.viewY,
+                                  VK_IMAGE_LAYOUT_GENERAL};
+
+    VkWriteDescriptorSet writes[2] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = yuvToRgbaSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imageInfo;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = yuvToRgbaSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &outInfo;
+
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+  }
 
   TIME_START(gpuDispatch);
   // 3. Command Buffer Recording
@@ -1098,7 +1077,7 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
 
-//  LOGI("processStack: Processing %zu frames", pendingFrames.size());
+  //  LOGI("processStack: Processing %zu frames", pendingFrames.size());
 
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
@@ -1110,11 +1089,12 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   TIME_START(allFramesProcessing);
   int frameIdx = 0;
   for (auto &frame : pendingFrames) {
-//    LOGI("processStack: Processing frame %d, score %f", frameIdx, frame.score);
+    //    LOGI("processStack: Processing frame %d, score %f", frameIdx,
+    //    frame.score);
     if (!processFrame(frame.buffer)) {
       LOGE("processStack: Failed to process frame %d", frameIdx);
     } else {
-//      LOGI("processStack: Successfully processed frame %d", frameIdx);
+      //      LOGI("processStack: Successfully processed frame %d", frameIdx);
     }
     AHardwareBuffer_release(frame.buffer);
     frameIdx++;
@@ -1122,6 +1102,16 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   pendingFrames.clear();
   vkQueueWaitIdle(vm.getComputeQueue());
   vkResetDescriptorPool(device, descriptorPool, 0);
+
+  // Reset descriptor set handles as they are now invalid
+  yuvToRgbaSet = VK_NULL_HANDLE;
+  std::fill(accumSets.begin(), accumSets.end(),
+            (VkDescriptorSet)VK_NULL_HANDLE);
+  std::fill(tensorSets.begin(), tensorSets.end(),
+            (VkDescriptorSet)VK_NULL_HANDLE);
+  std::fill(normalizeSets.begin(), normalizeSets.end(),
+            (VkDescriptorSet)VK_NULL_HANDLE);
+
   TIME_END(allFramesProcessing);
 
   if (!outBitmap || isFirstFrame) // Check again after processing
