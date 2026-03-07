@@ -444,11 +444,34 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
         }
 
         CameraParameter.APERTURE -> {
-            // Aperture values (usually fixed on mobile)
-            val step = 0.5f
-            generateSequence(minValue) { it + step }
-                .takeWhile { it <= maxValue }
-                .toList()
+            listOf(
+                minValue,
+                1f,
+                1.4f,
+                1.8f,
+                2f,
+                2.4f,
+                2.8f,
+                3.2f,
+                3.5f,
+                4f,
+                4.5f,
+                5f,
+                5.6f,
+                6.3f,
+                7.1f,
+                8f,
+                9f,
+                10f,
+                11f,
+                13f,
+                14f,
+                16f,
+                maxValue
+            )
+                .toSet()
+                .map { it }
+                .filter { it in minValue..maxValue }
         }
     }
 }

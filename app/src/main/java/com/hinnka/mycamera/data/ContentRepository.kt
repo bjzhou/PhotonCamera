@@ -9,6 +9,7 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
+import com.hinnka.mycamera.processor.DepthBokehProcessor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,11 +53,14 @@ class ContentRepository private constructor(context: Context) {
     // 边框渲染器
     val frameRenderer = FrameRenderer(appContext)
 
+    val depthBokehProcessor = DepthBokehProcessor(appContext)
+
     val photoProcessor = PhotoProcessor(
         lutManager,
         imageProcessor,
         frameManager,
-        frameRenderer
+        frameRenderer,
+        depthBokehProcessor
     )
 
     // 用户偏好设置仓库

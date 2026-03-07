@@ -59,10 +59,11 @@ fun CameraParameterBar(
         )
         ParameterItem(
             label = "Av",
-            value = String.format("f/%.1f", state.aperture),
+            value = String.format("f/%.1f", if (state.isVirtualApertureEnabled) state.virtualAperture else state.physicalAperture),
             labelColor = yellow,
+            valueColor = if (state.isVirtualApertureEnabled) Color(0xFF00E5FF) else null, // 开启虚拟光圈时显示青色
             isSelected = selectedParameter == CameraParameter.APERTURE,
-            isEnabled = false, // Usually fixed on mobile cameras
+            isEnabled = true, // Enabled for computational bokeh
             onClick = { onParameterClick(CameraParameter.APERTURE) }
         )
         ParameterItem(

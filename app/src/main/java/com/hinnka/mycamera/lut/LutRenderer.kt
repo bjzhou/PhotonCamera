@@ -58,6 +58,15 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uPassCameraTextureLocation: Int = 0
     private var aPassPositionLocation: Int = 0
     private var aPassTexCoordLocation: Int = 0
+    
+    // 深度估计输入采集
+    private var depthInputFboId: Int = 0
+    private var depthInputTextureId: Int = 0
+    private var depthInputPboId: Int = 0
+    private val DEPTH_INPUT_SIZE = 256
+    private val depthInputBuffer = ByteBuffer.allocateDirect(DEPTH_INPUT_SIZE * DEPTH_INPUT_SIZE * 4)
+    private var lastRunDepthInputTime: Long = 0
+    var onDepthInputAvailable: ((Bitmap) -> Unit)? = null
 
     // FBO 相关
     private var fboId: Int = 0
@@ -102,6 +111,8 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uLowResLocation: Int = 0
     private var uAspectRatioLocation: Int = 0
     private var uSTMatrixFragLocation: Int = 0
+    private var uApertureLocation: Int = 0
+    private var uFocusPointLocation: Int = 0
 
     // HDF 实时预览资源
     private var hdfExtractBlurHProgram: Int = 0
@@ -111,6 +122,27 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var hdfFboId = IntArray(2)
     private var hdfWidth: Int = 0
     private var hdfHeight: Int = 0
+    
+    // Bokeh 实时预览资源
+    private var bokehProgramId: Int = 0
+    private var uBokehInputTexLoc: Int = 0
+    private var uBokehDepthTexLoc: Int = 0
+    private var uBokehMaxBlurRadiusLoc: Int = 0
+    private var uBokehApertureLoc: Int = 0
+    private var uBokehFocusDepthLoc: Int = 0
+    private var uBokehTexelSizeLoc: Int = 0
+    private var aBokehPositionLoc: Int = 0
+    private var aBokehTexCoordLoc: Int = 0
+    
+    private var depthTextureId: Int = 0
+    @Volatile
+    var depthMap: Bitmap? = null
+    private var lastDepthMap: Bitmap? = null
+    private var bokehFboId: Int = 0
+    private var bokehTextureId: Int = 0
+    private var bokehFboWidth: Int = 0
+    private var bokehFboHeight: Int = 0
+    private var bokehRenderScale: Float = 0.5f // 降采样比例，0.5 代表 1/4 像素量
 
     // Attribute 位置
     private var aPositionLocation: Int = 0
@@ -151,6 +183,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var focusPoint: PointF? = null
+
+    @Volatile
+    var aperture: Float = 0f
 
     @Volatile
     var meteringEnabled: Boolean = true
@@ -299,8 +334,10 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         GLES30.glViewport(0, 0, width, height)
 
-        // 初始化 FBO
         initFbo(width, height)
+        initBokehFbo(width, height)
+        initMeteringFbo()
+        initDepthInputFbo()
 
         // 更新 MVP 矩阵以处理 center crop
         updateMVPMatrix()
@@ -365,16 +402,28 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         val recorder = livePhotoRecorder
         val hdfEnabled = halation > 0.001f
-        val needsFbo = (recorder != null || hdfEnabled) && fboId != 0 && fboTextureId != 0
+        val bokehNeeded = aperture > 0f && depthMap != null
+        val needsFbo = (recorder != null || hdfEnabled || bokehNeeded) && fboId != 0 && fboTextureId != 0
 
         if (needsFbo) {
             // 1. 渲染主着色器到 FBO (色彩配方 + LUT + CA)
             drawInternal(fboId, viewportWidth, viewportHeight)
 
-            // 2. HDF 多 Pass 处理
-            var outputTexId = fboTextureId
+            // 深度采集（按需，从刚刚渲染好的 FBO 纹理读取）
+            if (aperture > 0f) {
+                runDepthInputCaptureInternal(fboTextureId)
+            }
+
+            // 2. Bokeh 处理
+            var currentTexId = fboTextureId
+            if (bokehNeeded) {
+                currentTexId = renderBokehPreview(fboTextureId, viewportWidth, viewportHeight)
+            }
+
+            // 3. HDF 多 Pass 处理
+            var outputTexId = currentTexId
             if (hdfEnabled) {
-                renderHdfPreviewBlur(fboTextureId, viewportWidth, viewportHeight)
+                renderHdfPreviewBlur(currentTexId, viewportWidth, viewportHeight)
             }
 
             // 确保 FBO 内容已刷入显存
@@ -408,9 +457,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 
             // 4. 显示到屏幕
             if (hdfEnabled) {
-                drawHdfComposite(0, viewportWidth, viewportHeight)
+                drawHdfComposite(0, viewportWidth, viewportHeight, currentTexId)
             } else {
-                drawFboToScreen(0, viewportWidth, viewportHeight)
+                drawFboToScreen(0, viewportWidth, viewportHeight, currentTexId)
             }
         } else {
             // 直接渲染到屏幕
@@ -421,7 +470,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     /**
      * 将 FBO 纹理绘制到屏幕 (Copy Shader)
      */
-    private fun drawFboToScreen(fboId: Int, width: Int, height: Int) {
+    private fun drawFboToScreen(fboId: Int, width: Int, height: Int, sourceTextureId: Int) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -429,7 +478,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUseProgram(copyProgramId)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureId)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(uCopyTextureLoc, 0)
 
         // FBO 纹理已经是正向的 (经过 stMatrix/MVP 处理后)，所以这里可能不需要再变换
@@ -529,7 +578,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uAspectRatioLocation, viewportWidth.toFloat() / Math.max(1, viewportHeight).toFloat())
         }
 
-        // 色散效果独立于色彩配方，始终更新
+        // 虚化预览和色散效果始终更新（如果启用）
+        GLES30.glUniform1f(uApertureLocation, aperture)
+        val fp = focusPoint ?: PointF(0.5f, 0.5f)
+        GLES30.glUniform2f(uFocusPointLocation, fp.x, 1.0f - fp.y) // Y-flip to match texture coords
         GLES30.glUniform1f(uChromaticAberrationLocation, chromaticAberration)
 
         // 绑定顶点缓冲
@@ -639,10 +691,29 @@ class LutRenderer : GLSurfaceView.Renderer {
         uLowResLocation = GLES30.glGetUniformLocation(programId, "uLowRes")
         uAspectRatioLocation = GLES30.glGetUniformLocation(programId, "uAspectRatio")
         uSTMatrixFragLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
+        uApertureLocation = GLES30.glGetUniformLocation(programId, "uAperture")
+        uFocusPointLocation = GLES30.glGetUniformLocation(programId, "uFocusPoint")
 
         // Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
         aTexCoordLocation = GLES30.glGetAttribLocation(programId, "aTexCoord")
+
+        // === 初始化 Passthrough Shader (用于深度采集) ===
+        if (passthroughProgramId == 0) {
+            val passVs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
+            val passFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_PASSTHROUGH)
+            passthroughProgramId = GlUtils.linkProgram(passVs, passFs)
+            GLES30.glDeleteShader(passVs)
+            GLES30.glDeleteShader(passFs)
+            
+            if (passthroughProgramId != 0) {
+                uPassMVPMatrixLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uMVPMatrix")
+                uPassSTMatrixLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uSTMatrix")
+                uPassCameraTextureLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uCameraTexture")
+                aPassPositionLocation = GLES30.glGetAttribLocation(passthroughProgramId, "aPosition")
+                aPassTexCoordLocation = GLES30.glGetAttribLocation(passthroughProgramId, "aTexCoord")
+            }
+        }
 
         // === 初始化 Copy Shader (用于 FBO 上屏) ===
         val copyVs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER)
@@ -663,6 +734,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 //        PLog.d(TAG, "Shader program created: $programId")
         // === 初始化 HDF 实时预览着色器 ===
         initHdfPrograms()
+        
+        // === 初始化 Bokeh 实时预览着色器 ===
+        initBokehProgram()
     }
 
     private fun initHdfPrograms() {
@@ -758,14 +832,14 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun drawHdfComposite(targetFboId: Int, width: Int, height: Int) {
+    private fun drawHdfComposite(targetFboId: Int, width: Int, height: Int, sourceTextureId: Int) {
         if (hdfCompositeProgram == 0) return
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(hdfCompositeProgram)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureId)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfCompositeProgram, "uOriginalTexture"), 0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
@@ -854,6 +928,34 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+    }
+
+    private fun initDepthInputFbo() {
+        if (depthInputFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(depthInputFboId), 0)
+            depthInputFboId = 0
+        }
+        if (depthInputTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(depthInputTextureId), 0)
+            depthInputTextureId = 0
+        }
+
+        val fbos = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        depthInputFboId = fbos[0]
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        depthInputTextureId = textures[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthInputTextureId)
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, DEPTH_INPUT_SIZE, DEPTH_INPUT_SIZE, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, depthInputFboId)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, depthInputTextureId, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     private fun initCaptureFbo() {
@@ -1312,6 +1414,79 @@ class LutRenderer : GLSurfaceView.Renderer {
         calculateMeteringResults()
     }
 
+    private fun runDepthInputCaptureInternal(sourceTextureId: Int) {
+        if (onDepthInputAvailable == null || sourceTextureId == 0) return
+        val now = System.currentTimeMillis()
+        if (now - lastRunDepthInputTime < 50) return
+        lastRunDepthInputTime = now
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, depthInputFboId)
+        GLES30.glViewport(0, 0, DEPTH_INPUT_SIZE, DEPTH_INPUT_SIZE)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        // 使用 Copy Shader 采集，源是已校正好的 FBO 纹理
+        GLES30.glUseProgram(copyProgramId)
+        
+        // 计算居中裁剪矩阵 (Center Crop)
+        val captureMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(captureMatrix, 0)
+        
+        // MVP 矩阵处理 glReadPixels 的 Y 轴翻转
+        // 标准 Quad 是 [-1, 1]，直接 Scale -1 即可垂直镜像，无需位移
+        val flipMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(flipMatrix, 0)
+        android.opengl.Matrix.scaleM(flipMatrix, 0, 1f, -1f, 1f)
+        
+        GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, flipMatrix, 0)
+        GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, captureMatrix, 0) 
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(uCopyTextureLoc, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aCopyPositionLoc)
+        GLES30.glVertexAttribPointer(aCopyPositionLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+        
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aCopyTexCoordLoc)
+        GLES30.glVertexAttribPointer(aCopyTexCoordLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, 0)
+
+        // 确保渲染已完成
+        GLES30.glFinish()
+
+        val pixelSize = DEPTH_INPUT_SIZE * DEPTH_INPUT_SIZE * 4
+        if (depthInputPboId == 0) {
+            val pbos = IntArray(1)
+            GLES30.glGenBuffers(1, pbos, 0)
+            depthInputPboId = pbos[0]
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, depthInputPboId)
+            GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+        } else {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, depthInputPboId)
+        }
+
+        GLES30.glReadPixels(0, 0, DEPTH_INPUT_SIZE, DEPTH_INPUT_SIZE, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+        val mappedBuffer = GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT) as? ByteBuffer
+        if (mappedBuffer != null) {
+            depthInputBuffer.rewind()
+            depthInputBuffer.put(mappedBuffer)
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+            
+            val bitmap = Bitmap.createBitmap(DEPTH_INPUT_SIZE, DEPTH_INPUT_SIZE, Bitmap.Config.ARGB_8888)
+            depthInputBuffer.rewind()
+            bitmap.copyPixelsFromBuffer(depthInputBuffer)
+            onDepthInputAvailable?.invoke(bitmap)
+        }
+
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
+    }
+
     private val meteringBytes = ByteArray(METERING_SIZE * METERING_SIZE * 4)
 
     private fun calculateMeteringResults() {
@@ -1465,5 +1640,186 @@ class LutRenderer : GLSurfaceView.Renderer {
             chromaticAberration = chromaticAberration,
             halation = halation
         )
+    }
+
+    private fun initBokehProgram() {
+        val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
+        val fs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.BOKEH_FRAGMENT_SHADER)
+        bokehProgramId = GlUtils.linkProgram(vs, fs)
+        GLES30.glDeleteShader(vs)
+        GLES30.glDeleteShader(fs)
+
+        if (bokehProgramId != 0) {
+            uBokehInputTexLoc = GLES30.glGetUniformLocation(bokehProgramId, "uInputTexture")
+            uBokehDepthTexLoc = GLES30.glGetUniformLocation(bokehProgramId, "uDepthTexture")
+            uBokehDepthMatrixLoc = GLES30.glGetUniformLocation(bokehProgramId, "uDepthMatrix")
+            uBokehMaxBlurRadiusLoc = GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius")
+            uBokehApertureLoc = GLES30.glGetUniformLocation(bokehProgramId, "uAperture")
+            uBokehFocusDepthLoc = GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth")
+            uBokehTexelSizeLoc = GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize")
+            aBokehPositionLoc = GLES30.glGetAttribLocation(bokehProgramId, "aPosition")
+            aBokehTexCoordLoc = GLES30.glGetAttribLocation(bokehProgramId, "aTexCoord")
+        }
+    }
+    
+    private var uBokehDepthMatrixLoc: Int = 0
+
+    private fun initBokehFbo(width: Int, height: Int) {
+        if (bokehFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(bokehFboId), 0)
+            GLES30.glDeleteTextures(1, intArrayOf(bokehTextureId), 0)
+        }
+
+        val fbo = IntArray(1)
+        val tex = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbo, 0)
+        GLES30.glGenTextures(1, tex, 0)
+        bokehFboId = fbo[0]
+        bokehTextureId = tex[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bokehTextureId)
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bokehFboId)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, bokehTextureId, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun updateDepthTexture() {
+        val bitmap = depthMap
+        if (bitmap != null && bitmap != lastDepthMap) {
+            if (depthTextureId == 0) {
+                val tex = IntArray(1)
+                GLES30.glGenTextures(1, tex, 0)
+                depthTextureId = tex[0]
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTextureId)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTextureId)
+            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+            lastDepthMap = bitmap
+        }
+    }
+
+    private fun getFocusDepth(): Float {
+        val bitmap = depthMap ?: return 0.5f
+        val fp = focusPoint ?: PointF(0.5f, 0.5f)
+        val px = (fp.x * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val py = (fp.y * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        val color = try { bitmap.getPixel(px, py) } catch (e: Exception) { 0 }
+        return (color shr 16 and 0xFF) / 255.0f
+    }
+
+    private fun renderBokehPreview(inputTexId: Int, width: Int, height: Int): Int {
+        if (bokehProgramId == 0 || depthMap == null) {
+            return inputTexId
+        }
+
+        // 降采样优化：虚化计算不需要全分辨率
+        val renderWidth = (width * bokehRenderScale).toInt()
+        val renderHeight = (height * bokehRenderScale).toInt()
+
+        if (renderWidth != bokehFboWidth || renderHeight != bokehFboHeight) {
+            initBokehFbo(renderWidth, renderHeight)
+            bokehFboWidth = renderWidth
+            bokehFboHeight = renderHeight
+        }
+
+        updateDepthTexture()
+        if (depthTextureId == 0) return inputTexId
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bokehFboId)
+        GLES30.glViewport(0, 0, renderWidth, renderHeight)
+        
+        GLES30.glUseProgram(bokehProgramId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTexId)
+        GLES30.glUniform1i(uBokehInputTexLoc, 0)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTextureId)
+        GLES30.glUniform1i(uBokehDepthTexLoc, 1)
+
+        val depthMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(depthMatrix, 0)
+        // Y-flip: depth texture top is at Y=0 (GLUtils convention)
+        android.opengl.Matrix.translateM(depthMatrix, 0, 0f, 1f, 0f)
+        android.opengl.Matrix.scaleM(depthMatrix, 0, 1f, -1f, 1f)
+        GLES30.glUniformMatrix4fv(uBokehDepthMatrixLoc, 1, false, depthMatrix, 0)
+
+        // 性能优化建议：对于高分辨率预览，在 1/2 或更低分辨率 FBO 进行虚化计算
+        // 这里根据实验将模糊半径根据分辨率对齐
+        GLES30.glUniform1f(uBokehMaxBlurRadiusLoc, renderWidth.toFloat() / 25.0f) 
+        GLES30.glUniform1f(uBokehApertureLoc, aperture)
+        GLES30.glUniform1f(uBokehFocusDepthLoc, getFocusDepth())
+        GLES30.glUniform2f(uBokehTexelSizeLoc, 1.0f / renderWidth, 1.0f / renderHeight)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aBokehPositionLoc)
+        GLES30.glVertexAttribPointer(aBokehPositionLoc, 2, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aBokehTexCoordLoc)
+        GLES30.glVertexAttribPointer(aBokehTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, 0)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return bokehTextureId
+    }
+
+    private fun renderDepthDebug(width: Int, height: Int) {
+        updateDepthTexture()
+        if (depthTextureId == 0) return
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        // 使用 Copy Shader 绘制深度纹理
+        GLES30.glUseProgram(copyProgramId)
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthTextureId)
+        GLES30.glUniform1i(uCopyTextureLoc, 0)
+
+        // 调试预览也要应用 Center Crop，否则 256x256 的正方形强行拉伸到屏幕会长得很难看
+        val captureMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(captureMatrix, 0)
+        android.opengl.Matrix.translateM(captureMatrix, 0, 0.5f, 0.5f, 0f)
+        val aspect = width.toFloat() / height.toFloat()
+        if (aspect > 1f) {
+            android.opengl.Matrix.scaleM(captureMatrix, 0, 1f / aspect, 1f, 1f)
+        } else {
+            android.opengl.Matrix.scaleM(captureMatrix, 0, 1f, aspect, 1f)
+        }
+        android.opengl.Matrix.translateM(captureMatrix, 0, -0.5f, -0.5f, 0f)
+
+        val flipMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(flipMatrix, 0)
+        // 渲染到屏幕时，应用 Y 轴翻转，使调试图看起来是正的
+        android.opengl.Matrix.scaleM(flipMatrix, 0, 1f, -1f, 1f)
+        
+        GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, flipMatrix, 0)
+        GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, captureMatrix, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aCopyPositionLoc)
+        GLES30.glVertexAttribPointer(aCopyPositionLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aCopyTexCoordLoc)
+        GLES30.glVertexAttribPointer(aCopyTexCoordLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, 6, GLES30.GL_UNSIGNED_SHORT, 0)
     }
 }

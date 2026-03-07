@@ -82,6 +82,9 @@ class Camera2Controller(private val context: Context) {
     private var previewSurface: Surface? = null
     private var imageReader: ImageReader? = null
 
+    val previewDepthProcessor = com.hinnka.mycamera.preview.PreviewDepthProcessor(context)
+
+
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=Real-time)
     private var nrLevel = 1
 
@@ -225,7 +228,7 @@ class Camera2Controller(private val context: Context) {
                 shutterSpeed = if (isAutoExposure) actualExposureTimeNs
                     ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
                 awbMode = awbMode,
-                aperture = aperture ?: _state.value.aperture,
+                physicalAperture = aperture ?: _state.value.physicalAperture,
             )
         }
     }
@@ -564,14 +567,16 @@ class Camera2Controller(private val context: Context) {
                             }
                         } else {
                             PLog.w(TAG, "acquireNextImage() returned null, resetting capture state")
-                            _state.value = _state.value.copy(isCapturing = false)
-                            resetPreviewAfterCapture()
-                        }
-                    } catch (e: Exception) {
-                        PLog.e(TAG, "Error in onImageAvailable", e)
+                        _state.value = _state.value.copy(isCapturing = false)
+                        resetPreviewAfterCapture()
                     }
-                }, cameraHandler)
-            }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Error in onImageAvailable", e)
+                }
+            }, cameraHandler)
+        }
+
+
 
             PLog.d(TAG, "Opening camera: $cameraId")
 
@@ -752,9 +757,6 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    /**
-     * 创建预览会话
-     */
     private fun createPreviewSession() {
         val device = cameraDevice ?: return
         val surface = previewSurface ?: return
@@ -774,6 +776,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             val surfaces = mutableListOf(surface, reader.surface)
+
 
             // Android 9+ 使用 SessionConfiguration
             val outputConfigs = surfaces.map { OutputConfiguration(it) }
@@ -1112,6 +1115,22 @@ class Camera2Controller(private val context: Context) {
     fun setUseRaw(enabled: Boolean) {
         _state.value = _state.value.copy(useRaw = enabled)
         PLog.d(TAG, "RAW 格式拍照: $enabled")
+    }
+
+    /**
+     * 设置虚化模拟光圈大小
+     */
+    fun setAperture(value: Float) {
+        _state.value = _state.value.copy(virtualAperture = value)
+        PLog.d(TAG, "设置虚拟光圈: $value")
+    }
+
+    /**
+     * 启用/禁用虚拟光圈控制
+     */
+    fun setVirtualApertureEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(isVirtualApertureEnabled = enabled)
+        PLog.d(TAG, "虚拟光圈开关: $enabled")
     }
 
     /**
@@ -2100,7 +2119,7 @@ class Camera2Controller(private val context: Context) {
         val characteristics = cachedCharacteristics ?: return
         try {
             // 计算光照等级 (LV)
-            val aperture = _state.value.aperture.toDouble()
+            val aperture = _state.value.physicalAperture.toDouble()
             val shutterSpeed = _state.value.shutterSpeed.toDouble() / 1_000_000_000.0
             val iso = _state.value.iso.toDouble()
             val ev = ln(aperture * aperture / shutterSpeed) / ln(2.0)

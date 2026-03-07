@@ -58,6 +58,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -109,6 +110,10 @@ fun PhotoEditScreen(
     val editSharpening by viewModel.editSharpening.collectAsState()
     val editNoiseReduction by viewModel.editNoiseReduction.collectAsState()
     val editChromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
+    
+    val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
+    val editFocusX by viewModel.editFocusPointX.collectAsState()
+    val editFocusY by viewModel.editFocusPointY.collectAsState()
 
     val droMode by cameraViewModel.droMode.collectAsState()
     val colorSpace by cameraViewModel.colorSpace.collectAsState()
@@ -143,6 +148,9 @@ fun PhotoEditScreen(
         editSharpening,
         editNoiseReduction,
         editChromaNoiseReduction,
+        editComputationalAperture,
+        editFocusX,
+        editFocusY,
         showOrigin
     ) {
         if (currentPhoto == null) return@LaunchedEffect
@@ -340,8 +348,36 @@ fun PhotoEditScreen(
                                     // 如果既没有多指操作也没有明显位移，才根据结果执行逻辑
                                     if (!isMultiTouch && !isMoved) {
                                         if (upEvent != null) {
-                                            // 快速点击：切换控制区域显隐
-                                            showControls = !showControls
+                                            // 快速点击：切换控制区域显隐，或者调整景深焦点
+                                            if (editTab == 1 && viewModel.editComputationalAperture.value != null && previewBitmap != null) {
+                                                val tapPosition = upEvent.changes[0].position
+                                                val boxWidth = size.width.toFloat()
+                                                val boxHeight = size.height.toFloat()
+                                                val imageRatio = previewBitmap!!.width.toFloat() / previewBitmap!!.height.toFloat()
+                                                val boxRatio = boxWidth / boxHeight
+                                                
+                                                var imageDisplayWidth = boxWidth
+                                                var imageDisplayHeight = boxHeight
+                                                if (imageRatio > boxRatio) {
+                                                    imageDisplayHeight = boxWidth / imageRatio
+                                                } else {
+                                                    imageDisplayWidth = boxHeight * imageRatio
+                                                }
+                                                
+                                                val offsetX = (boxWidth - imageDisplayWidth) / 2f
+                                                val offsetY = (boxHeight - imageDisplayHeight) / 2f
+                                                
+                                                val relativeX = (tapPosition.x - offsetX) / imageDisplayWidth
+                                                val relativeY = (tapPosition.y - offsetY) / imageDisplayHeight
+                                                
+                                                if (relativeX in 0f..1f && relativeY in 0f..1f) {
+                                                    viewModel.setFocusPoint(relativeX, relativeY)
+                                                } else {
+                                                    showControls = !showControls
+                                                }
+                                            } else {
+                                                showControls = !showControls
+                                            }
                                         } else {
                                             // 确认为长按：显示原图
                                             showOrigin = true
@@ -559,6 +595,20 @@ fun PhotoEditScreen(
                         } else if (editTab == 1) {
                             Spacer(modifier = Modifier.height(16.dp))
                             // 细节处理调整 (锐化, 降噪, 杂色降噪)
+                            SliderSettingItem(
+                                title = stringResource(R.string.virtual_aperture),
+                                value = editComputationalAperture ?: 2.8f,
+                                valueRange = 1.0f..16.0f,
+                                onValueChange = { viewModel.setComputationalAperture(it) },
+                                toggleValue = editComputationalAperture != null,
+                                onToggleChange = { checked ->
+                                    if (checked) {
+                                        viewModel.setComputationalAperture(2.8f)
+                                    } else {
+                                        viewModel.setComputationalAperture(null)
+                                    }
+                                }
+                            )
                             SliderSettingItem(
                                 title = stringResource(R.string.settings_sharpening),
                                 value = editSharpening,
@@ -874,6 +924,11 @@ private fun RawEditPanel(
         availableRawLuts = listOf("none") + viewModel.getAvailableRawLutList(context, editLogCurve)
     }
 
+    val droOff = stringResource(R.string.settings_dro_off)
+    val droLow = stringResource(R.string.settings_dro_low)
+    val droHigh = stringResource(R.string.settings_dro_high)
+    val none = stringResource(R.string.none)
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -883,14 +938,14 @@ private fun RawEditPanel(
         // DRO Mode
         SegmentedControl(
             title = stringResource(R.string.settings_dro_mode),
-            items = MeteringSystem.DROMode.values().toList(),
+            items = MeteringSystem.DROMode.entries,
             selectedItem = editDroMode,
             onItemSelected = { viewModel.setDroMode(it.name) },
             itemLabel = {
                 when (it) {
-                    MeteringSystem.DROMode.OFF -> context.getString(R.string.settings_dro_off)
-                    MeteringSystem.DROMode.LOW -> context.getString(R.string.settings_dro_low)
-                    MeteringSystem.DROMode.HIGH -> context.getString(R.string.settings_dro_high)
+                    MeteringSystem.DROMode.OFF -> droOff
+                    MeteringSystem.DROMode.LOW -> droLow
+                    MeteringSystem.DROMode.HIGH -> droHigh
                 }
             }
         )
@@ -919,7 +974,7 @@ private fun RawEditPanel(
             items = availableRawLuts,
             selectedItem = editRawLut ?: "none",
             onItemSelected = { viewModel.setRawLut(editLogCurve, it) },
-            itemLabel = { if (it == "none") context.getString(R.string.none) else it.substringBeforeLast(".") }
+            itemLabel = { if (it == "none") none else it.substringBeforeLast(".") }
         )
     }
 }

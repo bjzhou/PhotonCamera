@@ -10,7 +10,9 @@ import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
+import com.hinnka.mycamera.processor.DepthBokehProcessor
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,7 +27,8 @@ class PhotoProcessor(
     private val lutManager: LutManager,
     private val lutImageProcessor: LutImageProcessor,
     private val frameManager: FrameManager,
-    private val frameRenderer: FrameRenderer
+    private val frameRenderer: FrameRenderer,
+    private val depthBokehProcessor: DepthBokehProcessor,
 ) {
 
     suspend fun process(context: Context, photoId: String, metadata: PhotoMetadata,
@@ -39,6 +42,7 @@ class PhotoProcessor(
         if (dngFile.exists()) {
             return processDng(
                 context,
+                photoId,
                 dngFile.absolutePath,
                 metadata,
                 sharpening,
@@ -48,6 +52,8 @@ class PhotoProcessor(
         } else if (yuvFile.exists()) {
             val data = PhotoManager.loadYuvData(context, photoId) ?: return null
             return processYuv(
+                context,
+                photoId,
                 data,
                 metadata,
                 sharpening,
@@ -57,6 +63,8 @@ class PhotoProcessor(
         } else if (photoFile.exists()) {
             val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
             return processBitmap(
+                context,
+                photoId,
                 bitmap,
                 metadata,
                 sharpening,
@@ -77,6 +85,7 @@ class PhotoProcessor(
      */
     suspend fun processDng(
         context: Context,
+        photoId: String?,
         dngPath: String,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
@@ -106,8 +115,16 @@ class PhotoProcessor(
         )
 
         result = bitmap?.let {
+            var b = it
+
+            metadata.computationalAperture?.let { aperture ->
+                b = depthBokehProcessor.applyHighQualityBokeh(context, photoId, b,
+                    metadata.focusPointX, metadata.focusPointY, aperture)
+                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, b) }
+            }
+
             lutImageProcessor.applyLut(
-                bitmap,
+                b,
                 lutConfig,
                 colorRecipeParams,
                 finalSharpening,
@@ -132,13 +149,14 @@ class PhotoProcessor(
      * @return 处理后的 Bitmap
      */
     suspend fun processYuv(
+        context: Context,
+        photoId: String?,
         input: ByteBuffer,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): Bitmap = withContext(Dispatchers.IO) {
-        var result: Bitmap? = null
 
         // 优先从元数据中获取软件处理参数
         // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
@@ -150,7 +168,7 @@ class PhotoProcessor(
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
 
         // 1. 应用 LUT
-        result = lutImageProcessor.applyLut(
+        var result = lutImageProcessor.applyLut(
             input.asShortBuffer(),
             metadata.width,
             metadata.height,
@@ -162,6 +180,12 @@ class PhotoProcessor(
             finalChromaNoiseReduction
         )
         YuvProcessor.free(input)
+
+        metadata.computationalAperture?.let { aperture ->
+            result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
+                metadata.focusPointX, metadata.focusPointY, aperture)
+            photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
+        }
 
         result = applyFrame(result, metadata)
 
@@ -177,11 +201,14 @@ class PhotoProcessor(
      * @return 处理后的 Bitmap
      */
     suspend fun processBitmap(
+        context: Context,
+        photoId: String?,
         input: Bitmap,
         metadata: PhotoMetadata,
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
-        chromaNoiseReduction: Float = 0f
+        chromaNoiseReduction: Float = 0f,
+        useComputationalAperture: Boolean = false,
     ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
 
@@ -203,6 +230,14 @@ class PhotoProcessor(
             finalNoiseReduction,
             finalChromaNoiseReduction
         )
+
+        if (useComputationalAperture) {
+            metadata.computationalAperture?.let { aperture ->
+                result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
+                    metadata.focusPointX, metadata.focusPointY, aperture)
+                photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
+            }
+        }
 
         result = applyFrame(result, metadata)
 

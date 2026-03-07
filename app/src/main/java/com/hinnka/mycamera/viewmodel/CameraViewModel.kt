@@ -405,9 +405,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // 监听相机状态，用于首次启动应用默认焦段
+        // 监听相机状态，用于同步预览渲染参数
         viewModelScope.launch {
             state.collect { currentState ->
+                // 同步焦段
                 val availableCameras = currentState.availableCameras
                 if (availableCameras.isNotEmpty() && !hasAppliedDefaultFocalLength) {
                     val prefs = userPreferencesRepository.userPreferences.firstOrNull()
@@ -417,6 +418,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     hasAppliedDefaultFocalLength = true
                 }
+
+                // 同步虚化参数到渲染器
+                glSurfaceView?.let { view ->
+                    if (currentState.isVirtualApertureEnabled) {
+                        view.setAperture(currentState.virtualAperture)
+                    } else {
+                        view.setAperture(0f)
+                    }
+                    currentState.focusPoint?.let { fp ->
+                        view.setFocusPoint(android.graphics.PointF(fp.first, fp.second))
+                    }
+                }
+            }
+        }
+
+        // 实时景深处理
+        viewModelScope.launch {
+            cameraController.previewDepthProcessor.latestDepthMap.collect { depth ->
+                glSurfaceView?.setDepthMap(depth)
             }
         }
     }
@@ -594,6 +614,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setShutterSpeed(value: Long) {
         cameraController.setShutterSpeed(value)
+    }
+
+    /**
+     * 设置计算光圈 (等效虚化)
+     */
+    fun setAperture(value: Float) {
+        cameraController.setAperture(value)
+    }
+
+    /**
+     * 设置是否开启虚拟光圈 (等效虚化控制)
+     */
+    fun setVirtualApertureAuto(enabled: Boolean) {
+        cameraController.setVirtualApertureEnabled(enabled)
     }
 
     /**
@@ -956,6 +990,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleMeteringUpdate(totalWeight: Double, weightedSumLuminance: Double) {
         cameraController.calculateAutoMetering(totalWeight, weightedSumLuminance)
+    }
+
+    fun handleDepthMapUpdate(bitmap: android.graphics.Bitmap) {
+        cameraController.previewDepthProcessor.processBitmap(bitmap)
     }
 
     // ==================== 边框相关方法 ====================
@@ -1504,6 +1542,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val shouldMirror = lensFacing == CameraCharacteristics.LENS_FACING_FRONT &&
                     (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
+            val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
@@ -1530,7 +1570,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 exposureBias = state.value.exposureBias,
                 droMode = droModeString,
                 isMirrored = shouldMirror,
-                colorSpace = captureInfo.colorSpace
+                colorSpace = captureInfo.colorSpace,
+                computationalAperture = aperture,
+                focusPointX = state.value.focusPoint?.first,
+                focusPointY = state.value.focusPoint?.second
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1627,6 +1670,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             val useSuperRes = useSuperResolution.value
 
+            val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = PhotoMetadata(
                 lutId = lutIdToSave,
@@ -1653,7 +1698,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 exposureBias = state.value.exposureBias,
                 droMode = droModeString,
                 isMirrored = shouldMirror,
-                colorSpace = captureInfo.colorSpace
+                colorSpace = captureInfo.colorSpace,
+                computationalAperture = aperture,
+                focusPointX = state.value.focusPoint?.first,
+                focusPointY = state.value.focusPoint?.second
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -1738,6 +1786,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val shouldMirror = lensFacing == CameraCharacteristics.LENS_FACING_FRONT &&
                 (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
+        val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
         val metadata = PhotoMetadata(
             lutId = lutIdToSave,
@@ -1762,7 +1812,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             focalLength35mm = captureInfo.formatFocalLength35mm(),
             aperture = captureInfo.formatAperture(),
             isMirrored = shouldMirror,
-            colorSpace = captureInfo.colorSpace
+            colorSpace = captureInfo.colorSpace,
+            computationalAperture = aperture,
+            focusPointX = state.value.focusPoint?.first,
+            focusPointY = state.value.focusPoint?.second
         )
 
         PhotoManager.preparePhoto(

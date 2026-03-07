@@ -3,6 +3,7 @@ package com.hinnka.mycamera.lut
 import android.graphics.Bitmap
 import coil.size.Size
 import coil.transform.Transformation
+import android.content.Context
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
 
@@ -15,6 +16,7 @@ import com.hinnka.mycamera.gallery.PhotoProcessor
  * @param chromaNoiseReduction 减少杂色强度
  */
 class PhotoTransformation(
+    private val context: Context,
     private val metadata: PhotoMetadata,
     private val photoProcessor: PhotoProcessor,
     private val sharpening: Float = 0f,
@@ -26,7 +28,7 @@ class PhotoTransformation(
 
     override suspend fun transform(input: Bitmap, size: Size): Bitmap {
         return photoProcessor.processBitmap(
-            input, metadata, sharpening, noiseReduction, chromaNoiseReduction
+            context, null, input, metadata, sharpening, noiseReduction, chromaNoiseReduction
         )
     }
 }

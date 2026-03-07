@@ -390,4 +390,6 @@
     <string name="imaging">影像</string>
     <string name="phantom">幻影</string>
     <string name="about">关于</string>
+    <string name="aperture">光圈</string>
+    <string name="virtual_aperture">虚拟光圈</string>
 </resources>

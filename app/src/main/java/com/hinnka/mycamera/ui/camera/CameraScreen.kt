@@ -348,10 +348,12 @@ fun CameraScreen(
                         },
                         onHistogramUpdated = { viewModel.handleHistogramUpdate(it) },
                         onMeteringUpdated = { w, l -> viewModel.handleMeteringUpdate(w, l) },
+                        onDepthInputAvailable = { viewModel.handleDepthMapUpdate(it) },
                         onGLSurfaceViewReady = {
                             viewModel.glSurfaceView = it
                         },
                         livePhotoRecorder = viewModel.livePhotoRecorder,
+                        aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         modifier = Modifier.fillMaxSize()
                     )
 
@@ -454,32 +456,32 @@ fun CameraScreen(
                         CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
                         CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
                         CameraParameter.ISO -> state.iso.toFloat()
-                        CameraParameter.APERTURE -> state.aperture
+                        CameraParameter.APERTURE -> if (state.isVirtualApertureEnabled) state.virtualAperture else state.physicalAperture
                         CameraParameter.WHITE_BALANCE -> state.awbTemperature.toFloat()
                     },
                     minValue = when (selectedParameter) {
                         CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
                         CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().lower.toFloat()
                         CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
-                        CameraParameter.APERTURE -> state.aperture // Fixed
+                        CameraParameter.APERTURE -> 1f // Min synthetic aperture
                         CameraParameter.WHITE_BALANCE -> 2000f
                     },
                     maxValue = when (selectedParameter) {
                         CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
                         CameraParameter.SHUTTER_SPEED -> state.getShutterSpeedRange().upper.toFloat()
                         CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
-                        CameraParameter.APERTURE -> state.aperture // Fixed
+                        CameraParameter.APERTURE -> 16.0f // Max synthetic aperture
                         CameraParameter.WHITE_BALANCE -> 10000f
                     },
                     isAdjustable = when (selectedParameter) {
                         CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
                         CameraParameter.SHUTTER_SPEED -> !state.isShutterSpeedAuto
                         CameraParameter.ISO -> !state.isIsoAuto
-                        CameraParameter.APERTURE -> false
+                        CameraParameter.APERTURE -> state.isVirtualApertureEnabled
                         CameraParameter.WHITE_BALANCE -> state.awbMode != android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
                     },
                     showAutoButton = when (selectedParameter) {
-                        CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE -> true
+                        CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.APERTURE -> true
                         else -> false
                     },
                     onValueChange = { value ->
@@ -487,7 +489,7 @@ fun CameraScreen(
                             CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
                             CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
                             CameraParameter.ISO -> viewModel.setIso(value.toInt())
-                            CameraParameter.APERTURE -> {} // Not adjustable
+                            CameraParameter.APERTURE -> viewModel.setAperture(value)
                             CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
                         }
                     },
@@ -502,7 +504,7 @@ fun CameraScreen(
                                     viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
                                 }
                             }
-
+                            CameraParameter.APERTURE -> viewModel.setVirtualApertureAuto(!state.isVirtualApertureEnabled)
                             else -> {}
                         }
                     },

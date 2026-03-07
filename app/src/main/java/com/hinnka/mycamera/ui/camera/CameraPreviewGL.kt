@@ -17,7 +17,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
@@ -44,8 +43,10 @@ fun CameraPreviewGL(
     onTap: (Float, Float, Int, Int) -> Unit,
     onHistogramUpdated: ((IntArray) -> Unit)? = null,
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
+    onDepthInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
+    aperture: Float = 0f,
     modifier: Modifier = Modifier
 ) {
     val rotationDegrees = OrientationObserver.rotationDegrees
@@ -126,6 +127,7 @@ fun CameraPreviewGL(
 
                     glSurfaceView.onHistogramUpdated = { onHistogramUpdated?.invoke(it) }
                     glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
+                    glSurfaceView.onDepthInputAvailable = { onDepthInputAvailable?.invoke(it) }
 
                     viewWidth = glSurfaceView.width
                     viewHeight = glSurfaceView.height
@@ -155,29 +157,31 @@ fun CameraPreviewGL(
                         glSurfaceView.setLut(currentLut)
                         glSurfaceView.setLutEnabled(true)
                         glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
-                        glSurfaceView.setColorRecipeParams(
-                            exposure = colorRecipeParams.exposure,
-                            contrast = colorRecipeParams.contrast,
-                            saturation = colorRecipeParams.saturation,
-                            temperature = colorRecipeParams.temperature,
-                            tint = colorRecipeParams.tint,
-                            fade = colorRecipeParams.fade,
-                            vibrance = colorRecipeParams.color,
-                            highlights = colorRecipeParams.highlights,
-                            shadows = colorRecipeParams.shadows,
-                            filmGrain = colorRecipeParams.filmGrain,
-                            vignette = colorRecipeParams.vignette,
-                            bleachBypass = colorRecipeParams.bleachBypass,
-                            chromaticAberration = colorRecipeParams.chromaticAberration,
-                            noise = colorRecipeParams.noise,
-                            lowRes = colorRecipeParams.lowRes,
-                            halation = colorRecipeParams.halation,
-                            lutIntensity = colorRecipeParams.lutIntensity,
-                        )
                     } else {
                         glSurfaceView.setLutEnabled(false)
                         glSurfaceView.setColorRecipeEnabled(false)
                     }
+
+                    glSurfaceView.setParams(
+                        exposure = colorRecipeParams.exposure,
+                        contrast = colorRecipeParams.contrast,
+                        saturation = colorRecipeParams.saturation,
+                        temperature = colorRecipeParams.temperature,
+                        tint = colorRecipeParams.tint,
+                        fade = colorRecipeParams.fade,
+                        vibrance = colorRecipeParams.color,
+                        highlights = colorRecipeParams.highlights,
+                        shadows = colorRecipeParams.shadows,
+                        filmGrain = colorRecipeParams.filmGrain,
+                        vignette = colorRecipeParams.vignette,
+                        bleachBypass = colorRecipeParams.bleachBypass,
+                        chromaticAberration = colorRecipeParams.chromaticAberration,
+                        noise = colorRecipeParams.noise,
+                        lowRes = colorRecipeParams.lowRes,
+                        halation = colorRecipeParams.halation,
+                        lutIntensity = colorRecipeParams.lutIntensity,
+                        aperture = aperture,
+                    )
 
                     glSurfaceView.setFocusPoint(focusPoint?.let {
                         android.graphics.PointF(

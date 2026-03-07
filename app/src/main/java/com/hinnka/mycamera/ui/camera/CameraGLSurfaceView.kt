@@ -6,7 +6,6 @@ import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.GLSurfaceView
 import android.util.AttributeSet
-import android.util.Log
 import android.view.Surface
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
@@ -32,6 +31,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
+    var onDepthInputAvailable: ((Bitmap) -> Unit)? = null
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
@@ -70,6 +70,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         renderer.onMeteringUpdated = { totalWeight, weightedSumLuminance ->
             onMeteringUpdated?.invoke(totalWeight, weightedSumLuminance)
+        }
+
+        renderer.onDepthInputAvailable = { bitmap ->
+            onDepthInputAvailable?.invoke(bitmap)
         }
 
         // 保持 EGL 上下文
@@ -158,9 +162,9 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     /**
-     * 设置色彩配方参数
+     * 设置参数
      */
-    fun setColorRecipeParams(
+    fun setParams(
         exposure: Float,
         contrast: Float,
         saturation: Float,
@@ -178,6 +182,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         lowRes: Float,
         halation: Float,
         lutIntensity: Float,
+        aperture: Float,
     ) {
         renderer.exposure = exposure
         renderer.contrast = contrast
@@ -196,6 +201,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.lowRes = lowRes
         renderer.halation = halation
         renderer.lutIntensity = lutIntensity
+        renderer.aperture = aperture
         requestRender()
     }
 
@@ -233,6 +239,21 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      */
     fun setLivePhotoRecorder(recorder: LivePhotoRecorder?) {
         renderer.livePhotoRecorder = recorder
+    }
+
+    /**
+     * 设置实时景深图
+     */
+    fun setDepthMap(bitmap: Bitmap?) {
+        renderer.depthMap = bitmap
+    }
+
+    /**
+     * 设置光圈 (虚化强度)
+     */
+    fun setAperture(value: Float) {
+        renderer.aperture = value
+        requestRender()
     }
 
     override fun onPause() {

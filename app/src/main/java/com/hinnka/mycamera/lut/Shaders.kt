@@ -7,31 +7,31 @@ object Shaders {
 
     /**
      * 顶点着色器
-     * 
+     *
      * 处理顶点位置和纹理坐标变换
      */
     /**
      * 顶点着色器
-     * 
+     *
      * 处理顶点位置和纹理坐标变换
      */
     val VERTEX_SHADER = """
         #version 300 es
-        
+
         // 顶点属性
         in vec4 aPosition;
         in vec2 aTexCoord;
-        
+
         // 输出到片元着色器
         out vec2 vTexCoord;
         out vec2 vRawCoord; // 原始坐标用于色散计算
-        
+
         // MVP 变换矩阵（用于 center crop 缩放）
         uniform mat4 uMVPMatrix;
-        
+
         // SurfaceTexture 变换矩阵
         uniform mat4 uSTMatrix;
-        
+
         void main() {
             // 应用 MVP 矩阵进行顶点变换（center crop）
             gl_Position = uMVPMatrix * aPosition;
@@ -69,12 +69,12 @@ object Shaders {
     val FRAGMENT_SHADER_COPY_2D = """
         #version 300 es
         precision mediump float;
-        
+
         in vec2 vTexCoord;
         out vec4 fragColor;
-        
+
         uniform sampler2D uCameraTexture;
-        
+
         void main() {
             fragColor = texture(uCameraTexture, vTexCoord);
         }
@@ -229,6 +229,8 @@ object Shaders {
     uniform float uNoiseSeed;     // 用于每帧刷新噪点的随机种子
     uniform float uLowRes;        // 0.0 ~ 1.0 (低分辨率强度，0为无效果)
     uniform float uAspectRatio;   // 图像长宽比 (Width/Height)，用于确保低分像素块是正方形
+    uniform float uAperture;      // 计算光圈 (1.4 ~ 16.0)
+    uniform vec2 uFocusPoint;     // 对焦点 (0.0 ~ 1.0)
 
     const vec3 W = vec3(0.2126, 0.7152, 0.0722);
 
@@ -274,7 +276,7 @@ object Shaders {
 
     vec3 applyLutColorSpace(vec3 rgb, int colorSpace) {
         if (colorSpace == 0) return rgb; // sRGB
-        
+
         // Matrices for Linear sRGB to target color space (aligned with ColorSpace.kt)
         if (colorSpace == 1) { // DCI-P3 (Bradford adapted)
             return mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * rgb;
@@ -305,13 +307,13 @@ object Shaders {
         if (uLowRes > 0.005) {
             // 算法改良：不再使用 floor() 产生的硬边缘，而是通过降采样+双线性插值模拟“糊”感
             // 同时保留边缘的低分锯齿感
-            float blocksX = mix(512.0, 32.0, uLowRes); 
+            float blocksX = mix(512.0, 32.0, uLowRes);
             vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
-            
+
             // 1. 计算当前像素所在的网格坐标
             vec2 gridUV = floor(vTexCoord / gridSize) * gridSize + gridSize * 0.5;
             vec2 gridRC = floor(vRawCoord / gridSize) * gridSize + gridSize * 0.5;
-            
+
             // 2. 混合原始坐标和网格坐标，实现“糊”且有锯齿的效果
             // 边缘会有锯齿，但平整区域通过插值变得平滑，避免彩色碎块
             uvCoord = mix(vTexCoord, gridUV, 0.95);
@@ -326,11 +328,11 @@ object Shaders {
             vec2 dir = rcCoord - center;
             float dist = length(dir);
             float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
-            
+
             // 关键：基于原始坐标偏移后，必须通过 uSTMatrix 转换回实际采样坐标
             vec2 rCoord = (uSTMatrix * vec4(rcCoord + dir * offset, 0.0, 1.0)).xy;
             vec2 bCoord = (uSTMatrix * vec4(rcCoord - dir * offset, 0.0, 1.0)).xy;
-            
+
             float r = texture(uCameraTexture, rCoord).r;
             float g = texture(uCameraTexture, uvCoord).g;
             float b = texture(uCameraTexture, bCoord).b;
@@ -360,14 +362,14 @@ object Shaders {
             if (abs(uHighlights) > 0.001 || abs(uShadows) > 0.001) {
                 float highlightMask = smoothstep(0.5, 1.0, luma);
                 float shadowMask = 1.0 - smoothstep(0.0, 0.5, luma);
-                
+
                 if (abs(uHighlights) > 0.001) {
                     float highlightFactor = 1.0 + uHighlights * (uHighlights > 0.0 ? 0.7 : 0.3);
                     color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
                 }
-                
+
                 if (abs(uShadows) > 0.001) {
-                    vec3 shadowTarget = (uShadows > 0.0) 
+                    vec3 shadowTarget = (uShadows > 0.0)
                         ? (mix(color.rgb, vec3(luma), uShadows * 0.2) + (color.rgb * uShadows * 0.5))
                         : (color.rgb * (1.0 + uShadows * 0.5));
                     color.rgb = mix(color.rgb, shadowTarget, shadowMask);
@@ -458,11 +460,11 @@ object Shaders {
                 // 将浮点精度控制在适合 fract 的范围，避免伪影
                 vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
                 vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
-                
+
                 // 亮度噪点
                 float lumNoise = fract(sin(dot(noiseCoord, vec2(12.9898, 78.233))) * 43758.5453);
                 lumNoise = (lumNoise - 0.5) * 2.0;
-                
+
                 // 彩色噪点 (R, G, B 分别生成)
                 float colorNoiseR = fract(sin(dot(noiseCoord + vec2(1.1, 2.2), vec2(39.346, 11.135))) * 43758.5453);
                 float colorNoiseG = fract(sin(dot(noiseCoord + vec2(3.3, 4.4), vec2(73.156, 52.235))) * 43758.5453);
@@ -472,10 +474,10 @@ object Shaders {
                 luma = dot(color.rgb, W);
                 // 蒙版强度：中灰区域稍强，极端高光/阴影保留
                 float noiseMask = mix(0.5, 1.0, 1.0 - abs(luma - 0.5) * 1.5);
-                
+
                 // 混合：结合亮度和彩色噪点，使彩色噪点不那么突兀但又可见
                 vec3 finalNoise = mix(vec3(lumNoise), mix(vec3(lumNoise), colorNoise, 0.7), 0.8);
-                
+
                 // 基准强度为 0.3，效果较明显
                 color.rgb += finalNoise * uNoise * max(0.0, noiseMask);
             }
@@ -524,6 +526,17 @@ object Shaders {
     )
 
     /**
+     * 后处理专用纹理坐标（垂直翻转）
+     * 用于让 glReadPixels 直接读取到正向的图片
+     */
+    val POST_PROCESS_TEXTURE_COORDS = floatArrayOf(
+        0.0f, 1.0f, // Top-left -> GL Bottom-left
+        1.0f, 1.0f, // Top-right -> GL Bottom-right
+        0.0f, 0.0f, // Bottom-left -> GL Top-left
+        1.0f, 0.0f  // Bottom-right -> GL Top-right
+    )
+
+    /**
      * 绘制顺序索引
      * 使用两个三角形绘制四边形
      */
@@ -531,4 +544,297 @@ object Shaders {
         0, 1, 2,  // 第一个三角形
         1, 3, 2   // 第二个三角形
     )
+
+    /**
+     * 高质量 Bokeh 片元着色器 (OpenGL ES 3.0)
+     * 采用 Golden-Angle 螺旋采样实现圆盘虚化
+     */
+    val BOKEH_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uInputTexture;
+        uniform sampler2D uDepthTexture;
+
+        uniform mat4 uDepthMatrix; // 用于对齐深度图坐标（处理 Y 翻转和 FOV 缩放）
+        uniform float uMaxBlurRadius;
+        uniform float uAperture;
+        uniform float uFocusDepth;
+        uniform vec2 uTexelSize;
+
+        const float PI = 3.14159265359;
+        const float GOLDEN_ANGLE = 2.39996323;
+        const int SAMPLES = 64; // 实时预览：64 采样配合 Jitter 已足够顺滑且性能均衡
+
+        // Interleaved Gradient Noise (IGN) - 用于低采样下消除环状伪影
+        float random(vec2 fragCoord) {
+            vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+            return fract(magic.z * fract(dot(fragCoord, magic.xy)));
+        }
+
+        void main() {
+            vec2 depthUV = (uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy;
+            vec4 centerColor = texture(uInputTexture, vTexCoord);
+            float centerDepth = texture(uDepthTexture, depthUV).r;
+
+            float coc = abs(centerDepth - uFocusDepth) * uMaxBlurRadius * (1.0 / uAperture);
+            coc = clamp(coc, 0.0, uMaxBlurRadius);
+
+            if (coc < 0.5) {
+                fragColor = centerColor;
+                return;
+            }
+
+            vec3 accColor = vec3(0.0);
+            float accWeight = 0.0;
+
+            // 重要优化：利用 IGN 随机扰动旋转角度，消除固定采样模式带来的色带感
+            // 相对于 brute-force 160 采样，这样能以更低功耗达到相同平滑度
+            float jitter = random(gl_FragCoord.xy) * GOLDEN_ANGLE;
+
+            for (int i = 0; i < SAMPLES; i++) {
+                // 面积均匀分布
+                float r = sqrt(float(i) / float(SAMPLES)) * coc;
+                float theta = float(i) * GOLDEN_ANGLE + jitter;
+
+                vec2 offset = vec2(cos(theta), sin(theta)) * r * uTexelSize;
+                vec2 sampleUV = clamp(vTexCoord + offset, 0.0, 1.0);
+
+                // Mipmap LOD 计算，融合相邻片元，在不加入噪点的情况下自然抹平色带
+                float sampleRadiusPixels = r * 1.5 / sqrt(float(SAMPLES));
+                float lod = max(0.0, log2(sampleRadiusPixels));
+
+                vec3 sampleColor = texture(uInputTexture, sampleUV, lod).rgb;
+                vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
+                float sampleDepth = texture(uDepthTexture, sDepthUV).r;
+
+                float sampleCoc = abs(sampleDepth - uFocusDepth) * uMaxBlurRadius * (1.0 / uAperture);
+                sampleCoc = clamp(sampleCoc, 0.0, uMaxBlurRadius);
+
+                // 软权重逻辑
+                float w = smoothstep(r - 0.5, r + 1.0, sampleCoc);
+
+                float depthDiff = sampleDepth - centerDepth;
+                float bgOcclusion = smoothstep(-0.10, -0.01, depthDiff);
+                float fgHalo = smoothstep(0.06, 0.01, depthDiff);
+                w *= bgOcclusion * fgHalo;
+
+                accColor += sampleColor * w;
+                accWeight += w;
+            }
+            vec3 finalColor = accWeight > 0.001 ? (accColor / accWeight) : centerColor.rgb;
+            fragColor = vec4(finalColor, centerColor.a);
+        }
+    """.trimIndent()
+
+    val FGF_COEFFS_FRAGMENT_SHADER = """#version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uLowResDepth;
+        uniform sampler2D uLowResGuide; // 通常是对原图做过预降采样后的版本
+        uniform vec2 uTexelSize; // 低分辨率下的像素步进
+
+        const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+        const float eps = 0.01 * 0.01; // 减小 epsilon，使系数更灵敏地响应引导图边缘
+
+        void main() {
+            float mean_I = 0.0;
+            float mean_p = 0.0;
+            float mean_Ip = 0.0;
+            float mean_II = 0.0;
+            float sumW = 0.0;
+
+            // 优化：采用更紧凑、密集的 5x5 窗口 (stride=1)，提高边缘系数的精确度
+            // 之前的 stride=4 太粗糙，导致跨越边缘时系数过度平滑
+            for(int y = -2; y <= 2; y++) {
+                for(int x = -2; x <= 2; x++) {
+                    vec2 offset = vec2(float(x), float(y)) * uTexelSize;
+                    vec2 sampleUV = vTexCoord + offset;
+
+                    float p = texture(uLowResDepth, sampleUV).r;
+                    float I = dot(texture(uLowResGuide, sampleUV).rgb, W);
+
+                    // 使用高斯权重，使中心像素贡献更高，进一步抑制边缘扩散
+                    float wS = exp(-float(x*x + y*y) / 2.0);
+
+                    mean_I += I * wS;
+                    mean_p += p * wS;
+                    mean_Ip += I * p * wS;
+                    mean_II += I * I * wS;
+                    sumW += wS;
+                }
+            }
+
+            mean_I /= sumW;
+            mean_p /= sumW;
+            mean_Ip /= sumW;
+            mean_II /= sumW;
+
+            float var_I = mean_II - mean_I * mean_I;
+            float cov_Ip = mean_Ip - mean_I * mean_p;
+
+            float a = cov_Ip / (var_I + eps);
+            float b = mean_p - a * mean_I;
+
+            // 输出 a, b 和 mean_I 到 RGB 通道 (支持 Guidance-Aware Upsampling)
+            fragColor = vec4(a, b, mean_I, 1.0);
+        }
+    """.trimIndent()
+
+    val FGF_APPLY_FRAGMENT_SHADER = """#version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uHighResGuide; // 高清原图
+        uniform sampler2D uLowResCoeffs; // FGF Pass 1 生成的 (a, b, mean_I) 纹理
+        uniform vec2 uLowResTexelSize;   // 低分辨率系数纹理的像素尺寸
+
+        const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+
+        void main() {
+            // 获取当前像素的高清亮度 I
+            vec3 guideRGB = texture(uHighResGuide, vTexCoord).rgb;
+            float I = dot(guideRGB, W);
+
+            // 优化：Guidance-Aware Upsampling (系数级的联合双边上采样)
+            // 解决常规双线性插值在边缘导致 a, b 混叠的问题
+            vec2 pos = vTexCoord / uLowResTexelSize - 0.5;
+            vec2 p0 = floor(pos);
+            vec2 f = pos - p0;
+
+            // 采样相邻的 4 个低分系数块
+            vec3 c00 = texture(uLowResCoeffs, (p0 + vec2(0.5, 0.5)) * uLowResTexelSize).rgb;
+            vec3 c10 = texture(uLowResCoeffs, (p0 + vec2(1.5, 0.5)) * uLowResTexelSize).rgb;
+            vec3 c01 = texture(uLowResCoeffs, (p0 + vec2(0.5, 1.5)) * uLowResTexelSize).rgb;
+            vec3 c11 = texture(uLowResCoeffs, (p0 + vec2(1.5, 1.5)) * uLowResTexelSize).rgb;
+
+            // 计算亮度权重：只采纳那些平均亮度与当前高清像素亮度接近的低分块生成的系数
+            // 这样当高清像素在主体内时，背景侧的 low-res 系数即便物理位置近，权重也会被压低
+            float sigma = 0.12; 
+            float w00 = (1.0 - f.x) * (1.0 - f.y) * exp(-abs(I - c00.z) / sigma);
+            float w10 = f.x * (1.0 - f.y) * exp(-abs(I - c10.z) / sigma);
+            float w01 = (1.0 - f.x) * f.y * exp(-abs(I - c01.z) / sigma);
+            float w11 = f.x * f.y * exp(-abs(I - c11.z) / sigma);
+
+            float sumW = w00 + w10 + w01 + w11;
+            vec2 coeffs;
+            if (sumW > 0.01) {
+                coeffs = (c00.xy * w00 + c10.xy * w10 + c01.xy * w01 + c11.xy * w11) / sumW;
+            } else {
+                // 回退：如果亮度差异都太大，使用基础双线性插值
+                coeffs = mix(mix(c00.xy, c10.xy, f.x), mix(c01.xy, c11.xy, f.x), f.y);
+            }
+
+            float finalDepth = coeffs.x * I + coeffs.y;
+            finalDepth = clamp(finalDepth, 0.0, 1.0);
+
+            fragColor = vec4(finalDepth, finalDepth, finalDepth, 1.0);
+        }
+    """.trimIndent()
+
+    /**
+     * 后期处理专用：物理级的 PSF Splatting 模拟算法。
+     * 采用大半径 Gather、逆向 HDR 提亮（点光源扩张）、能量守恒、球面像差（肥皂泡边缘）和口径蚀来高度还原真实的单反镜头虚化质感。
+     */
+    val PSF_SPLAT_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uInputTexture;
+        uniform sampler2D uDepthTexture;
+
+        uniform mat4 uDepthMatrix;
+        uniform float uMaxBlurRadius;
+        uniform float uAperture;
+        uniform float uFocusDepth;
+        uniform vec2 uTexelSize;
+
+        const float PI = 3.14159265359;
+        const float GOLDEN_ANGLE = 2.39996323;
+        const int SAMPLES = 160;
+
+        void main() {
+            vec2 depthUV = clamp((uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy, 0.0, 1.0);
+            vec4 centerColor = texture(uInputTexture, vTexCoord);
+            float centerDepth = texture(uDepthTexture, depthUV).r;
+
+            float centerCoc = abs(centerDepth - uFocusDepth) * uMaxBlurRadius * (1.0 / uAperture);
+            centerCoc = clamp(centerCoc, 0.0, uMaxBlurRadius);
+
+            // 1. 强力保护机制：对于清晰主体，保持 100% 锐度
+            if (centerCoc < 0.2) {
+                fragColor = centerColor;
+                return;
+            }
+
+            // 2. 初始权重：赋予较高的权重以定性，防止背景渗色
+            float centerWeight = 6.0 / (centerCoc * 0.4 + 1.0);
+            vec3 accColor = centerColor.rgb * centerWeight;
+            float accWeight = centerWeight;
+
+            float softBase = max(3.0, uMaxBlurRadius * 0.1);
+
+            for (int i = 0; i < SAMPLES; i++) {
+                float f = float(i + 1);
+                float r = sqrt(f / float(SAMPLES)) * uMaxBlurRadius;
+                float theta = f * GOLDEN_ANGLE;
+
+                vec2 offset = vec2(cos(theta), sin(theta)) * r * uTexelSize;
+                vec2 sampleUV = clamp(vTexCoord + offset, 0.0, 1.0);
+
+                float lod = log2(r * 0.3 + 1.5);
+                vec3 sColor = textureLod(uInputTexture, sampleUV, lod).rgb;
+                vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
+                float sDepth = texture(uDepthTexture, sDepthUV).r;
+
+                // --- 颜色引导保护 (Edge Protection Logic) ---
+                // 如果采样点颜色与中心色非常接近，说明它可能是主体的一部分
+                // 我们限制其散景半径，防止它作为一个模糊点去“泼溅”覆盖中心点
+                float colorDist = distance(centerColor.rgb, sColor);
+                float colorSimilarity = smoothstep(0.15, 0.01, colorDist);
+
+                float rawCoc = abs(sDepth - uFocusDepth) * uMaxBlurRadius * (1.0 / uAperture);
+                // 关键：如果颜色相似度高，则强制将采样点的 CoC 压低，视为主体保护区
+                float sCoc = mix(rawCoc, min(rawCoc, centerCoc), colorSimilarity);
+                sCoc = clamp(sCoc, 0.0, uMaxBlurRadius);
+
+                // 4. 重构权重逻辑
+                float fW = smoothstep(r - softBase, r + softBase * 0.5, sCoc);
+                float bW = smoothstep(r - softBase, r + softBase * 0.5, centerCoc);
+
+                float depthDiff = sDepth - centerDepth;
+                float isNearer = smoothstep(-0.1, 0.1, depthDiff);
+
+                // 引入相似度加成，让主体边缘的像素更倾向于互相保护而不是混入背景
+                float weight = mix(bW * (1.1 - isNearer), fW, isNearer);
+                weight *= (1.0 + colorSimilarity * 0.8);
+
+                if (weight > 0.0001) {
+                    float luma = dot(sColor, vec3(0.2126, 0.7152, 0.0722));
+                    float hdrBoost = 1.0 + pow(max(0.0, luma - 0.75), 2.0) * 4.0 * smoothstep(1.0, 5.0, sCoc);
+
+                    float edge = smoothstep(0.7, 1.05, r / max(sCoc, 0.1));
+                    float ring = 1.0 + edge * 0.4 * smoothstep(1.5, 5.0, sCoc);
+
+                    float fw = weight * ring;
+                    accColor += sColor * hdrBoost * fw;
+                    accWeight += fw;
+                }
+            }
+
+            vec3 finalColor = accWeight > 0.001 ? (accColor / accWeight) : centerColor.rgb;
+            finalColor = clamp(finalColor, 0.0, 1.0);
+
+            fragColor = vec4(finalColor, centerColor.a);
+        }
+    """.trimIndent()
 }

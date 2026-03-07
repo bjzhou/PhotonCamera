@@ -58,6 +58,10 @@ data class PhotoMetadata(
     val customProperties: Map<String, String> = emptyMap(),
     // 导出到系统相册的 URI 列表
     val exportedUris: List<String> = emptyList(),
+    // 计算摄影光圈与焦点
+    val computationalAperture: Float? = null,
+    val focusPointX: Float? = null,
+    val focusPointY: Float? = null,
     // Live Photo 演示时间戳 (us)
     val presentationTimestampUs: Long? = null,
     // DRO 模式
@@ -192,6 +196,12 @@ data class PhotoMetadata(
             put("customProperties", customPropsObj)
             // 导出的 URI 列表
             put("exportedUris", org.json.JSONArray(exportedUris))
+            
+            // 计算摄影光圈与焦点
+            put("computationalAperture", computationalAperture?.toDouble() ?: JSONObject.NULL)
+            put("focusPointX", focusPointX?.toDouble() ?: JSONObject.NULL)
+            put("focusPointY", focusPointY?.toDouble() ?: JSONObject.NULL)
+
             // Live Photo 时间戳
             put("presentationTimestampUs", presentationTimestampUs ?: JSONObject.NULL)
             // DRO 模式
@@ -290,6 +300,9 @@ data class PhotoMetadata(
                         }
                     },
                     exportedUris = exportedUris,
+                    computationalAperture = if (obj.isNull("computationalAperture")) null else obj.optDouble("computationalAperture").toFloat(),
+                    focusPointX = if (obj.isNull("focusPointX")) null else obj.optDouble("focusPointX").toFloat(),
+                    focusPointY = if (obj.isNull("focusPointY")) null else obj.optDouble("focusPointY").toFloat(),
                     presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),
                     droMode = if (obj.isNull("droMode")) null else obj.optString("droMode"),
                     software = if (obj.isNull("software")) null else obj.optString("software"),

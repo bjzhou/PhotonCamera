@@ -8,25 +8,20 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Log
 import android.util.LruCache
-import androidx.collection.MutableIntFloatMap
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.core.content.FileProvider
+import androidx.core.graphics.scale
+import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.frame.FrameRenderer
-import com.hinnka.mycamera.gallery.*
+import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -35,10 +30,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileOutputStream
-import java.util.*
 import kotlin.math.max
-import androidx.core.net.toUri
-import androidx.core.graphics.scale
 
 /**
  * 相册 Tab
@@ -229,6 +221,60 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editChromaNoiseReduction = MutableStateFlow(0f)
         private set
+
+    // Computational Bokeh editing state
+    var editComputationalAperture = MutableStateFlow<Float?>(null)
+        private set
+    var editFocusPointX = MutableStateFlow<Float?>(null)
+        private set
+    var editFocusPointY = MutableStateFlow<Float?>(null)
+        private set
+
+    private var bokehJob: Job? = null
+
+    fun setComputationalAperture(value: Float?) {
+        editComputationalAperture.value = value
+        updateBokehPhoto()
+    }
+
+    fun setFocusPoint(x: Float, y: Float) {
+        editFocusPointX.value = x
+        editFocusPointY.value = y
+        updateBokehPhoto()
+    }
+
+    private fun updateBokehPhoto() {
+        bokehJob?.cancel()
+        bokehJob = viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val aperture = editComputationalAperture.value
+            val focusPointX = editFocusPointX.value
+            val focusPointY = editFocusPointY.value
+            val photoData = getCurrentPhoto() ?: return@launch
+            val bitmap = PhotoManager.loadOriginalBitmap(context, photoData.id) ?: return@launch
+            if (!isActive) return@launch
+            val bokeh = aperture?.let {
+                contentRepository.depthBokehProcessor.applyHighQualityBokeh(
+                    context,
+                    photoData.id,
+                    bitmap,
+                    focusPointX,
+                    focusPointY,
+                    it
+                )
+            } ?: bitmap
+            if (!isActive) return@launch
+            PhotoManager.saveBokehPhoto(context, photoData.id, bokeh)
+            photoRefreshKeys[photoData.id] = System.currentTimeMillis()
+        }
+    }
+
+    fun hasDepthInfo(photo: PhotoData?): Boolean {
+        if (photo == null) return false
+        if (selectedTab == GalleryTab.SYSTEM) return false
+        val context = getApplication<Application>()
+        return PhotoManager.getDepthFile(context, photo.id).exists()
+    }
 
     // 最新照片（用于相机界面显示入口）
     private val _latestPhoto = MutableStateFlow<PhotoData?>(null)
@@ -1107,6 +1153,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editChromaNoiseReduction.value =
                 metadata.chromaNoiseReduction
                     ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+            
+            editComputationalAperture.value = metadata.computationalAperture
+            editFocusPointX.value = metadata.focusPointX
+            editFocusPointY.value = metadata.focusPointY
         } ?: run {
             editLutId.value = null
             editFrameId.value = null
@@ -1114,6 +1164,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = sharpening.value
             editNoiseReduction.value = noiseReduction.value
             editChromaNoiseReduction.value = chromaNoiseReduction.value
+
+            editComputationalAperture.value = null
+            editFocusPointX.value = null
+            editFocusPointY.value = null
         }
 
         // 加载当前编辑的 LUT 配置
@@ -1225,6 +1279,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
 
         return PhotoTransformation(
+            context = getApplication<Application>(),
             metadata = metadata,
             photoProcessor = contentRepository.photoProcessor,
             sharpening = photoSharpening,
@@ -1236,8 +1291,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 生成预览缓存 key
      */
-    private fun previewCacheKey(photoId: String, metadataHash: Int, refreshKey: Long): String {
-        return "${photoId}_${metadataHash}_${refreshKey}"
+    private fun previewCacheKey(photoData: PhotoData, metadata: PhotoMetadata, showOrigin: Boolean): String {
+        val photoId = photoData.id
+        val metadataHash = metadata.toJson().hashCode()
+        val refreshKey = photoRefreshKeys[photoId] ?: 0L
+        return if (showOrigin) {
+            "${photoId}_${refreshKey}"
+        } else {
+            "${photoId}_${metadataHash}_${refreshKey}"
+        }
     }
 
     /**
@@ -1281,7 +1343,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         colorRecipeParams = editLutRecipeParams.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
-                        chromaNoiseReduction = editChromaNoiseReduction.value
+                        chromaNoiseReduction = editChromaNoiseReduction.value,
+                        computationalAperture = editComputationalAperture.value,
+                        focusPointX = editFocusPointX.value,
+                        focusPointY = editFocusPointY.value
                     )
                     finalS = editSharpening.value
                     finalNR = editNoiseReduction.value
@@ -1298,50 +1363,36 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // 使用多级缓存优化性能
-                val refreshKey = photoRefreshKeys[photo.id] ?: 0L
-                val metadataHash = metadata.toJson().hashCode()
+                val previewCacheKey = previewCacheKey(photo, finalMetadata, showOrigin)
 
-                // 1. 完全处理后的预览图缓存 (LUT + 边框已应用)
-                val previewCacheKey = if (!useGlobalEdit && !showOrigin && bitmap == null) {
-                    previewCacheKey(photo.id, metadataHash, refreshKey)
-                } else null
-
-                previewCacheKey?.let {
-                    val cached = previewBitmapCache.get(it)
-                    if (cached != null && !cached.isRecycled) {
-                        return@withContext cached
-                    }
+                val cached = previewBitmapCache.get(previewCacheKey)
+                if (cached != null && !cached.isRecycled) {
+                    return@withContext cached
                 }
 
                 // 2. 原始底图缓存 (4096px 状态，用于快速重新应用编辑)
-                val sourceCacheKey = "${photo.id}_source_${refreshKey}"
-                val currentBitmap = bitmap ?: previewBitmapCache.get(sourceCacheKey) ?: run {
-                    val loaded = if (selectedTab == GalleryTab.PHOTON) {
-                        PhotoManager.loadBitmap(context, photo.id, 4096)
-                    } else {
-                        PhotoManager.loadBitmap(context, photo.uri, 4096)
-                    }
-                    if (loaded != null) {
-                        previewBitmapCache.put(sourceCacheKey, loaded)
-                    }
-                    loaded
+                val currentBitmap = bitmap ?: if (selectedTab == GalleryTab.PHOTON) {
+                    PhotoManager.loadBitmap(context, photo.id, 4096)
+                } else {
+                    PhotoManager.loadBitmap(context, photo.uri, 4096)
                 } ?: return@withContext null
+
+                previewBitmapCache.put(previewCacheKey(photo, finalMetadata, true), currentBitmap)
 
                 if (showOrigin) {
                     currentBitmap
                 } else {
                     // 预览生成
                     val result = contentRepository.photoProcessor.processBitmap(
-                        currentBitmap, finalMetadata,
-                        finalS, finalNR, finalCNR
+                        context, photo.id, currentBitmap, finalMetadata,
+                        finalS, finalNR, finalCNR,
+                        false
                     )
                     // 估计平均亮度
                     currentBrightness[photo.id] = estimateAverageBrightness(result)
 
                     // 存入缓存
-                    if (previewCacheKey != null) {
-                        previewBitmapCache.put(previewCacheKey, result)
-                    }
+                    previewBitmapCache.put(previewCacheKey, result)
 
                     result
                 }
@@ -1399,6 +1450,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,
+                    computationalAperture = editComputationalAperture.value,
+                    focusPointX = editFocusPointX.value,
+                    focusPointY = editFocusPointY.value,
                 ) ?: run {
                     onComplete(false)
                     return@launch

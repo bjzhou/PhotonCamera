@@ -129,8 +129,9 @@ data class CameraState(
     val awbMode: Int = 1, // 自动白平衡模式
     val awbTemperature: Int = 5000, // 色温 (K)
 
-    val aperture: Float = 2.0f, // 光圈值 (f-number)
-
+    val isVirtualApertureEnabled: Boolean = false,
+    val physicalAperture: Float = 2.0f, // 物理光圈值
+    val virtualAperture: Float = 2.0f,  // 虚拟光圈值 (f-number)
     // 对焦
     val isAutoFocus: Boolean = true,
     val focusPoint: Pair<Float, Float>? = null, // normalized coordinates (0-1)

@@ -15,10 +15,7 @@ import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.phantom.PhantomService
-import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
-import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.raw.MeteringSystem
@@ -53,6 +50,7 @@ object PhotoManager {
     private const val DNG_FILE = "original.dng"
     private const val METADATA_FILE = "metadata.json"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
+    private const val BOKEH_FILE = "bokeh.jpg"
 
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -84,8 +82,16 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), METADATA_FILE)
     }
 
+    fun getDepthFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), "depthmap.png")
+    }
+
     fun getThumbnailFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), THUMBNAIL_FILE)
+    }
+
+    fun getBokehFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), BOKEH_FILE)
     }
 
     fun getVideoFile(context: Context, photoId: String): File {
@@ -110,7 +116,7 @@ object PhotoManager {
                 // 读取照片
                 val processedBitmap = bitmap?.let {
                     photoProcessor.processBitmap(
-                        bitmap, metadata,
+                        context, id, bitmap, metadata,
                         sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
                     )
                 } ?: photoProcessor.process(
@@ -371,6 +377,14 @@ object PhotoManager {
                 }
                 PLog.d(TAG, "Motion Photo synthesized for $photoId with TS: ${livePhotoResult.second}")
             }
+        }
+    }
+
+    suspend fun saveBokehPhoto(context: Context, photoId: String, bitmap: Bitmap) = withContext(Dispatchers.IO) {
+        val photoDir = getPhotoDir(context, photoId, true)
+        val bokehFile = File(photoDir, BOKEH_FILE)
+        FileOutputStream(bokehFile).use { outputStream ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outputStream)
         }
     }
 
@@ -1216,6 +1230,18 @@ object PhotoManager {
     }
 
     fun loadBitmap(context: Context, photoId: String, maxEdge: Int? = null): Bitmap? {
+        val photoFile = getPhotoFile(context, photoId)
+        val bokehFile = getBokehFile(context, photoId)
+        if (!photoFile.exists()) {
+            return null
+        }
+        if (bokehFile.exists()) {
+            return loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
+        }
+        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge)
+    }
+
+    fun loadOriginalBitmap(context: Context, photoId: String, maxEdge: Int? = null): Bitmap? {
         val photoFile = getPhotoFile(context, photoId)
         if (!photoFile.exists()) {
             return null

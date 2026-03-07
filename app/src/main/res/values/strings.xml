@@ -390,4 +390,6 @@
     <string name="imaging">Imaging</string>
     <string name="phantom">Phantom</string>
     <string name="about">About</string>
+    <string name="aperture">Aperture</string>
+    <string name="virtual_aperture">Virtual Aperture</string>
 </resources>

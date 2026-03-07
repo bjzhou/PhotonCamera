@@ -225,7 +225,10 @@ class PhantomWidgetProvider : AppWidgetProvider() {
                         val input = android.graphics.BitmapFactory.decodeStream(inputStream)
                         latestPhoto.metadata?.let {
                             ContentRepository.getInstance(context).photoProcessor.processBitmap(
-                                input, it,
+                                context,
+                                null,
+                                input,
+                                it,
                             )
                         }
                     } catch (e: Exception) {
