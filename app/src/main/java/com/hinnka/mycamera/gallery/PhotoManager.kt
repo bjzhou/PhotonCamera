@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
@@ -1399,12 +1400,15 @@ object PhotoManager {
                         }
                     }
 
-
                     // 3. 处理 RAW 以生成 JPEG 预览
+                    var updatedMetadata = metadata
                     val processedBitmap = RawDemosaicProcessor.getInstance().process(
                         context,
                         dngFile.absolutePath, null, null, 0,
-                        sharpeningValue = 0.4f
+                        sharpeningValue = 0.4f,
+                        onMetadata = { raw ->
+                            updatedMetadata = updatedMetadata.merge(raw)
+                        }
                     )
 
                     if (processedBitmap != null) {
@@ -1417,7 +1421,7 @@ object PhotoManager {
                         generateThumbnail(processedBitmap, thumbnailFile)
 
                         // 更新元数据
-                        val updatedMetadata = metadata.copy(
+                        updatedMetadata = updatedMetadata.copy(
                             width = processedBitmap.width,
                             height = processedBitmap.height,
                             rotation = 0,
@@ -1480,11 +1484,15 @@ object PhotoManager {
                 val metadata = loadMetadata(context, photoId)
 
                 // 3. 处理 RAW 以生成 JPEG 预览
+                var updatedMetadata = metadata
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
                     sharpeningValue = 0.4f,
-                    droMode = metadata?.droMode?.let { MeteringSystem.DROMode.valueOf(it) }?: droMode
+                    droMode = metadata?.droMode?.let { MeteringSystem.DROMode.valueOf(it) } ?: droMode,
+                    onMetadata = { raw ->
+                        updatedMetadata = updatedMetadata?.merge(raw) ?: PhotoMetadata().merge(raw)
+                    }
                 )
 
                 if (processedBitmap != null) {
@@ -1492,8 +1500,9 @@ object PhotoManager {
                     FileOutputStream(photoFile).use { out ->
                         processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                     }
-                    metadata?.let {
+                    updatedMetadata?.let {
                         generateBokehPhoto(context, photoId, it, processedBitmap.copy(Bitmap.Config.ARGB_8888, true))
+                        saveMetadata(context, photoId, it)
                     }
                     // 生成缩略图
                     generateThumbnail(processedBitmap, thumbnailFile)

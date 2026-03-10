@@ -10,6 +10,8 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
+import android.util.Log
+import com.hinnka.mycamera.raw.RawMetadata
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.log2
@@ -196,7 +198,7 @@ data class PhotoMetadata(
             put("customProperties", customPropsObj)
             // 导出的 URI 列表
             put("exportedUris", org.json.JSONArray(exportedUris))
-            
+
             // 计算摄影光圈与焦点
             put("computationalAperture", computationalAperture?.toDouble() ?: JSONObject.NULL)
             put("focusPointX", focusPointX?.toDouble() ?: JSONObject.NULL)
@@ -210,6 +212,36 @@ data class PhotoMetadata(
             put("isMirrored", isMirrored)
             put("colorSpace", colorSpace.name)
         }.toString(2)
+    }
+
+    /**
+     * 从 RawMetadata 补齐信息
+     */
+    fun merge(raw: RawMetadata): PhotoMetadata {
+        return copy(
+            iso = raw.iso.takeIf { it > 0 } ?: iso,
+            shutterSpeed = formatShutterSpeed(raw.shutterSpeed).takeIf { it.isNotEmpty() } ?: shutterSpeed,
+            aperture = formatAperture(raw.aperture).takeIf { it.isNotEmpty() } ?: aperture,
+            exposureBias = raw.exposureBias,
+            droMode = raw.droMode.name,
+            width = raw.width.takeIf { it > 0 } ?: width,
+            height = raw.height.takeIf { it > 0 } ?: height
+        )
+    }
+
+    private fun formatShutterSpeed(shutterSpeedNs: Long): String {
+        if (shutterSpeedNs <= 0) return ""
+        val seconds = shutterSpeedNs / 1_000_000_000.0
+        return if (seconds >= 1.0) {
+            "${seconds.toInt()}\""
+        } else {
+            "1/${(1.0 / seconds).toInt()}"
+        }
+    }
+
+    private fun formatAperture(aperture: Float): String {
+        if (aperture <= 0) return ""
+        return "f/${String.format("%.1f", aperture)}"
     }
 
     companion object {
@@ -300,7 +332,8 @@ data class PhotoMetadata(
                         }
                     },
                     exportedUris = exportedUris,
-                    computationalAperture = if (obj.isNull("computationalAperture")) null else obj.optDouble("computationalAperture").toFloat(),
+                    computationalAperture = if (obj.isNull("computationalAperture")) null else obj.optDouble("computationalAperture")
+                        .toFloat(),
                     focusPointX = if (obj.isNull("focusPointX")) null else obj.optDouble("focusPointX").toFloat(),
                     focusPointY = if (obj.isNull("focusPointY")) null else obj.optDouble("focusPointY").toFloat(),
                     presentationTimestampUs = if (obj.isNull("presentationTimestampUs")) null else obj.optLong("presentationTimestampUs"),

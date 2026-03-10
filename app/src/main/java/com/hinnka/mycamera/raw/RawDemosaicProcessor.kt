@@ -291,7 +291,8 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
+        onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
         if (!dngFile.exists() || !dngFile.canRead()) {
@@ -308,7 +309,8 @@ class RawDemosaicProcessor {
                 exposureBias = exposureBias,
                 sharpeningValue = sharpeningValue,
                 droMode = droMode,
-                dngFile = dngFile
+                dngFile = dngFile,
+                onMetadata = onMetadata
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process DNG file: $dngFilePath", e)
@@ -373,7 +375,8 @@ class RawDemosaicProcessor {
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
         droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
-        dngFile: File? = null
+        dngFile: File? = null,
+        onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
         var actualRawData = rawData
         var actualWidth = width
@@ -401,6 +404,7 @@ class RawDemosaicProcessor {
             actualRowStride = dngRawData.rowStride
             actualMetadata = convertDngRawDataToMetadata(dngRawData, exposureBias, droMode)
             actualRotation = dngRawData.rotation
+            onMetadata?.invoke(actualMetadata)
         }
 
         if (actualRawData == null || actualMetadata == null) {
