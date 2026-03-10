@@ -31,10 +31,12 @@ class PhotoProcessor(
     private val depthBokehProcessor: DepthBokehProcessor,
 ) {
 
-    suspend fun process(context: Context, photoId: String, metadata: PhotoMetadata,
-                        sharpening: Float = 0f,
-                        noiseReduction: Float = 0f,
-                        chromaNoiseReduction: Float = 0f): Bitmap? {
+    suspend fun process(
+        context: Context, photoId: String, metadata: PhotoMetadata,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f
+    ): Bitmap? {
         val dngFile = PhotoManager.getDngFile(context, photoId)
         val yuvFile = PhotoManager.getYuvFile(context, photoId)
         val photoFile = PhotoManager.getPhotoFile(context, photoId)
@@ -99,7 +101,8 @@ class PhotoProcessor(
         // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
         val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-        val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+        val finalChromaNoiseReduction =
+            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         // 1. 应用 LUT
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
@@ -119,8 +122,10 @@ class PhotoProcessor(
             var b = it
 
             metadata.computationalAperture?.let { aperture ->
-                b = depthBokehProcessor.applyHighQualityBokeh(context, photoId, b,
-                    metadata.focusPointX, metadata.focusPointY, aperture)
+                b = depthBokehProcessor.applyHighQualityBokeh(
+                    context, photoId, b,
+                    metadata.focusPointX, metadata.focusPointY, aperture
+                )
                 photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, b) }
             }
 
@@ -163,7 +168,8 @@ class PhotoProcessor(
         // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
         val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-        val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+        val finalChromaNoiseReduction =
+            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
@@ -183,8 +189,10 @@ class PhotoProcessor(
         YuvProcessor.free(input)
 
         metadata.computationalAperture?.let { aperture ->
-            result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
-                metadata.focusPointX, metadata.focusPointY, aperture)
+            result = depthBokehProcessor.applyHighQualityBokeh(
+                context, photoId, result,
+                metadata.focusPointX, metadata.focusPointY, aperture
+            )
         }
 
         result = applyFrame(result, metadata)
@@ -216,15 +224,18 @@ class PhotoProcessor(
         // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
         val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
         val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-        val finalChromaNoiseReduction = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+        val finalChromaNoiseReduction =
+            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
 
         if (useComputationalAperture) {
             metadata.computationalAperture?.let { aperture ->
-                result = depthBokehProcessor.applyHighQualityBokeh(context, photoId, result,
-                    metadata.focusPointX, metadata.focusPointY, aperture)
+                result = depthBokehProcessor.applyHighQualityBokeh(
+                    context, photoId, result,
+                    metadata.focusPointX, metadata.focusPointY, aperture
+                )
                 photoId?.let { photoId -> PhotoManager.saveBokehPhoto(context, photoId, result) }
             }
         }
@@ -248,7 +259,7 @@ class PhotoProcessor(
     private suspend fun applyFrame(
         input: Bitmap,
         metadata: PhotoMetadata,
-    ) : Bitmap {
+    ): Bitmap {
         var result = input
         // 2. 应用边框水印
         if (metadata.frameId != null) {

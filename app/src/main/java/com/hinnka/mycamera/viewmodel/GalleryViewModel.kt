@@ -25,6 +25,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -80,6 +81,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val defaultLutId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.lutId }
     val defaultVirtualAperture: StateFlow<Float> = userPreferencesRepository.userPreferences.map { it.defaultVirtualAperture }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
+
+    val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.droMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -1506,7 +1511,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             refreshingPhotos.add(photo.id)
             try {
                 val context = getApplication<Application>()
-                val result = PhotoManager.refreshRawPreview(context, photo.id)
+                val result = PhotoManager.refreshRawPreview(context, photo.id, MeteringSystem.DROMode.valueOf(droMode.value))
                 if (result != null) {
                     // 更新刷新密钥以强制 UI 重新加载
                     photoRefreshKeys[photo.id] = System.currentTimeMillis()

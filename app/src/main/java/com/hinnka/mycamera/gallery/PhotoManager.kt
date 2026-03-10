@@ -1466,7 +1466,7 @@ object PhotoManager {
         }
     }
 
-    suspend fun refreshRawPreview(context: Context, photoId: String): Bitmap? {
+    suspend fun refreshRawPreview(context: Context, photoId: String, droMode: MeteringSystem.DROMode): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val photoDir = getPhotoDir(context, photoId, true)
@@ -1483,7 +1483,8 @@ object PhotoManager {
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
-                    sharpeningValue = 0.4f
+                    sharpeningValue = 0.4f,
+                    droMode = metadata?.droMode?.let { MeteringSystem.DROMode.valueOf(it) }?: droMode
                 )
 
                 if (processedBitmap != null) {

@@ -359,6 +359,7 @@ data class RawMetadata(
                     // 双矩阵插值
                     FloatArray(9) { i -> m1[i] * weight + m2[i] * (1.0f - weight) }
                 }
+
                 m1 != null -> m1
                 m2 != null -> m2
                 else -> {
@@ -371,7 +372,10 @@ data class RawMetadata(
             // 4. 计算最终 CCM: targetTransform × CamToXYZ
             val finalCCM = multiplyMatrix3x3(targetTransform, camToXYZ)
 
-            PLog.d(TAG, "targetTransform = ${targetTransform.contentToString()} finalCCM = ${finalCCM.contentToString()}")
+            PLog.d(
+                TAG,
+                "targetTransform = ${targetTransform.contentToString()} finalCCM = ${finalCCM.contentToString()}"
+            )
 
             return finalCCM
         }
@@ -446,8 +450,8 @@ data class RawMetadata(
                 val cameraNeutral = FloatArray(3)
                 for (i in 0 until 3) {
                     cameraNeutral[i] = xyzToCam[i * 3 + 0] * lx +
-                                       xyzToCam[i * 3 + 1] * ly +
-                                       xyzToCam[i * 3 + 2] * lz
+                            xyzToCam[i * 3 + 1] * ly +
+                            xyzToCam[i * 3 + 2] * lz
                 }
 
                 // 3. 构造中间矩阵：为了让作用于已 WB 像素的矩阵生效，需在求逆前补偿白平衡
@@ -480,15 +484,15 @@ data class RawMetadata(
         private fun getChromaticAdaptationMatrix(ill: Int): FloatArray {
             return if (ill == 17) { // A to D50 (Bradford Transform)
                 floatArrayOf(
-                    0.8924f, -0.0157f,  0.0529f,
-                   -0.1111f,  1.0505f, -0.0151f,
-                    0.0522f, -0.0077f,  2.2396f
+                    0.8924f, -0.0157f, 0.0529f,
+                    -0.1111f, 1.0505f, -0.0151f,
+                    0.0522f, -0.0077f, 2.2396f
                 )
             } else { // D65 to D50 (Bradford Transform)
                 floatArrayOf(
-                    1.0478f,  0.0229f, -0.0501f,
-                    0.0295f,  0.9905f, -0.0170f,
-                   -0.0092f,  0.0150f,  0.7521f
+                    1.0478f, 0.0229f, -0.0501f,
+                    0.0295f, 0.9905f, -0.0170f,
+                    -0.0092f, 0.0150f, 0.7521f
                 )
             }
         }
@@ -527,10 +531,14 @@ data class RawMetadata(
         private fun computeXYZD50ToGamut(primaries: FloatArray, whitePoint: FloatArray): FloatArray? {
             if (primaries.size != 6 || whitePoint.size != 2) return null
 
-            val xr = primaries[0]; val yr = primaries[1]
-            val xg = primaries[2]; val yg = primaries[3]
-            val xb = primaries[4]; val yb = primaries[5]
-            val xw = whitePoint[0]; val yw = whitePoint[1]
+            val xr = primaries[0];
+            val yr = primaries[1]
+            val xg = primaries[2];
+            val yg = primaries[3]
+            val xb = primaries[4];
+            val yb = primaries[5]
+            val xw = whitePoint[0];
+            val yw = whitePoint[1]
 
             // 1. 实现 RGB -> XYZ (D65) 的推导过程
             // 构造系数矩阵 S
@@ -580,8 +588,8 @@ data class RawMetadata(
 
             // 计算行列式
             val det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
-                      m[1] * (m[3] * m[8] - m[5] * m[6]) +
-                      m[2] * (m[3] * m[7] - m[4] * m[6])
+                    m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                    m[2] * (m[3] * m[7] - m[4] * m[6])
 
             if (kotlin.math.abs(det) < 1e-12f) {
                 Log.e(TAG, "Matrix is singular, cannot invert")
@@ -622,7 +630,7 @@ data class RawMetadata(
         /**
          * 3x3 矩阵乘法
          */
-        private fun multiplyMatrix3x3(a: FloatArray, b: FloatArray): FloatArray {
+        fun multiplyMatrix3x3(a: FloatArray, b: FloatArray): FloatArray {
             require(a.size == 9 && b.size == 9) { "Both matrices must be 3x3" }
 
             val result = FloatArray(9)
@@ -630,8 +638,8 @@ data class RawMetadata(
                 for (j in 0 until 3) {
                     result[i * 3 + j] =
                         a[i * 3 + 0] * b[0 * 3 + j] +
-                        a[i * 3 + 1] * b[1 * 3 + j] +
-                        a[i * 3 + 2] * b[2 * 3 + j]
+                                a[i * 3 + 1] * b[1 * 3 + j] +
+                                a[i * 3 + 2] * b[2 * 3 + j]
                 }
             }
             return result

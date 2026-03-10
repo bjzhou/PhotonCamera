@@ -183,10 +183,10 @@ object MeteringSystem {
         val preferredDROMode = metadata?.droMode ?: DROMode.OFF
 
         if (lv >= 10.0f) {
-            if (sceneContrast > 30.0f && preferredDROMode >= DROMode.HIGH) {
+            if (sceneContrast > 15.0f && preferredDROMode >= DROMode.HIGH) {
                 droMode = DROMode.HIGH
                 drBoost = 1.0f // 增加 1.0 EV 曝光
-            } else if (sceneContrast > 15.0f && preferredDROMode >= DROMode.LOW) {
+            } else if (sceneContrast > 8.0f && preferredDROMode >= DROMode.LOW) {
                 droMode = DROMode.LOW
                 drBoost = 0.5f // 增加 0.5 EV 曝光
             }
@@ -241,7 +241,7 @@ object MeteringSystem {
         val curveLut = interpolator.generateLut(256)
 
         PLog.d(
-            TAG, "Log Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=${sceneContrast.toInt()}, " +
+            TAG, "Log Analysis: EV=${ev.toInt()}, LV=${lv.toInt()}, DRO=$droMode, Contrast=$sceneContrast, " +
                     "p99=$p99Luma p999=$p999Luma bias=$biasMultiplier max=$maxLuma gain=$gain points=$finalX,$finalY"
         )
 
