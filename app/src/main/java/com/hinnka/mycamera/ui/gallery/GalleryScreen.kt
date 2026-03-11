@@ -359,7 +359,7 @@ fun GalleryScreen(
                 val currentPhotos = photos
                 // 照片网格
                 LazyVerticalStaggeredGrid(
-                    columns = StaggeredGridCells.Fixed(2),
+                    columns = StaggeredGridCells.Fixed(3),
                     contentPadding = PaddingValues(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalItemSpacing = 4.dp,
