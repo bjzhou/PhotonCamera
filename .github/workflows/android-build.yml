@@ -31,8 +31,10 @@ jobs:
             -PRELEASE_KEY_ALIAS=${{ secrets.RELEASE_KEY_ALIAS }} \
             -PRELEASE_KEY_PASSWORD=${{ secrets.RELEASE_KEY_PASSWORD }}
 
-      - name: Upload China Release APK
-        uses: actions/upload-artifact@v4
+      - name: Upload China Release APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: china-release-apk
-          path: app/build/outputs/apk/china/release/*.apk
+          files: app/build/outputs/apk/china/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
