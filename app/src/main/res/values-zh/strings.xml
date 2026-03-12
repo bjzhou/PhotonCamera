@@ -372,7 +372,7 @@
     <string name="settings_widget_theme_dark">深色</string>
 
     <!-- LUT Creator & UI -->
-    <string name="lut_creator_title">LUT 提取</string>
+    <string name="lut_creator_title">AI 仿色</string>
     <string name="lut_creator_desc">选择图片分析色彩风格，并生成专属 LUT。</string>
     <string name="lut_creator_use_ai">使用 AI 提取风格（需要在设置中配置 Key）</string>
     <string name="lut_creator_custom_ai_instructions">自定义 AI 提示词（选填）</string>

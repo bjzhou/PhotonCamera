@@ -42,6 +42,7 @@ object LutGenerator {
                 val dist = sqrt((dr * dr + dg * dg + db * db).toDouble())
                 M[i][j] = phi(dist)
             }
+            M[i][i] += 1e-4 // Regularization for Cubic RBF
 
             // Polynomial P block (based on Target as input)
             M[i][n] = 1.0
@@ -147,6 +148,7 @@ object LutGenerator {
                 val dist = sqrt((dr * dr + dg * dg + db * db).toDouble())
                 M[i][j] = phi(dist)
             }
+            M[i][i] += 1e-4 // Regularization
 
             // Polynomial P block
             M[i][n] = 1.0
@@ -201,13 +203,57 @@ object LutGenerator {
                 }
             }
         }
+        
+        enforceMonotonicity(lutData, size)
         return lutData
     }
 
+    /**
+     * Ensures that as input RGB increases, output RGB also increases (or stays same).
+     * Prevents "solarization" and extreme color inversion artifacts.
+     */
+    private fun enforceMonotonicity(lut: FloatArray, size: Int) {
+        // We iterate through the 3D grid and ensure that each channel 
+        // respects a basic growth trend relative to its own axis.
+        
+        // 1. Red channel: must be non-decreasing as input Red increases
+        for (b in 0 until size) {
+            for (g in 0 until size) {
+                for (r in 1 until size) {
+                    val currIdx = (b * size * size + g * size + r) * 3
+                    val prevIdx = (b * size * size + g * size + (r - 1)) * 3
+                    lut[currIdx] = max(lut[currIdx], lut[prevIdx])
+                }
+            }
+        }
+        
+        // 2. Green channel: must be non-decreasing as input Green increases
+        for (b in 0 until size) {
+            for (r in 0 until size) {
+                for (g in 1 until size) {
+                    val currIdx = (b * size * size + g * size + r) * 3 + 1
+                    val prevIdx = (b * size * size + (g - 1) * size + r) * 3 + 1
+                    lut[currIdx] = max(lut[currIdx], lut[prevIdx])
+                }
+            }
+        }
+        
+        // 3. Blue channel: must be non-decreasing as input Blue increases
+        for (g in 0 until size) {
+            for (r in 0 until size) {
+                for (b in 1 until size) {
+                    val currIdx = (b * size * size + g * size + r) * 3 + 2
+                    val prevIdx = ((b - 1) * size * size + g * size + r) * 3 + 2
+                    lut[currIdx] = max(lut[currIdx], lut[prevIdx])
+                }
+            }
+        }
+    }
+
     private fun phi(r: Double): Double {
-        // Linear radial basis phi(r) = r is widely used for 3D color interpolation 
-        // as it minimizes overshoots and provides C0 continuity at control points.
-        return r
+        // Cubic radial basis phi(r) = r^3 provides C2 continuity and much smoother 
+        // color transitions, effectively suppressing "ringing" and color casts.
+        return r * r * r
     }
 
     /**
