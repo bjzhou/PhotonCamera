@@ -229,10 +229,14 @@ object Shaders {
     uniform float uNoiseSeed;     // 用于每帧刷新噪点的随机种子
     uniform float uLowRes;        // 0.0 ~ 1.0 (低分辨率强度，0为无效果)
     uniform float uAspectRatio;   // 图像长宽比 (Width/Height)，用于确保低分像素块是正方形
+    uniform float uLchHueAdjustments[9];
+    uniform float uLchChromaAdjustments[9];
+    uniform float uLchLightnessAdjustments[9];
     uniform float uAperture;      // 计算光圈 (1.4 ~ 16.0)
     uniform vec2 uFocusPoint;     // 对焦点 (0.0 ~ 1.0)
 
     const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+    const float PI = 3.14159265359;
 
     float log10(float x) { return log(x) * 0.4342944819; }
     vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
@@ -243,6 +247,141 @@ object Shaders {
 
     vec3 linearToSrgb(vec3 l) {
         return mix(12.92 * l, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, l));
+    }
+
+    vec3 linearRgbToOklab(vec3 c) {
+        vec3 lms = mat3(
+            0.4122214708, 0.2119034982, 0.0883024619,
+            0.5363325363, 0.6806995451, 0.2817188376,
+            0.0514459929, 0.1073969566, 0.6299787005
+        ) * c;
+        vec3 lmsCbrt = pow(max(lms, vec3(0.0)), vec3(1.0 / 3.0));
+        return mat3(
+            0.2104542553, 1.9779984951, 0.0259040371,
+            0.7936177850, -2.4285922050, 0.7827717662,
+            -0.0040720468, 0.4505937099, -0.8086757660
+        ) * lmsCbrt;
+    }
+
+    vec3 oklabToLinearRgb(vec3 lab) {
+        vec3 lms = mat3(
+            1.0, 1.0, 1.0,
+            0.3963377774, -0.1055613458, -0.0894841775,
+            0.2158037573, -0.0638541728, -1.2914855480
+        ) * lab;
+        vec3 lms3 = lms * lms * lms;
+        return mat3(
+            4.0767416621, -1.2684380046, -0.0041960863,
+            -3.3077115913, 2.6097574011, -0.7034186147,
+            0.2309699292, -0.3413193965, 1.7076147010
+        ) * lms3;
+    }
+
+    float wrapAngle(float angle) {
+        return mod(angle + PI, 2.0 * PI) - PI;
+    }
+
+    float colorBandWeight(float hue, float center, float chroma) {
+        float dist = abs(wrapAngle(hue - center));
+        float hueWeight = 1.0 - smoothstep(radians(18.0), radians(42.0), dist);
+        float chromaWeight = smoothstep(0.02, 0.08, chroma);
+        return hueWeight * chromaWeight;
+    }
+
+    float fullCoverageBandWeight(float hue, float center, float chroma) {
+        float dist = abs(wrapAngle(hue - center));
+        float hueWeight = max(0.0, 1.0 - dist / radians(55.0));
+        float chromaWeight = smoothstep(0.005, 0.03, chroma);
+        return hueWeight * chromaWeight;
+    }
+
+    float skinBandWeight(float hue, float chroma, float lightness) {
+        float hueWeight = 1.0 - smoothstep(radians(10.0), radians(24.0), abs(wrapAngle(hue - radians(52.0))));
+        float chromaWeight = smoothstep(0.015, 0.10, chroma);
+        float lightnessWeight = smoothstep(0.32, 0.52, lightness) * (1.0 - smoothstep(0.78, 0.90, lightness));
+        return hueWeight * chromaWeight * lightnessWeight;
+    }
+
+    vec3 applyOklchDensity(vec3 srgbColor, float density) {
+        if (abs(density) < 0.0001) {
+            return srgbColor;
+        }
+
+        vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+        vec3 lab = linearRgbToOklab(linearColor);
+        float chroma = length(lab.yz);
+        float hue = atan(lab.z, lab.y);
+        const float CHROMA_BIAS = 0.35;
+        float densityScale = max(0.0, 1.0 + density * CHROMA_BIAS);
+        float newChroma = chroma * densityScale;
+        const float DENSITY_K = 1.85;
+        float newLightness = clamp(lab.x * exp(-DENSITY_K * density * chroma), 0.0, 1.0);
+        vec3 denseLab = vec3(newLightness, cos(hue) * newChroma, sin(hue) * newChroma);
+        vec3 denseLinear = max(oklabToLinearRgb(denseLab), vec3(0.0));
+        return clamp(linearToSrgb(denseLinear), 0.0, 1.0);
+    }
+
+    vec3 applyLchColorMixer(vec3 srgbColor) {
+        vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+        vec3 lab = linearRgbToOklab(linearColor);
+        float chroma = length(lab.yz);
+        float hue = atan(lab.z, lab.y);
+        if (hue < 0.0) hue += 2.0 * PI;
+
+        float centers[8] = float[](
+            radians(20.0),
+            radians(45.0),
+            radians(75.0),
+            radians(140.0),
+            radians(200.0),
+            radians(255.0),
+            radians(295.0),
+            radians(335.0)
+        );
+
+        float hueShift = 0.0;
+        float chromaScale = 1.0;
+        float lightnessShift = 0.0;
+        float bandWeights[8];
+        float totalBandWeight = 0.0;
+
+        for (int i = 0; i < 8; i++) {
+            float weight = fullCoverageBandWeight(hue, centers[i], chroma);
+            bandWeights[i] = weight;
+            totalBandWeight += weight;
+        }
+
+        if (totalBandWeight > 0.0001) {
+            for (int i = 0; i < 8; i++) {
+                float weight = bandWeights[i] / totalBandWeight;
+                hueShift += uLchHueAdjustments[i + 1] * weight * radians(24.0);
+                chromaScale += uLchChromaAdjustments[i + 1] * weight;
+                lightnessShift += uLchLightnessAdjustments[i + 1] * weight * 0.18;
+            }
+        }
+
+        float yellowRatio = max(0.0, lab.z) / (abs(lab.y) + abs(lab.z) + 0.0001);
+        float redDominance = max(0.0, lab.y - lab.z);
+        float lipSuppression = 1.0 - smoothstep(0.015, 0.065, redDominance);
+        float skinWeight = skinBandWeight(hue, chroma, lab.x) *
+            smoothstep(0.28, 0.52, yellowRatio) *
+            lipSuppression;
+        if (skinWeight > 0.0001) {
+            hueShift += uLchHueAdjustments[0] * skinWeight * radians(18.0);
+            chromaScale += uLchChromaAdjustments[0] * skinWeight;
+            lightnessShift += uLchLightnessAdjustments[0] * skinWeight * 0.12;
+        }
+
+        if (abs(hueShift) < 0.0001 && abs(chromaScale - 1.0) < 0.0001 && abs(lightnessShift) < 0.0001) {
+            return srgbColor;
+        }
+
+        float newHue = hue + hueShift;
+        float newChroma = max(0.0, chroma * max(0.0, chromaScale));
+        float newLightness = clamp(lab.x + lightnessShift, 0.0, 1.0);
+        vec3 mixedLab = vec3(newLightness, cos(newHue) * newChroma, sin(newHue) * newChroma);
+        vec3 mixedLinear = max(oklabToLinearRgb(mixedLab), vec3(0.0));
+        return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
     }
 
     vec3 applyLutCurve(vec3 l, int curveType) {
@@ -394,29 +533,12 @@ object Shaders {
                 color.rgb = mix(vec3(luma), color.rgb, uSaturation);
             }
 
-            // 6. 色彩增强（Vibrance）
-            if (uVibrance > 0.001) {
-                float strength = uVibrance * 0.5;
-                // 蓝色增强
-                float baseBlue = color.b - (color.r + color.g) * 0.5;
-                float blueMask = smoothstep(0.0, 0.2, baseBlue);
-                if (blueMask > 0.0) {
-                    color.r = mix(color.r, color.r * 0.7, blueMask * strength);
-                    color.g = mix(color.g, color.g * 0.7, blueMask * strength);
-                    color.b = mix(color.b, color.b * 0.95, blueMask * strength);
-                    vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
-                    color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
-                }
-                // 暖色增强
-                float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7);
-                float warmMask = smoothstep(0.05, 0.25, baseWarm);
-                if (warmMask > 0.0) {
-                    color.b = mix(color.b, color.b * 0.85, warmMask * strength);
-                    color.g = mix(color.g, color.g * 0.95, warmMask * strength);
-                    vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
-                    color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
-                }
+            // 6. 色彩密度（OkLCh density）
+            if (abs(uVibrance) > 0.001) {
+                color.rgb = applyOklchDensity(color.rgb, uVibrance);
             }
+
+            color.rgb = applyLchColorMixer(color.rgb);
 
             // 7. 褪色效果
             if (uFade > 0.001) {

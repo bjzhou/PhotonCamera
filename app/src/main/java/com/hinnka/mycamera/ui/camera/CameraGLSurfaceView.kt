@@ -10,6 +10,7 @@ import android.view.Surface
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -165,42 +166,61 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * 设置参数
      */
     fun setParams(
-        exposure: Float,
-        contrast: Float,
-        saturation: Float,
-        temperature: Float,
-        tint: Float,
-        fade: Float,
-        vibrance: Float,
-        highlights: Float,
-        shadows: Float,
-        filmGrain: Float,
-        vignette: Float,
-        bleachBypass: Float,
-        chromaticAberration: Float,
-        noise: Float,
-        lowRes: Float,
-        halation: Float,
-        lutIntensity: Float,
+        params: ColorRecipeParams,
         aperture: Float,
     ) {
-        renderer.exposure = exposure
-        renderer.contrast = contrast
-        renderer.saturation = saturation
-        renderer.temperature = temperature
-        renderer.tint = tint
-        renderer.fade = fade
-        renderer.vibrance = vibrance
-        renderer.highlights = highlights
-        renderer.shadows = shadows
-        renderer.filmGrain = filmGrain
-        renderer.vignette = vignette
-        renderer.bleachBypass = bleachBypass
-        renderer.chromaticAberration = chromaticAberration
-        renderer.noise = noise
-        renderer.lowRes = lowRes
-        renderer.halation = halation
-        renderer.lutIntensity = lutIntensity
+        renderer.exposure = params.exposure
+        renderer.contrast = params.contrast
+        renderer.saturation = params.saturation
+        renderer.temperature = params.temperature
+        renderer.tint = params.tint
+        renderer.fade = params.fade
+        renderer.vibrance = params.color
+        renderer.highlights = params.highlights
+        renderer.shadows = params.shadows
+        renderer.filmGrain = params.filmGrain
+        renderer.vignette = params.vignette
+        renderer.bleachBypass = params.bleachBypass
+        renderer.chromaticAberration = params.chromaticAberration
+        renderer.noise = params.noise
+        renderer.lowRes = params.lowRes
+        renderer.halation = params.halation
+        renderer.lutIntensity = params.lutIntensity
+        renderer.setLchAdjustments(
+            floatArrayOf(
+                params.skinHue,
+                params.redHue,
+                params.orangeHue,
+                params.yellowHue,
+                params.greenHue,
+                params.cyanHue,
+                params.blueHue,
+                params.purpleHue,
+                params.magentaHue,
+            ),
+            floatArrayOf(
+                params.skinChroma,
+                params.redChroma,
+                params.orangeChroma,
+                params.yellowChroma,
+                params.greenChroma,
+                params.cyanChroma,
+                params.blueChroma,
+                params.purpleChroma,
+                params.magentaChroma,
+            ),
+            floatArrayOf(
+                params.skinLightness,
+                params.redLightness,
+                params.orangeLightness,
+                params.yellowLightness,
+                params.greenLightness,
+                params.cyanLightness,
+                params.blueLightness,
+                params.purpleLightness,
+                params.magentaLightness,
+            )
+        )
         renderer.aperture = aperture
         requestRender()
     }

@@ -156,30 +156,13 @@ fun CameraPreviewGL(
                     if (currentLut != null) {
                         glSurfaceView.setLut(currentLut)
                         glSurfaceView.setLutEnabled(true)
-                        glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
                     } else {
                         glSurfaceView.setLutEnabled(false)
-                        glSurfaceView.setColorRecipeEnabled(false)
                     }
+                    glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
 
                     glSurfaceView.setParams(
-                        exposure = colorRecipeParams.exposure,
-                        contrast = colorRecipeParams.contrast,
-                        saturation = colorRecipeParams.saturation,
-                        temperature = colorRecipeParams.temperature,
-                        tint = colorRecipeParams.tint,
-                        fade = colorRecipeParams.fade,
-                        vibrance = colorRecipeParams.color,
-                        highlights = colorRecipeParams.highlights,
-                        shadows = colorRecipeParams.shadows,
-                        filmGrain = colorRecipeParams.filmGrain,
-                        vignette = colorRecipeParams.vignette,
-                        bleachBypass = colorRecipeParams.bleachBypass,
-                        chromaticAberration = colorRecipeParams.chromaticAberration,
-                        noise = colorRecipeParams.noise,
-                        lowRes = colorRecipeParams.lowRes,
-                        halation = colorRecipeParams.halation,
-                        lutIntensity = colorRecipeParams.lutIntensity,
+                        params = colorRecipeParams,
                         aperture = aperture,
                     )
 

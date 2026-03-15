@@ -52,6 +52,33 @@ class LutManager(private val context: Context) {
         private fun chromaticAberrationKey(lutId: String) = floatPreferencesKey("${lutId}_chromaticAberration")
         private fun noiseKey(lutId: String) = floatPreferencesKey("${lutId}_noise")
         private fun lowResKey(lutId: String) = floatPreferencesKey("${lutId}_lowRes")
+        private fun skinHueKey(lutId: String) = floatPreferencesKey("${lutId}_skinHue")
+        private fun skinChromaKey(lutId: String) = floatPreferencesKey("${lutId}_skinChroma")
+        private fun skinLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_skinLightness")
+        private fun redHueKey(lutId: String) = floatPreferencesKey("${lutId}_redHue")
+        private fun redChromaKey(lutId: String) = floatPreferencesKey("${lutId}_redChroma")
+        private fun redLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_redLightness")
+        private fun orangeHueKey(lutId: String) = floatPreferencesKey("${lutId}_orangeHue")
+        private fun orangeChromaKey(lutId: String) = floatPreferencesKey("${lutId}_orangeChroma")
+        private fun orangeLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_orangeLightness")
+        private fun yellowHueKey(lutId: String) = floatPreferencesKey("${lutId}_yellowHue")
+        private fun yellowChromaKey(lutId: String) = floatPreferencesKey("${lutId}_yellowChroma")
+        private fun yellowLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_yellowLightness")
+        private fun greenHueKey(lutId: String) = floatPreferencesKey("${lutId}_greenHue")
+        private fun greenChromaKey(lutId: String) = floatPreferencesKey("${lutId}_greenChroma")
+        private fun greenLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_greenLightness")
+        private fun cyanHueKey(lutId: String) = floatPreferencesKey("${lutId}_cyanHue")
+        private fun cyanChromaKey(lutId: String) = floatPreferencesKey("${lutId}_cyanChroma")
+        private fun cyanLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_cyanLightness")
+        private fun blueHueKey(lutId: String) = floatPreferencesKey("${lutId}_blueHue")
+        private fun blueChromaKey(lutId: String) = floatPreferencesKey("${lutId}_blueChroma")
+        private fun blueLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_blueLightness")
+        private fun purpleHueKey(lutId: String) = floatPreferencesKey("${lutId}_purpleHue")
+        private fun purpleChromaKey(lutId: String) = floatPreferencesKey("${lutId}_purpleChroma")
+        private fun purpleLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_purpleLightness")
+        private fun magentaHueKey(lutId: String) = floatPreferencesKey("${lutId}_magentaHue")
+        private fun magentaChromaKey(lutId: String) = floatPreferencesKey("${lutId}_magentaChroma")
+        private fun magentaLightnessKey(lutId: String) = floatPreferencesKey("${lutId}_magentaLightness")
         private fun lutIntensityKey(lutId: String) = floatPreferencesKey("${lutId}_lutIntensity")
         private fun remarksKey(lutId: String) =
             androidx.datastore.preferences.core.stringPreferencesKey("${lutId}_remarks")
@@ -88,6 +115,33 @@ class LutManager(private val context: Context) {
                 chromaticAberration = preferences[chromaticAberrationKey(lutId)] ?: 0f,
                 noise = preferences[noiseKey(lutId)] ?: 0f,
                 lowRes = preferences[lowResKey(lutId)] ?: 0f,
+                skinHue = preferences[skinHueKey(lutId)] ?: 0f,
+                skinChroma = preferences[skinChromaKey(lutId)] ?: 0f,
+                skinLightness = preferences[skinLightnessKey(lutId)] ?: 0f,
+                redHue = preferences[redHueKey(lutId)] ?: 0f,
+                redChroma = preferences[redChromaKey(lutId)] ?: 0f,
+                redLightness = preferences[redLightnessKey(lutId)] ?: 0f,
+                orangeHue = preferences[orangeHueKey(lutId)] ?: 0f,
+                orangeChroma = preferences[orangeChromaKey(lutId)] ?: 0f,
+                orangeLightness = preferences[orangeLightnessKey(lutId)] ?: 0f,
+                yellowHue = preferences[yellowHueKey(lutId)] ?: 0f,
+                yellowChroma = preferences[yellowChromaKey(lutId)] ?: 0f,
+                yellowLightness = preferences[yellowLightnessKey(lutId)] ?: 0f,
+                greenHue = preferences[greenHueKey(lutId)] ?: 0f,
+                greenChroma = preferences[greenChromaKey(lutId)] ?: 0f,
+                greenLightness = preferences[greenLightnessKey(lutId)] ?: 0f,
+                cyanHue = preferences[cyanHueKey(lutId)] ?: 0f,
+                cyanChroma = preferences[cyanChromaKey(lutId)] ?: 0f,
+                cyanLightness = preferences[cyanLightnessKey(lutId)] ?: 0f,
+                blueHue = preferences[blueHueKey(lutId)] ?: 0f,
+                blueChroma = preferences[blueChromaKey(lutId)] ?: 0f,
+                blueLightness = preferences[blueLightnessKey(lutId)] ?: 0f,
+                purpleHue = preferences[purpleHueKey(lutId)] ?: 0f,
+                purpleChroma = preferences[purpleChromaKey(lutId)] ?: 0f,
+                purpleLightness = preferences[purpleLightnessKey(lutId)] ?: 0f,
+                magentaHue = preferences[magentaHueKey(lutId)] ?: 0f,
+                magentaChroma = preferences[magentaChromaKey(lutId)] ?: 0f,
+                magentaLightness = preferences[magentaLightnessKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
                 remarks = preferences[remarksKey(lutId)] ?: ""
             )
@@ -230,10 +284,37 @@ class LutManager(private val context: Context) {
             preferences[chromaticAberrationKey(lutId)] = params.chromaticAberration
             preferences[noiseKey(lutId)] = params.noise
             preferences[lowResKey(lutId)] = params.lowRes
+            preferences[skinHueKey(lutId)] = params.skinHue
+            preferences[skinChromaKey(lutId)] = params.skinChroma
+            preferences[skinLightnessKey(lutId)] = params.skinLightness
+            preferences[redHueKey(lutId)] = params.redHue
+            preferences[redChromaKey(lutId)] = params.redChroma
+            preferences[redLightnessKey(lutId)] = params.redLightness
+            preferences[orangeHueKey(lutId)] = params.orangeHue
+            preferences[orangeChromaKey(lutId)] = params.orangeChroma
+            preferences[orangeLightnessKey(lutId)] = params.orangeLightness
+            preferences[yellowHueKey(lutId)] = params.yellowHue
+            preferences[yellowChromaKey(lutId)] = params.yellowChroma
+            preferences[yellowLightnessKey(lutId)] = params.yellowLightness
+            preferences[greenHueKey(lutId)] = params.greenHue
+            preferences[greenChromaKey(lutId)] = params.greenChroma
+            preferences[greenLightnessKey(lutId)] = params.greenLightness
+            preferences[cyanHueKey(lutId)] = params.cyanHue
+            preferences[cyanChromaKey(lutId)] = params.cyanChroma
+            preferences[cyanLightnessKey(lutId)] = params.cyanLightness
+            preferences[blueHueKey(lutId)] = params.blueHue
+            preferences[blueChromaKey(lutId)] = params.blueChroma
+            preferences[blueLightnessKey(lutId)] = params.blueLightness
+            preferences[purpleHueKey(lutId)] = params.purpleHue
+            preferences[purpleChromaKey(lutId)] = params.purpleChroma
+            preferences[purpleLightnessKey(lutId)] = params.purpleLightness
+            preferences[magentaHueKey(lutId)] = params.magentaHue
+            preferences[magentaChromaKey(lutId)] = params.magentaChroma
+            preferences[magentaLightnessKey(lutId)] = params.magentaLightness
             preferences[lutIntensityKey(lutId)] = params.lutIntensity
             preferences[remarksKey(lutId)] = params.remarks
         }
-        PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
+//        PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
     }
 
     /**
@@ -261,6 +342,33 @@ class LutManager(private val context: Context) {
                 chromaticAberration = preferences[chromaticAberrationKey(lutId)] ?: 0f,
                 noise = preferences[noiseKey(lutId)] ?: 0f,
                 lowRes = preferences[lowResKey(lutId)] ?: 0f,
+                skinHue = preferences[skinHueKey(lutId)] ?: 0f,
+                skinChroma = preferences[skinChromaKey(lutId)] ?: 0f,
+                skinLightness = preferences[skinLightnessKey(lutId)] ?: 0f,
+                redHue = preferences[redHueKey(lutId)] ?: 0f,
+                redChroma = preferences[redChromaKey(lutId)] ?: 0f,
+                redLightness = preferences[redLightnessKey(lutId)] ?: 0f,
+                orangeHue = preferences[orangeHueKey(lutId)] ?: 0f,
+                orangeChroma = preferences[orangeChromaKey(lutId)] ?: 0f,
+                orangeLightness = preferences[orangeLightnessKey(lutId)] ?: 0f,
+                yellowHue = preferences[yellowHueKey(lutId)] ?: 0f,
+                yellowChroma = preferences[yellowChromaKey(lutId)] ?: 0f,
+                yellowLightness = preferences[yellowLightnessKey(lutId)] ?: 0f,
+                greenHue = preferences[greenHueKey(lutId)] ?: 0f,
+                greenChroma = preferences[greenChromaKey(lutId)] ?: 0f,
+                greenLightness = preferences[greenLightnessKey(lutId)] ?: 0f,
+                cyanHue = preferences[cyanHueKey(lutId)] ?: 0f,
+                cyanChroma = preferences[cyanChromaKey(lutId)] ?: 0f,
+                cyanLightness = preferences[cyanLightnessKey(lutId)] ?: 0f,
+                blueHue = preferences[blueHueKey(lutId)] ?: 0f,
+                blueChroma = preferences[blueChromaKey(lutId)] ?: 0f,
+                blueLightness = preferences[blueLightnessKey(lutId)] ?: 0f,
+                purpleHue = preferences[purpleHueKey(lutId)] ?: 0f,
+                purpleChroma = preferences[purpleChromaKey(lutId)] ?: 0f,
+                purpleLightness = preferences[purpleLightnessKey(lutId)] ?: 0f,
+                magentaHue = preferences[magentaHueKey(lutId)] ?: 0f,
+                magentaChroma = preferences[magentaChromaKey(lutId)] ?: 0f,
+                magentaLightness = preferences[magentaLightnessKey(lutId)] ?: 0f,
                 lutIntensity = preferences[lutIntensityKey(lutId)] ?: 1f,
                 remarks = preferences[remarksKey(lutId)] ?: ""
             )
@@ -300,6 +408,33 @@ class LutManager(private val context: Context) {
             preferences.remove(chromaticAberrationKey(lutId))
             preferences.remove(noiseKey(lutId))
             preferences.remove(lowResKey(lutId))
+            preferences.remove(skinHueKey(lutId))
+            preferences.remove(skinChromaKey(lutId))
+            preferences.remove(skinLightnessKey(lutId))
+            preferences.remove(redHueKey(lutId))
+            preferences.remove(redChromaKey(lutId))
+            preferences.remove(redLightnessKey(lutId))
+            preferences.remove(orangeHueKey(lutId))
+            preferences.remove(orangeChromaKey(lutId))
+            preferences.remove(orangeLightnessKey(lutId))
+            preferences.remove(yellowHueKey(lutId))
+            preferences.remove(yellowChromaKey(lutId))
+            preferences.remove(yellowLightnessKey(lutId))
+            preferences.remove(greenHueKey(lutId))
+            preferences.remove(greenChromaKey(lutId))
+            preferences.remove(greenLightnessKey(lutId))
+            preferences.remove(cyanHueKey(lutId))
+            preferences.remove(cyanChromaKey(lutId))
+            preferences.remove(cyanLightnessKey(lutId))
+            preferences.remove(blueHueKey(lutId))
+            preferences.remove(blueChromaKey(lutId))
+            preferences.remove(blueLightnessKey(lutId))
+            preferences.remove(purpleHueKey(lutId))
+            preferences.remove(purpleChromaKey(lutId))
+            preferences.remove(purpleLightnessKey(lutId))
+            preferences.remove(magentaHueKey(lutId))
+            preferences.remove(magentaChromaKey(lutId))
+            preferences.remove(magentaLightnessKey(lutId))
             preferences.remove(lutIntensityKey(lutId))
             preferences.remove(remarksKey(lutId))
         }

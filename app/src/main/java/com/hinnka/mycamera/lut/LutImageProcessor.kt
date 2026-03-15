@@ -27,7 +27,6 @@ import androidx.core.graphics.createBitmap
  * 所有 GPU 操作在独立单线程完成，确保 EGL 上下文线程安全
  */
 class LutImageProcessor {
-
     // 单线程调度器，确保所有 EGL 操作在同一线程
     private val glDispatcher = Executors.newSingleThreadExecutor { r ->
         Thread(r, "LutImageProcessor-GL").apply { isDaemon = true }
@@ -98,6 +97,9 @@ class LutImageProcessor {
     private var uNoiseSeedLoc = 0
     private var uLowResLoc = 0
     private var uAspectRatioLoc = 0
+    private var uLchHueAdjustmentsLoc = 0
+    private var uLchChromaAdjustmentsLoc = 0
+    private var uLchLightnessAdjustmentsLoc = 0
 
     // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
     private var uSharpeningLoc = 0
@@ -236,6 +238,7 @@ class LutImageProcessor {
         val noise = colorRecipeParams?.noise ?: 0f
         val lowRes = colorRecipeParams?.lowRes ?: 0f
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
+        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(colorRecipeParams)
 
         // 后期处理参数
         val sharpening: Float = sharpeningValue
@@ -278,7 +281,8 @@ class LutImageProcessor {
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
             halation, chromaticAberration, noise, lowRes,
-            intensity, sharpening
+            intensity, sharpening,
+            lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments
             // GL_RGBA16 已自动归一化，使用标准 shader
         )
 
@@ -328,6 +332,7 @@ class LutImageProcessor {
         val intensity = colorRecipeParams?.lutIntensity ?: 1f
         val noise = colorRecipeParams?.noise ?: 0f
         val lowRes = colorRecipeParams?.lowRes ?: 0f
+        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(colorRecipeParams)
 
         // 后期处理参数（仅在软件处理模式下生效）
         val sharpening: Float = sharpeningValue
@@ -373,10 +378,56 @@ class LutImageProcessor {
             exposure, contrast, saturation, temperature, tint, fade,
             vibrance, highlights, shadows, filmGrain, vignette, bleachBypass,
             halation, chromaticAberration,
-            noise, lowRes, intensity, sharpening
+            noise, lowRes, intensity, sharpening,
+            lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments
         )
 
         outputBitmap
+    }
+
+    private fun buildLchAdjustmentArrays(params: ColorRecipeParams?): Triple<FloatArray, FloatArray, FloatArray> {
+        if (params == null) {
+            return Triple(
+                FloatArray(LCH_COLOR_BAND_COUNT),
+                FloatArray(LCH_COLOR_BAND_COUNT),
+                FloatArray(LCH_COLOR_BAND_COUNT)
+            )
+        }
+        return Triple(
+            floatArrayOf(
+                params.skinHue,
+                params.redHue,
+                params.orangeHue,
+                params.yellowHue,
+                params.greenHue,
+                params.cyanHue,
+                params.blueHue,
+                params.purpleHue,
+                params.magentaHue,
+            ),
+            floatArrayOf(
+                params.skinChroma,
+                params.redChroma,
+                params.orangeChroma,
+                params.yellowChroma,
+                params.greenChroma,
+                params.cyanChroma,
+                params.blueChroma,
+                params.purpleChroma,
+                params.magentaChroma,
+            ),
+            floatArrayOf(
+                params.skinLightness,
+                params.redLightness,
+                params.orangeLightness,
+                params.yellowLightness,
+                params.greenLightness,
+                params.cyanLightness,
+                params.blueLightness,
+                params.purpleLightness,
+                params.magentaLightness,
+            )
+        )
     }
 
     /**
@@ -406,7 +457,10 @@ class LutImageProcessor {
         noise: Float,
         lowRes: Float,
         intensity: Float,
-        sharpening: Float
+        sharpening: Float,
+        lchHueAdjustments: FloatArray,
+        lchChromaAdjustments: FloatArray,
+        lchLightnessAdjustments: FloatArray
     ): Bitmap {
         val program = shaderProgram
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
@@ -466,6 +520,9 @@ class LutImageProcessor {
                 GLES30.glGetUniformLocation(program, "uAspectRatio"),
                 width.toFloat() / Math.max(1, height).toFloat()
             )
+            GLES30.glUniform1fv(uLchHueAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
+            GLES30.glUniform1fv(uLchChromaAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
+            GLES30.glUniform1fv(uLchLightnessAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
         }
 
         // 设置 HDF 参数
@@ -725,6 +782,9 @@ class LutImageProcessor {
         uNoiseSeedLoc = GLES30.glGetUniformLocation(shaderProgram, "uNoiseSeed")
         uLowResLoc = GLES30.glGetUniformLocation(shaderProgram, "uLowRes")
         uAspectRatioLoc = GLES30.glGetUniformLocation(shaderProgram, "uAspectRatio")
+        uLchHueAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchHueAdjustments")
+        uLchChromaAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchChromaAdjustments")
+        uLchLightnessAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchLightnessAdjustments")
 
         uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
         uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
@@ -1193,6 +1253,7 @@ class LutImageProcessor {
 
     companion object {
         private const val TAG = "LutImageProcessor"
+        private const val LCH_COLOR_BAND_COUNT = 9
 
         // 2D 图片版本的顶点着色器
         private val IMAGE_VERTEX_SHADER = """
@@ -1243,6 +1304,9 @@ class LutImageProcessor {
             uniform float uNoiseSeed;     // 噪点随机种子
             uniform float uLowRes;        // 0.0 ~ 1.0 (低像素强度)
             uniform float uAspectRatio;   // 图像长宽比
+            uniform float uLchHueAdjustments[9];
+            uniform float uLchChromaAdjustments[9];
+            uniform float uLchLightnessAdjustments[9];
             
             // HDF 光晕效果
             uniform float uHalation;      // 0.0 ~ 1.0 (光晕强度)
@@ -1256,6 +1320,8 @@ class LutImageProcessor {
             uniform vec2 uTexelSize;
             
             // 辅助函数：亮度计算
+            const float PI = 3.14159265359;
+
             float getLuma(vec3 color) {
                 vec3 weights = (uInputColorSpace == 1) ? vec3(0.2290, 0.6917, 0.0793) : vec3(0.2126, 0.7152, 0.0722);
                 return dot(color, weights);
@@ -1274,6 +1340,141 @@ class LutImageProcessor {
                 vec3 absC = abs(c);
                 vec3 result = mix(absC / 12.92, pow((absC + 0.055) / 1.055, vec3(2.4)), step(0.04045, absC));
                 return sign(c) * result;
+            }
+
+            vec3 linearRgbToOklab(vec3 c) {
+                vec3 lms = mat3(
+                    0.4122214708, 0.2119034982, 0.0883024619,
+                    0.5363325363, 0.6806995451, 0.2817188376,
+                    0.0514459929, 0.1073969566, 0.6299787005
+                ) * c;
+                vec3 lmsCbrt = pow(max(lms, vec3(0.0)), vec3(1.0 / 3.0));
+                return mat3(
+                    0.2104542553, 1.9779984951, 0.0259040371,
+                    0.7936177850, -2.4285922050, 0.7827717662,
+                    -0.0040720468, 0.4505937099, -0.8086757660
+                ) * lmsCbrt;
+            }
+
+            vec3 oklabToLinearRgb(vec3 lab) {
+                vec3 lms = mat3(
+                    1.0, 1.0, 1.0,
+                    0.3963377774, -0.1055613458, -0.0894841775,
+                    0.2158037573, -0.0638541728, -1.2914855480
+                ) * lab;
+                vec3 lms3 = lms * lms * lms;
+                return mat3(
+                    4.0767416621, -1.2684380046, -0.0041960863,
+                    -3.3077115913, 2.6097574011, -0.7034186147,
+                    0.2309699292, -0.3413193965, 1.7076147010
+                ) * lms3;
+            }
+
+            float wrapAngle(float angle) {
+                return mod(angle + PI, 2.0 * PI) - PI;
+            }
+
+            float colorBandWeight(float hue, float center, float chroma) {
+                float dist = abs(wrapAngle(hue - center));
+                float hueWeight = 1.0 - smoothstep(radians(18.0), radians(42.0), dist);
+                float chromaWeight = smoothstep(0.02, 0.08, chroma);
+                return hueWeight * chromaWeight;
+            }
+
+            float fullCoverageBandWeight(float hue, float center, float chroma) {
+                float dist = abs(wrapAngle(hue - center));
+                float hueWeight = max(0.0, 1.0 - dist / radians(55.0));
+                float chromaWeight = smoothstep(0.005, 0.03, chroma);
+                return hueWeight * chromaWeight;
+            }
+
+            float skinBandWeight(float hue, float chroma, float lightness) {
+                float hueWeight = 1.0 - smoothstep(radians(10.0), radians(24.0), abs(wrapAngle(hue - radians(52.0))));
+                float chromaWeight = smoothstep(0.015, 0.10, chroma);
+                float lightnessWeight = smoothstep(0.32, 0.52, lightness) * (1.0 - smoothstep(0.78, 0.90, lightness));
+                return hueWeight * chromaWeight * lightnessWeight;
+            }
+
+            vec3 applyOklchDensity(vec3 srgbColor, float density) {
+                if (abs(density) < 0.0001) {
+                    return srgbColor;
+                }
+
+                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+                vec3 lab = linearRgbToOklab(linearColor);
+                float chroma = length(lab.yz);
+                float hue = atan(lab.z, lab.y);
+                const float CHROMA_BIAS = 0.35;
+                float densityScale = max(0.0, 1.0 + density * CHROMA_BIAS);
+                float newChroma = chroma * densityScale;
+                const float DENSITY_K = 1.85;
+                float newLightness = clamp(lab.x * exp(-DENSITY_K * density * chroma), 0.0, 1.0);
+                vec3 denseLab = vec3(newLightness, cos(hue) * newChroma, sin(hue) * newChroma);
+                vec3 denseLinear = max(oklabToLinearRgb(denseLab), vec3(0.0));
+                return clamp(linearToSrgb(denseLinear), 0.0, 1.0);
+            }
+
+            vec3 applyLchColorMixer(vec3 srgbColor) {
+                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
+                vec3 lab = linearRgbToOklab(linearColor);
+                float chroma = length(lab.yz);
+                float hue = atan(lab.z, lab.y);
+                if (hue < 0.0) hue += 2.0 * PI;
+
+                float centers[8] = float[](
+                    radians(20.0),
+                    radians(45.0),
+                    radians(75.0),
+                    radians(140.0),
+                    radians(200.0),
+                    radians(255.0),
+                    radians(295.0),
+                    radians(335.0)
+                );
+
+                float hueShift = 0.0;
+                float chromaScale = 1.0;
+                float lightnessShift = 0.0;
+                float bandWeights[8];
+                float totalBandWeight = 0.0;
+
+                for (int i = 0; i < 8; i++) {
+                    float weight = fullCoverageBandWeight(hue, centers[i], chroma);
+                    bandWeights[i] = weight;
+                    totalBandWeight += weight;
+                }
+
+                if (totalBandWeight > 0.0001) {
+                    for (int i = 0; i < 8; i++) {
+                        float weight = bandWeights[i] / totalBandWeight;
+                        hueShift += uLchHueAdjustments[i + 1] * weight * radians(24.0);
+                        chromaScale += uLchChromaAdjustments[i + 1] * weight;
+                        lightnessShift += uLchLightnessAdjustments[i + 1] * weight * 0.18;
+                    }
+                }
+
+                float yellowRatio = max(0.0, lab.z) / (abs(lab.y) + abs(lab.z) + 0.0001);
+                float redDominance = max(0.0, lab.y - lab.z);
+                float lipSuppression = 1.0 - smoothstep(0.015, 0.065, redDominance);
+                float skinWeight = skinBandWeight(hue, chroma, lab.x) *
+                    smoothstep(0.28, 0.52, yellowRatio) *
+                    lipSuppression;
+                if (skinWeight > 0.0001) {
+                    hueShift += uLchHueAdjustments[0] * skinWeight * radians(18.0);
+                    chromaScale += uLchChromaAdjustments[0] * skinWeight;
+                    lightnessShift += uLchLightnessAdjustments[0] * skinWeight * 0.12;
+                }
+
+                if (abs(hueShift) < 0.0001 && abs(chromaScale - 1.0) < 0.0001 && abs(lightnessShift) < 0.0001) {
+                    return srgbColor;
+                }
+
+                float newHue = hue + hueShift;
+                float newChroma = max(0.0, chroma * max(0.0, chromaScale));
+                float newLightness = clamp(lab.x + lightnessShift, 0.0, 1.0);
+                vec3 mixedLab = vec3(newLightness, cos(newHue) * newChroma, sin(newHue) * newChroma);
+                vec3 mixedLinear = max(oklabToLinearRgb(mixedLab), vec3(0.0));
+                return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
             }
 
             vec3 applyLutCurve(vec3 l, int curveType) {
@@ -1418,35 +1619,12 @@ class LutImageProcessor {
                     float gray = getLuma(color.rgb);
                     color.rgb = mix(vec3(gray), color.rgb, uSaturation);
 
-                    // 6. 色彩增强（Vibrance - 选择性增强蓝色/红橙色）
-                    float strength = uVibrance * 0.5;
-                    // --- 6.1 蓝色增强 (深邃天空/水面) ---
-                    float baseBlue = color.b - (color.r + color.g) * 0.5;
-                    float blueMask = smoothstep(0.0, 0.2, baseBlue); 
-                    if (blueMask > 0.0) {
-                        // 增加蓝色的纯度 (使用比例混合，避免绝对值减法产生噪点)
-                        color.r = mix(color.r, color.r * 0.7, blueMask * strength);
-                        color.g = mix(color.g, color.g * 0.7, blueMask * strength);
-                        // 稍微压暗蓝色，制造胶片重感 (同样使用比例混合)
-                        color.b = mix(color.b, color.b * 0.95, blueMask * strength);
-                        // 使用 S 曲线增加蓝色区域的对比度/通透感
-                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
-                        color.rgb = mix(color.rgb, sCurve, blueMask * strength * 0.2);
+                    // 6. 色彩密度（OkLCh density）
+                    if (abs(uVibrance) > 0.001) {
+                        color.rgb = applyOklchDensity(color.rgb, uVibrance);
                     }
-                    // --- 6.2 暖色增强 (新增逻辑：红润肤色/日落) ---
-                    // 去除浑浊的蓝色杂质，呈现奶油般质感的红/橙色
-                    // 算法：检测红色分量是否显著高于蓝色 (捕捉皮肤、夕阳、木头等)
-                    float baseWarm = color.r - (color.g * 0.3 + color.b * 0.7); 
-                    float warmMask = smoothstep(0.05, 0.25, baseWarm);
-                    if (warmMask > 0.0) {
-                        // 6.2.1 "去脏"：只在一定范围内应用，避免把鲜艳的红色变黑
-                        color.b = mix(color.b, color.b * 0.85, warmMask * strength); 
-                        // 6.2.2 密度调整
-                        color.g = mix(color.g, color.g * 0.95, warmMask * strength); 
-                        // 6.2.3 胶片感增强：使用非线性缩放而不是简单的乘法，保护亮度
-                        vec3 sCurve = color.rgb * color.rgb * (3.0 - 2.0 * color.rgb);
-                        color.rgb = mix(color.rgb, sCurve, warmMask * strength * 0.25);
-                    }
+
+                    color.rgb = applyLchColorMixer(color.rgb);
 
                     // 7. 褪色效果
                     if (uFade > 0.0) {

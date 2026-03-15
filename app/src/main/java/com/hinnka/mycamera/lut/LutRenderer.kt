@@ -24,6 +24,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     companion object {
         private const val TAG = "LutRenderer"
+        private const val LCH_COLOR_BAND_COUNT = 9
 
         // 属性位置
         private const val POSITION_COMPONENT_COUNT = 2
@@ -110,6 +111,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uNoiseSeedLocation: Int = 0
     private var uLowResLocation: Int = 0
     private var uAspectRatioLocation: Int = 0
+    private var uLchHueAdjustmentsLocation: Int = 0
+    private var uLchChromaAdjustmentsLocation: Int = 0
+    private var uLchLightnessAdjustmentsLocation: Int = 0
     private var uSTMatrixFragLocation: Int = 0
     private var uApertureLocation: Int = 0
     private var uFocusPointLocation: Int = 0
@@ -237,6 +241,10 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var halation: Float = 0f // 0.0 ~ 1.0
+
+    private val lchHueAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
+    private val lchChromaAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
+    private val lchLightnessAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
 
     // 渲染尺寸
     private var viewportWidth: Int = 0
@@ -625,6 +633,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
             GLES30.glUniform1f(uLowResLocation, lowRes)
             GLES30.glUniform1f(uAspectRatioLocation, viewportWidth.toFloat() / Math.max(1, viewportHeight).toFloat())
+            GLES30.glUniform1fv(uLchHueAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
+            GLES30.glUniform1fv(uLchChromaAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
+            GLES30.glUniform1fv(uLchLightnessAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
         }
 
         // 虚化预览和色散效果始终更新（如果启用）
@@ -739,6 +750,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         uNoiseSeedLocation = GLES30.glGetUniformLocation(programId, "uNoiseSeed")
         uLowResLocation = GLES30.glGetUniformLocation(programId, "uLowRes")
         uAspectRatioLocation = GLES30.glGetUniformLocation(programId, "uAspectRatio")
+        uLchHueAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchHueAdjustments")
+        uLchChromaAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchChromaAdjustments")
+        uLchLightnessAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchLightnessAdjustments")
         uSTMatrixFragLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
         uApertureLocation = GLES30.glGetUniformLocation(programId, "uAperture")
         uFocusPointLocation = GLES30.glGetUniformLocation(programId, "uFocusPoint")
@@ -1687,8 +1701,45 @@ class LutRenderer : GLSurfaceView.Renderer {
             vignette = vignette,
             bleachBypass = bleachBypass,
             chromaticAberration = chromaticAberration,
-            halation = halation
+            halation = halation,
+            noise = noise,
+            lowRes = lowRes,
+            skinHue = lchHueAdjustments[0],
+            skinChroma = lchChromaAdjustments[0],
+            skinLightness = lchLightnessAdjustments[0],
+            redHue = lchHueAdjustments[1],
+            redChroma = lchChromaAdjustments[1],
+            redLightness = lchLightnessAdjustments[1],
+            orangeHue = lchHueAdjustments[2],
+            orangeChroma = lchChromaAdjustments[2],
+            orangeLightness = lchLightnessAdjustments[2],
+            yellowHue = lchHueAdjustments[3],
+            yellowChroma = lchChromaAdjustments[3],
+            yellowLightness = lchLightnessAdjustments[3],
+            greenHue = lchHueAdjustments[4],
+            greenChroma = lchChromaAdjustments[4],
+            greenLightness = lchLightnessAdjustments[4],
+            cyanHue = lchHueAdjustments[5],
+            cyanChroma = lchChromaAdjustments[5],
+            cyanLightness = lchLightnessAdjustments[5],
+            blueHue = lchHueAdjustments[6],
+            blueChroma = lchChromaAdjustments[6],
+            blueLightness = lchLightnessAdjustments[6],
+            purpleHue = lchHueAdjustments[7],
+            purpleChroma = lchChromaAdjustments[7],
+            purpleLightness = lchLightnessAdjustments[7],
+            magentaHue = lchHueAdjustments[8],
+            magentaChroma = lchChromaAdjustments[8],
+            magentaLightness = lchLightnessAdjustments[8],
         )
+    }
+
+    fun setLchAdjustments(hue: FloatArray, chroma: FloatArray, lightness: FloatArray) {
+        for (i in 0 until LCH_COLOR_BAND_COUNT) {
+            lchHueAdjustments[i] = hue.getOrElse(i) { 0f }
+            lchChromaAdjustments[i] = chroma.getOrElse(i) { 0f }
+            lchLightnessAdjustments[i] = lightness.getOrElse(i) { 0f }
+        }
     }
 
     private fun initBokehProgram() {
