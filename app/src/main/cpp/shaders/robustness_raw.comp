@@ -70,6 +70,22 @@ float getGreen(sampler2D tex, int px, int py) {
     return (g1 + g2) * 0.5;
 }
 
+float sampleTargetGreen(vec2 planePos) {
+    vec2 clampedPos = clamp(
+        planePos,
+        vec2(0.0),
+        vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
+    ivec2 p0 = ivec2(floor(clampedPos));
+    ivec2 p1 = min(p0 + ivec2(1), ivec2(int(pc.planeWidth) - 1, int(pc.planeHeight) - 1));
+    vec2 f = clampedPos - vec2(p0);
+
+    float g00 = getGreen(trgImg, p0.x, p0.y);
+    float g10 = getGreen(trgImg, p1.x, p0.y);
+    float g01 = getGreen(trgImg, p0.x, p1.y);
+    float g11 = getGreen(trgImg, p1.x, p1.y);
+    return mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
+}
+
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
@@ -149,7 +165,18 @@ void main() {
     // Final sigma² = max(measured, noise_model) — lower-bound truncation (Paper §6.4)
     float sigma2 = max(sigma2_spatial, sigma2_noise);
     
+    float gradX = 0.5 * (getGreen(refImg, int(planeX) + 1, int(planeY)) -
+                         getGreen(refImg, int(planeX) - 1, int(planeY)));
+    float gradY = 0.5 * (getGreen(refImg, int(planeX), int(planeY) + 1) -
+                         getGreen(refImg, int(planeX), int(planeY) - 1));
+    float gradEnergy = gradX * gradX + gradY * gradY;
+    float edgeStrength = sqrt(max(gradEnergy / max(sigma2, 1e-8), 0.0));
+    float edgeRelax = smoothstep(1.2, 5.0, edgeStrength);
+
     float minRobustness = 1.0;
+    float sumRobustness = 0.0;
+    float centerRobustness = 1.0;
+    float weightSum = 0.0;
 
     // Morphological Min Filter (Radius 1 = 3×3 — less aggressive than 5×5)
     for (int dy = -1; dy <= 1; dy++) {
@@ -160,26 +187,8 @@ void main() {
              // Use green channel for comparison
              float greenRef = getGreen(refImg, nx, ny);
 
-             // Target: use manual bilinear sampling of Green pixels.
-             // Our flow vector 'flow' is in the half-res "plane" scale.
-             // So trgPlane is in half-res coordinates (0 to planeWidth-1).
              vec2 trgPlane = vec2(nx, ny) + flow;
-             
-             // Bilinear weights for half-res sampling
-             vec2 trgPlaneFloor = floor(trgPlane);
-             vec2 trgPlaneFrac = trgPlane - trgPlaneFloor;
-             int txi = int(trgPlaneFloor.x);
-             int tyi = int(trgPlaneFloor.y);
-             
-             // Sample 4 surrounding Green pixels using our helper function (which acts on plane coords)
-             float g00 = getGreen(trgImg, txi, tyi);
-             float g10 = getGreen(trgImg, txi + 1, tyi);
-             float g01 = getGreen(trgImg, txi, tyi + 1);
-             float g11 = getGreen(trgImg, txi + 1, tyi + 1);
-             
-             float greenTrg = mix(mix(g00, g10, trgPlaneFrac.x),
-                                  mix(g01, g11, trgPlaneFrac.x),
-                                  trgPlaneFrac.y);
+             float greenTrg = sampleTargetGreen(trgPlane);
 
              // Squared difference
              float diff = greenRef - greenTrg;
@@ -188,30 +197,40 @@ void main() {
              float d_ms_sq = diff * diff;
 
              // Wiener shrinkage noise correction (Paper §6.4 & Python Reference)
-             float d_noise_sq = 2.0 * sigma2;
+             float sigma2_adapted = sigma2 * mix(1.0, 2.4, edgeRelax);
+             float d_noise_sq = 2.0 * sigma2_adapted;
              float shrink = d_ms_sq / max(d_ms_sq + d_noise_sq, 1e-10);
              float d_corrected_sq = d_ms_sq * shrink * shrink; // Multiplied twice per paper
              
-             // Python Reference Parameter mapped S and t
-             // S2 = 12.0 (Relaxed) is used when flow is smooth and reliable (flowRange <= 0.8).
-             // This relaxation is VITAL: it allows sub-pixel shifted frames to pass the temporal mask
-             // and accumulate, physically filling in the missing Bayer colors on thin text!
-             // S1 = 2.0 (Strict) is used when flow is chaotic (flowRange > 0.8) to prevent ghosting.
-             float S_param = (flowRange > 0.8) ? 2.0 : 12.0; 
-             float t_param = 0.12;
+             float baseRelax = (flowRange > 0.8) ? 0.0 : 1.0;
+             float S_param = mix(2.0, 12.0, max(baseRelax, edgeRelax));
+             float t_param = mix(0.12, 0.04, edgeRelax);
              
              // Robustness calculation: R = S * exp(-d / sigma^2) - t
-             float exponential = exp(-d_corrected_sq / max(sigma2, 1e-10));
+             float exponential = exp(-d_corrected_sq / max(sigma2_adapted, 1e-10));
              float R = clamp(S_param * exponential - t_param, 0.0, 1.0);
 
              // Apply pre-computed penalties
              R *= globalPenalty;
 
+             float spatialWeight = (dx == 0 && dy == 0) ? 2.0 : 1.0;
+             sumRobustness += R * spatialWeight;
+             weightSum += spatialWeight;
              minRobustness = min(minRobustness, R);
+             if (dx == 0 && dy == 0) {
+                 centerRobustness = R;
+             }
         }
     }
 
     // Output
     uint outIdx = planeY * pc.planeWidth + planeX;
-    outRobustness.data[outIdx] = minRobustness;
+    float avgRobustness = (weightSum > 0.0) ? (sumRobustness / weightSum) : minRobustness;
+    float minMix = mix(0.22, 0.08, edgeRelax);
+    float centerMix = mix(0.43, 0.56, edgeRelax);
+    float avgMix = 1.0 - minMix - centerMix;
+    float robustness = minMix * minRobustness +
+                       centerMix * centerRobustness +
+                       avgMix * avgRobustness;
+    outRobustness.data[outIdx] = clamp(robustness, 0.0, 1.0);
 }

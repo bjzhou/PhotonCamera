@@ -1,0 +1,110 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, scalar) buffer OutputBuffer {
+    uint16_t data[];
+} outputBuffer;
+
+layout(binding = 1, scalar) buffer GreenPhase0 {
+    uvec2 data[];
+} greenPhase0;
+
+layout(binding = 2, scalar) buffer GreenPhase1 {
+    uvec2 data[];
+} greenPhase1;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+
+    float scale;
+
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+    float frameWeight;
+} pc;
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+
+    uint outX = pc.tileX + tx;
+    uint outY = pc.tileY + ty;
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+    if (outX >= pc.width || outY >= pc.height) return;
+
+    uint idx = ty * pc.bufferStride + tx;
+    uvec2 p0 = greenPhase0.data[idx];
+    uvec2 p1 = greenPhase1.data[idx];
+
+    float weight0 = float(p0.y);
+    float weight1 = float(p1.y);
+    float resLinear = 0.0;
+    if (weight0 + weight1 > 0.0) {
+        bool has0 = weight0 > 0.0;
+        bool has1 = weight1 > 0.0;
+        float g0 = has0 ? (float(p0.x) / max(weight0, 1e-6) / 65535.0) : 0.0;
+        float g1 = has1 ? (float(p1.x) / max(weight1, 1e-6) / 65535.0) : 0.0;
+        float blend0 = weight0;
+        float blend1 = weight1;
+
+        float val = 0.0;
+
+        if (has0 && has1) {
+            float diff = abs(g0 - g1);
+            float consistency = 1.0 - smoothstep(0.010, 0.050, diff);
+            float dominant0 = step(blend1, blend0);
+            float dominant1 = 1.0 - dominant0;
+            float avgVal = (g0 * blend0 + g1 * blend1) / max(blend0 + blend1, 1e-6);
+            float dominantVal = g0 * dominant0 + g1 * dominant1;
+            val = mix(dominantVal, avgVal, consistency);
+
+            float inconsistency = 1.0 - consistency;
+            uint baseIndex = (outY * pc.width + outX) * 3;
+            float rLinear = float(outputBuffer.data[baseIndex + 0]) / 65535.0;
+            float bLinear = float(outputBuffer.data[baseIndex + 2]) / 65535.0;
+            float rbMean = 0.5 * (rLinear + bLinear);
+            float rbMax = max(rLinear, bLinear);
+            float greenCeiling = max(rbMean * 1.35 + 0.015, rbMax * 1.18 + 0.010);
+            val = mix(val, min(val, greenCeiling), smoothstep(0.20, 0.75, inconsistency));
+        } else if (has0) {
+            val = g0;
+        } else {
+            val = g1;
+        }
+
+        float gain = (pc.wbGains[1] + pc.wbGains[2]) * 0.5;
+        float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
+        resLinear = (val * 65535.0) / (pc.whiteLevel - bl_avg) * gain;
+    }
+
+    uint outIndex = (outY * pc.width + outX) * 3 + 1;
+    outputBuffer.data[outIndex] = uint16_t(clamp(resLinear * 65535.0, 0.0, 65535.0));
+}

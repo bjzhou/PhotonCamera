@@ -24,6 +24,16 @@ layout(push_constant, scalar) uniform PushConstants {
     uint bufferStride;
 } pc;
 
+vec4 readAccum(int x, int y) {
+    x = clamp(x, 0, int(pc.tileW) - 1);
+    y = clamp(y, 0, int(pc.tileH) - 1);
+    return accumulator.data[uint(y) * pc.bufferStride + uint(x)];
+}
+
+float luminance(vec3 color) {
+    return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
 void main() {
     uint X = gl_GlobalInvocationID.x;
     uint Y = gl_GlobalInvocationID.y;
@@ -49,6 +59,29 @@ void main() {
         if (any(isnan(color)) || any(isinf(color))) {
             color = vec3(0.0);
         }
+
+        // Gentle luma-only detail recovery, gated by confidence and local contrast.
+        if (accum.a > 0.75) {
+            vec3 left = readAccum(int(localX) - 1, int(localY)).rgb /
+                        max(readAccum(int(localX) - 1, int(localY)).a, 0.001);
+            vec3 right = readAccum(int(localX) + 1, int(localY)).rgb /
+                         max(readAccum(int(localX) + 1, int(localY)).a, 0.001);
+            vec3 up = readAccum(int(localX), int(localY) - 1).rgb /
+                      max(readAccum(int(localX), int(localY) - 1).a, 0.001);
+            vec3 down = readAccum(int(localX), int(localY) + 1).rgb /
+                        max(readAccum(int(localX), int(localY) + 1).a, 0.001);
+
+            float centerY = luminance(color);
+            float neighborY = 0.25 * (luminance(left) + luminance(right) +
+                                      luminance(up) + luminance(down));
+            float detail = centerY - neighborY;
+            float localContrast =
+                abs(detail) / max(centerY + neighborY + 1e-4, 1e-4);
+            float sharpenAmount =
+                0.10 * smoothstep(0.02, 0.10, localContrast);
+            color = max(color + detail * sharpenAmount, vec3(0.0));
+        }
+
         color = clamp(color, 0.0, 1.0);
         
         uint r = uint(clamp(color.r * 255.0, 0.0, 255.0));

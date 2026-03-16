@@ -45,16 +45,36 @@ layout(binding = 2, scalar) buffer AlignmentBuffer {
     vec2 offsets[]; // Alignment (u,v) per tile
 } alignBuffer;
 
-// Helper: Sample half-resolution luminance at plane coordinate (px, py)
-// Uses textureGather to fetch 2×2 Bayer quad and averages for CFA-aware luminance.
-// This avoids hardware bilinear which mixes Bayer colors at boundaries.
-float getLuma(sampler2D tex, vec2 planeUV) {
-    // Convert plane UV to sensor UV, targeting center of the 2×2 Bayer block
-    vec2 sensorUV = planeUV;
-    // textureGather fetches 4 texels from a 2×2 block around the UV
-    vec4 quad = textureGather(tex, sensorUV, 0);
-    // Average all 4 Bayer values → approximate luminance
-    return dot(quad, vec4(0.25));
+float getGreenBlock(sampler2D tex, ivec2 planeCoord) {
+    int sx = clamp(planeCoord.x * 2, 0, int(pc.sensorWidth) - 2);
+    int sy = clamp(planeCoord.y * 2, 0, int(pc.sensorHeight) - 2);
+
+    float g1 = 0.0;
+    float g2 = 0.0;
+    if (pc.cfaPattern == 0u || pc.cfaPattern == 3u) {
+        g1 = texelFetch(tex, ivec2(sx + 1, sy), 0).r;
+        g2 = texelFetch(tex, ivec2(sx, sy + 1), 0).r;
+    } else {
+        g1 = texelFetch(tex, ivec2(sx, sy), 0).r;
+        g2 = texelFetch(tex, ivec2(sx + 1, sy + 1), 0).r;
+    }
+    return 0.5 * (g1 + g2);
+}
+
+float sampleGreenProxy(sampler2D tex, vec2 planePos) {
+    vec2 clampedPos = clamp(
+        planePos,
+        vec2(0.0),
+        vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
+    ivec2 p0 = ivec2(floor(clampedPos));
+    ivec2 p1 = min(p0 + ivec2(1), ivec2(int(pc.planeWidth) - 1, int(pc.planeHeight) - 1));
+    vec2 f = clampedPos - vec2(p0);
+
+    float g00 = getGreenBlock(tex, p0);
+    float g10 = getGreenBlock(tex, ivec2(p1.x, p0.y));
+    float g01 = getGreenBlock(tex, ivec2(p0.x, p1.y));
+    float g11 = getGreenBlock(tex, p1);
+    return mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
 }
 
 void main() {
@@ -93,7 +113,6 @@ void main() {
     uint startY = gy * tileH;
     
     vec2 planeDims = vec2(pc.planeWidth, pc.planeHeight);
-    vec2 pixelSize = 1.0 / vec2(pc.sensorWidth, pc.sensorHeight); // Raw Pixel Size
     
     // Iterate over the tile
     // Note: LK usually runs largely on gradients of the WARPED image I?
@@ -113,22 +132,22 @@ void main() {
              uint py = startY + y;
              if (px >= pc.planeWidth || py >= pc.planeHeight) continue;
              
-             vec2 baseUV = (vec2(px, py) + 0.5) / planeDims;
+             vec2 basePoint = vec2(px, py);
              
-             // 1. Sample Base Frame T(x) — Bayer-averaged luminance
-             float T = getLuma(refImg, baseUV);
+             // 1. Sample Base Frame T(x) — green proxy keeps more text edge energy
+             float T = sampleGreenProxy(refImg, basePoint);
              
-             // 2. Sample Current Frame I(x + p) — Bayer-averaged luminance
-             vec2 currentValPoint = baseUV + (currentFlow / planeDims);
-             float I = getLuma(trgImg, currentValPoint);
+             // 2. Sample Current Frame I(x + p) in plane coordinates
+             vec2 currentValPoint = basePoint + currentFlow;
+             float I = sampleGreenProxy(trgImg, currentValPoint);
              
              // 3. Compute Gradient of I at (x + p) using plane-pixel steps
              // One plane pixel = one 2×2 Bayer block
-             vec2 dX = vec2(1.0 / planeDims.x, 0.0);
-             vec2 dY = vec2(0.0, 1.0 / planeDims.y);
+             vec2 dX = vec2(1.0, 0.0);
+             vec2 dY = vec2(0.0, 1.0);
              
-             float I_x = (getLuma(trgImg, currentValPoint + dX) - getLuma(trgImg, currentValPoint - dX)) * 0.5;
-             float I_y = (getLuma(trgImg, currentValPoint + dY) - getLuma(trgImg, currentValPoint - dY)) * 0.5;
+             float I_x = (sampleGreenProxy(trgImg, currentValPoint + dX) - sampleGreenProxy(trgImg, currentValPoint - dX)) * 0.5;
+             float I_y = (sampleGreenProxy(trgImg, currentValPoint + dY) - sampleGreenProxy(trgImg, currentValPoint - dY)) * 0.5;
              
              // 4. Temporal Derivative / Error
              // It = I(x+p) - T(x)

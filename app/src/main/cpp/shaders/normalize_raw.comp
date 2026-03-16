@@ -48,6 +48,19 @@ layout(push_constant, scalar) uniform PushConstants {
     float baseNoise;
 } pc;
 
+vec2 readAccum(int x, int y) {
+    x = clamp(x, 0, int(pc.tileW) - 1);
+    y = clamp(y, 0, int(pc.tileH) - 1);
+    uint idx = uint(y) * pc.bufferStride + uint(x);
+    return accumulator.data[idx];
+}
+
+float accumToLinear(vec2 accum, float gain, float whiteRangeInv) {
+    if (accum.y <= 0.0) return 0.0;
+    float val = accum.x / accum.y;
+    return (val * 65535.0) * whiteRangeInv * gain;
+}
+
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
@@ -78,14 +91,21 @@ void main() {
         gain = pc.wbGains[3];
     }
 
-    float resLinear = 0.0;
-    if (accum.y > 0) {
-        float val = accum.x / accum.y; // Already [0, 1] net signal per sample
-        // Scale and apply WB gain
-        // Net signal range is [0, (white - black)]
-        // We want to map it back to [0, 1.0] for the processor
-        float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
-        resLinear = (val * 65535.0) / (pc.whiteLevel - bl_avg) * gain;
+    float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
+    float whiteRangeInv = 1.0 / max(pc.whiteLevel - bl_avg, 1.0);
+    float resLinear = accumToLinear(accum, gain, whiteRangeInv);
+
+    // Conservative detail recovery on green only, gated by accumulated confidence.
+    if (pc.planeIndex == 1u && accum.y > 0.65) {
+        float left = accumToLinear(readAccum(int(tx) - 1, int(ty)), gain, whiteRangeInv);
+        float right = accumToLinear(readAccum(int(tx) + 1, int(ty)), gain, whiteRangeInv);
+        float up = accumToLinear(readAccum(int(tx), int(ty) - 1), gain, whiteRangeInv);
+        float down = accumToLinear(readAccum(int(tx), int(ty) + 1), gain, whiteRangeInv);
+        float neighborAvg = 0.25 * (left + right + up + down);
+        float detail = resLinear - neighborAvg;
+        float localContrast = abs(detail) / max(resLinear + neighborAvg + 1e-4, 1e-4);
+        float sharpenAmount = 0.18 * smoothstep(0.02, 0.12, localContrast);
+        resLinear = max(resLinear + detail * sharpenAmount, 0.0);
     }
 
     // Write Interleaved RGB (R, G, B, R, G, B...)

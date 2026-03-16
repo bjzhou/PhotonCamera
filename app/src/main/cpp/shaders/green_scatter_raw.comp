@@ -1,0 +1,202 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+
+    float scale;
+
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+    float frameWeight;
+} pc;
+
+layout(set = 0, binding = 0) uniform sampler2D inputRawSampler;
+layout(set = 0, binding = 1, scalar) buffer AlignBuffer { vec2 offsets[]; } alignBuffer;
+layout(set = 0, binding = 2, scalar) buffer KernelParams { vec4 data[]; } kernelParams;
+layout(set = 0, binding = 3, scalar) buffer RobustnessBuffer { float data[]; } outRobustness;
+layout(set = 0, binding = 4, scalar) buffer GreenPhase0 { uvec2 data[]; } greenPhase0;
+layout(set = 0, binding = 5, scalar) buffer GreenPhase1 { uvec2 data[]; } greenPhase1;
+layout(set = 0, binding = 6) uniform sampler2D uLensShadingMap;
+layout(set = 0, binding = 7, scalar) buffer LocalTileMask { float data[]; } localTileMask;
+
+const float kAccumScale = 2048.0;
+
+float cubicWeight(float x) {
+    x = abs(x);
+    if (x >= 2.0) return 0.0;
+    if (x < 1.0) {
+        return 1.0 - 2.5 * x * x + 1.5 * x * x * x;
+    }
+    return 2.0 - 4.0 * x + 2.5 * x * x - 0.5 * x * x * x;
+}
+
+vec3 getKernelMatrix(vec4 params) {
+    float k1 = params.x;
+    float k2 = params.y;
+    float c2 = params.z;
+    float s2 = params.w;
+
+    float k_sum = k1 + k2;
+    float k_diff = k1 - k2;
+
+    float a = 0.5 * (k_sum + k_diff * c2);
+    float c_val = 0.5 * (k_sum - k_diff * c2);
+    float b = 0.5 * k_diff * s2;
+    return vec3(a, b, c_val);
+}
+
+vec2 sampleFlow(vec2 planeCoord) {
+    vec2 gCoord = planeCoord / float(pc.tileSize) - 0.5;
+    ivec2 g0 = ivec2(floor(gCoord));
+    vec2 gf = gCoord - vec2(g0);
+    ivec2 g1 = g0 + 1;
+    g0 = clamp(g0, ivec2(0), ivec2(int(pc.gridW) - 1, int(pc.gridH) - 1));
+    g1 = clamp(g1, ivec2(0), ivec2(int(pc.gridW) - 1, int(pc.gridH) - 1));
+
+    vec2 f00 = alignBuffer.offsets[g0.y * pc.gridW + g0.x];
+    vec2 f10 = alignBuffer.offsets[g0.y * pc.gridW + g1.x];
+    vec2 f01 = alignBuffer.offsets[g1.y * pc.gridW + g0.x];
+    vec2 f11 = alignBuffer.offsets[g1.y * pc.gridW + g1.x];
+    return mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
+}
+
+float sampleLocalTileWeight(vec2 refPos) {
+    vec2 planeRef = refPos * 0.5;
+    uint tilesX = (pc.planeWidth + 15u) / 16u;
+    uint tileX = min(uint(clamp(floor(planeRef.x / 16.0), 0.0, float(max(tilesX, 1u) - 1u))), max(tilesX, 1u) - 1u);
+    uint tilesY = (pc.planeHeight + 15u) / 16u;
+    uint tileY = min(uint(clamp(floor(planeRef.y / 16.0), 0.0, float(max(tilesY, 1u) - 1u))), max(tilesY, 1u) - 1u);
+    return clamp(localTileMask.data[tileY * tilesX + tileX], 0.0, 1.0);
+}
+
+int getGreenFamily(int cfaPattern, ivec2 samplePos, out int lscIdx) {
+    int phase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
+    lscIdx = -1;
+    if (cfaPattern == 0) { // RGGB
+        if (phase == 1) { lscIdx = 1; return 0; }
+        if (phase == 2) { lscIdx = 2; return 1; }
+    } else if (cfaPattern == 1) { // GRBG
+        if (phase == 0) { lscIdx = 1; return 0; }
+        if (phase == 3) { lscIdx = 2; return 1; }
+    } else if (cfaPattern == 2) { // GBRG
+        if (phase == 3) { lscIdx = 1; return 0; }
+        if (phase == 0) { lscIdx = 2; return 1; }
+    } else { // BGGR
+        if (phase == 2) { lscIdx = 1; return 0; }
+        if (phase == 1) { lscIdx = 2; return 1; }
+    }
+    return -1;
+}
+
+void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val, float robustness) {
+    vec2 kernelPlanePos = clamp(refPos * 0.5, vec2(0.0), vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
+    ivec2 planeIdx = ivec2(round(kernelPlanePos));
+    vec4 kParams = kernelParams.data[planeIdx.y * int(pc.planeWidth) + planeIdx.x];
+    vec3 OmegaInv = getKernelMatrix(kParams);
+
+    ivec2 base = ivec2(floor(outCenter));
+    for (int oy = -1; oy <= 2; ++oy) {
+        for (int ox = -1; ox <= 2; ++ox) {
+            ivec2 outPos = base + ivec2(ox, oy);
+            if (outPos.x < int(pc.tileX) || outPos.y < int(pc.tileY) ||
+                outPos.x >= int(pc.tileX + pc.tileW) ||
+                outPos.y >= int(pc.tileY + pc.tileH) ||
+                outPos.x < 0 || outPos.y < 0 ||
+                outPos.x >= int(pc.width) || outPos.y >= int(pc.height)) {
+                continue;
+            }
+
+            vec2 d_hr = vec2(outPos) - outCenter;
+            float reconWeight = cubicWeight(d_hr.x) * cubicWeight(d_hr.y);
+            if (reconWeight <= 0.0) continue;
+
+            vec2 d_raw = (vec2(outPos) / pc.scale) - refPos;
+            vec2 d = d_raw * 0.5;
+            float mahalanobis = OmegaInv.x * d.x * d.x +
+                                (OmegaInv.y * d.x * d.y) * 2.0 +
+                                OmegaInv.z * d.y * d.y;
+            float w = exp(-0.5 * max(mahalanobis, 0.0)) * reconWeight *
+                      robustness * pc.frameWeight;
+            if (w <= 0.0) continue;
+
+            uint weightFixed = uint(clamp(w * kAccumScale, 0.0, 4294967040.0));
+            uint sumFixed = uint(clamp(val * w * 65535.0 * kAccumScale, 0.0, 4294967040.0));
+            uint localX = uint(outPos.x - int(pc.tileX));
+            uint localY = uint(outPos.y - int(pc.tileY));
+            uint idx = localY * pc.bufferStride + localX;
+
+            if (phaseIndex == 0) {
+                atomicAdd(greenPhase0.data[idx].x, sumFixed);
+                atomicAdd(greenPhase0.data[idx].y, weightFixed);
+            } else {
+                atomicAdd(greenPhase1.data[idx].x, sumFixed);
+                atomicAdd(greenPhase1.data[idx].y, weightFixed);
+            }
+        }
+    }
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.sensorWidth || y >= pc.sensorHeight) return;
+
+    ivec2 samplePos = ivec2(x, y);
+    int lscIdx = -1;
+    int family = getGreenFamily(int(pc.cfaPattern), samplePos, lscIdx);
+    if (family < 0) return;
+
+    vec2 planePos = vec2(samplePos) * 0.5;
+    vec2 flow = vec2(0.0);
+    if (pc.isFirstFrame == 0u) {
+        flow = sampleFlow(planePos);
+    }
+    vec2 refPos = vec2(samplePos) - flow * 2.0;
+    vec2 outCenter = refPos * pc.scale;
+
+    float raw = texelFetch(inputRawSampler, samplePos, 0).r;
+    int samplePhase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
+    float val = max(0.0, raw * 65535.0 - pc.blackLevel[samplePhase]);
+
+    vec2 lscUV = (vec2(samplePos) + 0.5) / vec2(pc.sensorWidth, pc.sensorHeight);
+    vec4 lscGains = texture(uLensShadingMap, lscUV);
+    float lscGain = (lscIdx == 1) ? lscGains.g : lscGains.b;
+    val = (val * lscGain) / 65535.0;
+
+    int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth) - 1);
+    int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight) - 1);
+    float robustness = 1.0;
+    if (pc.isFirstFrame == 0u) {
+        robustness = outRobustness.data[rY * int(pc.planeWidth) + rX];
+    }
+    robustness *= sampleLocalTileWeight(refPos);
+
+    splatSample(family, outCenter, refPos, val, robustness);
+}

@@ -20,6 +20,10 @@ layout(binding = 4, scalar) buffer MotionPrior {
     float errors[];
 } motionPrior;
 
+layout(binding = 5, scalar) buffer LocalTileMask {
+    float weights[];
+} localTileMask;
+
 layout(push_constant, scalar) uniform PushConstants {
     float t0, t1, t2, t3, t4, t5;
     float offsetX, offsetY;
@@ -37,30 +41,41 @@ layout(push_constant, scalar) uniform PushConstants {
     uint bufferStride;
     float noiseAlpha; // Sensor noise model slope
     float noiseBeta;  // Sensor noise model intercept
+    float frameWeight;
 } pc;
 
 vec4 sampleBicubic(sampler2D s, vec2 uv, vec2 size) {
-    // Standard bicubic sampling
-    // We rely on high quality sampling for the input value
-    // But for the weight calculation we use analytic Gaussian
-    vec2 f = fract(uv * size - 0.5);
-    vec2 invSize = 1.0 / size;
-    vec2 center = (floor(uv * size - 0.5) + 0.5) * invSize;
+    vec2 texelPos = uv * size - 0.5;
+    ivec2 base = ivec2(floor(texelPos));
+    vec2 f = texelPos - vec2(base);
 
-    // Catmull-Rom weights
-    // Optimized implementation could go here, but for clarity:
-    // This is just a placeholder if we need strict bicubic value fetch
-    // Actually, texture() with linear filtering is often "good enough" for the value
-    // *if* we have many frames. But for super-res, we want to avoid blurring the input.
-    // Let's use the hardware linear filter to save cost, 
-    // as the main quality comes from the Merge Kernel, not the Input Resampler.
-    // BUT paper says "Bicubic interpolation". 
-    // Let's stick to a simple 4-tap or decent hardware linear for now to save cycles 
-    // unless we see quality issues. The previous code had a manual bicubic.
-    
-    // Let's revert to Texture Linear for performance in this heavy shader, 
-    // unless user complains about sharpness.
-    return texture(s, uv);
+    float wx[4];
+    float wy[4];
+    float fx = f.x;
+    float fy = f.y;
+
+    wx[0] = -0.5 * fx + fx * fx - 0.5 * fx * fx * fx;
+    wx[1] = 1.0 - 2.5 * fx * fx + 1.5 * fx * fx * fx;
+    wx[2] = 0.5 * fx + 2.0 * fx * fx - 1.5 * fx * fx * fx;
+    wx[3] = -0.5 * fx * fx + 0.5 * fx * fx * fx;
+
+    wy[0] = -0.5 * fy + fy * fy - 0.5 * fy * fy * fy;
+    wy[1] = 1.0 - 2.5 * fy * fy + 1.5 * fy * fy * fy;
+    wy[2] = 0.5 * fy + 2.0 * fy * fy - 1.5 * fy * fy * fy;
+    wy[3] = -0.5 * fy * fy + 0.5 * fy * fy * fy;
+
+    vec4 accum = vec4(0.0);
+    float weightSum = 0.0;
+    for (int j = 0; j < 4; ++j) {
+        for (int i = 0; i < 4; ++i) {
+            ivec2 p = base + ivec2(i - 1, j - 1);
+            p = clamp(p, ivec2(0), ivec2(size) - ivec2(1));
+            float w = wx[i] * wy[j];
+            accum += texelFetch(s, p, 0) * w;
+            weightSum += w;
+        }
+    }
+    return (abs(weightSum) > 1e-6) ? (accum / weightSum) : accum;
 }
 
 // Compute Anisotropic Gaussian Weight
@@ -109,6 +124,13 @@ float computeKernelWeight(vec2 diffVec, vec4 kp) {
     
     float w = exp(-0.5 * (u*u/k1_2 + v*v/k2_2));
     return w;
+}
+
+float sampleLocalTileWeight(vec2 uv) {
+    vec2 gridPos = uv * vec2(float(pc.gridW), float(pc.gridH));
+    ivec2 g = ivec2(floor(gridPos));
+    g = clamp(g, ivec2(0), ivec2(int(pc.gridW) - 1, int(pc.gridH) - 1));
+    return clamp(localTileMask.weights[g.y * int(pc.gridW) + g.x], 0.0, 1.0);
 }
 
 void main() {
@@ -171,10 +193,6 @@ void main() {
         finalUV += alignment / nativeSize;
     }
 
-    // 3. Sample Input Frame (Target)
-    // Using hardware linear for speed, replace with Bicubic function if needed
-    vec4 targetVal = texture(rgbSampler, finalUV);
-    
     // 4. Kernel Regression Elements
     vec2 posInSource = finalUV * nativeSize;
     vec2 centerSource = floor(posInSource - 0.5) + 0.5;
@@ -187,7 +205,7 @@ void main() {
     float centerRobustness = 1.0;
     if (pc.isFirstFrame == 0 && currentW > 0.001) {
         vec3 refRGB = accumulator.data[outIndex].rgb / currentW;
-        vec3 centerColor = texture(rgbSampler, finalUV).rgb;
+        vec3 centerColor = sampleBicubic(rgbSampler, finalUV, nativeSize).rgb;
         vec3 diffVec = abs(centerColor - refRGB);
         float diff = max(diffVec.r, max(diffVec.g, diffVec.b));
         float luma = refRGB.g;
@@ -210,14 +228,20 @@ void main() {
         centerRobustness *= (1.0 / (1.0 + motionError * 0.005));
         if (isnan(centerRobustness)) centerRobustness = 0.0;
     }
+    float localTileWeight = sampleLocalTileWeight(finalUV);
+    float detailStrength = smoothstep(6.0, 28.0, max(kp.x, kp.y));
+    int supportRadius = (detailStrength > 0.45) ? 1 : 2;
 
     // Accumulate neighbors
     for (int j = -2; j <= 2; ++j) {
         for (int i = -2; i <= 2; ++i) {
+            if (abs(i) > supportRadius || abs(j) > supportRadius) {
+                continue;
+            }
             vec2 samplePos = centerSource + vec2(float(i), float(j));
             vec2 sampleUV = samplePos / nativeSize;
             
-            vec3 sampleColor = texture(rgbSampler, sampleUV).rgb;
+            vec3 sampleColor = sampleBicubic(rgbSampler, sampleUV, nativeSize).rgb;
             vec2 d = (samplePos - posInSource); 
 
             // Per-sample robustness
@@ -237,7 +261,7 @@ void main() {
             // We multiply the inverse variances by 0.25 to normalize the spatial spread.
             float w = exp(-0.5 * (u*u * kp.x * 0.25 + v*v * kp.y * 0.25));
             
-            float combinedWeight = w * robustness;
+            float combinedWeight = w * robustness * pc.frameWeight * localTileWeight;
             if (isnan(combinedWeight) || isinf(combinedWeight)) combinedWeight = 0.0;
             
             vec4 increment = vec4(sampleColor * combinedWeight, combinedWeight);

@@ -35,6 +35,7 @@ layout(push_constant, scalar) uniform PushConstants {
     float noiseAlpha;
     float noiseBeta;
     float baseNoise;
+    float frameWeight;
 } pc;
 
 // Bindings
@@ -61,6 +62,75 @@ layout(set = 0, binding = 4, scalar) buffer RobustnessBuffer {
 } outRobustness;
 
 layout(set = 0, binding = 5) uniform sampler2D uLensShadingMap;
+layout(set = 0, binding = 6, scalar) buffer LocalTileMask {
+    float data[];
+} localTileMask;
+
+float cubicWeight(float x) {
+    x = abs(x);
+    if (x >= 2.0) return 0.0;
+    if (x < 1.0) {
+        return 1.0 - 2.5 * x * x + 1.5 * x * x * x;
+    }
+    return 2.0 - 4.0 * x + 2.5 * x * x - 0.5 * x * x * x;
+}
+
+int getSampleColor(int cfaPattern, ivec2 samplePos, out int lscIdx) {
+    int samplePhase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
+    int sampleColor = -1;
+    lscIdx = -1;
+
+    if (cfaPattern == 0) { // RGGB
+        if (samplePhase == 0) { sampleColor = 0; lscIdx = 0; }
+        else if (samplePhase == 1) { sampleColor = 1; lscIdx = 1; }
+        else if (samplePhase == 2) { sampleColor = 1; lscIdx = 2; }
+        else { sampleColor = 2; lscIdx = 3; }
+    } else if (cfaPattern == 1) { // GRBG
+        if (samplePhase == 0) { sampleColor = 1; lscIdx = 1; }
+        else if (samplePhase == 1) { sampleColor = 0; lscIdx = 0; }
+        else if (samplePhase == 2) { sampleColor = 2; lscIdx = 3; }
+        else { sampleColor = 1; lscIdx = 2; }
+    } else if (cfaPattern == 2) { // GBRG
+        if (samplePhase == 0) { sampleColor = 1; lscIdx = 2; }
+        else if (samplePhase == 1) { sampleColor = 2; lscIdx = 3; }
+        else if (samplePhase == 2) { sampleColor = 0; lscIdx = 0; }
+        else { sampleColor = 1; lscIdx = 1; }
+    } else { // BGGR
+        if (samplePhase == 0) { sampleColor = 2; lscIdx = 3; }
+        else if (samplePhase == 1) { sampleColor = 1; lscIdx = 2; }
+        else if (samplePhase == 2) { sampleColor = 1; lscIdx = 1; }
+        else { sampleColor = 0; lscIdx = 0; }
+    }
+    return sampleColor;
+}
+
+ivec2 getLatticeParity(int cfaPattern, int targetCFA, int familyIndex) {
+    if (cfaPattern == 0) { // RGGB
+        if (targetCFA == 0) return ivec2(0, 0);
+        if (targetCFA == 2) return ivec2(1, 1);
+        return (familyIndex == 0) ? ivec2(1, 0) : ivec2(0, 1);
+    } else if (cfaPattern == 1) { // GRBG
+        if (targetCFA == 0) return ivec2(1, 0);
+        if (targetCFA == 2) return ivec2(0, 1);
+        return (familyIndex == 0) ? ivec2(0, 0) : ivec2(1, 1);
+    } else if (cfaPattern == 2) { // GBRG
+        if (targetCFA == 0) return ivec2(0, 1);
+        if (targetCFA == 2) return ivec2(1, 0);
+        return (familyIndex == 0) ? ivec2(0, 0) : ivec2(1, 1);
+    } else { // BGGR
+        if (targetCFA == 0) return ivec2(1, 1);
+        if (targetCFA == 2) return ivec2(0, 0);
+        return (familyIndex == 0) ? ivec2(1, 0) : ivec2(0, 1);
+    }
+}
+
+float nearestFamilyDistanceSq(vec2 centerPos, ivec2 parity) {
+    vec2 lattice = 0.5 * (centerPos - vec2(parity));
+    vec2 nearest = floor(lattice + 0.5);
+    vec2 samplePos = nearest * 2.0 + vec2(parity);
+    vec2 d = samplePos - centerPos;
+    return dot(d, d);
+}
 
 // Helper to get inverse kernel matrix from parameters
 // Params: k1, k2, cos2t, sin2t
@@ -79,6 +149,15 @@ vec3 getKernelMatrix(vec4 params) {
     float b = 0.5 * k_diff * s2;
     
     return vec3(a, b, c_val);
+}
+
+float sampleLocalTileWeight(vec2 rawPos) {
+    vec2 planePos = rawPos * 0.5;
+    uint tilesX = (pc.planeWidth + 15u) / 16u;
+    uint tilesY = (pc.planeHeight + 15u) / 16u;
+    uint tileX = min(uint(clamp(floor(planePos.x / 16.0), 0.0, float(max(tilesX, 1u) - 1u))), max(tilesX, 1u) - 1u);
+    uint tileY = min(uint(clamp(floor(planePos.y / 16.0), 0.0, float(max(tilesY, 1u) - 1u))), max(tilesY, 1u) - 1u);
+    return clamp(localTileMask.data[tileY * tilesX + tileX], 0.0, 1.0);
 }
 
 void main() {
@@ -132,109 +211,98 @@ void main() {
         vec2 f11 = alignBuffer.offsets[g1.y * pc.gridW + g1.x];
         flow = mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
     }
-    
+
     vec2 flowRaw = flow * 2.0; // In raw pixels
     
     // Projected Center in Input Frame
     vec2 centerPos = vec2(float(outX) / pc.scale, float(outY) / pc.scale) + flowRaw;
+    float localTileWeight = sampleLocalTileWeight(centerPos);
     
-    // Window search in Current Frame (Bayer)
-    // 3×3 nearest neighbors (Paper §5.4: "每个输出像素独立处理 9 个最近邻")
-    // For Bayer, we need slightly larger to find same-color samples,
-    // but 5×5 is sufficient (guarantees ≥4 same-color in any CFA pattern).
-    ivec2 iCenter = ivec2(round(centerPos));
-    
-    for (int dy = -2; dy <= 2; dy++) {
-        for (int dx = -2; dx <= 2; dx++) {
-             ivec2 samplePos = iCenter + ivec2(dx, dy);
+    // Reconstruct on the Bayer color lattice instead of averaging over a dense
+    // square neighborhood. This preserves sub-pixel sample placement better.
+    int familyCount = (targetCFA == 1) ? 2 : 1;
+    int dominantFamily = 0;
+    if (targetCFA == 1 && pc.scale > 1.5) {
+        float bestDist = 1e10;
+        for (int family = 0; family < 2; ++family) {
+            ivec2 parity = getLatticeParity(int(pc.cfaPattern), targetCFA, family);
+            float distSq = nearestFamilyDistanceSq(centerPos, parity);
+            if (distSq < bestDist) {
+                bestDist = distSq;
+                dominantFamily = family;
+            }
+        }
+    }
+
+    for (int family = 0; family < familyCount; ++family) {
+        ivec2 parity = getLatticeParity(int(pc.cfaPattern), targetCFA, family);
+        vec2 latticeCenter = 0.5 * (centerPos - vec2(parity));
+        ivec2 latticeBase = ivec2(floor(latticeCenter));
+        float familyWeight = 1.0;
+        if (targetCFA == 1 && pc.scale > 1.5) {
+            familyWeight = (family == dominantFamily) ? 1.0 : 0.12;
+        }
+
+        for (int ly = -1; ly <= 1; ++ly) {
+            for (int lx = -1; lx <= 1; ++lx) {
+                ivec2 latticeCoord = latticeBase + ivec2(lx, ly);
+                ivec2 samplePos = latticeCoord * 2 + parity;
+
+                if (samplePos.x < 0 || samplePos.y < 0 ||
+                    samplePos.x >= int(pc.sensorWidth) ||
+                    samplePos.y >= int(pc.sensorHeight)) {
+                    continue;
+                }
+
+                int lscIdx = -1;
+                int sampleColor = getSampleColor(int(pc.cfaPattern), samplePos, lscIdx);
+                if (sampleColor != targetCFA) continue;
              
-             // Check Bounds
-             if (samplePos.x < 0 || samplePos.y < 0 || 
-                 samplePos.x >= int(pc.sensorWidth) || samplePos.y >= int(pc.sensorHeight)) continue;
+                // --- Strict Weight Calculation ---
              
-             // Check Color Channel of Sample
-             // Bayer Pattern Logic
-             int samplePhase = (samplePos.y % 2) * 2 + (samplePos.x % 2);
+                // Spatial Distance d = samplePos - centerPos (in raw sensor pixels)
+                vec2 d_raw = vec2(samplePos) - centerPos;
+                vec2 d = d_raw * 0.5;
              
-             int sampleColor = -1;
-             int lscIdx = -1; // 0=R, 1=Gr, 2=Gb, 3=B
+                float mahalanobis = OmegaInv.x * d.x * d.x + 
+                                    (OmegaInv.y * d.x * d.y) * 2.0 + 
+                                    OmegaInv.z * d.y * d.y;
              
-             if (pc.cfaPattern == 0) { // RGGB
-                 if (samplePhase == 0) { sampleColor = 0; lscIdx = 0; }
-                 else if (samplePhase == 1) { sampleColor = 1; lscIdx = 1; }
-                 else if (samplePhase == 2) { sampleColor = 1; lscIdx = 2; }
-                 else { sampleColor = 2; lscIdx = 3; }
-             } else if (pc.cfaPattern == 1) { // GRBG
-                 if (samplePhase == 0) { sampleColor = 1; lscIdx = 1; }
-                 else if (samplePhase == 1) { sampleColor = 0; lscIdx = 0; }
-                 else if (samplePhase == 2) { sampleColor = 2; lscIdx = 3; }
-                 else { sampleColor = 1; lscIdx = 2; }
-             } else if (pc.cfaPattern == 2) { // GBRG
-                 if (samplePhase == 0) { sampleColor = 1; lscIdx = 2; }
-                 else if (samplePhase == 1) { sampleColor = 2; lscIdx = 3; }
-                 else if (samplePhase == 2) { sampleColor = 0; lscIdx = 0; }
-                 else { sampleColor = 1; lscIdx = 1; }
-             } else { // BGGR
-                 if (samplePhase == 0) { sampleColor = 2; lscIdx = 3; }
-                 else if (samplePhase == 1) { sampleColor = 1; lscIdx = 2; }
-                 else if (samplePhase == 2) { sampleColor = 1; lscIdx = 1; }
-                 else { sampleColor = 0; lscIdx = 0; }
-             }
+                float raw = texelFetch(inputRawSampler, samplePos, 0).r;
              
-             if (sampleColor != targetCFA) continue;
+                int samplePhase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
+                float black = pc.blackLevel[samplePhase];
+                float val = max(0.0, raw * 65535.0 - black);
              
-             // --- Strict Weight Calculation ---
+                vec2 lscUV = (vec2(samplePos) + 0.5) / vec2(pc.sensorWidth, pc.sensorHeight);
+                vec4 lscGains = texture(uLensShadingMap, lscUV);
+                float lscGain = 1.0;
+                if (lscIdx == 0) lscGain = lscGains.r;
+                else if (lscIdx == 1) lscGain = lscGains.g;
+                else if (lscIdx == 2) lscGain = lscGains.b;
+                else if (lscIdx == 3) lscGain = lscGains.a;
              
-             // Spatial Distance d = samplePos - centerPos (in raw sensor pixels)
-             vec2 d_raw = vec2(samplePos) - centerPos;
-             // Convert to plane pixels (half-res) to match kernel parameter coordinate space
-             // k1, k2 were computed at plane resolution in raw_structure_tensor.comp
-             vec2 d = d_raw * 0.5;
+                val *= lscGain;
+                val /= 65535.0;
              
-             // Kernel Weight: exp( -0.5 * d^T * Omega^-1 * d )
-             // OmegaInv packed as vec3(a, b, c) -> [a b; b c]
-             float mahalanobis = OmegaInv.x * d.x * d.x + 
-                                 (OmegaInv.y * d.x * d.y) * 2.0 + 
-                                 OmegaInv.z * d.y * d.y;
+                int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth)-1);
+                int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight)-1);
              
-             // Fetch Value
-             float raw = texelFetch(inputRawSampler, samplePos, 0).r;
+                float R = 1.0;
+                if (pc.isFirstFrame == 0) {
+                    R = outRobustness.data[rY * pc.planeWidth + rX];
+                }
              
-             // --- Scientific Correction ---
-             // 1. Black Level Subtraction
-             float black = pc.blackLevel[samplePhase];
-             float val = max(0.0, raw * 65535.0 - black);
+                vec2 d_hr = d_raw * pc.scale;
+                float reconWeight = cubicWeight(d_hr.x) * cubicWeight(d_hr.y);
+                if (reconWeight <= 0.0) continue;
+              
+                float w = exp(-0.5 * max(mahalanobis, 0.0)) *
+                          reconWeight * R * pc.frameWeight * familyWeight *
+                          localTileWeight;
              
-             // 2. Lens Shading Correction
-             // Android LensShadingMap order: [R, Gr, Gb, B]
-             // Bayer phase (RGGB): 0=R, 1=Gr, 2=Gb, 3=B
-             vec2 lscUV = (vec2(samplePos) + 0.5) / vec2(pc.sensorWidth, pc.sensorHeight);
-             vec4 lscGains = texture(uLensShadingMap, lscUV);
-             float lscGain = 1.0;
-             if (lscIdx == 0) lscGain = lscGains.r;
-             else if (lscIdx == 1) lscGain = lscGains.g;
-             else if (lscIdx == 2) lscGain = lscGains.b;
-             else if (lscIdx == 3) lscGain = lscGains.a;
-             
-             val *= lscGain;
-             val /= 65535.0; // Normalize back to [0, 1] for accumulator
-             
-             // Fetch Robustness R
-             // Robustness is at Half-Res (Plane)
-             int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth)-1);
-             int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight)-1);
-             
-             float R = 1.0;
-             if (pc.isFirstFrame == 0) {
-                 // Fetch precomputed and min-filtered robustness
-                 R = outRobustness.data[rY * pc.planeWidth + rX];
-             }
-             
-             // Final Weight
-             float w = exp(-0.5 * max(mahalanobis, 0.0)) * R;
-             
-             // Accumulate (Value * Weight, Weight)
-             accumVal += vec2(val * w, w);
+                accumVal += vec2(val * w, w);
+            }
         }
     }
     

@@ -1,0 +1,59 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, scalar) buffer OutputBuffer { uint16_t data[]; } outputBuffer;
+layout(binding = 1, scalar) buffer ColorAccum { uvec2 data[]; } colorAccum;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    float scale;
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+    float frameWeight;
+} pc;
+
+void main() {
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    uint outX = pc.tileX + tx;
+    uint outY = pc.tileY + ty;
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+    if (outX >= pc.width || outY >= pc.height) return;
+
+    uvec2 accum = colorAccum.data[ty * pc.bufferStride + tx];
+    float resLinear = 0.0;
+    if (accum.y > 0u) {
+        float val = float(accum.x) / max(float(accum.y), 1.0) / 65535.0;
+        float gain = (pc.planeIndex == 0u) ? pc.wbGains[0] : pc.wbGains[3];
+        float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
+        resLinear = (val * 65535.0) / (pc.whiteLevel - bl_avg) * gain;
+    }
+
+    uint outIndex = (outY * pc.width + outX) * 3 + pc.planeIndex;
+    outputBuffer.data[outIndex] = uint16_t(clamp(resLinear * 65535.0, 0.0, 65535.0));
+}

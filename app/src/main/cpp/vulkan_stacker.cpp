@@ -5,6 +5,8 @@
 #include "structure_tensor.comp.h"
 #include "yuv_to_rgba.comp.h"
 #include <android/log.h>
+#include <algorithm>
+#include <cmath>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <vector>
@@ -16,6 +18,144 @@
       LOGE("Detected Vulkan error: %d at %s:%d", err, __FILE__, __LINE__);     \
     }                                                                          \
   } while (0)
+
+namespace {
+
+struct ScalarStats {
+  float minValue = 0.0f;
+  float maxValue = 0.0f;
+  float p50 = 0.0f;
+  float p90 = 0.0f;
+};
+
+struct LocalReliabilityMap {
+  std::vector<float> tileWeights;
+  float edgeGoodFraction = 0.0f;
+  float textGoodFraction = 0.0f;
+};
+
+inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
+
+inline ScalarStats computeScalarStats(const std::vector<float> &values) {
+  ScalarStats stats;
+  if (values.empty())
+    return stats;
+  std::vector<float> sorted = values;
+  std::sort(sorted.begin(), sorted.end());
+  auto percentile = [&](float q) -> float {
+    size_t idx =
+        std::min(sorted.size() - 1, (size_t)std::floor(q * (sorted.size() - 1)));
+    return sorted[idx];
+  };
+  stats.minValue = sorted.front();
+  stats.maxValue = sorted.back();
+  stats.p50 = percentile(0.50f);
+  stats.p90 = percentile(0.90f);
+  return stats;
+}
+
+LocalReliabilityMap buildLocalReliabilityMap(const GrayImage &reference,
+                                             const std::vector<float> &errorMap,
+                                             uint32_t gridW, uint32_t gridH) {
+  LocalReliabilityMap result;
+  if (reference.data.empty() || errorMap.empty() || gridW == 0 || gridH == 0)
+    return result;
+
+  result.tileWeights.resize((size_t)gridW * gridH, 1.0f);
+  std::vector<float> detailScores;
+  detailScores.reserve((size_t)gridW * gridH);
+  uint32_t tileW = (reference.width + gridW - 1) / gridW;
+  uint32_t tileH = (reference.height + gridH - 1) / gridH;
+
+  for (uint32_t gy = 0; gy < gridH; ++gy) {
+    for (uint32_t gx = 0; gx < gridW; ++gx) {
+      uint32_t x0 = gx * tileW;
+      uint32_t y0 = gy * tileH;
+      uint32_t x1 = std::min<uint32_t>(x0 + tileW, reference.width);
+      uint32_t y1 = std::min<uint32_t>(y0 + tileH, reference.height);
+      double detailSum = 0.0;
+      size_t count = 0;
+      for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+          size_t idx = (size_t)y * reference.width + x;
+          float center = (float)reference.data[idx];
+          float xp = (float)reference
+                         .data[(size_t)y * reference.width +
+                               std::min<uint32_t>(x + 1, reference.width - 1)];
+          float xm = (float)reference
+                         .data[(size_t)y * reference.width + (x > 0 ? x - 1 : 0)];
+          float yp = (float)reference.data[(size_t)std::min<uint32_t>(
+                                               y + 1, reference.height - 1) *
+                                               reference.width +
+                                           x];
+          float ym = (float)reference
+                         .data[(size_t)(y > 0 ? y - 1 : 0) * reference.width + x];
+          detailSum += std::abs(xp - xm) + std::abs(yp - ym) +
+                       0.5 * std::abs(4.0f * center - xp - xm - yp - ym);
+          ++count;
+        }
+      }
+      float detail = (count > 0) ? (float)(detailSum / (double)count) : 0.0f;
+      detailScores.push_back(detail);
+    }
+  }
+
+  ScalarStats detailStats = computeScalarStats(detailScores);
+  float edgeThreshold = std::max(detailStats.p50, detailStats.p90 * 0.65f);
+  float textThreshold = std::max(detailStats.p90, detailStats.maxValue * 0.70f);
+  size_t edgeCount = 0;
+  size_t edgeGood = 0;
+  size_t textCount = 0;
+  size_t textGood = 0;
+
+  for (size_t idx = 0; idx < errorMap.size() && idx < detailScores.size(); ++idx) {
+    float detail = detailScores[idx];
+    float err = errorMap[idx];
+    bool isEdge = detail >= edgeThreshold;
+    bool isText = detail >= textThreshold;
+    float errorWeight = clamp01(1.0f - std::max(0.0f, err - 10.0f) / 28.0f);
+    float detailBoost = isText ? 1.0f : (isEdge ? 0.72f : 0.38f);
+    float tileWeight = clamp01(errorWeight * (0.55f + 0.45f * detailBoost));
+    if (isText) {
+      tileWeight = std::max(tileWeight, 0.35f);
+      ++textCount;
+      if (err < 16.0f)
+        ++textGood;
+    } else if (isEdge) {
+      tileWeight = std::max(tileWeight, 0.20f);
+      ++edgeCount;
+      if (err < 18.0f)
+        ++edgeGood;
+    }
+    result.tileWeights[idx] = tileWeight;
+  }
+
+  result.edgeGoodFraction =
+      (edgeCount > 0) ? (float)edgeGood / (float)edgeCount : 0.0f;
+  result.textGoodFraction =
+      (textCount > 0) ? (float)textGood / (float)textCount
+                      : result.edgeGoodFraction;
+  return result;
+}
+
+float computeFrameFusionWeight(const std::vector<float> &errorMap,
+                               float sharpnessRatio,
+                               const LocalReliabilityMap &localMap) {
+  if (errorMap.empty())
+    return clamp01(0.35f + 0.65f * sharpnessRatio);
+
+  ScalarStats errStats = computeScalarStats(errorMap);
+  float errorWeight =
+      clamp01(1.0f - std::max(0.0f, errStats.p90 - 14.0f) / 18.0f);
+  float sharpnessWeight = clamp01(0.35f + 0.65f * sharpnessRatio);
+  float localWeight =
+      clamp01(0.55f * localMap.edgeGoodFraction + 0.45f * localMap.textGoodFraction);
+  float rescueFloor = 0.18f * localWeight;
+  return std::max(errorWeight * sharpnessWeight * (0.72f + 0.28f * localWeight),
+                  rescueFloor);
+}
+
+} // namespace
 
 VulkanImageStacker::VulkanImageStacker(uint32_t w, uint32_t h, bool sr)
     : width(w), height(h), enableSuperRes(sr) {
@@ -230,6 +370,25 @@ void VulkanImageStacker::initVulkanResources() {
   VK_CHECK(vkAllocateMemory(device, &mpAlloc, nullptr, &motionPriorMemory));
   vkBindBufferMemory(device, motionPriorBuffer, motionPriorMemory, 0);
 
+  VkBufferCreateInfo lmInfo{};
+  lmInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  lmInfo.size = mpSize;
+  lmInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  lmInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &lmInfo, nullptr, &localTileMaskBuffer));
+
+  VkMemoryRequirements lmReqs;
+  vkGetBufferMemoryRequirements(device, localTileMaskBuffer, &lmReqs);
+
+  VkMemoryAllocateInfo lmAlloc{};
+  lmAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  lmAlloc.allocationSize = lmReqs.size;
+  lmAlloc.memoryTypeIndex = vm.findMemoryType(
+      lmReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device, &lmAlloc, nullptr, &localTileMaskMemory));
+  vkBindBufferMemory(device, localTileMaskBuffer, localTileMaskMemory, 0);
+
   // Initialize RGB Intermediate Image
   rgbFrame.width = width;
   rgbFrame.height = height;
@@ -322,16 +481,23 @@ void VulkanImageStacker::createPipelines(VkSampler sampler) {
   motionPriorBinding.descriptorCount = 1;
   motionPriorBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-  VkDescriptorSetLayoutBinding bindingsFinal[5];
+  VkDescriptorSetLayoutBinding localMaskBinding{};
+  localMaskBinding.binding = 5;
+  localMaskBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  localMaskBinding.descriptorCount = 1;
+  localMaskBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+  VkDescriptorSetLayoutBinding bindingsFinal[6];
   bindingsFinal[0] = bindings[0];
   bindingsFinal[1] = bindings[1];
   bindingsFinal[2] = bindings[2];
   bindingsFinal[3] = bindings[3];
   bindingsFinal[4] = motionPriorBinding;
+  bindingsFinal[5] = localMaskBinding;
 
   VkDescriptorSetLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 5;
+  layoutInfo.bindingCount = 6;
   layoutInfo.pBindings = bindingsFinal;
   vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                               &descriptorSetLayout);
@@ -525,7 +691,7 @@ bool VulkanImageStacker::addFrame(AHardwareBuffer *buffer) {
   return true;
 }
 
-bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
+bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore) {
   VulkanImage input;
   // Use existing conversion if available (from first frame) to compatible with
   // immutable sampler
@@ -589,8 +755,9 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       VkDescriptorBufferInfo alignBufferInfo{alignmentBuffer, 0, VK_WHOLE_SIZE};
       VkDescriptorBufferInfo kpBufferInfo{kernelParamsBuffer, 0, VK_WHOLE_SIZE};
       VkDescriptorBufferInfo mpBufferInfo{motionPriorBuffer, 0, VK_WHOLE_SIZE};
+      VkDescriptorBufferInfo lmBufferInfo{localTileMaskBuffer, 0, VK_WHOLE_SIZE};
 
-      VkWriteDescriptorSet descriptorWrites[5] = {};
+      VkWriteDescriptorSet descriptorWrites[6] = {};
       descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
       descriptorWrites[0].dstSet = accumSets[i];
       descriptorWrites[0].dstBinding = 0;
@@ -627,7 +794,14 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       descriptorWrites[4].descriptorCount = 1;
       descriptorWrites[4].pBufferInfo = &mpBufferInfo;
 
-      vkUpdateDescriptorSets(device, 5, descriptorWrites, 0, nullptr);
+      descriptorWrites[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptorWrites[5].dstSet = accumSets[i];
+      descriptorWrites[5].dstBinding = 5;
+      descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      descriptorWrites[5].descriptorCount = 1;
+      descriptorWrites[5].pBufferInfo = &lmBufferInfo;
+
+      vkUpdateDescriptorSets(device, 6, descriptorWrites, 0, nullptr);
     }
 
     if (tensorSets[i] == VK_NULL_HANDLE) {
@@ -669,7 +843,9 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   float offsetX = 0.0f, offsetY = 0.0f;
   std::vector<Point> alignmentOffsets;
   std::vector<float> alignmentErrorMap;
+  std::vector<float> localTileMask;
   size_t copyCount = 0;
+  float frameWeight = 1.0f;
 
   AHardwareBuffer_Desc desc;
   AHardwareBuffer_describe(buffer, &desc);
@@ -703,6 +879,7 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
     auto currentPyramid = buildPyramid(currentY.data.data(), width, height, 4);
     if (currentIsFirstFrame) {
       referencePyramid = std::move(currentPyramid);
+      localTileMask.assign((size_t)gridW * gridH, 1.0f);
     } else {
       TileAlignment alignment =
           computeTileAlignment(referencePyramid, currentPyramid, 64);
@@ -728,6 +905,15 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
         offsetX = sumX / alignmentOffsets.size();
         offsetY = sumY / alignmentOffsets.size();
       }
+
+      LocalReliabilityMap localMap = buildLocalReliabilityMap(
+          referencePyramid.front(), alignmentErrorMap, gridW, gridH);
+      localTileMask = std::move(localMap.tileWeights);
+      float sharpnessRatio = (referenceFrameScore > 0.0f)
+                                 ? std::min(frameScore / referenceFrameScore, 1.0f)
+                                 : 1.0f;
+      frameWeight = computeFrameFusionWeight(alignmentErrorMap, sharpnessRatio,
+                                             localMap);
     }
   }
   TIME_END(cpuAlignment);
@@ -753,9 +939,13 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
   pc.gridH = gridH;
   pc.noiseAlpha = 0.005f;
   pc.noiseBeta = 0.001f;
+  pc.frameWeight = frameWeight;
 
-  LOGI("processFrame: Dispatching. Alpha=%f, Beta=%f, Scale=%f, Grid=%dx%d",
-       pc.noiseAlpha, pc.noiseBeta, pc.scale, gridW, gridH);
+  if (!currentIsFirstFrame && pc.frameWeight < 0.12f) {
+    input.release(device);
+    isFirstFrame = false;
+    return true;
+  }
 
   // --- START PIPELINING SYNC POINT ---
   // Wait for the PREVIOUS frame's GPU task to finish before we start recording
@@ -779,6 +969,19 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
       memcpy(mpMapPtr, alignmentErrorMap.data(), copyCount * sizeof(float));
       vkUnmapMemory(device, motionPriorMemory);
     }
+
+  }
+
+  if (localTileMask.empty()) {
+    localTileMask.assign((size_t)gridW * gridH, 1.0f);
+  }
+  void *lmMapPtr = nullptr;
+  VkResult resLM =
+      vkMapMemory(device, localTileMaskMemory, 0, VK_WHOLE_SIZE, 0, &lmMapPtr);
+  if (resLM == VK_SUCCESS && lmMapPtr != nullptr && !localTileMask.empty()) {
+    memcpy(lmMapPtr, localTileMask.data(),
+           localTileMask.size() * sizeof(float));
+    vkUnmapMemory(device, localTileMaskMemory);
   }
 
   // Update yuvToRgbaSet with current input
@@ -904,6 +1107,16 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer) {
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                          &memBarrier, 0, nullptr, 0, nullptr);
   }
+
+  VkBufferMemoryBarrier localMaskBarrier{};
+  localMaskBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  localMaskBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+  localMaskBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  localMaskBarrier.buffer = localTileMaskBuffer;
+  localMaskBarrier.size = VK_WHOLE_SIZE;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                       &localMaskBarrier, 0, nullptr);
 
   // Phase 2: Compute Structure Tensor (Pass 1)
 
@@ -1076,6 +1289,7 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   std::sort(
       pendingFrames.begin(), pendingFrames.end(),
       [](const FrameData &a, const FrameData &b) { return a.score > b.score; });
+  referenceFrameScore = pendingFrames.empty() ? 0.0f : pendingFrames.front().score;
 
   //  LOGI("processStack: Processing %zu frames", pendingFrames.size());
 
@@ -1091,7 +1305,7 @@ bool VulkanImageStacker::processStack(uint32_t *outBitmap, uint32_t outWidth,
   for (auto &frame : pendingFrames) {
     //    LOGI("processStack: Processing frame %d, score %f", frameIdx,
     //    frame.score);
-    if (!processFrame(frame.buffer)) {
+    if (!processFrame(frame.buffer, frame.score)) {
       LOGE("processStack: Failed to process frame %d", frameIdx);
     } else {
       //      LOGI("processStack: Successfully processed frame %d", frameIdx);
@@ -1343,6 +1557,10 @@ void VulkanImageStacker::releaseVulkanResources() {
     vkDestroyBuffer(device, motionPriorBuffer, nullptr);
   if (motionPriorMemory != VK_NULL_HANDLE)
     vkFreeMemory(device, motionPriorMemory, nullptr);
+  if (localTileMaskBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, localTileMaskBuffer, nullptr);
+  if (localTileMaskMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, localTileMaskMemory, nullptr);
 
   if (tensorSetLayout != VK_NULL_HANDLE)
     vkDestroyDescriptorSetLayout(device, tensorSetLayout, nullptr);

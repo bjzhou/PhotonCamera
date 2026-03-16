@@ -46,21 +46,37 @@ layout(push_constant, scalar) uniform PushConstants {
     float baseNoise;
 } pc;
 
-ivec2 getPlaneOffsets(uint planeIdx, uint cfa) {
-    const int offsets[4][4][2] = int[4][4][2](
-        int[4][2](int[2](0,0), int[2](1,0), int[2](0,1), int[2](1,1)), // RGGB
-        int[4][2](int[2](1,0), int[2](0,0), int[2](1,1), int[2](0,1)), // GRBG  
-        int[4][2](int[2](0,1), int[2](1,1), int[2](0,0), int[2](1,0)), // GBRG
-        int[4][2](int[2](1,1), int[2](0,1), int[2](1,0), int[2](0,0))  // BGGR
-    );
-    return ivec2(offsets[cfa][planeIdx][0], offsets[cfa][planeIdx][1]);
+float getGreenBlock(ivec2 planeCoord) {
+    int sx = clamp(planeCoord.x * 2, 0, int(pc.sensorWidth) - 2);
+    int sy = clamp(planeCoord.y * 2, 0, int(pc.sensorHeight) - 2);
+
+    float g1 = 0.0;
+    float g2 = 0.0;
+    if (pc.cfaPattern == 0u || pc.cfaPattern == 3u) {
+        g1 = texelFetch(inputRawSampler, ivec2(sx + 1, sy), 0).r;
+        g2 = texelFetch(inputRawSampler, ivec2(sx, sy + 1), 0).r;
+    } else {
+        g1 = texelFetch(inputRawSampler, ivec2(sx, sy), 0).r;
+        g2 = texelFetch(inputRawSampler, ivec2(sx + 1, sy + 1), 0).r;
+    }
+    return 0.5 * (g1 + g2);
 }
 
-// Convert Bayer to Grayscale (Luma approximation)
-// We use a simple average of the 2x2 block for the half-res structure tensor
-// This runs on half-res (plane resolution), so one thread per 2x2 Bayer block output?
-// No, the paper says "compute structure tensor on half-resolution luminance".
-// Let's assume this shader runs on the plane resolution (W/2 x H/2).
+float sampleGreenProxy(vec2 planePos) {
+    vec2 clampedPos = clamp(
+        planePos,
+        vec2(0.0),
+        vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
+    ivec2 p0 = ivec2(floor(clampedPos));
+    ivec2 p1 = min(p0 + ivec2(1), ivec2(int(pc.planeWidth) - 1, int(pc.planeHeight) - 1));
+    vec2 f = clampedPos - vec2(p0);
+
+    float g00 = getGreenBlock(p0);
+    float g10 = getGreenBlock(ivec2(p1.x, p0.y));
+    float g01 = getGreenBlock(ivec2(p0.x, p1.y));
+    float g11 = getGreenBlock(p1);
+    return mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
+}
 
 void main() {
     uint tx = gl_GlobalInvocationID.x;
@@ -73,11 +89,8 @@ void main() {
     
     if (planeX >= pc.planeWidth || planeY >= pc.planeHeight) return;
     
-    vec2 pixelSize = vec2(1.0) / vec2(pc.sensorWidth, pc.sensorHeight);
-
-    // 1. Compute Gradients Ix, Iy on Half-Resolution Luma
-    // Luma is defined as average of the 2x2 Bayer block (simplification for robustness).
-    // Gradient is computed via Central Difference on this Luma field.
+    // 1. Compute Gradients on the green proxy rather than averaging the full
+    // Bayer quad. This keeps more line/text energy for anisotropic kernels.
     
     float sIxIx = 0.0;
     float sIyIy = 0.0;
@@ -89,18 +102,10 @@ void main() {
              int nx = clamp(int(planeX) + dx, 0, int(pc.planeWidth) - 1);
              int ny = clamp(int(planeY) + dy, 0, int(pc.planeHeight) - 1);
              
-             // Compute Luma and Gradient at (nx, ny) on the fly
-             // Ideally this should be a separate pass, but we do it here to save BW.
-             
-             // Helper to fetch Luma at (cx, cy)
-             #define FETCH_LUMA(cx, cy) \
-                 dot(textureGather(inputRawSampler, (vec2(cx, cy) * 2.0 + 1.0) * pixelSize, 0), vec4(0.25))
-
-             // Gradient at (nx, ny)
-             float xp = FETCH_LUMA(clamp(nx + 1, 0, int(pc.planeWidth)-1), ny);
-             float xm = FETCH_LUMA(clamp(nx - 1, 0, int(pc.planeWidth)-1), ny);
-             float yp = FETCH_LUMA(nx, clamp(ny + 1, 0, int(pc.planeHeight)-1));
-             float ym = FETCH_LUMA(nx, clamp(ny - 1, 0, int(pc.planeHeight)-1));
+             float xp = sampleGreenProxy(vec2(clamp(nx + 1, 0, int(pc.planeWidth)-1), ny));
+             float xm = sampleGreenProxy(vec2(clamp(nx - 1, 0, int(pc.planeWidth)-1), ny));
+             float yp = sampleGreenProxy(vec2(nx, clamp(ny + 1, 0, int(pc.planeHeight)-1)));
+             float ym = sampleGreenProxy(vec2(nx, clamp(ny - 1, 0, int(pc.planeHeight)-1)));
              
              float Ix = (xp - xm) * 0.5;
              float Iy = (yp - ym) * 0.5;

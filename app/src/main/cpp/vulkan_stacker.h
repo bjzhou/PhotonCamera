@@ -82,6 +82,7 @@ private:
     // Phase 2/3: Noise Model
     float noiseAlpha;
     float noiseBeta;
+    float frameWeight;
   };
 
   struct FrameData {
@@ -102,9 +103,12 @@ private:
   // Phase 3: Motion Prior Buffer (Grid Resolution)
   VkBuffer motionPriorBuffer = VK_NULL_HANDLE;
   VkDeviceMemory motionPriorMemory = VK_NULL_HANDLE;
+  VkBuffer localTileMaskBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory localTileMaskMemory = VK_NULL_HANDLE;
+  float referenceFrameScore = 0.0f;
 
   void initVulkanResources();
   void releaseVulkanResources();
   void createPipelines(VkSampler immutableSampler);
-  bool processFrame(AHardwareBuffer *buffer);
+  bool processFrame(AHardwareBuffer *buffer, float frameScore);
 };

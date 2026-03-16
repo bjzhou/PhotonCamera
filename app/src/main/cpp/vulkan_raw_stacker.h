@@ -63,6 +63,27 @@ private:
   VkDescriptorSetLayout robustnessSetLayout = VK_NULL_HANDLE;
   std::vector<VkDescriptorSet> robustnessSets; // Per-frame sets
 
+  // Green HR scatter/splat path
+  VkPipelineLayout greenScatterPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline greenScatterPipeline = VK_NULL_HANDLE;
+  VkDescriptorSetLayout greenScatterSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSet greenScatterSet = VK_NULL_HANDLE;
+
+  VkPipelineLayout colorScatterPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline colorScatterPipeline = VK_NULL_HANDLE;
+  VkDescriptorSetLayout colorScatterSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSet colorScatterSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+  VkDescriptorSetLayout greenNormalizeSetLayout = VK_NULL_HANDLE;
+  VkPipelineLayout greenNormalizePipelineLayout = VK_NULL_HANDLE;
+  VkPipeline greenNormalizePipeline = VK_NULL_HANDLE;
+  VkDescriptorSet greenNormalizeSet = VK_NULL_HANDLE;
+
+  VkDescriptorSetLayout colorNormalizeSetLayout = VK_NULL_HANDLE;
+  VkPipelineLayout colorNormalizePipelineLayout = VK_NULL_HANDLE;
+  VkPipeline colorNormalizePipeline = VK_NULL_HANDLE;
+  VkDescriptorSet colorNormalizeSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+
   // Normalization
   VkDescriptorSetLayout normalizeSetLayout = VK_NULL_HANDLE;
   VkPipelineLayout normalizePipelineLayout = VK_NULL_HANDLE;
@@ -78,6 +99,14 @@ private:
 
   VkBuffer robustnessBuffer = VK_NULL_HANDLE; // Robustness Mask Output
   VkDeviceMemory robustnessMemory = VK_NULL_HANDLE;
+
+  VkBuffer localTileMaskBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory localTileMaskMemory = VK_NULL_HANDLE;
+
+  VkBuffer greenPhaseAccumBuffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+  VkDeviceMemory greenPhaseAccumMemories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+  VkBuffer rbScatterAccumBuffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+  VkDeviceMemory rbScatterAccumMemories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
   VkBuffer stagingBuffer = VK_NULL_HANDLE;
   VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
@@ -135,7 +164,8 @@ private:
     float noiseAlpha; // 112
     float noiseBeta;  // 116
     float baseNoise;  // 120
-  }; // Total size: 124 bytes
+    float frameWeight; // 124
+  }; // Total size: 128 bytes
 
   // Metadata storage
   float mBlackLevel[4] = {0, 0, 0, 0};
@@ -149,6 +179,10 @@ private:
     float score = 0.0f;
   };
   std::vector<FrameData> pendingFrames;
+
+  GrayImage buildAlignmentProxy(const FrameData &frame) const;
+  float calculateFrameScore(const FrameData &frame) const;
+  void selectReferenceFrame();
 
   void initVulkanResources();
   void releaseVulkanResources();
