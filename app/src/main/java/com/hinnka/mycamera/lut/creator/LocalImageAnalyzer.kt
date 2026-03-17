@@ -308,10 +308,12 @@ object LocalImageAnalyzer {
                 }
             }
 
+            val monotonicControlPoints = enforceControlPointLuminanceMonotonicity(controlPoints)
+
             scaledSource.recycle()
             scaledTarget.recycle()
 
-            return controlPoints
+            return monotonicControlPoints
         }
 
     private data class MatchedTargetColor(
@@ -556,6 +558,94 @@ object LocalImageAnalyzer {
         val g = Color.green(color) / 255f
         val b = Color.blue(color) / 255f
         return 0.2126f * r + 0.7152f * g + 0.0722f * b
+    }
+
+    private fun lumaFromRgb(r: Float, g: Float, b: Float): Float {
+        return 0.2126f * r + 0.7152f * g + 0.0722f * b
+    }
+
+    private fun enforceControlPointLuminanceMonotonicity(
+        controlPoints: List<ControlPoint>
+    ): List<ControlPoint> {
+        if (controlPoints.size < 2) return controlPoints
+
+        val sorted = controlPoints.withIndex().sortedBy {
+            lumaFromRgb(it.value.sourceR, it.value.sourceG, it.value.sourceB)
+        }
+
+        data class Block(
+            var start: Int,
+            var end: Int,
+            var weight: Int,
+            var averageTargetLuma: Float
+        )
+
+        val sourceLuma = FloatArray(sorted.size)
+        val targetLuma = FloatArray(sorted.size)
+        sorted.forEachIndexed { sortedIndex, indexedValue ->
+            val point = indexedValue.value
+            sourceLuma[sortedIndex] = lumaFromRgb(point.sourceR, point.sourceG, point.sourceB)
+            targetLuma[sortedIndex] = lumaFromRgb(point.targetR, point.targetG, point.targetB)
+        }
+
+        val blocks = mutableListOf<Block>()
+        for (i in targetLuma.indices) {
+            blocks.add(Block(i, i, 1, targetLuma[i]))
+            while (blocks.size >= 2) {
+                val last = blocks[blocks.lastIndex]
+                val previous = blocks[blocks.lastIndex - 1]
+                if (previous.averageTargetLuma <= last.averageTargetLuma) break
+
+                val previousWeight = previous.weight
+                val mergedWeight = previous.weight + last.weight
+                val mergedAverage =
+                    (previous.averageTargetLuma * previousWeight + last.averageTargetLuma * last.weight) / mergedWeight
+                previous.end = last.end
+                previous.weight = mergedWeight
+                previous.averageTargetLuma = mergedAverage
+                blocks.removeAt(blocks.lastIndex)
+            }
+        }
+
+        val adjustedTargetLuma = FloatArray(sorted.size)
+        blocks.forEach { block ->
+            for (i in block.start..block.end) {
+                adjustedTargetLuma[i] = block.averageTargetLuma
+            }
+        }
+
+        val adjustedByOriginalIndex = arrayOfNulls<ControlPoint>(controlPoints.size)
+        sorted.forEachIndexed { sortedIndex, indexedValue ->
+            val point = indexedValue.value
+            val currentLuma = targetLuma[sortedIndex]
+            val desiredLuma = adjustedTargetLuma[sortedIndex].coerceIn(0f, 1f)
+            val adjustedPoint = adjustTargetLuma(point, currentLuma, desiredLuma)
+            adjustedByOriginalIndex[indexedValue.index] = adjustedPoint
+        }
+
+        return adjustedByOriginalIndex.map { it!! }
+    }
+
+    private fun adjustTargetLuma(
+        point: ControlPoint,
+        currentLuma: Float,
+        desiredLuma: Float
+    ): ControlPoint {
+        val adjustedTarget = if (currentLuma < 1e-4f) {
+            floatArrayOf(desiredLuma, desiredLuma, desiredLuma)
+        } else {
+            val scale = desiredLuma / currentLuma
+            floatArrayOf(
+                (point.targetR * scale).coerceIn(0f, 1f),
+                (point.targetG * scale).coerceIn(0f, 1f),
+                (point.targetB * scale).coerceIn(0f, 1f)
+            )
+        }
+        return point.copy(
+            targetR = adjustedTarget[0],
+            targetG = adjustedTarget[1],
+            targetB = adjustedTarget[2]
+        )
     }
 
     private fun mergeNearbyControlPoints(controlPoints: List<ControlPoint>): List<ControlPoint> {
