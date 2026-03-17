@@ -971,7 +971,8 @@ object PhotoManager {
                 characteristics,
                 captureResult,
                 exposureBias,
-                droMode
+                droMode,
+                RawDemosaicProcessor.getInstance().getRawColorSpace()
             )
 
             var currentUseSuperResolution = useSuperResolution
@@ -983,9 +984,10 @@ object PhotoManager {
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
                 whiteBalanceGains = rawMetadata.whiteBalanceGains,
                 noiseModel = rawMetadata.noiseProfile,
-                lensShading = rawMetadata.lensShadingMap,
-                lensShadingWidth = rawMetadata.lensShadingMapWidth,
-                lensShadingHeight = rawMetadata.lensShadingMapHeight,
+                // LibRaw 路径目前没有应用 LSC。多帧先保持一致，避免把亮度系统性抬高。
+                lensShading = null,
+                lensShadingWidth = 0,
+                lensShadingHeight = 0,
             )
 
             if (byteBuffer == null && currentUseSuperResolution) {
@@ -999,9 +1001,9 @@ object PhotoManager {
                     whiteLevel = rawMetadata.whiteLevel.toInt(),
                     whiteBalanceGains = rawMetadata.whiteBalanceGains,
                     noiseModel = rawMetadata.noiseProfile,
-                    lensShading = rawMetadata.lensShadingMap,
-                    lensShadingWidth = rawMetadata.lensShadingMapWidth,
-                    lensShadingHeight = rawMetadata.lensShadingMapHeight,
+                    lensShading = null,
+                    lensShadingWidth = 0,
+                    lensShadingHeight = 0,
                 )
             }
 
@@ -1020,7 +1022,6 @@ object PhotoManager {
                     noiseProfile = floatArrayOf(0f, 0f),
                     // Keep original CCM and other params
                 )
-
                 var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     finalByteBuffer,

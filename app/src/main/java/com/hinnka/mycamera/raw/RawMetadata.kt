@@ -371,12 +371,6 @@ data class RawMetadata(
 
             // 4. 计算最终 CCM: targetTransform × CamToXYZ
             val finalCCM = multiplyMatrix3x3(targetTransform, camToXYZ)
-
-            PLog.d(
-                TAG,
-                "targetTransform = ${targetTransform.contentToString()} finalCCM = ${finalCCM.contentToString()}"
-            )
-
             return finalCCM
         }
 

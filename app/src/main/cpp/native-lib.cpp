@@ -1200,7 +1200,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   Matrix3x3 m1 = Matrix3x3::identity();
   Matrix3x3 m2 = Matrix3x3::identity();
   bool hasM1 = false, hasM2 = false;
-
   auto getMatrix = [&](int index, Matrix3x3 &m) {
     float sumFM = 0.0f;
     for (int i = 0; i < 3; i++) {
@@ -1210,8 +1209,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
         sumFM += std::abs(m.m[i * 3 + j]);
       }
     }
-    if (sumFM > 0.01f)
+    if (sumFM > 0.01f) {
       return true;
+    }
 
     float sumCM = 0.0f;
     Matrix3x3 xyzToCam;
@@ -1283,7 +1283,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   hasM2 = getMatrix(1, m2);
 
   LOGI("hasM1 = %d hasM2 = %d", hasM1, hasM2);
-
   float weight = 0.5f;
   if (hasM1 && hasM2) {
     float t1 =
@@ -1299,7 +1298,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
         return rCool;
       return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
     };
-    float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
+    float r1 = getTargetRatio(t1);
+    float r2 = getTargetRatio(t2);
     if (std::abs(r1 - r2) > 0.01f) {
       weight = (currentRatio - r2) / (r1 - r2);
       weight = std::max(0.0f, std::min(1.0f, weight));

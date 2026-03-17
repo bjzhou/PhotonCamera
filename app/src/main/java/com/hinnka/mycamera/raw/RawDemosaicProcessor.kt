@@ -270,6 +270,10 @@ class RawDemosaicProcessor {
         this.colorSpace = colorSpace
     }
 
+    fun getRawColorSpace(): ColorSpace {
+        return colorSpace
+    }
+
     fun setRawLogCurve(logCurve: LogCurve) {
         this.logCurve = logCurve
     }

@@ -38,6 +38,7 @@ layout(set = 0, binding = 2, scalar) buffer KernelParams { vec4 data[]; } kernel
 layout(set = 0, binding = 3, scalar) buffer RobustnessBuffer { float data[]; } outRobustness;
 layout(set = 0, binding = 4, scalar) buffer ColorAccum { uvec2 data[]; } colorAccum;
 layout(set = 0, binding = 5) uniform sampler2D uLensShadingMap;
+layout(set = 0, binding = 6, scalar) buffer LocalTileMask { float data[]; } localTileMask;
 
 const float kAccumScale = 2048.0;
 
@@ -72,6 +73,15 @@ vec2 sampleFlow(vec2 planeCoord) {
     vec2 f01 = alignBuffer.offsets[g1.y * pc.gridW + g0.x];
     vec2 f11 = alignBuffer.offsets[g1.y * pc.gridW + g1.x];
     return mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
+}
+
+float sampleLocalTileWeight(vec2 refPos) {
+    vec2 planeRef = refPos * 0.5;
+    uint tilesX = (pc.planeWidth + 15u) / 16u;
+    uint tileX = min(uint(clamp(floor(planeRef.x / 16.0), 0.0, float(max(tilesX, 1u) - 1u))), max(tilesX, 1u) - 1u);
+    uint tilesY = (pc.planeHeight + 15u) / 16u;
+    uint tileY = min(uint(clamp(floor(planeRef.y / 16.0), 0.0, float(max(tilesY, 1u) - 1u))), max(tilesY, 1u) - 1u);
+    return clamp(localTileMask.data[tileY * tilesX + tileX], 0.0, 1.0);
 }
 
 bool sampleMatchesTarget(ivec2 pos, out int lscIdx) {
@@ -119,6 +129,7 @@ void main() {
     int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth) - 1);
     int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight) - 1);
     float robustness = (pc.isFirstFrame == 0u) ? outRobustness.data[rY * int(pc.planeWidth) + rX] : 1.0;
+    robustness *= sampleLocalTileWeight(refPos);
 
     vec2 planeRef = clamp(refPos * 0.5, vec2(0.0), vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
     ivec2 planeIdx = ivec2(round(planeRef));

@@ -628,10 +628,12 @@ void VulkanRawStacker::createPipelines() {
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
   csBindings[5] = {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  csBindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
   VkDescriptorSetLayoutCreateInfo csLayoutInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  csLayoutInfo.bindingCount = 6;
+  csLayoutInfo.bindingCount = 7;
   csLayoutInfo.pBindings = csBindings;
   vkCreateDescriptorSetLayout(device, &csLayoutInfo, nullptr,
                               &colorScatterSetLayout);
@@ -1511,6 +1513,8 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                               rbScatterAccumBuffers[c], VK_WHOLE_SIZE, 4);
     updateImageDescriptorSet(device, colorScatterSets[c], lscView, lscSampler,
                              5);
+    updateBufferDescriptorSet(device, colorScatterSets[c], localTileMaskBuffer,
+                              VK_WHOLE_SIZE, 6);
   }
 
   // =====================================================================
@@ -2043,14 +2047,15 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                                nullptr, 1, &localMaskBarrier, 0, nullptr);
 
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            accumulatePipeline);
           for (int c = 0; c < 3; c += 2) {
-            updateImageDescriptorSet(device, accumSets[c],
+            int colorSetIndex = (c == 0) ? 0 : 1;
+            updateImageDescriptorSet(device, colorScatterSets[colorSetIndex],
                                      uploadedFrames[i].view, sampler, 0);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              colorScatterPipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                    pipelineLayout, 0, 1, &accumSets[c], 0,
-                                    nullptr);
+                                    colorScatterPipelineLayout, 0, 1,
+                                    &colorScatterSets[colorSetIndex], 0, nullptr);
 
             pc.isFirstFrame = isRef ? 1 : 0;
             pc.outputChannel = c;
@@ -2060,17 +2065,16 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
             pc.tileW = currentTileW;
             pc.tileH = currentTileH;
 
-            vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                               0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, (currentTileW + 15) / 16,
-                          (currentTileH + 15) / 16, 1);
+            vkCmdPushConstants(cb, colorScatterPipelineLayout,
+                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (width + 15) / 16, (height + 15) / 16, 1);
 
             VkBufferMemoryBarrier accBarrier{
                 VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
             accBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
             accBarrier.dstAccessMask =
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            accBarrier.buffer = accumBuffers[c];
+            accBarrier.buffer = rbScatterAccumBuffers[colorSetIndex];
             accBarrier.size = VK_WHOLE_SIZE;
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
@@ -2124,9 +2128,6 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       // relative to the buffer binding.
       {
         VkCommandBuffer cb = vm.beginSingleTimeCommands();
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          normalizePipeline);
-
         // Compute the byte offset into staging buffer for this tile's row band
         VkDeviceSize rowBandOffset =
             (VkDeviceSize)(ty * tileH) * outputW * 3 * sizeof(uint16_t);
@@ -2136,15 +2137,17 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
         VkDeviceSize rowBandRange = stagingTotalSize - rowBandOffset;
 
         for (int c = 0; c < 3; c += 2) {
-          updateBufferDescriptorSet(device, normalizeSets[c], stagingBuffer,
+          int colorSetIndex = (c == 0) ? 0 : 1;
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorSetIndex], stagingBuffer,
                                     rowBandRange, 0, rowBandOffset);
-          updateBufferDescriptorSet(device, normalizeSets[c], accumBuffers[c],
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorSetIndex],
+                                    rbScatterAccumBuffers[colorSetIndex],
                                     VK_WHOLE_SIZE, 1);
           vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            normalizePipeline);
+                            colorNormalizePipeline);
           vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  normalizePipelineLayout, 0, 1,
-                                  &normalizeSets[c], 0, nullptr);
+                                  colorNormalizePipelineLayout, 0, 1,
+                                  &colorNormalizeSets[colorSetIndex], 0, nullptr);
 
           PushConstants pc{};
           pc.width = outputW;
@@ -2162,7 +2165,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
           memcpy(pc.blackLevel, mBlackLevel, 4 * sizeof(float));
           memcpy(pc.wbGains, mWbGains, 4 * sizeof(float));
 
-          vkCmdPushConstants(cb, normalizePipelineLayout,
+          vkCmdPushConstants(cb, colorNormalizePipelineLayout,
                              VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
           vkCmdDispatch(cb, (currentTileW + 15) / 16, (currentTileH + 15) / 16,
                         1);
