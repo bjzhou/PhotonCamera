@@ -106,7 +106,8 @@ class PhotoProcessor(
 
         // 1. 应用 LUT
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorRecipeParams = metadata.colorRecipeParams
+            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
         val cropRegion = metadata.cropRegion
 
         val bitmap = RawDemosaicProcessor.getInstance().process(
@@ -173,7 +174,8 @@ class PhotoProcessor(
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorRecipeParams = metadata.colorRecipeParams
+            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
 
         // 1. 应用 LUT
         var result = lutImageProcessor.applyLut(
@@ -230,7 +232,8 @@ class PhotoProcessor(
             metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+        val colorRecipeParams = metadata.colorRecipeParams
+            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
 
         if (useComputationalAperture) {
             metadata.computationalAperture?.let { aperture ->

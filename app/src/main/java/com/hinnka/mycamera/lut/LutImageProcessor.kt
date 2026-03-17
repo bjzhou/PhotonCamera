@@ -12,6 +12,8 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.NLMShaders
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -212,6 +214,7 @@ class LutImageProcessor {
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
     ): Bitmap = withContext(glDispatcher) {
+        currentCoroutineContext().ensureActive()
         if (!isInitialized) {
             if (!initialize()) {
                 // 创建一个空白 Bitmap 返回
@@ -250,12 +253,15 @@ class LutImageProcessor {
 
         // 创建/更新帧缓冲
         setupFramebuffer(width, height)
+        currentCoroutineContext().ensureActive()
 
         // 上传 RGBA 16-bit 数据作为图片纹理
         uploadImageTextureFromArgb(argbData, width, height)
+        currentCoroutineContext().ensureActive()
 
         if (noiseReduction > 0 || chromaNoiseReduction > 0) {
             renderNLMDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+            currentCoroutineContext().ensureActive()
         }
 
         // 上传 LUT 纹理
@@ -269,6 +275,7 @@ class LutImageProcessor {
         val hdfEnabled = halation > 0f
         if (hdfEnabled) {
             renderHDFBlur(inputTexId, width, height, halation)
+            currentCoroutineContext().ensureActive()
         }
 
         // 执行渲染
@@ -307,6 +314,7 @@ class LutImageProcessor {
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
     ): Bitmap = withContext(glDispatcher) {
+        currentCoroutineContext().ensureActive()
         if (!isInitialized) {
             if (!initialize()) {
                 return@withContext bitmap
@@ -347,12 +355,15 @@ class LutImageProcessor {
 
         // 创建/更新帧缓冲
         setupFramebuffer(width, height)
+        currentCoroutineContext().ensureActive()
 
         // 上传图片纹理
         uploadImageTexture(bitmap)
+        currentCoroutineContext().ensureActive()
 
         if (noiseReduction > 0 || chromaNoiseReduction > 0) {
             renderNLMDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+            currentCoroutineContext().ensureActive()
         }
 
         // 上传 LUT 纹理
@@ -366,6 +377,7 @@ class LutImageProcessor {
         val hdfEnabled = halation > 0f
         if (hdfEnabled) {
             renderHDFBlur(inputTexId, width, height, halation)
+            currentCoroutineContext().ensureActive()
         }
 
         // 执行渲染

@@ -1453,7 +1453,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         useGlobalEdit: Boolean = false,
         showOrigin: Boolean = false,
         bitmap: Bitmap? = null,
-        ignoreCrop: Boolean = false
+        ignoreCrop: Boolean = false,
+        recipeParamsOverride: ColorRecipeParams? = null
     ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
@@ -1474,7 +1475,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     finalMetadata = (currentPhotoMetadata ?: metadata).copy(
                         lutId = editLutId.value,
                         frameId = editFrameId.value,
-                        colorRecipeParams = editLutRecipeParams.value,
+                        colorRecipeParams = recipeParamsOverride ?: editLutRecipeParams.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,

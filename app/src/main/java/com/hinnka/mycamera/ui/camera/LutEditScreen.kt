@@ -19,6 +19,9 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
 import com.hinnka.mycamera.viewmodel.LutEditViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * LUT编辑底部弹窗
@@ -30,20 +33,40 @@ import com.hinnka.mycamera.viewmodel.LutEditViewModel
 fun LutEditBottomSheet(
     lutId: String,
     onDismiss: () -> Unit,
+    initialParams: ColorRecipeParams? = null,
+    onParamsPreviewChange: ((ColorRecipeParams) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val viewModel: LutEditViewModel = viewModel()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val backgroundColor = Color(0xFF151515)
+    val scope = rememberCoroutineScope()
 
     var editingParams by remember { mutableStateOf(ColorRecipeParams.DEFAULT) }
+    var saveJob by remember { mutableStateOf<Job?>(null) }
 
-    LaunchedEffect(lutId) {
-        editingParams = viewModel.getColorRecipe(lutId)
+    fun scheduleSave(params: ColorRecipeParams) {
+        saveJob?.cancel()
+        saveJob = scope.launch {
+            delay(250)
+            viewModel.saveLutColorRecipe(lutId, params)
+        }
+    }
+
+    fun flushSave() {
+        saveJob?.cancel()
+        viewModel.saveLutColorRecipe(lutId, editingParams)
+    }
+
+    LaunchedEffect(lutId, initialParams) {
+        editingParams = initialParams ?: viewModel.getColorRecipe(lutId)
     }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            flushSave()
+            onDismiss()
+        },
         sheetState = sheetState,
         containerColor = backgroundColor,
         modifier = modifier,
@@ -57,8 +80,10 @@ fun LutEditBottomSheet(
             LutIntensitySlider(
                 intensity = editingParams.lutIntensity,
                 onIntensityChange = {
-                    editingParams = editingParams.copy(lutIntensity = it)
-                    viewModel.saveLutColorRecipe(lutId, editingParams)
+                    val newParams = editingParams.copy(lutIntensity = it)
+                    editingParams = newParams
+                    onParamsPreviewChange?.invoke(newParams)
+                    scheduleSave(newParams)
                 }
             )
 
@@ -66,12 +91,16 @@ fun LutEditBottomSheet(
             ColorRecipePanel(
                 currentParams = editingParams,
                 onParamChange = { param, value ->
-                    editingParams = param.setValue(editingParams, value)
-                    viewModel.saveLutColorRecipe(lutId, editingParams)
+                    val newParams = param.setValue(editingParams, value)
+                    editingParams = newParams
+                    onParamsPreviewChange?.invoke(newParams)
+                    scheduleSave(newParams)
                 },
                 onRemarksChange = {
-                    editingParams = editingParams.copy(remarks = it)
-                    viewModel.saveLutColorRecipe(lutId, editingParams)
+                    val newParams = editingParams.copy(remarks = it)
+                    editingParams = newParams
+                    onParamsPreviewChange?.invoke(newParams)
+                    scheduleSave(newParams)
                 },
                 modifier = Modifier
                     .fillMaxWidth()

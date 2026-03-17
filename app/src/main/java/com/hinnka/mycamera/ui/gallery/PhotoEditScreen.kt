@@ -49,6 +49,7 @@ import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.MeteringSystem
@@ -93,6 +94,7 @@ fun PhotoEditScreen(
     val lutScrollState = rememberLazyListState()
     val frameScrollState = rememberLazyListState()
     var showLutEditDialog by remember { mutableStateOf(false) }
+    var previewRecipeParamsOverride by remember(editLutId) { mutableStateOf<ColorRecipeParams?>(null) }
 
     BackHandler {
         viewModel.exitEditMode()
@@ -145,7 +147,7 @@ fun PhotoEditScreen(
         currentPhoto,
         refreshKey,
         editLutId,
-        editLutRecipeParams,
+        previewRecipeParamsOverride ?: editLutRecipeParams,
         editLutConfig,
         editFrameId,
         editFrameCustomProperties,
@@ -159,9 +161,16 @@ fun PhotoEditScreen(
         editTab == 3
     ) {
         if (currentPhoto == null) return@LaunchedEffect
+        delay(120)
         isLoadingPreview = previewBitmap == null
         previewBitmap = withContext(Dispatchers.IO) {
-            viewModel.getPreviewBitmap(currentPhoto, useGlobalEdit = true, showOrigin = showOrigin, ignoreCrop = editTab == 3)
+            viewModel.getPreviewBitmap(
+                currentPhoto,
+                useGlobalEdit = true,
+                showOrigin = showOrigin,
+                ignoreCrop = editTab == 3,
+                recipeParamsOverride = previewRecipeParamsOverride
+            )
         }
         isLoadingPreview = false
     }
@@ -697,7 +706,12 @@ fun PhotoEditScreen(
     if (showLutEditDialog && editLutId != null) {
         LutEditBottomSheet(
             lutId = editLutId!!,
-            onDismiss = { showLutEditDialog = false }
+            initialParams = previewRecipeParamsOverride ?: editLutRecipeParams,
+            onParamsPreviewChange = { previewRecipeParamsOverride = it },
+            onDismiss = {
+                previewRecipeParamsOverride = null
+                showLutEditDialog = false
+            }
         )
     }
 
