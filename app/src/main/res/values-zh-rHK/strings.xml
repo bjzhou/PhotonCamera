@@ -1,0 +1,479 @@
+<resources>
+    <string name="app_name">光子相机</string>
+
+    <!-- Camera Controls -->
+    <string name="capture">拍摄</string>
+    <string name="switch_camera">切换摄像头</string>
+    <string name="settings">设置</string>
+    <string name="flash">闪光灯</string>
+    <string name="timer">定时器</string>
+    <string name="histogram">直方图</string>
+    <string name="grid">网格</string>
+    <string name="back">返回</string>
+
+    <!-- Exposure Controls -->
+    <string name="exposure_compensation">EV</string>
+    <string name="iso">ISO</string>
+    <string name="shutter_speed">快门</string>
+    <string name="auto">自动</string>
+
+    <!-- Focus -->
+    <string name="focus">对焦</string>
+    <string name="tap_to_focus">点击对焦</string>
+
+    <!-- Aspect Ratio -->
+    <string name="aspect_ratio">画面比例</string>
+    <string name="ratio_3_2">3:2</string>
+    <string name="ratio_4_3">4:3</string>
+    <string name="ratio_16_9">16:9</string>
+    <string name="ratio_1_1">1:1</string>
+
+    <!-- Permissions -->
+    <string name="camera_permission_required">需要相机和麦克风权限</string>
+    <string name="grant_permission">授予权限</string>
+
+    <!-- Zoom -->
+    <string name="zoom">变焦</string>
+
+    <!-- Gallery -->
+    <string name="gallery">相册</string>
+    <string name="gallery_photon">光子相册</string>
+    <string name="gallery_system">系统相册</string>
+    <string name="permission_required_gallery">需要媒体访问权限以显示系统相册</string>
+    <string name="photo_detail">照片详情</string>
+    <string name="share">分享</string>
+    <string name="delete">删除</string>
+    <string name="export">导出</string>
+    <string name="batch_export">批量导出</string>
+    <string name="exporting">正在导出 %d/%d...</string>
+    <string name="export_complete">导出完成</string>
+    <string name="export_all">导出全部</string>
+    <string name="export_success">照片导出成功</string>
+    <string name="export_all_success">全部照片导出成功</string>
+    <string name="export_failed">照片导出失败</string>
+    <string name="export_all_confirm">导出所有连拍照片吗？</string>
+    <string name="edit">编辑</string>
+    <string name="refresh_failed">刷新预览失败</string>
+    <string name="select_all">全选</string>
+    <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="rotate">旋转</string>
+    <string name="crop">裁剪</string>
+    <string name="crop_free">自由</string>
+    <string name="crop_original">原始</string>
+    <string name="crop_reset">重置</string>
+    <string name="brightness">亮度</string>
+    <string name="delete_confirm">删除这张照片吗？</string>
+    <string name="delete_multiple_confirm">删除 %d 张照片吗？</string>
+    <string name="delete_exported_photos">同时删除系统相册中的导出图</string>
+    <string name="no_photos">暂无照片</string>
+    <string name="photo_info">照片信息</string>
+    <string name="filter">滤镜</string>
+    <string name="intensity">强度</string>
+    <string name="original">原图</string>
+    <string name="export_confirm">导出已应用滤镜的照片吗？</string>
+    <string name="items_selected">已选择 %d</string>
+    <string name="not_selected">未选择</string>
+    <string name="selected">已选择</string>
+    <string name="imported">导入</string>
+    <string name="photo_info_date">拍摄时间</string>
+    <string name="photo_info_resolution">分辨率</string>
+    <string name="photo_info_size">文件大小</string>
+    <string name="photo_info_focal_length">焦距</string>
+    <string name="photo_info_aperture">光圈</string>
+    <string name="photo_info_iso">ISO</string>
+    <string name="photo_info_shutter_speed">快门速度</string>
+
+    <!-- Frame Watermark -->
+    <string name="frame">边框</string>
+    <string name="none">无</string>
+    <string name="show_app_branding">显示 App 品牌</string>
+    <string name="export_with_frame_confirm">导出带有边框水印的照片吗？</string>
+    <string name="import_photo">导入</string>
+    <string name="adjust_watermark">调整水印</string>
+    <string name="watermark_adjustment">水印调整</string>
+    <string name="logo">LOGO</string>
+    <string name="text_content">文字内容</string>
+    <string name="device_model">设备型号</string>
+    <string name="brand_name">品牌名称</string>
+    <string name="date_label">日期 (DATE)</string>
+    <string name="time_label">时间 (TIME)</string>
+    <string name="datetime_label">日期时间 (DATETIME)</string>
+    <string name="default_from_photo">默认读取照片信息</string>
+    <string name="font_option">字体</string>
+    <string name="default_text">默认</string>
+    <string name="custom_import">导入...</string>
+
+    <!-- Settings -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_capture">拍摄设置</string>
+    <string name="settings_section_display">显示设置</string>
+    <string name="settings_use_raw">RAW 拍摄</string>
+    <string name="settings_use_raw_description">使用 RAW 格式 (DNG) 拍摄。关闭后将使用 YCBCR_P010/YUV_420 格式。</string>
+    <string name="settings_level_indicator">水平仪</string>
+    <string name="settings_level_description">在拍摄时显示水平仪，帮助保持画面水平</string>
+    <string name="settings_grid_lines">网格线显示</string>
+    <string name="settings_grid_description">在拍摄时显示网格线，辅助构图</string>
+    <string name="settings_use_multi_frame">多帧合成</string>
+    <string name="settings_use_multi_frame_description">拍摄多张照片并合成，以获得更好的画质和更低的噪点。</string>
+    <string name="settings_use_multiple_exposure">多重曝光</string>
+    <string name="settings_use_multiple_exposure_description">通过多次快门逐步叠加一张作品，并提供幽灵预览辅助构图。</string>
+    <string name="multiple_exposure_short">多曝</string>
+    <string name="multiple_exposure_finish">完成</string>
+    <string name="multiple_exposure_undo">撤销</string>
+    <string name="multiple_exposure_cancel">取消拍摄</string>
+    <string name="multiple_exposure_blending">平均叠加</string>
+    <string name="multiple_exposure_guidance">参考半透明叠影继续构图，然后拍摄下一张。</string>
+    <string name="multiple_exposure_ready">已就绪，等待下一次曝光</string>
+    <string name="settings_multiple_exposure_count">多重曝光张数</string>
+    <string name="settings_multiple_exposure_count_description">最终合成所使用的曝光张数。默认 2 张，更接近经典双重曝光工作流。</string>
+    <string name="settings_multi_frame_count">多帧合成帧数</string>
+    <string name="settings_multi_frame_count_description">多帧合成所使用的帧数（帧数越多效果越好，但合成也越慢）。</string>
+    <string name="settings_use_super_resolution">超分辨率</string>
+    <string name="settings_use_super_resolution_description">使用 2x 多帧超分辨率以获得更多细节。（需要开启多帧合成）</string>
+    <string name="settings_raw_engine">RAW 处理引擎</string>
+    <string name="settings_raw_engine_description">选择用于处理 RAW 数据的引擎</string>
+    <string name="settings_raw_engine_native">原生</string>
+    <string name="settings_raw_engine_self_developed">自研</string>
+    <string name="settings_use_live_photo">动态照片 (Live Photo)</string>
+    <string name="settings_use_live_photo_description">在拍照时同时录制一段短视频，让照片动起来。</string>
+    <string name="settings_use_gpu_acceleration">GPU 加速</string>
+    <string name="settings_use_gpu_acceleration_description">使用 GPU (Vulkan) 加速多帧合成，建议开启。</string>
+    <string name="settings_section_frame">边框水印</string>
+    <string name="settings_frame_style">边框样式</string>
+    <string name="settings_frame_description">为拍摄的照片添加装饰性边框和水印</string>
+    <string name="settings_section_operation">拍摄操作</string>
+    <string name="settings_section_image_processing">影像处理</string>
+    <string name="settings_section_software_processing">细节微调</string>
+    <string name="settings_shutter_sound">快门声音</string>
+    <string name="settings_shutter_sound_description">拍照时播放快门声音</string>
+    <string name="settings_vibration">拍摄震动</string>
+    <string name="settings_vibration_description">拍照时产生震动反馈</string>
+    <string name="settings_volume_key_action">音量键功能</string>
+    <string name="settings_volume_key_action_description">设置音量键在拍摄时的操作</string>
+    <string name="settings_mirror_front_camera">自拍镜像</string>
+    <string name="settings_mirror_front_camera_description">镜像前置摄像头的照片以匹配预览画面</string>
+    <string name="settings_volume_key_action_none">系统音量</string>
+    <string name="settings_volume_key_action_capture">快门/拍摄</string>
+    <string name="settings_volume_key_action_exposure">曝光补偿</string>
+    <string name="settings_volume_key_action_zoom">焦距切换</string>
+    <string name="settings_auto_save">拍摄后自动保存</string>
+    <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
+    <string name="settings_save_location">保存地理位置</string>
+    <string name="settings_save_location_description">开启后在照片 EXIF 信息中记录经纬度</string>
+    <string name="settings_nr_level">降噪等级</string>
+    <string name="settings_nr_level_description">调整系统硬件降噪模式。“关闭”常用于配合软件算法以获得更多细节。</string>
+    <string name="settings_nr_level_off">关闭</string>
+    <string name="settings_nr_level_minimal">极低</string>
+    <string name="settings_nr_level_fast">快速</string>
+    <string name="settings_nr_level_high_quality">高质量</string>
+    <string name="settings_nr_level_zsl">零延迟</string>
+    <string name="settings_edge_level">锐化等级</string>
+    <string name="settings_edge_level_description">调整系统硬件边缘增强（锐化）模式。</string>
+    <string name="settings_sharpening">锐化</string>
+    <string name="settings_sharpening_description">增强图像锐度和边缘清晰度</string>
+    <string name="settings_noise_reduction">降噪</string>
+    <string name="settings_noise_reduction_description">减少图像噪点，同时保留细节</string>
+    <string name="settings_chroma_noise_reduction">减少杂色</string>
+    <string name="settings_chroma_noise_reduction_description">减少彩色噪点和伪影</string>
+    <string name="settings_detail_enhancement_description">手动微调锐化和降噪参数</string>
+    <string name="settings_photo_quality">照片质量</string>
+    <string name="settings_photo_quality_description">选择 JPEG 压缩的照片质量（越高画质越好，但文件体积也越大）</string>
+
+    <!-- LUT -->
+    <string name="filter_intensity">滤镜强度</string>
+    <string name="lut_intensity_none">关闭</string>
+    <string name="lut_intensity_low">低</string>
+    <string name="lut_intensity_medium">中</string>
+    <string name="lut_intensity_high">高</string>
+    <string name="filters_panel">滤镜面板</string>
+    <string name="toggle_display_mode">切换显示模式</string>
+
+    <!-- Billing & Premium -->
+    <string name="billing_vip_tag">VIP</string>
+    <string name="billing_premium_unlock_title">解锁全部 VIP 滤镜</string>
+    <string name="billing_premium_unlock_description">一次支付，永久使用目前及未来增加的所有高级 LUT 滤镜和 Pro 功能。</string>
+    <string name="billing_feature_all_luts">访问所有专业级 LUT</string>
+    <string name="billing_feature_support_dev">支持独立软件开发</string>
+    <string name="billing_feature_lifetime">一次购买，永久使用</string>
+    <string name="billing_premium_get_access">获取 Pro 权益</string>
+    <string name="billing_price_region_notice">具体价格以所在地区为准</string>
+    <string name="settings_premium_title">PhotonCamera Pro</string>
+    <string name="settings_premium_description">解锁全部高级滤镜并支持我们的开发工作</string>
+
+    <!-- Custom Import -->
+    <string name="custom_tag">自定义</string>
+    <string name="settings_section_custom">自定义导入</string>
+    <string name="settings_custom_import">导入自定义内容</string>
+    <string name="import_lut">导入 LUT</string>
+    <string name="import_frame">导入边框</string>
+    <string name="import_image_frame">导入图片边框</string>
+    <string name="settings_import_description">导入自定义 LUT 滤镜文件 (.cube) 或边框模板图片 (.png/.webp)</string>
+    <string name="custom_content_management">已导入内容</string>
+    <string name="lut_type">LUT 滤镜</string>
+    <string name="frame_type">边框模板</string>
+    <string name="delete_confirm_title">删除确认</string>
+    <string name="delete_custom_content_confirm">删除 "%s" 吗？</string>
+    <string name="importing">导入中...</string>
+    <string name="edit_name">编辑名称</string>
+    <string name="name">名称</string>
+    <string name="confirm">确认</string>
+
+    <!-- Color Recipe -->
+    <string name="color_recipe">色彩配方</string>
+
+    <!-- Color Recipe Parameters -->
+    <string name="recipe_param_exposure">曝光</string>
+    <string name="recipe_param_contrast">对比度</string>
+    <string name="recipe_param_saturation">饱和度</string>
+    <string name="recipe_param_temperature">色温</string>
+    <string name="recipe_param_tint">色调</string>
+    <string name="recipe_param_fade">褪色</string>
+    <string name="recipe_param_color">色彩效果</string>
+    <string name="recipe_param_highlights">高光</string>
+    <string name="recipe_param_shadows">阴影</string>
+    <string name="recipe_param_film_grain">颗粒</string>
+    <string name="recipe_param_vignette">晕影</string>
+    <string name="recipe_param_bleach_bypass">留银冲洗</string>
+    <string name="recipe_param_halation">HDF</string>
+    <string name="recipe_param_chromatic_aberration">色散(CA)</string>
+    <string name="recipe_param_noise">噪点</string>
+    <string name="recipe_param_low_res">低像素</string>
+    <string name="recipe_param_lut_intensity">LUT强度</string>
+    <string name="recipe_param_skin_hue">肤色 色相</string>
+    <string name="recipe_param_skin_chroma">肤色 彩度</string>
+    <string name="recipe_param_skin_lightness">肤色 明度</string>
+    <string name="recipe_param_red_hue">红 色相</string>
+    <string name="recipe_param_red_chroma">红 彩度</string>
+    <string name="recipe_param_red_lightness">红 明度</string>
+    <string name="recipe_param_orange_hue">橙 色相</string>
+    <string name="recipe_param_orange_chroma">橙 彩度</string>
+    <string name="recipe_param_orange_lightness">橙 明度</string>
+    <string name="recipe_param_yellow_hue">黄 色相</string>
+    <string name="recipe_param_yellow_chroma">黄 彩度</string>
+    <string name="recipe_param_yellow_lightness">黄 明度</string>
+    <string name="recipe_param_green_hue">绿 色相</string>
+    <string name="recipe_param_green_chroma">绿 彩度</string>
+    <string name="recipe_param_green_lightness">绿 明度</string>
+    <string name="recipe_param_cyan_hue">青 色相</string>
+    <string name="recipe_param_cyan_chroma">青 彩度</string>
+    <string name="recipe_param_cyan_lightness">青 明度</string>
+    <string name="recipe_param_blue_hue">蓝 色相</string>
+    <string name="recipe_param_blue_chroma">蓝 彩度</string>
+    <string name="recipe_param_blue_lightness">蓝 明度</string>
+    <string name="recipe_param_purple_hue">紫 色相</string>
+    <string name="recipe_param_purple_chroma">紫 彩度</string>
+    <string name="recipe_param_purple_lightness">紫 明度</string>
+    <string name="recipe_param_magenta_hue">品红 色相</string>
+    <string name="recipe_param_magenta_chroma">品红 彩度</string>
+    <string name="recipe_param_magenta_lightness">品红 明度</string>
+
+    <!-- Color Recipe Tabs -->
+    <string name="recipe_tab_basic">基础</string>
+    <string name="recipe_tab_color">颜色</string>
+    <string name="recipe_tab_lch">LCH</string>
+    <string name="recipe_tab_light">亮度</string>
+    <string name="recipe_lch_skin">肤色</string>
+    <string name="recipe_lch_red">红</string>
+    <string name="recipe_lch_orange">橙</string>
+    <string name="recipe_lch_yellow">黄</string>
+    <string name="recipe_lch_green">绿</string>
+    <string name="recipe_lch_cyan">青</string>
+    <string name="recipe_lch_blue">蓝</string>
+    <string name="recipe_lch_purple">紫</string>
+    <string name="recipe_lch_magenta">品红</string>
+    <string name="recipe_tab_texture">效果</string>
+    <string name="recipe_tab_lens">氛围</string>
+    <string name="recipe_tab_post">细节</string>
+    <string name="recipe_tab_remarks">备注</string>
+    <string name="recipe_placeholder_remarks">点击添加备注信息…</string>
+
+    <!-- Post-Processing Parameters (Capture/Edit only) -->
+    <string name="recipe_param_sharpening">锐化</string>
+    <string name="recipe_param_noise_reduction">降噪</string>
+    <string name="recipe_param_chroma_noise_reduction">减少杂色</string>
+
+    <!-- Developer Options -->
+    <string name="settings_section_developer">开发者选项</string>
+    <string name="settings_log_viewer">日志收集</string>
+    <string name="settings_log_viewer_description">查看和导出应用日志，用于问题诊断</string>
+    <string name="logs">日志</string>
+
+    <!-- 滤镜/边框管理 -->
+    <string name="settings_section_management">内容管理</string>
+    <string name="settings_filter_management">滤镜管理</string>
+    <string name="settings_filter_management_description">管理滤镜，设置默认，排序</string>
+    <string name="settings_frame_management">边框管理</string>
+    <string name="settings_frame_management_description">管理边框，设置默认，排序</string>
+    <string name="settings_openai_api_key">Gemini API Key</string>
+    <string name="settings_openai_api_key_desc">用于 AI 分析提取 LUT 配方的 API 秘钥</string>
+    <string name="settings_openai_base_url">Gemini API 域名</string>
+    <string name="settings_openai_base_url_desc">允许设置兼容大语言模型的自定义接口地址</string>
+    <string name="settings_use_built_in_ai">使用内置体验服务</string>
+    <string name="settings_use_built_in_ai_desc">开启后使用内置的 AI 提取服务，无需配置 API Key。</string>
+    <string name="settings_backup_settings">备份设置</string>
+    <string name="settings_backup_settings_description">备份您的首选项以及自定义导入的 LUT 和边框。</string>
+    <string name="settings_restore_settings">恢复设置</string>
+    <string name="settings_restore_settings_description">从之前的备份 ZIP 文件中恢复。应用可能需要重启才能生效。</string>
+    <string name="backup_success">备份成功</string>
+    <string name="backup_failed">备份失败</string>
+    <string name="restore_success">恢复成功，请重新启动应用。</string>
+    <string name="restore_failed">恢复失败</string>
+    <string name="filter_management_title">滤镜管理</string>
+    <string name="frame_management_title">边框管理</string>
+    <string name="category_all">所有</string>
+    <string name="category_custom">自定义</string>
+    <string name="set_as_default">设为默认</string>
+    <string name="current_default">默认</string>
+    <string name="rename">重命名</string>
+    <string name="import_filter">导入滤镜</string>
+    <string name="import_frame_json">导入边框配置</string>
+    <string name="import_frame_image">导入图片边框</string>
+    <string name="delete_filter_confirm_message">删除滤镜 "%s"？</string>
+    <string name="delete_frame_confirm_message">删除边框 "%s"？</string>
+    <string name="rename_dialog_title">重命名</string>
+    <string name="export_lut_cube">导出 .cube 文件</string>
+    <string name="copy">复制</string>
+    <string name="copy_lut_dialog_title">复制滤镜</string>
+    <string name="copy_suffix"> (副本)</string>
+    <string name="edit_category">编辑分类</string>
+    <string name="batch_edit_category">批量编辑分类</string>
+    <string name="sort_categories">分类排序</string>
+    <string name="drag_to_reorder_categories">拖动图标调整 Tab 显示顺序</string>
+    <string name="selected_count">已选择 %d</string>
+    <string name="category">分类</string>
+    <string name="import_failed">导入失败: %d 个项目</string>
+    <string name="common_categories">已有分类</string>
+    <string name="delete_category_title">删除分类</string>
+    <string name="delete_category_message">确认删除分类 "%s"？该分类下的滤镜将被设为未分类。</string>
+    <string name="built_in">内置</string>
+    <string name="custom">自定义</string>
+    <string name="no_filters">暂无自定义滤镜</string>
+    <string name="no_frames">暂无自定义边框</string>
+    <string name="input_curve">输入曲线</string>
+
+    <!-- 边框导入帮助 -->
+    <string name="help">帮助</string>
+    <string name="got_it">知道了</string>
+    <string name="frame_import_help_title">边框导入说明</string>
+    <string name="frame_import_help_message">支持的格式：PNG、WebP\n\n要求：\n• 图片必须包含透明区域（Alpha 通道）\n• 您的照片会被自动放置在边框下层，通过透明区域显示\n\n提示：在您希望显示照片的位置设计透明开口即可。</string>
+
+    <!-- Camera Calibration -->
+    <string name="settings_section_calibration">相机校正</string>
+    <string name="settings_camera_orientation">照片方向校正</string>
+    <string name="settings_camera_orientation_description">如果该摄像头的照片旋转方向不正确，可在此调整。此设置仅对当前摄像头生效。</string>
+    <string name="settings_orientation_normal">0°</string>
+    <string name="settings_orientation_90">90°</string>
+    <string name="settings_orientation_180">180°</string>
+    <string name="settings_orientation_270">270°</string>
+    <string name="rear_camera">后置摄像头</string>
+    <string name="front_camera">前置摄像头</string>
+    <string name="camera">摄像头</string>
+    <string name="current_camera">当前摄像头</string>
+
+    <!-- 关于与捐赠 -->
+    <string name="settings_section_about">关于</string>
+    <string name="settings_donation">捐赠</string>
+    <string name="settings_donation_description">支持 Photon Camera 的持续开发</string>
+    <string name="settings_background_description">更改应用背景图</string>
+    <string name="settings_custom_background">自定义...</string>
+    <string name="settings_default_focal_length_description">设置启动 App 时自动切换到的焦段</string>
+    <string name="settings_raw_restore_lut">RAW 还原 LUT</string>
+    <string name="settings_raw_restore_lut_description">选择用于 RAW 色彩还原的 LUT。选择“无”以获得 Log 风格输出。</string>
+    <string name="settings_dro_mode">RAW动态范围优化 (DRO)</string>
+    <string name="settings_dro_mode_description">通过利用 Log 曲线高光冗余，在不牺牲高光的前提下提升阴影细节。</string>
+    <string name="settings_dro_off">关闭</string>
+    <string name="settings_dro_low">中等</string>
+    <string name="settings_dro_high">最高</string>
+    <string name="settings_log_curve_description">选择 RAW 处理的传输函数 (Log 曲线)。</string>
+    <string name="settings_use_p010">P010 (10位 YUV)</string>
+    <string name="settings_use_p010_description">启用 10位 YUV 输出以获得更好的图像数据精度。仅在支持的设备上且 RAW 关闭时生效。</string>
+    <string name="refresh">刷新</string>
+    <string name="refresh_success">预览已刷新</string>
+    <string name="settings_background">背景设置</string>
+    <string name="category_management_title">分类管理</string>
+    <string name="new_category">新建分类</string>
+    <string name="category_name">分类名称</string>
+    <string name="import_to_category">导入至分类</string>
+    <string name="import_success">成功导入 %d 个项目</string>
+    <string name="settings_default_focal_length">默认焦段</string>
+    <string name="settings_apply_ultra_hdr">Ultra HDR 曝光策略</string>
+    <string name="settings_apply_ultra_hdr_description">基于多帧堆叠和直方图分析，在光照充足时自动压低曝光以保护高光。仅当 RAW 和多帧合成同时开启时生效。</string>
+    <string name="settings_color_space">RAW 色彩空间</string>
+    <string name="settings_color_space_description">选择 RAW 处理的目标色彩空间。</string>
+    <string name="settings_log_curve">RAW 伽马</string>
+    <string name="ghost_mode">幻影模式</string>
+    <string name="close_ghost_mode">关闭幻影模式</string>
+    <string name="ghost_mode_dialog_title">开启幻影模式</string>
+    <string name="ghost_mode_dialog_description">开启后，App 将在后台自动为系统相机拍摄的照片（DCIM/Camera 目录）应用当前选择的 LUT 效果。</string>
+    <string name="ghost_mode_permissions_required">需开启以下权限：</string>
+    <string name="ghost_mode_overlay_permission">• 悬浮窗权限：允许 App 在后台稳定运行而不被系统清理，确保监测的连续性。</string>
+    <string name="ghost_mode_file_permission">• 所有文件管理权限：准许 App 直接读写系统相机照片，为您提供无感的自动修图体验。</string>
+    <string name="ghost_mode_dialog_confirm">同意并前往设置</string>
+    <string name="settings_phantom_button_hidden">隐藏悬浮按钮</string>
+    <string name="settings_phantom_button_hidden_description">在幻影模式下隐藏屏幕上的悬浮按钮。你仍可以通过快捷设置或应用快捷方式来控制。</string>
+    <string name="settings_launch_camera_on_phantom_mode">启动系统相机</string>
+    <string name="settings_launch_camera_on_phantom_mode_description">通过快捷设置或应用快捷方式开启幻影模式时，自动启动系统相机。</string>
+    <string name="settings_phantom_save_as_new">另存新图</string>
+    <string name="settings_phantom_save_as_new_description">开启时，会在保存编辑后的照片时创建一个新文件，而不是覆盖原图。</string>
+    <string name="color_space">色彩空间</string>
+    <string name="advanced_options">高级选项</string>
+
+    <string name="settings_widget_theme">小组件主题</string>
+    <string name="settings_widget_theme_description">设置桌面小组件的配色方案</string>
+    <string name="settings_widget_theme_system">跟随系统</string>
+    <string name="settings_widget_theme_light">浅色</string>
+    <string name="settings_widget_theme_dark">深色</string>
+
+    <!-- LUT Creator & UI -->
+    <string name="lut_creator_title">AI 仿色</string>
+    <string name="lut_creator_desc">选择图片分析色彩风格，并生成专属 LUT。</string>
+    <string name="lut_creator_tab_ai">AI 分析</string>
+    <string name="lut_creator_tab_local">本地分析</string>
+    <string name="lut_creator_use_ai">使用 AI 提取风格（需要在设置中配置 Key）</string>
+    <string name="lut_creator_custom_ai_instructions">自定义 AI 提示词（选填）</string>
+    <string name="lut_creator_custom_ai_hint">例如：让画面更有氛围感，加深对比度</string>
+    <string name="lut_creator_select_images">选择图片</string>
+    <string name="lut_creator_ai_mode_desc">上传一张效果图，AI 会先还原原图，再沿用现有分析流程。</string>
+    <string name="lut_creator_local_mode_desc">上传多组图片，每组包含一张原图和一张效果图，且应尽量是完全相同的场景。</string>
+    <string name="lut_creator_local_pairs_hint">本地分析支持多组原图/效果图配对。构图、曝光和场景越一致，合并后的控制点越稳定。</string>
+    <string name="lut_creator_add_local_pair">添加图片组</string>
+    <string name="lut_creator_select_source_image">选择原图</string>
+    <string name="lut_creator_select_effect_image">选择效果图</string>
+    <string name="lut_creator_reset_local_selection">清空已选内容</string>
+    <string name="lut_creator_local_step_select_source">步骤 1：选择原图</string>
+    <string name="lut_creator_local_step_select_source_desc">先选择未加风格的原图。选择完成后会立即进入下一步，继续选择对应的效果图。</string>
+    <string name="lut_creator_local_step_select_target">步骤 2：选择效果图</string>
+    <string name="lut_creator_local_step_select_target_desc">当前这一步要选效果图。请尽量选择与刚才原图构图、场景一致的版本。</string>
+    <string name="lut_creator_local_pairs_count">已添加 %1$d 组图片</string>
+    <string name="lut_creator_local_pending_target">当前有 1 组还差效果图</string>
+    <string name="lut_creator_local_ready_status">可以继续添加图片组，或直接开始分析</string>
+    <string name="lut_creator_start_local_analysis">开始本地分析</string>
+    <string name="lut_creator_pair_label">第 %1$d 组</string>
+    <string name="lut_creator_source_image">原图</string>
+    <string name="lut_creator_target_image">效果图</string>
+    <string name="lut_creator_analyzing">正在分析图片风格…</string>
+    <string name="lut_creator_analysis_complete">分析完成！</string>
+    <string name="lut_creator_lut_name_hint">LUT 预设名称</string>
+    <string name="lut_creator_generate_save">生成并保存</string>
+    <string name="lut_creator_generating">正在生成 3D LUT 数据…</string>
+    <string name="lut_creator_success">LUT 生成成功！</string>
+    <string name="lut_creator_finish">完成</string>
+    <string name="lut_creator_error">错误：%s</string>
+    <string name="lut_creator_try_again">再试一次</string>
+
+    <string name="settings_ai_model">AI 提取模型</string>
+    <string name="settings_ai_model_desc">选择用于抽取色彩风格的 AI 模型。</string>
+    <string name="settings_ai_model_loading">加载模型中…</string>
+    <string name="settings_ai_model_select">点此选择模型…</string>
+    <string name="settings_ai_model_fetching">正在请求列表…</string>
+    <string name="settings_ai_model_empty">未找到任何可用模型</string>
+    <string name="general">常用</string>
+    <string name="imaging">影像</string>
+    <string name="phantom">幻影</string>
+    <string name="about">关于</string>
+    <string name="aperture">光圈</string>
+    <string name="virtual_aperture">虚拟光圈</string>
+    <string name="settings_default_virtual_aperture">默认虚拟光圈</string>
+    <string name="settings_default_virtual_aperture_description">开启后，拍摄及导入照片将自动应用所选光圈值的虚化效果。</string>
+</resources>
