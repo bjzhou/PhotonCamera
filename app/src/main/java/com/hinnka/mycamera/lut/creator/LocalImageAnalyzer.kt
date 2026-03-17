@@ -12,6 +12,13 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 object LocalImageAnalyzer {
+    private const val CONSISTENCY_CHECK_SIZE = 128
+    private const val LOCAL_SEARCH_RADIUS = 6
+    private const val PATCH_RADIUS = 1
+    private const val CLUSTER_MATCH_SAMPLE_COUNT = 96
+    private const val MAX_PATCH_MATCH_SCORE = 0.28f
+    private const val MIN_CLUSTER_MATCH_RATIO = 0.25f
+    private const val MIN_GLOBAL_MATCH_RATIO = 0.18f
 
     /**
      * Analyzes the given images using K-Means clustering in Oklab space
@@ -26,6 +33,23 @@ object LocalImageAnalyzer {
 
     suspend fun analyzeSourceTargetImages(source: Bitmap, target: Bitmap): LutRecipe =
         withContext(Dispatchers.Default) {
+            LutRecipe(mergeNearbyControlPoints(extractSourceTargetControlPoints(source, target)))
+        }
+
+    suspend fun analyzeSourceTargetImagePairs(pairs: List<Pair<Bitmap, Bitmap>>): LutRecipe =
+        withContext(Dispatchers.Default) {
+            if (pairs.isEmpty()) return@withContext LutRecipe()
+
+            val mergedControlPoints = buildList {
+                pairs.forEach { (source, target) ->
+                    addAll(extractSourceTargetControlPoints(source, target))
+                }
+            }
+
+            return@withContext LutRecipe(mergeNearbyControlPoints(mergedControlPoints))
+        }
+
+    private fun extractSourceTargetControlPoints(source: Bitmap, target: Bitmap): List<ControlPoint> {
             val maxDim = 256
             val sw = if (source.width > maxDim || source.height > maxDim) {
                 val scale = maxDim.toFloat() / max(source.width, source.height)
@@ -36,6 +60,8 @@ object LocalImageAnalyzer {
                 (source.height * scale).toInt()
             } else source.height
 
+            logPairConsistency(source, target)
+
             val scaledSource = source.scale(sw, sh)
             val scaledTarget = target.scale(sw, sh)
 
@@ -45,14 +71,16 @@ object LocalImageAnalyzer {
             scaledTarget.getPixels(pixelsT, 0, sw, 0, 0, sw, sh)
 
             val totalPixels = sw * sh
-            if (totalPixels == 0) return@withContext LutRecipe()
+            if (totalPixels == 0) return emptyList()
 
             val oklabSource = FloatArray(totalPixels * 3)
+            val sourceLuma = FloatArray(totalPixels)
+            val targetLuma = FloatArray(totalPixels)
             for (i in 0 until totalPixels) {
-                val c = pixelsS[i]
-                val r = Color.red(c) / 255f
-                val g = Color.green(c) / 255f
-                val b = Color.blue(c) / 255f
+                val colorS = pixelsS[i]
+                val r = Color.red(colorS) / 255f
+                val g = Color.green(colorS) / 255f
+                val b = Color.blue(colorS) / 255f
                 val oklab = OklchConverter.linearSrgbToOklab(
                     OklchConverter.srgbToLinear(r),
                     OklchConverter.srgbToLinear(g),
@@ -61,9 +89,10 @@ object LocalImageAnalyzer {
                 oklabSource[i * 3] = oklab[0]
                 oklabSource[i * 3 + 1] = oklab[1]
                 oklabSource[i * 3 + 2] = oklab[2]
+                sourceLuma[i] = lumaFromColor(colorS)
+                targetLuma[i] = lumaFromColor(pixelsT[i])
             }
 
-            // K-Means on Source to find significant colors
             val k = 16
             val centroids = Array(k) { FloatArray(3) }
             val step = totalPixels / k
@@ -75,7 +104,7 @@ object LocalImageAnalyzer {
             }
 
             val assignments = IntArray(totalPixels)
-            repeat(15) { // 15 iterations of K-means
+            repeat(15) {
                 for (i in 0 until totalPixels) {
                     var bestDist = Float.MAX_VALUE
                     var bestC = 0
@@ -110,48 +139,72 @@ object LocalImageAnalyzer {
             }
 
             val controlPoints = mutableListOf<ControlPoint>()
-            // For each cluster, find the average color in TARGET
+            var totalMatchAttempts = 0
+            var totalMatchSuccess = 0
             for (c in 0 until k) {
-                var sumTR = 0.0
-                var sumTG = 0.0
-                var sumTB = 0.0
-                var count = 0
+                val clusterIndices = IntArray(totalPixels)
+                var clusterCount = 0
                 for (i in 0 until totalPixels) {
                     if (assignments[i] == c) {
-                        val colorT = pixelsT[i]
-                        sumTR += Color.red(colorT) / 255f
-                        sumTG += Color.green(colorT) / 255f
-                        sumTB += Color.blue(colorT) / 255f
-                        count++
+                        clusterIndices[clusterCount++] = i
                     }
                 }
 
-                if (count > 0) {
-                    val sourceRgb = oklabToSrgb(centroids[c][0], centroids[c][1], centroids[c][2])
-                    val targetR = (sumTR / count).toFloat()
-                    val targetG = (sumTG / count).toFloat()
-                    val targetB = (sumTB / count).toFloat()
+                if (clusterCount == 0) continue
 
-                    // Calculate Delta E in Oklab space (already have centroids[c] for source)
-                    val tLinearR = OklchConverter.srgbToLinear(targetR)
-                    val tLinearG = OklchConverter.srgbToLinear(targetG)
-                    val tLinearB = OklchConverter.srgbToLinear(targetB)
-                    val tOklab = OklchConverter.linearSrgbToOklab(tLinearR, tLinearG, tLinearB)
+                val matchedTarget = sampleMatchedTargetColor(
+                    clusterIndices = clusterIndices,
+                    clusterCount = clusterCount,
+                    width = sw,
+                    height = sh,
+                    sourceLuma = sourceLuma,
+                    targetLuma = targetLuma,
+                    targetPixels = pixelsT
+                ) ?: continue
 
-                    val dL = centroids[c][0] - tOklab[0]
-                    val da = centroids[c][1] - tOklab[1]
-                    val db = centroids[c][2] - tOklab[2]
-                    val deltaE = sqrt(dL * dL + da * da + db * db)
+                totalMatchAttempts += matchedTarget.attemptCount
+                totalMatchSuccess += matchedTarget.matchCount
 
-                    if (deltaE < 0.50f) {
-                        controlPoints.add(
-                            ControlPoint(
-                                sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
-                                targetR = targetR, targetG = targetG, targetB = targetB
-                            )
+                if (matchedTarget.matchRatio < MIN_CLUSTER_MATCH_RATIO) continue
+
+                val sourceRgb = oklabToSrgb(centroids[c][0], centroids[c][1], centroids[c][2])
+                val targetR = matchedTarget.r
+                val targetG = matchedTarget.g
+                val targetB = matchedTarget.b
+
+                val tLinearR = OklchConverter.srgbToLinear(targetR)
+                val tLinearG = OklchConverter.srgbToLinear(targetG)
+                val tLinearB = OklchConverter.srgbToLinear(targetB)
+                val tOklab = OklchConverter.linearSrgbToOklab(tLinearR, tLinearG, tLinearB)
+
+                val dL = centroids[c][0] - tOklab[0]
+                val da = centroids[c][1] - tOklab[1]
+                val db = centroids[c][2] - tOklab[2]
+                val deltaE = sqrt(dL * dL + da * da + db * db)
+
+                if (deltaE < 0.50f) {
+                    controlPoints.add(
+                        ControlPoint(
+                            sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
+                            targetR = targetR, targetG = targetG, targetB = targetB
                         )
-                    }
+                    )
                 }
+            }
+
+            val globalMatchRatio = if (totalMatchAttempts > 0) {
+                totalMatchSuccess.toFloat() / totalMatchAttempts
+            } else {
+                0f
+            }
+            PLog.d("LocalImageAnalyzer", "local match coverage=$globalMatchRatio")
+            if (globalMatchRatio < MIN_GLOBAL_MATCH_RATIO || controlPoints.size < 6) {
+                scaledSource.recycle()
+                scaledTarget.recycle()
+                throw IllegalArgumentException(
+                    "Too few locally matched regions for reliable analysis. matchCoverage=%.2f controlPoints=%d"
+                        .format(globalMatchRatio, controlPoints.size)
+                )
             }
 
             // --- Grayscale/Tone Sampling ---
@@ -176,7 +229,14 @@ object LocalImageAnalyzer {
 
                     // If the pixel is close to this luminance and is relatively neutral
                     if (abs(sL - targetL) < 0.05f && (sa * sa + sb * sb) < 0.001f) {
-                        val colorT = pixelsT[i]
+                        val matchedIndex = findBestTargetMatch(
+                            sourceIndex = i,
+                            width = sw,
+                            height = sh,
+                            sourceLuma = sourceLuma,
+                            targetLuma = targetLuma
+                        ) ?: continue
+                        val colorT = pixelsT[matchedIndex]
                         val colorS = pixelsS[i]
                         sumTR += Color.red(colorT) / 255f
                         sumTG += Color.green(colorT) / 255f
@@ -251,38 +311,283 @@ object LocalImageAnalyzer {
             scaledSource.recycle()
             scaledTarget.recycle()
 
-            // --- Final Cleanup: Merge Nearby Points ---
-            // This is CRITICAL. If two points are very close in Source space but have different Targets,
-            // the RBF solver will explode (matrix singularity). We merge points within 0.02 distance.
-            val finalPoints = mutableListOf<ControlPoint>()
-            for (p in controlPoints) {
-                var merged = false
-                for (i in finalPoints.indices) {
-                    val fp = finalPoints[i]
-                    val dist = sqrt(
-                        (p.sourceR - fp.sourceR).let { it * it } +
-                                (p.sourceG - fp.sourceG).let { it * it } +
-                                (p.sourceB - fp.sourceB).let { it * it }
-                    )
-                    if (dist < 0.05f) { // Points are too close, merge to prevent RBF explosion
-                        // Average them
-                        finalPoints[i] = ControlPoint(
-                            sourceR = (p.sourceR + fp.sourceR) / 2f,
-                            sourceG = (p.sourceG + fp.sourceG) / 2f,
-                            sourceB = (p.sourceB + fp.sourceB) / 2f,
-                            targetR = (p.targetR + fp.targetR) / 2f,
-                            targetG = (p.targetG + fp.targetG) / 2f,
-                            targetB = (p.targetB + fp.targetB) / 2f
-                        )
-                        merged = true
-                        break
-                    }
-                }
-                if (!merged) finalPoints.add(p)
-            }
-
-            return@withContext LutRecipe(finalPoints)
+            return controlPoints
         }
+
+    private data class MatchedTargetColor(
+        val r: Float,
+        val g: Float,
+        val b: Float,
+        val attemptCount: Int,
+        val matchCount: Int
+    ) {
+        val matchRatio: Float
+            get() = if (attemptCount > 0) matchCount.toFloat() / attemptCount else 0f
+    }
+
+    private fun logPairConsistency(source: Bitmap, target: Bitmap) {
+        val sourceScaled = source.scaleForConsistency()
+        val targetScaled = target.scale(sourceScaled.width, sourceScaled.height)
+        try {
+            val width = sourceScaled.width
+            val height = sourceScaled.height
+            val size = width * height
+            if (size == 0) return
+
+            val sourcePixels = IntArray(size)
+            val targetPixels = IntArray(size)
+            sourceScaled.getPixels(sourcePixels, 0, width, 0, 0, width, height)
+            targetScaled.getPixels(targetPixels, 0, width, 0, 0, width, height)
+
+            val sourceLuma = FloatArray(size) { lumaFromColor(sourcePixels[it]) }
+            val targetLuma = FloatArray(size) { lumaFromColor(targetPixels[it]) }
+            val sourceGradient = buildGradientMagnitude(sourceLuma, width, height)
+            val targetGradient = buildGradientMagnitude(targetLuma, width, height)
+
+            val luminanceCorrelation = pearsonCorrelation(sourceLuma, targetLuma)
+            val gradientCorrelation = pearsonCorrelation(sourceGradient, targetGradient)
+
+            PLog.d(
+                "LocalImageAnalyzer",
+                "pair consistency luminanceCorr=$luminanceCorrelation gradientCorr=$gradientCorrelation"
+            )
+        } finally {
+            if (sourceScaled !== source) sourceScaled.recycle()
+            if (targetScaled !== target) targetScaled.recycle()
+        }
+    }
+
+    private fun Bitmap.scaleForConsistency(): Bitmap {
+        if (width <= CONSISTENCY_CHECK_SIZE && height <= CONSISTENCY_CHECK_SIZE) return this
+        val scaleFactor = CONSISTENCY_CHECK_SIZE.toFloat() / max(width, height)
+        return scale(
+            (width * scaleFactor).toInt().coerceAtLeast(1),
+            (height * scaleFactor).toInt().coerceAtLeast(1)
+        )
+    }
+
+    private fun sampleMatchedTargetColor(
+        clusterIndices: IntArray,
+        clusterCount: Int,
+        width: Int,
+        height: Int,
+        sourceLuma: FloatArray,
+        targetLuma: FloatArray,
+        targetPixels: IntArray
+    ): MatchedTargetColor? {
+        var sumTR = 0.0
+        var sumTG = 0.0
+        var sumTB = 0.0
+        var matchedCount = 0
+        val step = max(1, clusterCount / CLUSTER_MATCH_SAMPLE_COUNT)
+        var attemptCount = 0
+
+        for (sampleIndex in 0 until clusterCount step step) {
+            attemptCount++
+            val sourceIndex = clusterIndices[sampleIndex]
+            val matchedIndex = findBestTargetMatch(
+                sourceIndex = sourceIndex,
+                width = width,
+                height = height,
+                sourceLuma = sourceLuma,
+                targetLuma = targetLuma
+            ) ?: continue
+
+            val colorT = targetPixels[matchedIndex]
+            sumTR += Color.red(colorT) / 255f
+            sumTG += Color.green(colorT) / 255f
+            sumTB += Color.blue(colorT) / 255f
+            matchedCount++
+        }
+
+        if (matchedCount == 0) return null
+        return MatchedTargetColor(
+            r = (sumTR / matchedCount).toFloat(),
+            g = (sumTG / matchedCount).toFloat(),
+            b = (sumTB / matchedCount).toFloat(),
+            attemptCount = attemptCount,
+            matchCount = matchedCount
+        )
+    }
+
+    private fun findBestTargetMatch(
+        sourceIndex: Int,
+        width: Int,
+        height: Int,
+        sourceLuma: FloatArray,
+        targetLuma: FloatArray
+    ): Int? {
+        val x = sourceIndex % width
+        val y = sourceIndex / width
+        if (
+            x < PATCH_RADIUS ||
+            x > width - PATCH_RADIUS - 1 ||
+            y < PATCH_RADIUS ||
+            y > height - PATCH_RADIUS - 1
+        ) {
+            return null
+        }
+        val minX = max(PATCH_RADIUS, x - LOCAL_SEARCH_RADIUS)
+        val maxX = min(width - PATCH_RADIUS - 1, x + LOCAL_SEARCH_RADIUS)
+        val minY = max(PATCH_RADIUS, y - LOCAL_SEARCH_RADIUS)
+        val maxY = min(height - PATCH_RADIUS - 1, y + LOCAL_SEARCH_RADIUS)
+        if (minX > maxX || minY > maxY) return null
+
+        var bestIndex: Int? = null
+        var bestScore = Float.MAX_VALUE
+        for (candidateY in minY..maxY) {
+            for (candidateX in minX..maxX) {
+                val candidateIndex = candidateY * width + candidateX
+                val patchScore = patchDifferenceScore(
+                    sourceX = x,
+                    sourceY = y,
+                    targetX = candidateX,
+                    targetY = candidateY,
+                    width = width,
+                    sourceLuma = sourceLuma,
+                    targetLuma = targetLuma
+                )
+                val distancePenalty = (abs(candidateX - x) + abs(candidateY - y)) * 0.015f
+                val score = patchScore + distancePenalty
+                if (score < bestScore) {
+                    bestScore = score
+                    bestIndex = candidateIndex
+                }
+            }
+        }
+        return if (bestScore <= MAX_PATCH_MATCH_SCORE) bestIndex else null
+    }
+
+    private fun patchDifferenceScore(
+        sourceX: Int,
+        sourceY: Int,
+        targetX: Int,
+        targetY: Int,
+        width: Int,
+        sourceLuma: FloatArray,
+        targetLuma: FloatArray
+    ): Float {
+        var sourceMean = 0f
+        var targetMean = 0f
+        var count = 0
+        for (dy in -PATCH_RADIUS..PATCH_RADIUS) {
+            for (dx in -PATCH_RADIUS..PATCH_RADIUS) {
+                sourceMean += sourceLuma[(sourceY + dy) * width + (sourceX + dx)]
+                targetMean += targetLuma[(targetY + dy) * width + (targetX + dx)]
+                count++
+            }
+        }
+        sourceMean /= count
+        targetMean /= count
+
+        var sourceVar = 0f
+        var targetVar = 0f
+        for (dy in -PATCH_RADIUS..PATCH_RADIUS) {
+            for (dx in -PATCH_RADIUS..PATCH_RADIUS) {
+                val sourceDelta = sourceLuma[(sourceY + dy) * width + (sourceX + dx)] - sourceMean
+                val targetDelta = targetLuma[(targetY + dy) * width + (targetX + dx)] - targetMean
+                sourceVar += sourceDelta * sourceDelta
+                targetVar += targetDelta * targetDelta
+            }
+        }
+
+        val sourceStd = sqrt(max(sourceVar / count, 1e-6f))
+        val targetStd = sqrt(max(targetVar / count, 1e-6f))
+
+        var score = 0f
+        for (dy in -PATCH_RADIUS..PATCH_RADIUS) {
+            for (dx in -PATCH_RADIUS..PATCH_RADIUS) {
+                val sourceNormalized =
+                    (sourceLuma[(sourceY + dy) * width + (sourceX + dx)] - sourceMean) / sourceStd
+                val targetNormalized =
+                    (targetLuma[(targetY + dy) * width + (targetX + dx)] - targetMean) / targetStd
+                val delta = sourceNormalized - targetNormalized
+                score += delta * delta
+            }
+        }
+        return score / count
+    }
+
+    private fun buildGradientMagnitude(luma: FloatArray, width: Int, height: Int): FloatArray {
+        val gradient = FloatArray(luma.size)
+        for (y in 1 until height - 1) {
+            for (x in 1 until width - 1) {
+                val idx = y * width + x
+                val gx =
+                    -luma[(y - 1) * width + (x - 1)] + luma[(y - 1) * width + (x + 1)] +
+                        -2f * luma[y * width + (x - 1)] + 2f * luma[y * width + (x + 1)] +
+                        -luma[(y + 1) * width + (x - 1)] + luma[(y + 1) * width + (x + 1)]
+                val gy =
+                    -luma[(y - 1) * width + (x - 1)] - 2f * luma[(y - 1) * width + x] - luma[(y - 1) * width + (x + 1)] +
+                        luma[(y + 1) * width + (x - 1)] + 2f * luma[(y + 1) * width + x] + luma[(y + 1) * width + (x + 1)]
+                gradient[idx] = sqrt(gx * gx + gy * gy)
+            }
+        }
+        return gradient
+    }
+
+    private fun pearsonCorrelation(a: FloatArray, b: FloatArray): Float {
+        if (a.size != b.size || a.isEmpty()) return 0f
+        var meanA = 0.0
+        var meanB = 0.0
+        for (i in a.indices) {
+            meanA += a[i]
+            meanB += b[i]
+        }
+        meanA /= a.size
+        meanB /= b.size
+
+        var numerator = 0.0
+        var varianceA = 0.0
+        var varianceB = 0.0
+        for (i in a.indices) {
+            val da = a[i] - meanA
+            val db = b[i] - meanB
+            numerator += da * db
+            varianceA += da * da
+            varianceB += db * db
+        }
+        if (varianceA < 1e-8 || varianceB < 1e-8) return 0f
+        return (numerator / sqrt(varianceA * varianceB)).toFloat()
+    }
+
+    private fun lumaFromColor(color: Int): Float {
+        val r = Color.red(color) / 255f
+        val g = Color.green(color) / 255f
+        val b = Color.blue(color) / 255f
+        return 0.2126f * r + 0.7152f * g + 0.0722f * b
+    }
+
+    private fun mergeNearbyControlPoints(controlPoints: List<ControlPoint>): List<ControlPoint> {
+        // This is CRITICAL. If two points are very close in Source space but have different Targets,
+        // the RBF solver will explode (matrix singularity). We merge points within 0.05 distance.
+        val finalPoints = mutableListOf<ControlPoint>()
+        for (p in controlPoints) {
+            var merged = false
+            for (i in finalPoints.indices) {
+                val fp = finalPoints[i]
+                val dist = sqrt(
+                    (p.sourceR - fp.sourceR).let { it * it } +
+                            (p.sourceG - fp.sourceG).let { it * it } +
+                            (p.sourceB - fp.sourceB).let { it * it }
+                )
+                if (dist < 0.05f) {
+                    finalPoints[i] = ControlPoint(
+                        sourceR = (p.sourceR + fp.sourceR) / 2f,
+                        sourceG = (p.sourceG + fp.sourceG) / 2f,
+                        sourceB = (p.sourceB + fp.sourceB) / 2f,
+                        targetR = (p.targetR + fp.targetR) / 2f,
+                        targetG = (p.targetG + fp.targetG) / 2f,
+                        targetB = (p.targetB + fp.targetB) / 2f
+                    )
+                    merged = true
+                    break
+                }
+            }
+            if (!merged) finalPoints.add(p)
+        }
+        return finalPoints
+    }
 
     private suspend fun internalAnalyzeImages(bitmaps: List<Bitmap>): LutRecipe = withContext(Dispatchers.Default) {
         val maxDim = 256

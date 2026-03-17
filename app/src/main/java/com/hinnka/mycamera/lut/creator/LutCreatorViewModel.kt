@@ -26,52 +26,77 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
 
     val aiAnalysisEnabled: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
-    fun analyzeImages(uri: Uri, customPrompt: String = "", isAiEnabled: Boolean = aiAnalysisEnabled.value) {
+    fun analyzeAiImage(uri: Uri, customPrompt: String = "") {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = LutCreatorUiState.Analyzing
 
             try {
-                // Read bitmaps from URIs
                 val bitmap = loadBitmapFromUri(uri)
                 if (bitmap == null) {
                     _uiState.value = LutCreatorUiState.Error("Failed to decode image(s)")
                     return@launch
                 }
 
-                val (recipe, generatedSource) = if (isAiEnabled) {
-                    val userPrefs = userPrefsRepo.userPreferences.firstOrNull()
-                    val isBuiltIn = userPrefs?.useBuiltInAiService ?: false
-                    val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else userPrefs?.openAIApiKey ?: ""
-                    val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else userPrefs?.openAIBaseUrl ?: ""
+                val userPrefs = userPrefsRepo.userPreferences.firstOrNull()
+                val isBuiltIn = userPrefs?.useBuiltInAiService ?: false
+                val apiKey = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_KEY else userPrefs?.openAIApiKey ?: ""
+                val baseUrl = if (isBuiltIn) OpenAIApiClient.BUILT_IN_API_URL else userPrefs?.openAIBaseUrl ?: ""
 
-                    if (apiKey.isEmpty()) {
-                        _uiState.value = LutCreatorUiState.Error("OpenAI API Key is not set in settings")
-                        return@launch
-                    }
-
-                    val client = OpenAIApiClient(apiKey, baseUrl)
-
-                    PLog.d(
-                        "LutCreatorViewModel",
-                        "Calling Gemini 3.1 for direct image-to-image restoration..."
-                    )
-
-                    val sourceBitmap = client.generateOriginalImage(
-                        bitmap = bitmap,
-                        isBuiltIn,
-                        model = OpenAIApiClient.BUILT_IN_IMAGE_MODEL,
-                        customPrompt = customPrompt
-                    ).getOrThrow()
-
-                    PLog.d("LutCreatorViewModel", "AI generated original image, analyzing pair locally...")
-                    LocalImageAnalyzer.analyzeSourceTargetImages(sourceBitmap, bitmap) to sourceBitmap
-                } else {
-                    LocalImageAnalyzer.analyzeImages(listOf(bitmap)) to null
+                if (apiKey.isEmpty()) {
+                    _uiState.value = LutCreatorUiState.Error("OpenAI API Key is not set in settings")
+                    return@launch
                 }
+
+                val client = OpenAIApiClient(apiKey, baseUrl)
+
+                PLog.d(
+                    "LutCreatorViewModel",
+                    "Calling Gemini 3.1 for direct image-to-image restoration..."
+                )
+
+                val sourceBitmap = client.generateOriginalImage(
+                    bitmap = bitmap,
+                    isBuiltIn,
+                    model = OpenAIApiClient.BUILT_IN_IMAGE_MODEL,
+                    customPrompt = customPrompt
+                ).getOrThrow()
+
+                PLog.d("LutCreatorViewModel", "AI generated original image, analyzing pair locally...")
+                val recipe = LocalImageAnalyzer.analyzeSourceTargetImages(sourceBitmap, bitmap)
 
                 PLog.d("LutCreatorViewModel", "Recipe: $recipe")
 
-                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe, generatedSource)
+                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe, sourceBitmap)
+            } catch (e: Exception) {
+                _uiState.value = LutCreatorUiState.Error("Analysis failed: ${e.message}")
+            }
+        }
+    }
+
+    fun analyzeLocalImagePairs(pairs: List<LocalImagePairInput>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = LutCreatorUiState.Analyzing
+
+            try {
+                if (pairs.isEmpty()) {
+                    _uiState.value = LutCreatorUiState.Error("No image pairs selected")
+                    return@launch
+                }
+
+                val bitmaps = pairs.mapIndexed { index, pair ->
+                    val sourceBitmap = loadBitmapFromUri(pair.sourceUri)
+                    val targetBitmap = loadBitmapFromUri(pair.targetUri)
+
+                    if (sourceBitmap == null || targetBitmap == null) {
+                        _uiState.value = LutCreatorUiState.Error("Failed to decode image pair ${index + 1}")
+                        return@launch
+                    }
+                    sourceBitmap to targetBitmap
+                }
+
+                val recipe = LocalImageAnalyzer.analyzeSourceTargetImagePairs(bitmaps)
+                PLog.d("LutCreatorViewModel", "Local multi-pair recipe: $recipe")
+                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe)
             } catch (e: Exception) {
                 _uiState.value = LutCreatorUiState.Error("Analysis failed: ${e.message}")
             }
@@ -130,6 +155,11 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.value = LutCreatorUiState.Idle
     }
 }
+
+data class LocalImagePairInput(
+    val sourceUri: Uri,
+    val targetUri: Uri
+)
 
 sealed class LutCreatorUiState {
     object Idle : LutCreatorUiState()
