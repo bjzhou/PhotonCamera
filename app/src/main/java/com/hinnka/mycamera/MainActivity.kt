@@ -106,6 +106,19 @@ class MainActivity : ComponentActivity() {
         hasPermissions = result.values.all { it }
     }
 
+    private fun applyPreferredWindowColorMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val configuration = resources.configuration
+        when {
+            configuration.isScreenHdr -> {
+                window.colorMode = ActivityInfo.COLOR_MODE_HDR
+            }
+            configuration.isScreenWideColorGamut -> {
+                window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -115,11 +128,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         hideSystemUI()
-
-        val isWideColorGamutSupported = resources.configuration.isScreenWideColorGamut
-        if (isWideColorGamutSupported) {
-            window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
-        }
+        applyPreferredWindowColorMode()
 
         OrientationObserver.observe(this)
 
@@ -154,6 +163,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        applyPreferredWindowColorMode()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

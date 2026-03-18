@@ -208,6 +208,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP010 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val autoEnableHdrForHdrCapture: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.autoEnableHdrForHdrCapture }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val autoEnableHdrForSdrPhotos: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.autoEnableHdrForSdrPhotos }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val phantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.phantomMode }
@@ -556,6 +562,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
         val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
 
+        val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
+            dynamicRangeProfile = state.value.currentDynamicRangeProfile,
+            hasRawSource = userPrefs?.useRaw == true,
+            hasEmbeddedGainmap = false,
+            userPrefs = userPrefs
+        )
+
         return PhotoMetadata(
             lutId = lutIdToSave,
             frameId = frameIdToSave,
@@ -585,9 +598,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             computationalAperture = aperture,
             focusPointX = state.value.focusPoint?.first,
             focusPointY = state.value.focusPoint?.second,
+            manualHdrEffectEnabled = defaultHdrEffectEnabled,
             captureMode = captureMode,
             multipleExposureFrameCount = multipleExposureFrameCount
         )
+    }
+
+    private fun defaultHdrEffectEnabled(
+        dynamicRangeProfile: String?,
+        hasRawSource: Boolean,
+        hasEmbeddedGainmap: Boolean,
+        userPrefs: com.hinnka.mycamera.data.UserPreferences?
+    ): Boolean {
+        if (hasEmbeddedGainmap) return true
+        return if (dynamicRangeProfile == "HLG10" || hasRawSource) {
+            userPrefs?.autoEnableHdrForHdrCapture ?: true
+        } else {
+            userPrefs?.autoEnableHdrForSdrPhotos ?: false
+        }
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {
@@ -1262,6 +1290,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setAutoEnableHdrForHdrCapture(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveAutoEnableHdrForHdrCapture(enabled)
+        }
+    }
+
+    fun setAutoEnableHdrForSdrPhotos(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveAutoEnableHdrForSdrPhotos(enabled)
+        }
+    }
+
     /**
      * 获取 LUT 信息
      */
@@ -1875,6 +1915,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+            val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
+                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
+                hasRawSource = image.format == android.graphics.ImageFormat.RAW_SENSOR ||
+                    image.format == android.graphics.ImageFormat.RAW10 ||
+                    image.format == android.graphics.ImageFormat.RAW12,
+                hasEmbeddedGainmap = false,
+                userPrefs = userPrefs
+            )
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = PhotoMetadata(
@@ -1903,9 +1951,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 droMode = droModeString,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
+                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
                 computationalAperture = aperture,
                 focusPointX = state.value.focusPoint?.first,
-                focusPointY = state.value.focusPoint?.second
+                focusPointY = state.value.focusPoint?.second,
+                manualHdrEffectEnabled = defaultHdrEffectEnabled
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -2003,6 +2053,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val useSuperRes = useSuperResolution.value
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+            val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
+                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
+                hasRawSource = images.firstOrNull()?.format == android.graphics.ImageFormat.RAW_SENSOR ||
+                    images.firstOrNull()?.format == android.graphics.ImageFormat.RAW10 ||
+                    images.firstOrNull()?.format == android.graphics.ImageFormat.RAW12,
+                hasEmbeddedGainmap = false,
+                userPrefs = userPrefs
+            )
 
             // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
             val metadata = PhotoMetadata(
@@ -2031,9 +2089,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 droMode = droModeString,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
+                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
                 computationalAperture = aperture,
                 focusPointX = state.value.focusPoint?.first,
-                focusPointY = state.value.focusPoint?.second
+                focusPointY = state.value.focusPoint?.second,
+                manualHdrEffectEnabled = defaultHdrEffectEnabled
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -2119,6 +2179,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 (userPreferencesRepository.userPreferences.firstOrNull()?.mirrorFrontCamera ?: true)
 
         val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
+        val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
+            dynamicRangeProfile = state.value.currentDynamicRangeProfile,
+            hasRawSource = false,
+            hasEmbeddedGainmap = false,
+            userPrefs = userPrefs
+        )
 
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息
         val metadata = PhotoMetadata(
@@ -2145,9 +2211,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             aperture = captureInfo.formatAperture(),
             isMirrored = shouldMirror,
             colorSpace = captureInfo.colorSpace,
+            dynamicRangeProfile = state.value.currentDynamicRangeProfile,
             computationalAperture = aperture,
             focusPointX = state.value.focusPoint?.first,
-            focusPointY = state.value.focusPoint?.second
+            focusPointY = state.value.focusPoint?.second,
+            manualHdrEffectEnabled = defaultHdrEffectEnabled
         )
 
         PhotoManager.preparePhoto(

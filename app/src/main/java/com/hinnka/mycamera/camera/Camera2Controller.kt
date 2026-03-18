@@ -7,6 +7,7 @@ import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
@@ -111,6 +112,7 @@ class Camera2Controller(private val context: Context) {
     private var availableLensShadingMapModes: IntArray = intArrayOf()
     private var isRawSupported = false
     private var isP010Supported = false
+    private var isHlg10Supported = false
     private var availableAeModes: IntArray = intArrayOf()
     private var availableAwbModes: IntArray = intArrayOf()
 
@@ -461,6 +463,13 @@ class Camera2Controller(private val context: Context) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     isP010Supported = outputFormats.contains(ImageFormat.YCBCR_P010)
                 }
+                isHlg10Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isP010Supported) {
+                    val dynamicRangeProfiles =
+                        cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
+                    dynamicRangeProfiles?.supportedProfiles?.contains(DynamicRangeProfiles.HLG10) == true
+                } else {
+                    false
+                }
 
                 // 在相机开启后，如果启用了实况照片，启动录制器（因为 closeCamera 刚才停止了它）
                 if (_state.value.useLivePhoto) {
@@ -475,6 +484,8 @@ class Camera2Controller(private val context: Context) {
                 _state.value = _state.value.copy(
                     isRawSupported = isRawSupported,
                     isP010Supported = isP010Supported,
+                    isHlg10Supported = isHlg10Supported,
+                    currentDynamicRangeProfile = if (shouldUseHlgCapture()) "HLG10" else "STANDARD",
                     availableNrModes = availableNoiseReductionModes
                 )
             } catch (e: Exception) {
@@ -757,7 +768,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun createPreviewSession() {
+    private fun createPreviewSession(forceStandardSession: Boolean = false) {
         val device = cameraDevice ?: return
         val surface = previewSurface ?: return
         val reader = imageReader ?: return
@@ -779,24 +790,73 @@ class Camera2Controller(private val context: Context) {
 
 
             // Android 9+ 使用 SessionConfiguration
-            val outputConfigs = surfaces.map { OutputConfiguration(it) }
+            val useHlgCapture = shouldUseHlgCapture() && !forceStandardSession
+            val readerFormat = reader.imageFormat
+            val supportedColorProfiles = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                cachedCharacteristics?.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES)
+                    ?.getSupportedColorSpaces(readerFormat)
+                    ?.joinToString()
+            } else {
+                null
+            }
+            PLog.i(
+                TAG,
+                "Creating preview session: forceStandard=$forceStandardSession, " +
+                        "useHlgCapture=$useHlgCapture, readerFormat=${imageFormatToString(readerFormat)}, " +
+                        "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported, " +
+                        "supportedColorSpaces=${supportedColorProfiles ?: "n/a"}"
+            )
+            val outputConfigs = surfaces.mapIndexed { index, outputSurface ->
+                OutputConfiguration(outputSurface).apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val profile = if (useHlgCapture && index == 1) {
+                            DynamicRangeProfiles.HLG10
+                        } else {
+                            DynamicRangeProfiles.STANDARD
+                        }
+                        setDynamicRangeProfile(profile)
+                    }
+                }
+            }
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
                 outputConfigs,
                 Executors.newSingleThreadExecutor(),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        if (useHlgCapture) {
+                            _state.value = _state.value.copy(currentDynamicRangeProfile = "HLG10")
+                        } else if (_state.value.currentDynamicRangeProfile != "STANDARD") {
+                            _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
+                        }
                         onSessionConfigured(session)
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        PLog.e(TAG, "Session configuration failed")
+                        PLog.e(
+                            TAG,
+                            "Session configuration failed: useHlgCapture=$useHlgCapture, " +
+                                    "readerFormat=${imageFormatToString(readerFormat)}, " +
+                                    "sessionColorSpace=${if (useHlgCapture) "BT2020" else if (_state.value.isP3Supported) "DISPLAY_P3/DEFAULT" else "DEFAULT"}"
+                        )
+                        if (useHlgCapture) {
+                            PLog.w(TAG, "Retrying preview session with STANDARD dynamic range fallback")
+                            _state.value = _state.value.copy(currentDynamicRangeProfile = "STANDARD")
+                            createPreviewSession(forceStandardSession = true)
+                        }
                     }
                 }
             )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && _state.value.isP3Supported) {
-                PLog.i(TAG, "Configuring Display P3 color space for output")
-                sessionConfig.setColorSpace(android.graphics.ColorSpace.Named.DISPLAY_P3)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                when {
+                    useHlgCapture -> {
+                        PLog.i(TAG, "Skipping explicit session color space for HLG capture session")
+                    }
+                    _state.value.isP3Supported -> {
+                        PLog.i(TAG, "Configuring Display P3 color space for output")
+                        sessionConfig.setColorSpace(android.graphics.ColorSpace.Named.DISPLAY_P3)
+                    }
+                }
             }
             device.createCaptureSession(sessionConfig)
 
@@ -824,6 +884,16 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to start preview - illegal state")
         } catch (e: IllegalArgumentException) {
             PLog.e(TAG, "Failed to start preview - unconfigured surface")
+        }
+    }
+
+    private fun imageFormatToString(format: Int): String {
+        return when (format) {
+            ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
+            ImageFormat.YCBCR_P010 -> "YCBCR_P010"
+            ImageFormat.YUV_420_888 -> "YUV_420_888"
+            ImageFormat.JPEG -> "JPEG"
+            else -> format.toString()
         }
     }
 
@@ -2285,8 +2355,19 @@ class Camera2Controller(private val context: Context) {
             captureTime = System.currentTimeMillis(),
             latitude = latitude,
             longitude = longitude,
-            colorSpace = if (_state.value.isP3Supported) ColorSpace.Named.DISPLAY_P3 else ColorSpace.Named.SRGB
+            colorSpace = when {
+                shouldUseHlgCapture() -> ColorSpace.Named.BT2020
+                _state.value.isP3Supported -> ColorSpace.Named.DISPLAY_P3
+                else -> ColorSpace.Named.SRGB
+            }
         )
+    }
+
+    private fun shouldUseHlgCapture(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                _state.value.useP010 &&
+                isP010Supported &&
+                isHlg10Supported
     }
 
     /**

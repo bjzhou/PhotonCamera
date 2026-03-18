@@ -154,6 +154,7 @@ class RawDemosaicProcessor {
     private var combinedProgram = 0
     private var sharpenProgram = 0
     private var passthroughProgram = 0
+    private var hdrReferenceProgram = 0
 
     private var rawTextureId = 0
 
@@ -166,6 +167,11 @@ class RawDemosaicProcessor {
     private var combinedTextureId = 0
     private var combinedWidth = 0
     private var combinedHeight = 0
+
+    private var hdrReferenceFramebufferId = 0
+    private var hdrReferenceTextureId = 0
+    private var hdrReferenceWidth = 0
+    private var hdrReferenceHeight = 0
 
     private var sharpenFramebufferId = 0
     private var sharpenTextureId = 0
@@ -227,6 +233,21 @@ class RawDemosaicProcessor {
         val exposureGain: Float,
         val curveLut: FloatArray? = null
     )
+
+    private fun SceneStats.toRenderPlan(): RawRenderPlan {
+        return RawRenderPlan(
+            sceneNormalizationGain = exposureGain,
+            sdrCurveLut = curveLut
+        )
+    }
+
+    private fun resolveWorkingColorSpace(): android.graphics.ColorSpace {
+        return baseLut?.outputColorSpace ?: when (colorSpace) {
+            ColorSpace.SRGB -> android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
+            ColorSpace.DCI_P3 -> android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3)
+            else -> android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.BT2020)
+        }
+    }
 
 
     private var isInitialized = false
@@ -315,7 +336,7 @@ class RawDemosaicProcessor {
                 droMode = droMode,
                 dngFile = dngFile,
                 onMetadata = onMetadata
-            )
+            )?.sdrBitmap
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process DNG file: $dngFilePath", e)
             null
@@ -356,9 +377,45 @@ class RawDemosaicProcessor {
                 cropRegion = cropRegion,
                 rotation = rotation,
                 sharpeningValue = sharpeningValue,
-            )
+            )?.sdrBitmap
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW buffer", e)
+            null
+        }
+    }
+
+    suspend fun processForHdrSources(
+        context: Context,
+        dngFilePath: String,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
+        rotation: Int,
+        exposureBias: Float = 0f,
+        sharpeningValue: Float = 0f,
+        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
+        onMetadata: ((RawMetadata) -> Unit)? = null
+    ): RawHdrRenderResult? = withContext(glDispatcher) {
+        val dngFile = File(dngFilePath)
+        if (!dngFile.exists() || !dngFile.canRead()) {
+            PLog.e(TAG, "DNG file not found or not readable: $dngFilePath")
+            return@withContext null
+        }
+
+        try {
+            processInternal(
+                context = context,
+                aspectRatio = aspectRatio,
+                cropRegion = cropRegion,
+                rotation = rotation,
+                exposureBias = exposureBias,
+                sharpeningValue = sharpeningValue,
+                droMode = droMode,
+                dngFile = dngFile,
+                onMetadata = onMetadata,
+                includeHdrReference = true
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to process RAW HDR sources: $dngFilePath", e)
             null
         }
     }
@@ -380,8 +437,9 @@ class RawDemosaicProcessor {
         sharpeningValue: Float = 0f,
         droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
         dngFile: File? = null,
-        onMetadata: ((RawMetadata) -> Unit)? = null
-    ): Bitmap? = withContext(glDispatcher) {
+        onMetadata: ((RawMetadata) -> Unit)? = null,
+        includeHdrReference: Boolean = false
+    ): RawHdrRenderResult? = withContext(glDispatcher) {
         var actualRawData = rawData
         var actualWidth = width
         var actualHeight = height
@@ -399,7 +457,13 @@ class RawDemosaicProcessor {
                 colorSpace.xw, colorSpace.yw
             )
             if (dngRawData == null) {
-                return@withContext RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)
+                return@withContext RawProcessor.processAndToBitmap(dngFile, aspectRatio, cropRegion, rotation)?.let {
+                    RawHdrRenderResult(
+                        sdrBitmap = it,
+                        hdrReferenceBitmap = null,
+                        renderPlan = RawRenderPlan(sceneNormalizationGain = 1.0f)
+                    )
+                }
             }
             dngRawDataCleanup = dngRawData
             actualRawData = dngRawData.rawData
@@ -504,6 +568,8 @@ class RawDemosaicProcessor {
             // 计算平均亮度
             val sceneStats =
                 analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, logCurve, actualMetadata)
+            val renderPlan = sceneStats.toRenderPlan()
+            val workingColorSpace = resolveWorkingColorSpace()
 
             // NLM 降噪 (Combined 之后)
             val denoiseStart = System.currentTimeMillis()
@@ -516,6 +582,26 @@ class RawDemosaicProcessor {
             )
             val denoiseOutputTexture = gfTexId[1]
             PLog.d(TAG, "NLM Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
+
+            val hdrReferenceBitmap = if (includeHdrReference) {
+                setupHdrReferenceFramebuffer(actualWidth, actualHeight)
+                renderHdrReferencePass(
+                    metadata = actualMetadata,
+                    renderPlan = renderPlan,
+                    inputTextureId = denoiseOutputTexture
+                )
+                setupOutputFramebuffer(finalWidth, finalHeight)
+                renderOutputPass(
+                    actualRotation,
+                    actualWidth,
+                    actualHeight,
+                    bounds,
+                    hdrReferenceTextureId
+                )
+                readPixels(finalWidth, finalHeight, workingColorSpace)
+            } else {
+                null
+            }
 
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             setupCombinedFramebuffer(actualWidth, actualHeight)
@@ -545,15 +631,17 @@ class RawDemosaicProcessor {
 
             // 8. 读取结果
             val readStart = System.currentTimeMillis()
-            val finalBitmap = readPixels(
-                finalWidth,
-                finalHeight,
-                baseLut?.outputColorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
-            )
+            val finalBitmap = readPixels(finalWidth, finalHeight, workingColorSpace)
             PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
 
             PLog.d(TAG, "RAW processing complete: ${finalBitmap?.width}x${finalBitmap?.height}")
-            finalBitmap
+            finalBitmap?.let {
+                RawHdrRenderResult(
+                    sdrBitmap = it,
+                    hdrReferenceBitmap = hdrReferenceBitmap,
+                    renderPlan = renderPlan
+                )
+            }
         } finally {
             dngRawDataCleanup?.close()
         }
@@ -682,6 +770,16 @@ class RawDemosaicProcessor {
             GLES30.glLinkProgram(combinedProgram)
 
             GLES30.glDeleteShader(fShaderCombined)
+        }
+
+        val fShaderHdrReference = compileShader(GLES30.GL_FRAGMENT_SHADER, RawShaders.HDR_REFERENCE_FRAGMENT_SHADER)
+        if (vShader != 0 && fShaderHdrReference != 0) {
+            hdrReferenceProgram = GLES30.glCreateProgram()
+            GLES30.glAttachShader(hdrReferenceProgram, vShader)
+            GLES30.glAttachShader(hdrReferenceProgram, fShaderHdrReference)
+            GLES30.glLinkProgram(hdrReferenceProgram)
+
+            GLES30.glDeleteShader(fShaderHdrReference)
         }
 
         // 2.2 Sharpen Program
@@ -1460,6 +1558,46 @@ class RawDemosaicProcessor {
         checkGlError("setupCombinedFramebuffer")
     }
 
+    private fun setupHdrReferenceFramebuffer(width: Int, height: Int) {
+        if (hdrReferenceWidth == width && hdrReferenceHeight == height && hdrReferenceFramebufferId != 0) {
+            return
+        }
+
+        if (hdrReferenceTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(hdrReferenceTextureId), 0)
+        }
+        if (hdrReferenceFramebufferId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(hdrReferenceFramebufferId), 0)
+        }
+
+        hdrReferenceWidth = width
+        hdrReferenceHeight = height
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        hdrReferenceTextureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdrReferenceTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+
+        val framebuffers = IntArray(1)
+        GLES30.glGenFramebuffers(1, framebuffers, 0)
+        hdrReferenceFramebufferId = framebuffers[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdrReferenceFramebufferId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            hdrReferenceTextureId,
+            0
+        )
+        checkGlError("setupHdrReferenceFramebuffer")
+    }
+
     private fun setupSharpenFramebuffer(width: Int, height: Int) {
         if (sharpenWidth == width && sharpenHeight == height && sharpenFramebufferId != 0) {
             return
@@ -1790,6 +1928,35 @@ class RawDemosaicProcessor {
         checkGlError("renderCombinedPass")
     }
 
+    private fun renderHdrReferencePass(
+        metadata: RawMetadata,
+        renderPlan: RawRenderPlan,
+        inputTextureId: Int
+    ) {
+        GLES30.glUseProgram(hdrReferenceProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdrReferenceFramebufferId)
+        GLES30.glViewport(0, 0, metadata.width, metadata.height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdrReferenceProgram, "uInputTexture"), 0)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(hdrReferenceProgram, "uExposureGain"),
+            renderPlan.sceneNormalizationGain
+        )
+
+        val identityMatrix = FloatArray(16)
+        GlMatrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(hdrReferenceProgram, "uTexMatrix"),
+            1, false, identityMatrix, 0
+        )
+
+        drawQuad(hdrReferenceProgram)
+        checkGlError("renderHdrReferencePass")
+    }
+
     /**
      * Sharpen Pass
      */
@@ -2014,6 +2181,7 @@ class RawDemosaicProcessor {
         if (combinedProgram != 0) GLES30.glDeleteProgram(combinedProgram)
         if (sharpenProgram != 0) GLES30.glDeleteProgram(sharpenProgram)
         if (passthroughProgram != 0) GLES30.glDeleteProgram(passthroughProgram)
+        if (hdrReferenceProgram != 0) GLES30.glDeleteProgram(hdrReferenceProgram)
 
         // DHT programs
         for (p in intArrayOf(
@@ -2048,6 +2216,8 @@ class RawDemosaicProcessor {
         )
         if (combinedTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(combinedTextureId), 0)
         if (combinedFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(combinedFramebufferId), 0)
+        if (hdrReferenceTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(hdrReferenceTextureId), 0)
+        if (hdrReferenceFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdrReferenceFramebufferId), 0)
         if (sharpenTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
         if (sharpenFramebufferId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(sharpenFramebufferId), 0)
         if (lut3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(lut3DTextureId), 0)

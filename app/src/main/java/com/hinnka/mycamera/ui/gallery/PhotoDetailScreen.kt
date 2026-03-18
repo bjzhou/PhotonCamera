@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -30,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -40,26 +42,20 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
-import coil.request.ImageRequest
 import com.hinnka.mycamera.R
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.min
-import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
-import me.saket.telephoto.zoomable.rememberZoomableImageState
-import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
-import me.saket.telephoto.zoomable.ZoomSpec
-import kotlin.math.min
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.Image
 import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -93,6 +89,13 @@ fun PhotoDetailScreen(
     val isSharing by viewModel.isSharing.collectAsState()
 
     val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
+    val currentHasHdr = remember { mutableStateOf(false) }
+    val hdrRefreshNonce = remember { mutableStateOf(0L) }
+    LaunchedEffect(currentHasHdr.value) {
+        if (currentHasHdr.value) {
+            hdrRefreshNonce.value = System.nanoTime()
+        }
+    }
 
     // Activity Result Launcher for delete confirmation
     val deletePhotoLauncher = rememberLauncherForActivityResult(
@@ -167,6 +170,12 @@ fun PhotoDetailScreen(
     // 同步当前索引，并在快到底部时加载更多系统照片
     LaunchedEffect(pagerState.currentPage, photos.size) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
+        currentHasHdr.value = false
+        currentColorSpace.value = null
+
+        photos.getOrNull(pagerState.currentPage)?.let { viewModel.prefetchDetailBitmap(it) }
+        photos.getOrNull(pagerState.currentPage - 1)?.let { viewModel.prefetchDetailBitmap(it) }
+        photos.getOrNull(pagerState.currentPage + 1)?.let { viewModel.prefetchDetailBitmap(it) }
 
         if (viewModel.selectedTab == GalleryTab.SYSTEM && pagerState.currentPage >= photos.size - 5) {
             viewModel.loadSystemPhotos(reset = false)
@@ -271,6 +280,24 @@ fun PhotoDetailScreen(
                                 imageVector = Icons.Default.BurstMode,
                                 contentDescription = "查看连拍照片", // 连拍照片
                                 tint = Color.White
+                            )
+                        }
+                    }
+                    if (currentPhoto != null && viewModel.canToggleManualHdrEnhance(currentPhoto)) {
+                        val hdrEnabled = viewModel.isManualHdrEnhanceEnabled(currentPhoto)
+                        TextButton(
+                                    onClick = {
+                                        viewModel.toggleManualHdrEnhance(currentPhoto) { success ->
+                                            if (!success) {
+                                                Toast.makeText(context, R.string.hdr_toggle_failed, Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                        ) {
+                            Text(
+                                text = stringResource(R.string.hdr_label),
+                                color = if (hdrEnabled) AccentOrange else Color.White.copy(alpha = 0.72f),
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
@@ -472,6 +499,9 @@ fun PhotoDetailScreen(
                                 ZoomableImage(
                                     photo = photo,
                                     colorSpace = currentColorSpace,
+                                    hasHdr = currentHasHdr,
+                                    hdrRefreshNonce = hdrRefreshNonce.value,
+                                    isActive = page == pagerState.currentPage,
                                     showOrigin = showOrigin,
                                     viewModel = viewModel,
                                     onZoomChange = { zoomed ->
@@ -678,22 +708,24 @@ private fun InfoRow(label: String, value: String) {
 private fun ZoomableImage(
     photo: PhotoData,
     colorSpace: MutableState<ColorSpace?>,
+    hasHdr: MutableState<Boolean>,
+    hdrRefreshNonce: Long,
+    isActive: Boolean,
     showOrigin: Boolean,
     viewModel: GalleryViewModel,
     onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-
     var isLoading by remember { mutableStateOf(true) }
-    val maxZoom = min(photo.width, photo.height) / 300f
-    val zoomableState = rememberZoomableImageState(
-        zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
+    var imageViewRef by remember { mutableStateOf<HdrZoomImageView?>(null) }
+    var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var hdrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var hdrVisible by remember { mutableStateOf(false) }
+    val hdrAlpha by animateFloatAsState(
+        targetValue = if (hdrVisible && hdrBitmap != null) 1f else 0f,
+        animationSpec = tween(durationMillis = 750, easing = LinearOutSlowInEasing),
+        label = "hdrFadeIn"
     )
-
-    LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
-        onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
-    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -704,38 +736,116 @@ private fun ZoomableImage(
             photo.metadata?.hashCode() ?: photo.relatedPhoto?.metadata?.hashCode() ?: 0
         }
 
-        var bitmap by remember { mutableStateOf<Bitmap?>(null) }
         val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
 
-        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey) {
+        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey, isActive) {
             suspend fun loadBitmap() {
-                isLoading = bitmap == null
-                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin)
-                if (bitmap == null) {
-                    delay(500)
-                    loadBitmap()
+                val minPreviewDisplayMs = 250L
+                isLoading = true
+                previewBitmap = null
+                hdrBitmap = null
+                hdrVisible = false
+
+                var previewShownAtMs = 0L
+                val loadedPreviewBitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin)
+                if (loadedPreviewBitmap != null) {
+                    previewBitmap = loadedPreviewBitmap
+                    previewShownAtMs = SystemClock.elapsedRealtime()
+                    if (isActive) {
+                        colorSpace.value = loadedPreviewBitmap.colorSpace
+                        val previewHasHdr = UltraHdrWriter.hasGainmap(loadedPreviewBitmap)
+                        hasHdr.value = previewHasHdr
+                        PLog.d(
+                            "PhotoDetailScreen",
+                            "ZoomableImage preview loaded: photo=${photo.id}, active=$isActive, hasHdr=$previewHasHdr, colorSpace=${loadedPreviewBitmap.colorSpace?.name}"
+                        )
+                    }
+                    isLoading = false
                 }
-                colorSpace.value = bitmap?.colorSpace
-                isLoading = bitmap == null
+
+                if (!isActive || showOrigin) {
+                    return
+                }
+
+                hasHdr.value = false
+                val detailBitmap = viewModel.getDetailBitmap(photo, showOrigin = showOrigin)
+                if (detailBitmap == null) {
+                    if (previewBitmap == null && hdrBitmap == null) {
+                        delay(500)
+                        loadBitmap()
+                    }
+                    return
+                }
+
+                val detailHasHdr = UltraHdrWriter.hasGainmap(detailBitmap)
+                if (previewBitmap == null || !detailHasHdr) {
+                    previewBitmap = detailBitmap
+                }
+                colorSpace.value = detailBitmap.colorSpace
+                hasHdr.value = detailHasHdr
+                PLog.d(
+                    "PhotoDetailScreen",
+                    "ZoomableImage detail loaded: photo=${photo.id}, active=$isActive, hasHdr=$detailHasHdr, colorSpace=${detailBitmap.colorSpace?.name}"
+                )
+
+                if (detailHasHdr) {
+                    hdrBitmap = detailBitmap
+                    val elapsed = if (previewShownAtMs > 0L) {
+                        SystemClock.elapsedRealtime() - previewShownAtMs
+                    } else {
+                        minPreviewDisplayMs
+                    }
+                    val remainingDelay = (minPreviewDisplayMs - elapsed).coerceAtLeast(0L)
+                    if (remainingDelay > 0L) {
+                        delay(remainingDelay)
+                    }
+                    hdrVisible = true
+                } else {
+                    hdrBitmap = null
+                    hdrVisible = false
+                }
+                isLoading = false
             }
             loadBitmap()
         }
 
-        if (bitmap != null) {
-            val imageModel = remember(photo.id, metadataHash, bitmap) {
-                ImageRequest.Builder(context)
-                    .data(bitmap)
-                    .crossfade(false) // 禁用交叉淡入淡出，避免滑动时同时渲染两张大图
-                    .build()
-            }
-
-            ZoomableAsyncImage(
-                model = imageModel,
-                contentDescription = photo.displayName,
-                contentScale = ContentScale.Fit,
-                state = zoomableState,
+        previewBitmap?.let { sdrBitmap ->
+            Image(
+                bitmap = sdrBitmap.asImageBitmap(),
+                contentDescription = null,
                 modifier = Modifier.fillMaxSize()
             )
+        }
+
+        hdrBitmap?.let { currentHdrBitmap ->
+            key(currentHdrBitmap, hasHdr.value, hdrRefreshNonce) {
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = hdrAlpha },
+                    factory = { ctx ->
+                        HdrZoomImageView(ctx).apply {
+                            setOnZoomChangedListener(onZoomChange)
+                            imageViewRef = this
+                            setBitmap(currentHdrBitmap)
+                        }
+                    },
+                    update = { view ->
+                        imageViewRef = view
+                        view.setOnZoomChangedListener(onZoomChange)
+                        view.setBitmap(currentHdrBitmap)
+                    }
+                )
+            }
+        }
+
+        LaunchedEffect(hasHdr.value, hdrRefreshNonce, imageViewRef, hdrBitmap, hdrVisible) {
+            if (isActive && hdrBitmap != null && hdrVisible) {
+                withFrameNanos { }
+                imageViewRef?.rebindForHdrMode()
+                withFrameNanos { }
+                imageViewRef?.refreshForHdrMode()
+            }
         }
 
         if (isLoading) {

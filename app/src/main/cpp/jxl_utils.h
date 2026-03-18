@@ -7,9 +7,15 @@
 
 #include <jxl/types.h>
 
+enum class JxlEncodingProfile {
+  ORIGINAL = 0,
+  BT2100_HLG = 1,
+};
+
 // 将 RGBA 数据进行 JPEG XL 压缩并保存到文件
 bool saveJxl(const void *pixels, int32_t width, int32_t height,
-             JxlDataType dataType, const std::string &outputPath);
+             JxlDataType dataType, const std::string &outputPath,
+             JxlEncodingProfile encodingProfile = JxlEncodingProfile::ORIGINAL);
 
 // 从 JPEG XL 文件中读取并解压缩 RGBA 数据
 bool loadJxl(const std::string &inputPath, std::vector<uint16_t> &outPixels,

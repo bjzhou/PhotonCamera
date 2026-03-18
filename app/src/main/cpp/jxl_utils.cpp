@@ -9,8 +9,52 @@
 #include <jxl/thread_parallel_runner_cxx.h>
 #include <vector>
 
+static bool applyColorEncoding(JxlEncoder *encoder,
+                               JxlEncodingProfile encodingProfile) {
+  if (encodingProfile == JxlEncodingProfile::ORIGINAL) {
+    return true;
+  }
+
+  JxlColorEncoding color_encoding = {};
+  color_encoding.color_space = JXL_COLOR_SPACE_RGB;
+  color_encoding.white_point = JXL_WHITE_POINT_D65;
+  color_encoding.primaries = JXL_PRIMARIES_2100;
+  color_encoding.transfer_function = JXL_TRANSFER_FUNCTION_HLG;
+  color_encoding.rendering_intent = JXL_RENDERING_INTENT_PERCEPTUAL;
+
+  if (JXL_ENC_SUCCESS !=
+      JxlEncoderSetColorEncoding(encoder, &color_encoding)) {
+    LOGE("JxlEncoderSetColorEncoding failed: error=%d",
+         static_cast<int>(JxlEncoderGetError(encoder)));
+    return false;
+  }
+  return true;
+}
+
+static bool applyExtraChannelInfo(JxlEncoder *encoder,
+                                  const JxlBasicInfo &basicInfo) {
+  if (basicInfo.num_extra_channels == 0 || basicInfo.alpha_bits == 0) {
+    return true;
+  }
+
+  JxlExtraChannelInfo alpha_info;
+  JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA, &alpha_info);
+  alpha_info.bits_per_sample = basicInfo.alpha_bits;
+  alpha_info.exponent_bits_per_sample = basicInfo.alpha_exponent_bits;
+  alpha_info.alpha_premultiplied = basicInfo.alpha_premultiplied;
+
+  if (JXL_ENC_SUCCESS !=
+      JxlEncoderSetExtraChannelInfo(encoder, 0, &alpha_info)) {
+    LOGE("JxlEncoderSetExtraChannelInfo failed: error=%d",
+         static_cast<int>(JxlEncoderGetError(encoder)));
+    return false;
+  }
+  return true;
+}
+
 bool saveJxl(const void *pixels, int32_t width, int32_t height,
-             JxlDataType dataType, const std::string &outputPath) {
+             JxlDataType dataType, const std::string &outputPath,
+             JxlEncodingProfile encodingProfile) {
   auto encoder = JxlEncoderMake(nullptr);
   size_t num_threads = JxlThreadParallelRunnerDefaultNumWorkerThreads();
   if (num_threads > 4)
@@ -50,9 +94,21 @@ bool saveJxl(const void *pixels, int32_t width, int32_t height,
   basic_info.num_color_channels = 3;
   basic_info.num_extra_channels = 1;
   basic_info.alpha_bits = basic_info.bits_per_sample;
+  basic_info.alpha_exponent_bits = 0;
+  basic_info.alpha_premultiplied = JXL_FALSE;
+  if (encodingProfile == JxlEncodingProfile::BT2100_HLG) {
+    basic_info.intensity_target = 1000.0f;
+  }
 
   if (JXL_ENC_SUCCESS != JxlEncoderSetBasicInfo(encoder.get(), &basic_info)) {
-    LOGE("JxlEncoderSetBasicInfo failed");
+    LOGE("JxlEncoderSetBasicInfo failed: error=%d",
+         static_cast<int>(JxlEncoderGetError(encoder.get())));
+    return false;
+  }
+  if (!applyExtraChannelInfo(encoder.get(), basic_info)) {
+    return false;
+  }
+  if (!applyColorEncoding(encoder.get(), encodingProfile)) {
     return false;
   }
 
@@ -62,7 +118,12 @@ bool saveJxl(const void *pixels, int32_t width, int32_t height,
       JxlEncoderAddImageFrame(frame_settings, &pixel_format, pixels,
                               static_cast<size_t>(width) * height * 4 *
                                   bytes_per_sample)) {
-    LOGE("JxlEncoderAddImageFrame failed");
+    LOGE("JxlEncoderAddImageFrame failed: error=%d, profile=%d, dataType=%d, "
+         "bits=%u, expBits=%u, alphaBits=%u, intensityTarget=%.1f",
+         static_cast<int>(JxlEncoderGetError(encoder.get())),
+         static_cast<int>(encodingProfile), static_cast<int>(dataType),
+         basic_info.bits_per_sample, basic_info.exponent_bits_per_sample,
+         basic_info.alpha_bits, basic_info.intensity_target);
     return false;
   }
   JxlEncoderCloseInput(encoder.get());

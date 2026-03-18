@@ -143,6 +143,8 @@ fun SettingsScreen(
     val logCurve by viewModel.logCurve.collectAsState()
     val rawLut by viewModel.rawLut.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
+    val autoEnableHdrForHdrCapture by viewModel.autoEnableHdrForHdrCapture.collectAsState()
+    val autoEnableHdrForSdrPhotos by viewModel.autoEnableHdrForSdrPhotos.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val phantomButtonHidden by viewModel.phantomButtonHidden.collectAsState()
@@ -868,7 +870,7 @@ fun SettingsScreen(
                             onLevelSelected = { viewModel.setRawLut(logCurve, it) }
                         )
 
-                        HorizontalDivider(
+                        /*HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
@@ -878,7 +880,7 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_apply_ultra_hdr_description),
                             checked = applyUltraHDR,
                             onCheckedChange = { viewModel.setApplyUltraHDR(it) }
-                        )
+                        )*/
 
                         if (state.isP010Supported) {
                             HorizontalDivider(
@@ -893,6 +895,30 @@ fun SettingsScreen(
                                 onCheckedChange = { viewModel.setUseP010(it) }
                             )
                         }
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture),
+                            description = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture_description),
+                            checked = autoEnableHdrForHdrCapture,
+                            onCheckedChange = { viewModel.setAutoEnableHdrForHdrCapture(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos),
+                            description = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos_description),
+                            checked = autoEnableHdrForSdrPhotos,
+                            onCheckedChange = { viewModel.setAutoEnableHdrForSdrPhotos(it) }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))

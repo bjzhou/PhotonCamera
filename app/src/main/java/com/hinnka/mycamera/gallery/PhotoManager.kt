@@ -16,6 +16,9 @@ import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.hdr.GainmapResult
+import com.hinnka.mycamera.hdr.UltraHdrWriter
+import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
@@ -27,6 +30,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.firstOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -35,7 +39,9 @@ import java.nio.ByteOrder
 import java.nio.IntBuffer
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.use
+import kotlin.system.measureTimeMillis
 
 /**
  * 照片管理器
@@ -49,15 +55,19 @@ object PhotoManager {
     private const val BURST_DIR = "burst"
     private const val PHOTO_FILE = "original.jpg"
     private const val YUV_FILE = "original.jxl"
+    private const val HDR_FILE = "original_hdr.bin"
     private const val VIDEO_FILE = "video.mp4"
     private const val DNG_FILE = "original.dng"
     private const val METADATA_FILE = "metadata.json"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
+    private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
     private const val MULTIPLE_EXPOSURE_DIR = "multiple_exposure_sessions"
     private const val MULTIPLE_EXPOSURE_PREVIEW_FILE = "preview.jpg"
 
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val gainmapProducer = UnifiedGainmapProducer()
+    private val detailHdrBuildJobs = ConcurrentHashMap<String, Job>()
 
     private fun getPhotosBaseDir(context: Context): File {
         return File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
@@ -95,6 +105,10 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), YUV_FILE)
     }
 
+    fun getHdrFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), HDR_FILE)
+    }
+
     fun getDngFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), DNG_FILE)
     }
@@ -115,8 +129,160 @@ object PhotoManager {
         return File(getPhotoDir(context, photoId), BOKEH_FILE)
     }
 
+    fun getDetailHdrFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), DETAIL_HDR_FILE)
+    }
+
+    fun deleteDetailHdrFile(context: Context, photoId: String) {
+        val detailFile = getDetailHdrFile(context, photoId)
+        val photoFile = getPhotoFile(context, photoId)
+        val photoDir = getPhotoDir(context, photoId)
+        val stableTimestamp = photoFile.takeIf { it.exists() }?.lastModified()
+        if (detailFile.exists()) {
+            detailFile.delete()
+        }
+        stableTimestamp?.let { photoDir.setLastModified(it) }
+    }
+
     fun getVideoFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), VIDEO_FILE)
+    }
+
+    private fun hasBitmapGainmap(bitmap: Bitmap?): Boolean {
+        if (bitmap == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
+        return try {
+            val hasGainmap = bitmap.javaClass.getMethod("hasGainmap")
+            hasGainmap.invoke(bitmap) as? Boolean ?: false
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun canReuseEmbeddedGainmap(metadata: PhotoMetadata): Boolean {
+        return metadata.manualHdrEffectEnabled &&
+            metadata.hasEmbeddedGainmap &&
+            metadata.lutId == null &&
+            metadata.colorRecipeParams == null &&
+            metadata.sharpening == null &&
+            metadata.noiseReduction == null &&
+            metadata.chromaNoiseReduction == null &&
+            metadata.frameId == null &&
+            metadata.cropRegion == null &&
+            metadata.postCropRegion == null &&
+            metadata.computationalAperture == null
+    }
+
+    private fun writeFinalJpeg(
+        bitmap: Bitmap,
+        outputStream: FileOutputStream,
+        quality: Int,
+        gainmapResult: GainmapResult? = null,
+    ): Boolean {
+        var success = false
+        val elapsed = measureTimeMillis {
+            success = UltraHdrWriter.writeJpeg(
+                UltraHdrWriter.Request(
+                    bitmap = bitmap,
+                    outputStream = outputStream,
+                    quality = quality,
+                    gainmap = gainmapResult?.payload,
+                )
+            )
+        }
+        PLog.d(
+            TAG,
+            "writeFinalJpeg took ${elapsed}ms, size=${bitmap.width}x${bitmap.height}, gainmap=${gainmapResult != null}, success=$success"
+        )
+        return success
+    }
+
+    suspend fun buildDetailHdrCache(
+        context: Context,
+        photoId: String,
+        metadata: PhotoMetadata? = null,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f,
+        quality: Int = 92
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val resolvedMetadata = metadata ?: loadMetadata(context, photoId) ?: return@withContext false
+            if (!resolvedMetadata.manualHdrEffectEnabled) {
+                deleteDetailHdrFile(context, photoId)
+                return@withContext false
+            }
+            val photoFile = getPhotoFile(context, photoId)
+            val photoDir = getPhotoDir(context, photoId)
+            val stableTimestamp = photoFile.takeIf { it.exists() }?.lastModified()
+            val detailFile = getDetailHdrFile(context, photoId)
+            val tempFile = File(detailFile.parentFile, "detail_hdr_temp.jpg")
+
+            val photoProcessor = ContentRepository.getInstance(context).photoProcessor
+            val ultraHdrSource = photoProcessor.prepareUltraHdrSource(
+                context = context,
+                photoId = photoId,
+                metadata = resolvedMetadata,
+                sharpening = sharpening,
+                noiseReduction = noiseReduction,
+                chromaNoiseReduction = chromaNoiseReduction
+            )
+
+            if (ultraHdrSource == null) {
+                if (detailFile.exists()) {
+                    detailFile.delete()
+                }
+                stableTimestamp?.let { photoDir.setLastModified(it) }
+                return@withContext false
+            }
+
+            val gainmapResult = gainmapProducer.build(ultraHdrSource)
+            FileOutputStream(tempFile).use { outputStream ->
+                if (!writeFinalJpeg(ultraHdrSource.sdrBase, outputStream, quality, gainmapResult)) {
+                    tempFile.delete()
+                    return@withContext false
+                }
+            }
+
+            if (detailFile.exists()) {
+                detailFile.delete()
+            }
+            tempFile.renameTo(detailFile)
+            stableTimestamp?.let { photoDir.setLastModified(it) }
+            PLog.d(TAG, "buildDetailHdrCache success: $photoId, source=${ultraHdrSource.sourceKind}, gainmap=${gainmapResult != null}")
+            true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to build detail HDR cache for $photoId", e)
+            false
+        }
+    }
+
+    fun queueDetailHdrCacheBuild(
+        context: Context,
+        photoId: String,
+        metadata: PhotoMetadata? = null,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f
+    ) {
+        val existingJob = detailHdrBuildJobs[photoId]
+        if (existingJob?.isActive == true) {
+            return
+        }
+        val job = processingScope.launch {
+            try {
+                buildDetailHdrCache(
+                    context = context,
+                    photoId = photoId,
+                    metadata = metadata,
+                    sharpening = sharpening,
+                    noiseReduction = noiseReduction,
+                    chromaNoiseReduction = chromaNoiseReduction
+                )
+            } finally {
+                detailHdrBuildJobs.remove(photoId)
+            }
+        }
+        detailHdrBuildJobs[photoId] = job
     }
 
     suspend fun exportPhoto(
@@ -134,8 +300,41 @@ object PhotoManager {
         return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
             try {
+                if (bitmap == null && canReuseEmbeddedGainmap(metadata)) {
+                    val embeddedBitmap = loadOriginalBitmap(context, id)
+                    if (embeddedBitmap != null && hasBitmapGainmap(embeddedBitmap)) {
+                        PLog.d(TAG, "Reusing embedded gainmap for export: $id")
+                        return@withContext exportBitmapToMediaStore(
+                            context = context,
+                            id = id,
+                            bitmap = embeddedBitmap,
+                            metadata = metadata,
+                            photoQuality = photoQuality,
+                            suffix = suffix
+                        )
+                    }
+                }
+
+                var ultraHdrSource = null as com.hinnka.mycamera.hdr.GainmapSourceSet?
+                val ultraHdrPrepareElapsed = measureTimeMillis {
+                    ultraHdrSource = photoProcessor.prepareUltraHdrSource(
+                        context = context,
+                        photoId = id,
+                        metadata = metadata,
+                        sharpening = sharpeningValue,
+                        noiseReduction = noiseReductionValue,
+                        chromaNoiseReduction = chromaNoiseReductionValue
+                    )
+                }
+                PLog.d(TAG, "prepareUltraHdrSource took ${ultraHdrPrepareElapsed}ms")
+                var gainmapResult: GainmapResult? = null
+                val gainmapElapsed = measureTimeMillis {
+                    gainmapResult = ultraHdrSource?.let { gainmapProducer.build(it) }
+                }
+                PLog.d(TAG, "gainmapProducer.build took ${gainmapElapsed}ms, enabled=${gainmapResult != null}")
+
                 // 读取照片
-                val processedBitmap = bitmap?.let {
+                val processedBitmap = ultraHdrSource?.sdrBase ?: bitmap?.let {
                     photoProcessor.processBitmap(
                         context, id, bitmap, metadata,
                         sharpeningValue, noiseReductionValue, chromaNoiseReductionValue,
@@ -146,7 +345,10 @@ object PhotoManager {
                     sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
                 ) ?: return@withContext false
 
-                PLog.d(TAG, "processedBitmap = ${processedBitmap.colorSpace?.name}")
+                PLog.d(
+                    TAG,
+                    "processedBitmap = ${processedBitmap.colorSpace?.name}, ultraHdrSource=${ultraHdrSource?.sourceKind}, gainmap=${gainmapResult != null}"
+                )
 
                 // 保存到指定目录
                 val date = metadata.dateTaken ?: System.currentTimeMillis()
@@ -175,9 +377,17 @@ object PhotoManager {
                     val videoFile = File(getPhotoDir(context, id), VIDEO_FILE)
                     val isLivePhoto = videoFile.exists()
 
-                    FileOutputStream(tempExportFile).use { outputStream ->
-                        processedBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                    val exportWriteElapsed = measureTimeMillis {
+                        FileOutputStream(tempExportFile).use { outputStream ->
+                            writeFinalJpeg(
+                                bitmap = processedBitmap,
+                                outputStream = outputStream,
+                                quality = photoQuality,
+                                gainmapResult = if (isLivePhoto) null else gainmapResult
+                            )
+                        }
                     }
+                    PLog.d(TAG, "exportPhoto writeFinalJpeg wrapper took ${exportWriteElapsed}ms")
 
                     ExifWriter.writeExif(
                         tempExportFile, metadata.toCaptureInfo().copy(
@@ -279,6 +489,58 @@ object PhotoManager {
             }
 
             false
+        }
+    }
+
+    private suspend fun exportBitmapToMediaStore(
+        context: Context,
+        id: String,
+        bitmap: Bitmap,
+        metadata: PhotoMetadata,
+        photoQuality: Int,
+        suffix: String?,
+    ): Boolean {
+        val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
+        try {
+            val date = metadata.dateTaken ?: System.currentTimeMillis()
+            val lutName =
+                metadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
+            var withSuffix = suffix?.let { "_$it" } ?: ""
+            lutName?.let { withSuffix += ".$it" }
+            val filename =
+                "PhotonCamera_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(date))}$withSuffix.jpg"
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/PhotonCamera")
+            }
+            val uri = context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                contentValues
+            ) ?: return false
+
+            FileOutputStream(tempExportFile).use { outputStream ->
+                writeFinalJpeg(bitmap, outputStream, photoQuality)
+            }
+            ExifWriter.writeExif(
+                tempExportFile, metadata.toCaptureInfo().copy(
+                    imageWidth = bitmap.width,
+                    imageHeight = bitmap.height
+                )
+            )
+            context.contentResolver.openOutputStream(uri)?.use { output ->
+                tempExportFile.inputStream().use { input -> input.copyTo(output) }
+            }
+
+            val currentMetadata = loadMetadata(context, id) ?: metadata
+            val updatedMetadata = currentMetadata.copy(
+                exportedUris = currentMetadata.exportedUris + uri.toString()
+            )
+            saveMetadata(context, id, updatedMetadata)
+            PLog.d(TAG, "Exported embedded-gainmap URI saved: $uri for photo $id")
+            return true
+        } finally {
+            tempExportFile.delete()
         }
     }
 
@@ -445,6 +707,7 @@ object PhotoManager {
             val photoFile = File(photoDir, PHOTO_FILE)
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
+            val hdrFile = File(photoDir, HDR_FILE)
 
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
@@ -455,12 +718,18 @@ object PhotoManager {
             PLog.d(TAG, "saveYuvPhoto: ${metadata.width} ${metadata.height} ${metadata.colorSpace.name}")
 
             // YUV 格式：使用 native 处理（包含旋转和裁切）并直接保存为 FP16 JXL
-            val success = image.use {
-                YuvProcessor.processAndSave16(
-                    image, aspectRatio, rotation,
-                    yuvFile.absolutePath, previewBitmap
-                )
+            var success = false
+            val nativeSaveElapsed = measureTimeMillis {
+                success = image.use {
+                    YuvProcessor.processAndSave16(
+                        image, aspectRatio, rotation,
+                        yuvFile.absolutePath,
+                        hdrSidecarPath = if (metadata.dynamicRangeProfile == "HLG10") hdrFile.absolutePath else null,
+                        previewBitmap = previewBitmap
+                    )
+                }
             }
+            PLog.d(TAG, "saveYuvPhoto processAndSave16 took ${nativeSaveElapsed}ms, success=$success")
 
             if (metadata.isMirrored) {
                 previewBitmap = BitmapUtils.flipHorizontal(previewBitmap)
@@ -468,10 +737,18 @@ object PhotoManager {
 
             if (success) {
                 FileOutputStream(tempFile).use { outputStream ->
-                    previewBitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                    writeFinalJpeg(previewBitmap, outputStream, photoQuality)
                 }
                 tempFile.renameTo(photoFile)
                 generateBokehPhoto(context, photoId, metadata, previewBitmap)
+                queueDetailHdrCacheBuild(
+                    context = context,
+                    photoId = photoId,
+                    metadata = metadata,
+                    sharpening = sharpeningValue,
+                    noiseReduction = noiseReductionValue,
+                    chromaNoiseReduction = chromaNoiseReductionValue
+                )
                 if (shouldAutoSave) {
                     exportPhoto(
                         context,
@@ -554,9 +831,17 @@ object PhotoManager {
             }
 
             FileOutputStream(tempFile).use { outputStream ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
+            queueDetailHdrCacheBuild(
+                context = context,
+                photoId = photoId,
+                metadata = metadata,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue
+            )
             if (shouldAutoSave) {
                 exportPhoto(
                     context,
@@ -662,9 +947,17 @@ object PhotoManager {
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             FileOutputStream(tempFile).use { outputStream ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
+            queueDetailHdrCacheBuild(
+                context = context,
+                photoId = photoId,
+                metadata = metadata,
+                sharpening = sharpeningValue,
+                noiseReduction = noiseReductionValue,
+                chromaNoiseReduction = chromaNoiseReductionValue
+            )
 
             if (shouldAutoSave) {
                 exportPhoto(
@@ -906,7 +1199,7 @@ object PhotoManager {
 
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->
-                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                writeFinalJpeg(result, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
             // Auto Save
@@ -1049,7 +1342,7 @@ object PhotoManager {
             } ?: return@withContext
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->
-                result.compress(Bitmap.CompressFormat.JPEG, photoQuality, outputStream)
+                writeFinalJpeg(result, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
             // Auto Save
@@ -1465,37 +1758,61 @@ object PhotoManager {
         if (!yuvFile.exists()) {
             return null
         }
-        return YuvProcessor.loadCompressedArgb(yuvFile.absolutePath)
+        val start = System.currentTimeMillis()
+        return YuvProcessor.loadCompressedArgb(yuvFile.absolutePath).also {
+            PLog.d(TAG, "loadYuvData took ${System.currentTimeMillis() - start}ms, success=${it != null}")
+        }
     }
 
-    fun loadBitmap(context: Context, photoId: String, maxEdge: Int? = null): Bitmap? {
+    fun loadHdrData(context: Context, photoId: String): ByteBuffer? {
+        val hdrFile = getHdrFile(context, photoId)
+        if (!hdrFile.exists()) {
+            return null
+        }
+        return try {
+            val bytes = hdrFile.readBytes()
+            ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
+                put(bytes)
+                rewind()
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load HDR sidecar", e)
+            null
+        }
+    }
+
+    fun loadBitmap(context: Context, photoId: String, maxEdge: Int? = null, preserveHdr: Boolean = false): Bitmap? {
         val bokehFile = getBokehFile(context, photoId)
         if (bokehFile.exists()) {
-            return loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
+            return loadBitmap(context, Uri.fromFile(bokehFile), maxEdge, preserveHdr)
         }
         val photoFile = getPhotoFile(context, photoId)
         if (!photoFile.exists()) {
             return null
         }
-        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge)
+        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge, preserveHdr)
     }
 
-    fun loadOriginalBitmap(context: Context, photoId: String, maxEdge: Int? = null): Bitmap? {
+    fun loadOriginalBitmap(context: Context, photoId: String, maxEdge: Int? = null, preserveHdr: Boolean = false): Bitmap? {
         val photoFile = getPhotoFile(context, photoId)
         if (!photoFile.exists()) {
             return null
         }
-        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge)
+        return loadBitmap(context, Uri.fromFile(photoFile), maxEdge, preserveHdr)
     }
 
-    fun loadBitmap(context: Context, uri: Uri, maxEdge: Int? = null): Bitmap? {
+    fun loadBitmap(context: Context, uri: Uri, maxEdge: Int? = null, preserveHdr: Boolean = false): Bitmap? {
         var infoSize: android.util.Size? = null
         var infoMimeType: String? = null
         val source = ImageDecoder.createSource(context.contentResolver, uri)
 
         val bitmap = runCatching {
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                if (preserveHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    decoder.allocator = ImageDecoder.ALLOCATOR_HARDWARE
+                } else {
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                }
                 // 记录原始信息
                 infoSize = info.size
                 infoMimeType = info.mimeType
@@ -1548,6 +1865,11 @@ object PhotoManager {
         } catch (e: Exception) {
             bitmap
         }
+    }
+
+    private fun detectEmbeddedGainmap(context: Context, photoFile: File): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE || !photoFile.exists()) return false
+        return hasBitmapGainmap(loadBitmap(context, Uri.fromFile(photoFile), preserveHdr = true))
     }
 
 
@@ -1605,6 +1927,7 @@ object PhotoManager {
                 // 1. 检测是否为 RAW 文件
                 val mimeType = context.contentResolver.getType(uri)
                 val fileName = getFileName(context, uri) ?: ""
+                val userPrefs = ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
                 val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
                         mimeType?.contains("dng", ignoreCase = true) == true ||
                         fileName.endsWith(".dng", ignoreCase = true) ||
@@ -1646,6 +1969,7 @@ object PhotoManager {
                             width = processedBitmap.width,
                             height = processedBitmap.height,
                             rotation = 0,
+                            manualHdrEffectEnabled = userPrefs?.autoEnableHdrForHdrCapture ?: true,
                         )
                         metadataFile.writeText(updatedMetadata.toJson())
                         if (updatedMetadata.computationalAperture != null) {
@@ -1662,6 +1986,17 @@ object PhotoManager {
                     // --- 常规 JPEG 处理逻辑 ---
                     // 传递元数据确保旋转信息被正确处理
                     tempImportJpeg(uri, context, metadata, photoFile, metadataFile, thumbnailFile)
+                    val currentMetadata = loadMetadata(context, photoId) ?: metadata
+                    val hasEmbeddedGainmap = detectEmbeddedGainmap(context, photoFile)
+                    val updatedMetadata = currentMetadata.copy(
+                        hasEmbeddedGainmap = hasEmbeddedGainmap,
+                        manualHdrEffectEnabled = if (hasEmbeddedGainmap) {
+                            true
+                        } else {
+                            userPrefs?.autoEnableHdrForSdrPhotos ?: false
+                        }
+                    )
+                    saveMetadata(context, photoId, updatedMetadata)
                     if (metadata.computationalAperture != null) {
                         val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
                         if (bitmap != null) {
@@ -1681,6 +2016,16 @@ object PhotoManager {
                         saveMetadata(context, photoId, metadata.copy(presentationTimestampUs = timestampUs))
                     }
                 }
+
+                val importedMetadata = loadMetadata(context, photoId) ?: metadata
+                queueDetailHdrCacheBuild(
+                    context = context,
+                    photoId = photoId,
+                    metadata = importedMetadata,
+                    sharpening = importedMetadata.sharpening ?: 0f,
+                    noiseReduction = importedMetadata.noiseReduction ?: 0f,
+                    chromaNoiseReduction = importedMetadata.chromaNoiseReduction ?: 0f
+                )
 
                 PLog.d(TAG, "Photo imported: $photoId (isRaw: $isRaw)")
                 photoId

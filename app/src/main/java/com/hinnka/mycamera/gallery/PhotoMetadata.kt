@@ -72,6 +72,9 @@ data class PhotoMetadata(
     val software: String? = null,
     val isMirrored: Boolean = false,
     val colorSpace: ColorSpace.Named = ColorSpace.Named.SRGB,
+    val manualHdrEffectEnabled: Boolean = false,
+    val hasEmbeddedGainmap: Boolean = false,
+    val dynamicRangeProfile: String? = null,
     val captureMode: String? = null,
     val multipleExposureFrameCount: Int? = null
 ) {
@@ -252,6 +255,9 @@ data class PhotoMetadata(
             put("software", software ?: JSONObject.NULL)
             put("isMirrored", isMirrored)
             put("colorSpace", colorSpace.name)
+            put("manualHdrEffectEnabled", manualHdrEffectEnabled)
+            put("hasEmbeddedGainmap", hasEmbeddedGainmap)
+            put("dynamicRangeProfile", dynamicRangeProfile ?: JSONObject.NULL)
             put("captureMode", captureMode ?: JSONObject.NULL)
             put("multipleExposureFrameCount", multipleExposureFrameCount ?: JSONObject.NULL)
         }.toString(2)
@@ -424,6 +430,9 @@ data class PhotoMetadata(
                             it
                         )
                     } ?: ColorSpace.Named.SRGB,
+                    manualHdrEffectEnabled = obj.optBoolean("manualHdrEffectEnabled", false),
+                    hasEmbeddedGainmap = obj.optBoolean("hasEmbeddedGainmap", false),
+                    dynamicRangeProfile = if (obj.isNull("dynamicRangeProfile")) null else obj.optString("dynamicRangeProfile"),
                     captureMode = if (obj.isNull("captureMode")) null else obj.optString("captureMode"),
                     multipleExposureFrameCount = if (obj.isNull("multipleExposureFrameCount")) null else obj.optInt("multipleExposureFrameCount"),
                 )

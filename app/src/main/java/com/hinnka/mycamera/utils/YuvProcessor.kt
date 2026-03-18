@@ -69,6 +69,7 @@ object YuvProcessor {
         aspectRatio: AspectRatio,
         rotation: Int,
         outputPath: String,
+        hdrSidecarPath: String? = null,
         previewBitmap: Bitmap
     ): Boolean {
         val planes = image.planes
@@ -93,7 +94,7 @@ object YuvProcessor {
             width, height,
             yRowStride, uvRowStride, uvPixelStride,
             rotation, aspectRatio.widthRatio, aspectRatio.heightRatio, format,
-            outputPath, previewBitmap
+            outputPath, hdrSidecarPath, previewBitmap
         )
     }
 
@@ -178,6 +179,7 @@ object YuvProcessor {
         targetHR: Int,
         format: Int,
         outputPath: String,
+        hdrSidecarPath: String?,
         previewBitmap: Bitmap
     ): Boolean
 

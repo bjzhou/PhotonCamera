@@ -5,6 +5,7 @@
  */
 #include <algorithm>
 #include <android/bitmap.h>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <jni.h>
@@ -145,6 +146,21 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
 
   Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
   return gamutToXYZD50.invert();
+}
+
+static inline float hlgToLinear(float value) {
+  constexpr float kHlgA = 0.17883277f;
+  constexpr float kHlgB = 0.28466892f;
+  constexpr float kHlgC = 0.55991073f;
+  constexpr float kHdrReferenceScale = 6.0f;
+
+  const float v = std::max(0.0f, std::min(1.0f, value));
+  const float linear = (v <= 0.5f)
+                           ? (v * v) / 3.0f
+                           : static_cast<float>(
+                                 (std::exp((v - kHlgC) / kHlgA) + kHlgB) /
+                                 12.0f);
+  return linear * kHdrReferenceScale;
 }
 
 extern "C" {
@@ -518,13 +534,17 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
     JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
     jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
     jint uvPixelStride, jint rotation, jint targetWR, jint targetHR,
-    jint format, jstring outputPath, jobject outBitmap8) {
+    jint format, jstring outputPath, jstring hdrSidecarPath, jobject outBitmap8) {
   const char *path = env->GetStringUTFChars(outputPath, nullptr);
+  const char *hdrPath =
+      hdrSidecarPath ? env->GetStringUTFChars(hdrSidecarPath, nullptr) : nullptr;
 
   // 1. 锁定 Bitmap 地址 (8-bit) 用于预览
   void *bitmapPixels;
   if (AndroidBitmap_lockPixels(env, outBitmap8, &bitmapPixels) < 0) {
     env->ReleaseStringUTFChars(outputPath, path);
+    if (hdrPath)
+      env->ReleaseStringUTFChars(hdrSidecarPath, hdrPath);
     return JNI_FALSE;
   }
   auto *ptr8 = static_cast<uint32_t *>(bitmapPixels);
@@ -538,6 +558,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
     LOGE("Failed to get buffer addresses");
     AndroidBitmap_unlockPixels(env, outBitmap8);
     env->ReleaseStringUTFChars(outputPath, path);
+    if (hdrPath)
+      env->ReleaseStringUTFChars(hdrSidecarPath, hdrPath);
     return JNI_FALSE;
   }
 
@@ -572,6 +594,10 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
 
   // === 转换并存储为 RGB ===
   std::vector<uint16_t> fp16Pixels(finalWidth * finalHeight * 4);
+  std::vector<uint16_t> hdrReferencePixels;
+  if (isP010 && hdrPath) {
+    hdrReferencePixels.resize(finalWidth * finalHeight * 4);
+  }
 
 #pragma omp parallel for num_threads(4)
   for (int y = 0; y < finalHeight; y++) {
@@ -641,6 +667,17 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
 
       int idx = y * finalWidth + x;
 
+      if (!hdrReferencePixels.empty()) {
+        const float hdrR = hlgToLinear(R);
+        const float hdrG = hlgToLinear(G);
+        const float hdrB = hlgToLinear(B);
+        const int hdrIdx = idx * 4;
+        hdrReferencePixels[hdrIdx + 0] = floatToHalf(hdrR);
+        hdrReferencePixels[hdrIdx + 1] = floatToHalf(hdrG);
+        hdrReferencePixels[hdrIdx + 2] = floatToHalf(hdrB);
+        hdrReferencePixels[hdrIdx + 3] = floatToHalf(1.0f);
+      }
+
       // --- 输出 A: UINT16 (保存到本地) ---
       int idx16 = idx * 4;
       fp16Pixels[idx16 + 0] = static_cast<uint16_t>(R * 65535.0f);
@@ -660,10 +697,30 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   AndroidBitmap_unlockPixels(env, outBitmap8);
 
   // 保存为 JXL
-  bool success = saveJxl(fp16Pixels.data(), finalWidth, finalHeight,
-                         JXL_TYPE_UINT16, path);
+  bool success = saveJxl(
+      fp16Pixels.data(), finalWidth, finalHeight, JXL_TYPE_UINT16, path,
+      isP010 ? JxlEncodingProfile::BT2100_HLG : JxlEncodingProfile::ORIGINAL);
+
+  if (success && isP010 && hdrPath) {
+    std::ofstream hdrOut(hdrPath, std::ios::binary);
+    if (!hdrOut) {
+      LOGE("Failed to open HDR sidecar path: %s", hdrPath);
+      success = false;
+    } else {
+      hdrOut.write(reinterpret_cast<const char *>(hdrReferencePixels.data()),
+                   static_cast<std::streamsize>(hdrReferencePixels.size() *
+                                                sizeof(uint16_t)));
+      hdrOut.close();
+      if (!hdrOut.good()) {
+        LOGE("Failed to write HDR sidecar: %s", hdrPath);
+        success = false;
+      }
+    }
+  }
 
   env->ReleaseStringUTFChars(outputPath, path);
+  if (hdrPath)
+    env->ReleaseStringUTFChars(hdrSidecarPath, hdrPath);
   return success ? JNI_TRUE : JNI_FALSE;
 }
 

@@ -187,10 +187,12 @@ data class CameraState(
     val applyUltraHDR: Boolean = true,
     val useP010: Boolean = false,
     val isP010Supported: Boolean = false,
+    val isHlg10Supported: Boolean = false,
     val burstCapturing: Boolean = false,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val isP3Supported: Boolean = false,
+    val currentDynamicRangeProfile: String = "STANDARD",
 ) {
     /**
      * 是否全自动曝光

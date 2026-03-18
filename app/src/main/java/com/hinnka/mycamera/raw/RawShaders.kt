@@ -236,6 +236,28 @@ object RawShaders {
     """.trimIndent()
 
     /**
+     * HDR Reference Shader
+     *
+     * 对线性输入仅应用共享曝光归一化，不做 SDR tone mapping，
+     * 供后续 gainmap 计算使用。
+     */
+    val HDR_REFERENCE_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uInputTexture;
+        uniform float uExposureGain;
+
+        void main() {
+            vec3 color = texture(uInputTexture, vTexCoord).rgb * uExposureGain;
+            fragColor = vec4(max(color, vec3(0.0)), 1.0);
+        }
+    """.trimIndent()
+
+    /**
      * 绘制顺序索引
      */
     val DRAW_ORDER = shortArrayOf(

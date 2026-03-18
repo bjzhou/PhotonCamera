@@ -22,6 +22,8 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.hdr.UltraHdrWriter
+import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
@@ -59,6 +61,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val contentRepository = ContentRepository.getInstance(application)
 
     private val repository = contentRepository.galleryRepository
+    private val detailGainmapProducer = UnifiedGainmapProducer()
 
     // 用户偏好设置仓库
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
@@ -213,6 +216,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val previewBitmapCache = object : LruCache<String, Bitmap>(
         // 限制缓存大小为可用内存的 1/8
         (Runtime.getRuntime().maxMemory() / 8).toInt()
+    ) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return value.allocationByteCount
+        }
+    }
+
+    private val detailBitmapCache = object : LruCache<String, Bitmap>(
+        (Runtime.getRuntime().maxMemory() / 12).toInt()
     ) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return value.allocationByteCount
@@ -1435,6 +1446,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun detailCacheKey(photoData: PhotoData, metadata: PhotoMetadata, showOrigin: Boolean): String {
+        return "detail_${previewCacheKey(photoData, metadata, showOrigin)}"
+    }
+
+    private fun shouldUseHdrDetail(photoId: String, metadata: PhotoMetadata): Boolean {
+        return metadata.manualHdrEffectEnabled
+    }
+
     /**
      * 清除指定照片的预览缓存
      */
@@ -1442,6 +1461,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val snapshot = previewBitmapCache.snapshot()
         snapshot.keys.filter { it.startsWith("${photoId}_") }.forEach {
             previewBitmapCache.remove(it)
+        }
+        val detailSnapshot = detailBitmapCache.snapshot()
+        detailSnapshot.keys.filter { it.contains("detail_${photoId}_") }.forEach {
+            detailBitmapCache.remove(it)
         }
     }
 
@@ -1560,6 +1583,182 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    suspend fun getDetailBitmap(
+        photo: PhotoData,
+        showOrigin: Boolean = false,
+    ): Bitmap? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val metadata =
+                    photo.metadata
+                        ?: photo.relatedPhoto?.metadata
+                        ?: PhotoManager.loadMetadata(getApplication(), photo.id)
+                        ?: PhotoMetadata()
+
+                val detailCacheKey = detailCacheKey(photo, metadata, showOrigin)
+                val shouldUseHdrDetail = shouldUseHdrDetail(photo.id, metadata)
+
+                // HDR detail must be derived from the original render path, not bokeh.jpg,
+                // otherwise SDR bokeh cache would override HDR-capable sources.
+
+                if (showOrigin) {
+                    val originalBitmap = if (selectedTab == GalleryTab.PHOTON) {
+                        PhotoManager.loadOriginalBitmap(context, photo.id, preserveHdr = true)
+                    } else {
+                        PhotoManager.loadBitmap(context, photo.id, preserveHdr = true)
+                            ?: PhotoManager.loadBitmap(context, photo.uri, preserveHdr = true)
+                    }
+                    originalBitmap?.let { detailBitmapCache.put(detailCacheKey, it) }
+                    return@withContext originalBitmap
+                }
+
+                if (!shouldUseHdrDetail) {
+                    return@withContext getPreviewBitmap(photo, showOrigin = false)
+                }
+
+                if (shouldUseHdrDetail) {
+                    val cachedDetail = detailBitmapCache.get(detailCacheKey)
+                    if (cachedDetail != null && !cachedDetail.isRecycled) {
+                        PLog.d(TAG, "getDetailBitmap: hit detail cache for ${photo.id}")
+                        return@withContext cachedDetail
+                    }
+
+                    val detailFile = PhotoManager.getDetailHdrFile(context, photo.id)
+                    if (detailFile.exists()) {
+                        val diskCached = PhotoManager.loadBitmap(context, Uri.fromFile(detailFile), preserveHdr = true)
+                        if (diskCached != null) {
+                            detailBitmapCache.put(detailCacheKey, diskCached)
+                            PLog.d(
+                                TAG,
+                                "getDetailBitmap: using disk detail HDR cache for ${photo.id}, hasGainmap=${UltraHdrWriter.hasGainmap(diskCached)}"
+                            )
+                            return@withContext diskCached
+                        }
+                    }
+                }
+
+                val embeddedHdrBitmap = if (selectedTab == GalleryTab.PHOTON) {
+                    PhotoManager.loadOriginalBitmap(context, photo.id, preserveHdr = true)
+                } else {
+                    PhotoManager.loadBitmap(context, photo.id, preserveHdr = true)
+                        ?: PhotoManager.loadBitmap(context, photo.uri, preserveHdr = true)
+                }
+                if (UltraHdrWriter.hasGainmap(embeddedHdrBitmap)) {
+                    PLog.d(TAG, "getDetailBitmap: using embedded gainmap bitmap for ${photo.id}")
+                    embeddedHdrBitmap?.let { detailBitmapCache.put(detailCacheKey, it) }
+                    return@withContext embeddedHdrBitmap
+                }
+
+                val canReuseEmbeddedGainmap =
+                    metadata.hasEmbeddedGainmap &&
+                        metadata.lutId == null &&
+                        metadata.colorRecipeParams == null &&
+                        metadata.sharpening == null &&
+                        metadata.noiseReduction == null &&
+                        metadata.chromaNoiseReduction == null &&
+                        metadata.frameId == null &&
+                        metadata.cropRegion == null &&
+                        metadata.postCropRegion == null &&
+                        metadata.computationalAperture == null
+                if (canReuseEmbeddedGainmap) {
+                    val reusedBitmap = if (selectedTab == GalleryTab.PHOTON) {
+                        PhotoManager.loadOriginalBitmap(context, photo.id, preserveHdr = true)
+                    } else {
+                        PhotoManager.loadBitmap(context, photo.id, preserveHdr = true)
+                            ?: PhotoManager.loadBitmap(context, photo.uri, preserveHdr = true)
+                    }
+                    reusedBitmap?.let { detailBitmapCache.put(detailCacheKey, it) }
+                    return@withContext reusedBitmap
+                }
+
+                val finalS = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
+                val finalNR = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
+                val finalCNR = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+
+                val ultraHdrSource = contentRepository.photoProcessor.prepareUltraHdrSource(
+                    context = context,
+                    photoId = photo.id,
+                    metadata = metadata,
+                    sharpening = finalS,
+                    noiseReduction = finalNR,
+                    chromaNoiseReduction = finalCNR
+                )
+                if (ultraHdrSource != null) {
+                    val gainmapResult = detailGainmapProducer.build(ultraHdrSource)
+                    if (gainmapResult != null) {
+                        val attached = UltraHdrWriter.attachGainmap(ultraHdrSource.sdrBase, gainmapResult.payload)
+                        PLog.d(
+                            TAG,
+                            "getDetailBitmap: built HDR detail for ${photo.id}, source=${ultraHdrSource.sourceKind}, attach=$attached, hasGainmap=${UltraHdrWriter.hasGainmap(ultraHdrSource.sdrBase)}"
+                        )
+                        PhotoManager.queueDetailHdrCacheBuild(
+                            context = context,
+                            photoId = photo.id,
+                            metadata = metadata,
+                            sharpening = finalS,
+                            noiseReduction = finalNR,
+                            chromaNoiseReduction = finalCNR
+                        )
+                    } else {
+                        PLog.d(
+                            TAG,
+                            "getDetailBitmap: no gainmap result for ${photo.id}, source=${ultraHdrSource.sourceKind}"
+                        )
+                    }
+                    detailBitmapCache.put(detailCacheKey, ultraHdrSource.sdrBase)
+                    return@withContext ultraHdrSource.sdrBase
+                }
+
+                PLog.d(TAG, "getDetailBitmap: fallback to preview for ${photo.id}")
+                val fallback = getPreviewBitmap(photo, showOrigin = false)
+                fallback?.let { detailBitmapCache.put(detailCacheKey, it) }
+                return@withContext fallback
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to create detail bitmap", e)
+                null
+            }
+        }
+    }
+
+    fun shouldPrioritizeDetailBitmap(photo: PhotoData, showOrigin: Boolean = false): Boolean {
+        if (showOrigin) return true
+        val context = getApplication<Application>()
+        val metadata =
+            photo.metadata
+                ?: photo.relatedPhoto?.metadata
+                ?: PhotoMetadata()
+        if (!shouldUseHdrDetail(photo.id, metadata)) {
+            return false
+        }
+        val detailCacheKey = detailCacheKey(photo, metadata, showOrigin)
+        val cachedDetail = detailBitmapCache.get(detailCacheKey)
+        if (cachedDetail != null && !cachedDetail.isRecycled) {
+            return true
+        }
+        if (PhotoManager.getDetailHdrFile(context, photo.id).exists()) {
+            return true
+        }
+        return metadata.hasEmbeddedGainmap
+    }
+
+    fun prefetchDetailBitmap(photo: PhotoData, showOrigin: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: PhotoMetadata()
+                if (showOrigin || shouldUseHdrDetail(photo.id, metadata)) {
+                    getDetailBitmap(photo, showOrigin)
+                }
+            }.onFailure {
+                if (it !is CancellationException) {
+                    PLog.w(TAG, "Failed to prefetch detail bitmap for ${photo.id}", it)
+                }
+            }
+        }
+    }
+
     /**
      * 保存编辑（只更新元数据，不修改原图）
      */
@@ -1655,6 +1854,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                     exitEditMode()
                     invalidatePreviewCache(targetPhotoId)
+                    PhotoManager.deleteDetailHdrFile(context, targetPhotoId)
+                    PhotoManager.queueDetailHdrCacheBuild(
+                        context = context,
+                        photoId = targetPhotoId,
+                        metadata = metadata,
+                        sharpening = metadata.sharpening ?: 0f,
+                        noiseReduction = metadata.noiseReduction ?: 0f,
+                        chromaNoiseReduction = metadata.chromaNoiseReduction ?: 0f
+                    )
                 }
                 onComplete(success)
             } catch (e: Exception) {
@@ -1889,6 +2097,69 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to estimate brightness", e)
             0f
+        }
+    }
+
+    fun canToggleManualHdrEnhance(photo: PhotoData): Boolean {
+        val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: return false
+        return metadata.hasEmbeddedGainmap ||
+            metadata.dynamicRangeProfile == "HLG10" ||
+            PhotoManager.getDngFile(getApplication(), photo.id).exists() ||
+            PhotoManager.getPhotoFile(getApplication(), photo.id).exists()
+    }
+
+    fun isManualHdrEnhanceEnabled(photo: PhotoData): Boolean {
+        val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: return false
+        return metadata.manualHdrEffectEnabled
+    }
+
+    fun toggleManualHdrEnhance(photo: PhotoData, onComplete: (Boolean) -> Unit = {}) {
+        if (!canToggleManualHdrEnhance(photo)) {
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val currentMetadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: run {
+                    onComplete(false)
+                    return@launch
+                }
+                val updatedMetadata = currentMetadata.copy(
+                    manualHdrEffectEnabled = !currentMetadata.manualHdrEffectEnabled
+                )
+                val success = PhotoManager.saveMetadata(context, photo.id, updatedMetadata)
+                if (success) {
+                    val updatedPhotos = _photos.value.map { p ->
+                        if (p.id == photo.id) p.copy(metadata = updatedMetadata) else p
+                    }
+                    _photos.value = updatedPhotos
+                    if (_latestPhoto.value?.id == photo.id) {
+                        _latestPhoto.value = _latestPhoto.value?.copy(metadata = updatedMetadata)
+                    }
+                    if (currentPhotoMetadataId == photo.id) {
+                        currentPhotoMetadata = updatedMetadata
+                    }
+                    invalidatePreviewCache(photo.id)
+                    if (updatedMetadata.manualHdrEffectEnabled) {
+                        PhotoManager.queueDetailHdrCacheBuild(
+                            context = context,
+                            photoId = photo.id,
+                            metadata = updatedMetadata,
+                            sharpening = updatedMetadata.sharpening ?: 0f,
+                            noiseReduction = updatedMetadata.noiseReduction ?: 0f,
+                            chromaNoiseReduction = updatedMetadata.chromaNoiseReduction ?: 0f
+                        )
+                    } else {
+                        PhotoManager.deleteDetailHdrFile(context, photo.id)
+                    }
+                    photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                }
+                onComplete(success)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to toggle manual HDR enhance", e)
+                onComplete(false)
+            }
         }
     }
 }
