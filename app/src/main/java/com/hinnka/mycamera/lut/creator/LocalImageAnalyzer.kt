@@ -41,12 +41,30 @@ object LocalImageAnalyzer {
             if (pairs.isEmpty()) return@withContext LutRecipe()
 
             val mergedControlPoints = buildList {
-                pairs.forEach { (source, target) ->
-                    addAll(extractSourceTargetControlPoints(source, target))
+                pairs.forEachIndexed { index, (source, target) ->
+                    try {
+                        addAll(extractSourceTargetControlPoints(source, target))
+                    } catch (e: Exception) {
+                        PLog.w(
+                            "LocalImageAnalyzer",
+                            "Skipping local pair ${index + 1}: ${e.message}"
+                        )
+                    }
                 }
             }
 
-            return@withContext LutRecipe(mergeNearbyControlPoints(mergedControlPoints))
+            if (mergedControlPoints.isEmpty()) {
+                throw IllegalArgumentException("No valid local image pairs could be matched")
+            }
+
+            val finalControlPoints = mergeNearbyControlPoints(mergedControlPoints)
+            if (finalControlPoints.size < 6) {
+                throw IllegalArgumentException(
+                    "Too few valid control points after skipping invalid image pairs: ${finalControlPoints.size}"
+                )
+            }
+
+            return@withContext LutRecipe(finalControlPoints)
         }
 
     private fun extractSourceTargetControlPoints(source: Bitmap, target: Bitmap): List<ControlPoint> {
@@ -186,7 +204,8 @@ object LocalImageAnalyzer {
                     controlPoints.add(
                         ControlPoint(
                             sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
-                            targetR = targetR, targetG = targetG, targetB = targetB
+                            targetR = targetR, targetG = targetG, targetB = targetB,
+                            matchConfidence = matchedTarget.matchConfidence
                         )
                     )
                 }
@@ -220,6 +239,8 @@ object LocalImageAnalyzer {
                 var sumSR = 0.0;
                 var sumSG = 0.0;
                 var sumSB = 0.0
+                var sumConfidence = 0.0
+                var attemptCount = 0
                 var count = 0
 
                 for (i in 0 until totalPixels) {
@@ -229,14 +250,15 @@ object LocalImageAnalyzer {
 
                     // If the pixel is close to this luminance and is relatively neutral
                     if (abs(sL - targetL) < 0.05f && (sa * sa + sb * sb) < 0.001f) {
-                        val matchedIndex = findBestTargetMatch(
+                        attemptCount++
+                        val matchedPatch = findBestTargetMatch(
                             sourceIndex = i,
                             width = sw,
                             height = sh,
                             sourceLuma = sourceLuma,
                             targetLuma = targetLuma
                         ) ?: continue
-                        val colorT = pixelsT[matchedIndex]
+                        val colorT = pixelsT[matchedPatch.index]
                         val colorS = pixelsS[i]
                         sumTR += Color.red(colorT) / 255f
                         sumTG += Color.green(colorT) / 255f
@@ -244,11 +266,14 @@ object LocalImageAnalyzer {
                         sumSR += Color.red(colorS) / 255f
                         sumSG += Color.green(colorS) / 255f
                         sumSB += Color.blue(colorS) / 255f
+                        sumConfidence += matchedPatch.confidence
                         count++
                     }
                 }
 
                 if (count > 10) { // Only add if we found enough neutral samples to be representative
+                    val matchRatio = if (attemptCount > 0) count.toFloat() / attemptCount else 0f
+                    val averageConfidence = if (count > 0) (sumConfidence / count).toFloat() else 0f
                     controlPoints.add(
                         ControlPoint(
                             sourceR = (sumSR / count).toFloat(),
@@ -256,7 +281,8 @@ object LocalImageAnalyzer {
                             sourceB = (sumSB / count).toFloat(),
                             targetR = (sumTR / count).toFloat(),
                             targetG = (sumTG / count).toFloat(),
-                            targetB = (sumTB / count).toFloat()
+                            targetB = (sumTB / count).toFloat(),
+                            matchConfidence = (averageConfidence * matchRatio).coerceIn(0f, 1f)
                         )
                     )
                 } else {
@@ -271,7 +297,8 @@ object LocalImageAnalyzer {
                                 fallbackL,
                                 fallbackL,
                                 fallbackL,
-                                fallbackL
+                                fallbackL,
+                                1f
                             )
                         )
                     }
@@ -302,13 +329,15 @@ object LocalImageAnalyzer {
                     controlPoints.add(
                         ControlPoint(
                             sourceR = corner[0], sourceG = corner[1], sourceB = corner[2],
-                            targetR = corner[0], targetG = corner[1], targetB = corner[2]
+                            targetR = corner[0], targetG = corner[1], targetB = corner[2],
+                            matchConfidence = 1f
                         )
                     )
                 }
             }
 
-            val monotonicControlPoints = enforceControlPointLuminanceMonotonicity(controlPoints)
+            val prunedControlPoints = pruneLowConfidenceMonotonicViolations(controlPoints)
+            val monotonicControlPoints = enforceControlPointLuminanceMonotonicity(prunedControlPoints)
 
             scaledSource.recycle()
             scaledTarget.recycle()
@@ -321,11 +350,17 @@ object LocalImageAnalyzer {
         val g: Float,
         val b: Float,
         val attemptCount: Int,
-        val matchCount: Int
+        val matchCount: Int,
+        val matchConfidence: Float
     ) {
         val matchRatio: Float
             get() = if (attemptCount > 0) matchCount.toFloat() / attemptCount else 0f
     }
+
+    private data class MatchedPatch(
+        val index: Int,
+        val confidence: Float
+    )
 
     private fun logPairConsistency(source: Bitmap, target: Bitmap) {
         val sourceScaled = source.scaleForConsistency()
@@ -381,13 +416,14 @@ object LocalImageAnalyzer {
         var sumTG = 0.0
         var sumTB = 0.0
         var matchedCount = 0
+        var sumConfidence = 0.0
         val step = max(1, clusterCount / CLUSTER_MATCH_SAMPLE_COUNT)
         var attemptCount = 0
 
         for (sampleIndex in 0 until clusterCount step step) {
             attemptCount++
             val sourceIndex = clusterIndices[sampleIndex]
-            val matchedIndex = findBestTargetMatch(
+            val matchedPatch = findBestTargetMatch(
                 sourceIndex = sourceIndex,
                 width = width,
                 height = height,
@@ -395,10 +431,11 @@ object LocalImageAnalyzer {
                 targetLuma = targetLuma
             ) ?: continue
 
-            val colorT = targetPixels[matchedIndex]
+            val colorT = targetPixels[matchedPatch.index]
             sumTR += Color.red(colorT) / 255f
             sumTG += Color.green(colorT) / 255f
             sumTB += Color.blue(colorT) / 255f
+            sumConfidence += matchedPatch.confidence
             matchedCount++
         }
 
@@ -408,7 +445,8 @@ object LocalImageAnalyzer {
             g = (sumTG / matchedCount).toFloat(),
             b = (sumTB / matchedCount).toFloat(),
             attemptCount = attemptCount,
-            matchCount = matchedCount
+            matchCount = matchedCount,
+            matchConfidence = ((sumConfidence / matchedCount).toFloat() * (matchedCount.toFloat() / attemptCount)).coerceIn(0f, 1f)
         )
     }
 
@@ -418,7 +456,7 @@ object LocalImageAnalyzer {
         height: Int,
         sourceLuma: FloatArray,
         targetLuma: FloatArray
-    ): Int? {
+    ): MatchedPatch? {
         val x = sourceIndex % width
         val y = sourceIndex / width
         if (
@@ -457,7 +495,14 @@ object LocalImageAnalyzer {
                 }
             }
         }
-        return if (bestScore <= MAX_PATCH_MATCH_SCORE) bestIndex else null
+        return if (bestScore <= MAX_PATCH_MATCH_SCORE && bestIndex != null) {
+            MatchedPatch(
+                index = bestIndex,
+                confidence = (1f - (bestScore / MAX_PATCH_MATCH_SCORE)).coerceIn(0f, 1f)
+            )
+        } else {
+            null
+        }
     }
 
     private fun patchDifferenceScore(
@@ -626,6 +671,29 @@ object LocalImageAnalyzer {
         return adjustedByOriginalIndex.map { it!! }
     }
 
+    private fun pruneLowConfidenceMonotonicViolations(
+        controlPoints: List<ControlPoint>
+    ): List<ControlPoint> {
+        if (controlPoints.size < 2) return controlPoints
+
+        val sorted = controlPoints.sortedBy { lumaFromRgb(it.sourceR, it.sourceG, it.sourceB) }.toMutableList()
+        var index = 1
+        while (index < sorted.size) {
+            val previous = sorted[index - 1]
+            val current = sorted[index]
+            val previousTargetLuma = lumaFromRgb(previous.targetR, previous.targetG, previous.targetB)
+            val currentTargetLuma = lumaFromRgb(current.targetR, current.targetG, current.targetB)
+            if (currentTargetLuma + 1e-4f < previousTargetLuma) {
+                val removeCurrent = current.matchConfidence <= previous.matchConfidence
+                sorted.removeAt(if (removeCurrent) index else index - 1)
+                index = max(1, index - 1)
+            } else {
+                index++
+            }
+        }
+        return sorted
+    }
+
     private fun adjustTargetLuma(
         point: ControlPoint,
         currentLuma: Float,
@@ -662,14 +730,7 @@ object LocalImageAnalyzer {
                             (p.sourceB - fp.sourceB).let { it * it }
                 )
                 if (dist < 0.05f) {
-                    finalPoints[i] = ControlPoint(
-                        sourceR = (p.sourceR + fp.sourceR) / 2f,
-                        sourceG = (p.sourceG + fp.sourceG) / 2f,
-                        sourceB = (p.sourceB + fp.sourceB) / 2f,
-                        targetR = (p.targetR + fp.targetR) / 2f,
-                        targetG = (p.targetG + fp.targetG) / 2f,
-                        targetB = (p.targetB + fp.targetB) / 2f
-                    )
+                    finalPoints[i] = resolveNearbyControlPointConflict(fp, p)
                     merged = true
                     break
                 }
@@ -677,6 +738,33 @@ object LocalImageAnalyzer {
             if (!merged) finalPoints.add(p)
         }
         return finalPoints
+    }
+
+    private fun resolveNearbyControlPointConflict(
+        first: ControlPoint,
+        second: ControlPoint
+    ): ControlPoint {
+        val firstTargetLuma = lumaFromRgb(first.targetR, first.targetG, first.targetB)
+        val secondTargetLuma = lumaFromRgb(second.targetR, second.targetG, second.targetB)
+        val luminanceGap = abs(firstTargetLuma - secondTargetLuma)
+        val confidenceGap = abs(first.matchConfidence - second.matchConfidence)
+
+        if (confidenceGap > 0.1f || luminanceGap > 0.08f) {
+            return if (first.matchConfidence >= second.matchConfidence) first else second
+        }
+
+        val firstWeight = first.matchConfidence.coerceAtLeast(0.05f)
+        val secondWeight = second.matchConfidence.coerceAtLeast(0.05f)
+        val totalWeight = firstWeight + secondWeight
+        return ControlPoint(
+            sourceR = (first.sourceR * firstWeight + second.sourceR * secondWeight) / totalWeight,
+            sourceG = (first.sourceG * firstWeight + second.sourceG * secondWeight) / totalWeight,
+            sourceB = (first.sourceB * firstWeight + second.sourceB * secondWeight) / totalWeight,
+            targetR = (first.targetR * firstWeight + second.targetR * secondWeight) / totalWeight,
+            targetG = (first.targetG * firstWeight + second.targetG * secondWeight) / totalWeight,
+            targetB = (first.targetB * firstWeight + second.targetB * secondWeight) / totalWeight,
+            matchConfidence = max(first.matchConfidence, second.matchConfidence)
+        )
     }
 
     private suspend fun internalAnalyzeImages(bitmaps: List<Bitmap>): LutRecipe = withContext(Dispatchers.Default) {

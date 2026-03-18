@@ -21,5 +21,6 @@ data class ControlPoint(
     val sourceB: Float,
     val targetR: Float,
     val targetG: Float,
-    val targetB: Float
+    val targetB: Float,
+    val matchConfidence: Float = 1f
 )
