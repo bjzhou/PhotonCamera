@@ -41,10 +41,10 @@ layout(set = 0, binding = 0) uniform sampler2D inputRawSampler;
 layout(set = 0, binding = 1, scalar) buffer AlignBuffer { vec2 offsets[]; } alignBuffer;
 layout(set = 0, binding = 2, scalar) buffer KernelParams { vec4 data[]; } kernelParams;
 layout(set = 0, binding = 3, scalar) buffer RobustnessBuffer { float data[]; } outRobustness;
-layout(set = 0, binding = 4, scalar) buffer GreenPhase0 { uvec2 data[]; } greenPhase0;
-layout(set = 0, binding = 5, scalar) buffer GreenPhase1 { uvec2 data[]; } greenPhase1;
-layout(set = 0, binding = 6) uniform sampler2D uLensShadingMap;
-layout(set = 0, binding = 7, scalar) buffer LocalTileMask { float data[]; } localTileMask;
+layout(set = 0, binding = 4, scalar) buffer FlowVarianceBuffer { float data[]; } flowVarianceBuffer;
+layout(set = 0, binding = 5, scalar) buffer GreenPhase0 { uvec2 data[]; } greenPhase0;
+layout(set = 0, binding = 6, scalar) buffer GreenPhase1 { uvec2 data[]; } greenPhase1;
+layout(set = 0, binding = 7) uniform sampler2D uLensShadingMap;
 
 const float kAccumScale = 2048.0;
 
@@ -87,15 +87,6 @@ vec2 sampleFlow(vec2 planeCoord) {
     return mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
 }
 
-float sampleLocalTileWeight(vec2 refPos) {
-    vec2 planeRef = refPos * 0.5;
-    uint tilesX = (pc.planeWidth + 15u) / 16u;
-    uint tileX = min(uint(clamp(floor(planeRef.x / 16.0), 0.0, float(max(tilesX, 1u) - 1u))), max(tilesX, 1u) - 1u);
-    uint tilesY = (pc.planeHeight + 15u) / 16u;
-    uint tileY = min(uint(clamp(floor(planeRef.y / 16.0), 0.0, float(max(tilesY, 1u) - 1u))), max(tilesY, 1u) - 1u);
-    return clamp(localTileMask.data[tileY * tilesX + tileX], 0.0, 1.0);
-}
-
 int getGreenFamily(int cfaPattern, ivec2 samplePos, out int lscIdx) {
     int phase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
     lscIdx = -1;
@@ -115,7 +106,8 @@ int getGreenFamily(int cfaPattern, ivec2 samplePos, out int lscIdx) {
     return -1;
 }
 
-void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val, float robustness) {
+void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val,
+                 float pInlier, float flowVar) {
     vec2 kernelPlanePos = clamp(refPos * 0.5, vec2(0.0), vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
     ivec2 planeIdx = ivec2(round(kernelPlanePos));
     vec4 kParams = kernelParams.data[planeIdx.y * int(pc.planeWidth) + planeIdx.x];
@@ -142,11 +134,14 @@ void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val, float r
             float mahalanobis = OmegaInv.x * d.x * d.x +
                                 (OmegaInv.y * d.x * d.y) * 2.0 +
                                 OmegaInv.z * d.y * d.y;
-            float w = exp(-0.5 * max(mahalanobis, 0.0)) * reconWeight *
-                      robustness * pc.frameWeight;
+            float effectiveSigma2 = 1.0 + 4.0 * flowVar;
+            float inlierWeight = 0.18 + 0.82 * pInlier;
+            float w = inlierWeight *
+                      exp(-0.5 * max(mahalanobis, 0.0) / effectiveSigma2) *
+                      reconWeight * (0.45 + 0.55 * pc.frameWeight);
             if (w <= 0.0) continue;
 
-            uint weightFixed = uint(clamp(w * kAccumScale, 0.0, 4294967040.0));
+            uint weightFixed = max(1u, uint(clamp(w * kAccumScale, 0.0, 4294967040.0)));
             uint sumFixed = uint(clamp(val * w * 65535.0 * kAccumScale, 0.0, 4294967040.0));
             uint localX = uint(outPos.x - int(pc.tileX));
             uint localY = uint(outPos.y - int(pc.tileY));
@@ -189,14 +184,17 @@ void main() {
     vec4 lscGains = texture(uLensShadingMap, lscUV);
     float lscGain = (lscIdx == 1) ? lscGains.g : lscGains.b;
     val = (val * lscGain) / 65535.0;
+    float highlightSuppression = 1.0 - 0.70 * smoothstep(0.78, 0.98, val);
 
     int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth) - 1);
     int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight) - 1);
-    float robustness = 1.0;
+    float pInlier = 1.0;
+    float flowVar = 0.03;
     if (pc.isFirstFrame == 0u) {
-        robustness = outRobustness.data[rY * int(pc.planeWidth) + rX];
+        uint confidenceIdx = rY * int(pc.planeWidth) + rX;
+        pInlier = outRobustness.data[confidenceIdx];
+        flowVar = flowVarianceBuffer.data[confidenceIdx];
     }
-    robustness *= sampleLocalTileWeight(refPos);
-
-    splatSample(family, outCenter, refPos, val, robustness);
+    splatSample(family, outCenter, refPos, val, pInlier * highlightSuppression,
+                flowVar);
 }

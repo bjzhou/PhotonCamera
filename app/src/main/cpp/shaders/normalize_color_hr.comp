@@ -37,6 +37,17 @@ layout(push_constant, scalar) uniform PushConstants {
     float frameWeight;
 } pc;
 
+uvec2 readAccum(int x, int y) {
+    x = clamp(x, 0, int(pc.tileW) - 1);
+    y = clamp(y, 0, int(pc.tileH) - 1);
+    return colorAccum.data[uint(y) * pc.bufferStride + uint(x)];
+}
+
+float accumMean(uvec2 accum) {
+    if (accum.y == 0u) return 0.0;
+    return float(accum.x) / max(float(accum.y), 1.0) / 65535.0;
+}
+
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
@@ -48,7 +59,28 @@ void main() {
     uvec2 accum = colorAccum.data[ty * pc.bufferStride + tx];
     float resLinear = 0.0;
     if (accum.y > 0u) {
-        float val = float(accum.x) / max(float(accum.y), 1.0) / 65535.0;
+        float val = accumMean(accum);
+        float confidence = clamp(float(accum.y) / 768.0, 0.0, 1.0);
+        if (confidence < 0.999) {
+            float neighSum = 0.0;
+            float neighWeight = 0.0;
+            for (int oy = -1; oy <= 1; ++oy) {
+                for (int ox = -1; ox <= 1; ++ox) {
+                    if (ox == 0 && oy == 0) continue;
+                    uvec2 neighAccum = readAccum(int(tx) + ox, int(ty) + oy);
+                    if (neighAccum.y == 0u) continue;
+                    float w = (ox == 0 || oy == 0) ? 1.0 : 0.7;
+                    neighSum += accumMean(neighAccum) * w;
+                    neighWeight += w;
+                }
+            }
+            if (neighWeight > 0.0) {
+                float neighVal = neighSum / neighWeight;
+                float highlightBlend = smoothstep(0.70, 0.96, max(val, neighVal));
+                val = mix(neighVal, val, confidence * (1.0 - 0.55 * highlightBlend));
+            }
+        }
+
         float gain = (pc.planeIndex == 0u) ? pc.wbGains[0] : pc.wbGains[3];
         float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
         resLinear = (val * 65535.0) / (pc.whiteLevel - bl_avg) * gain;

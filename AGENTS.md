@@ -18,10 +18,16 @@
     ./gradlew assembleChinaDebug
     ```
 
-* 通过性验证
+* 通过性验证（kotlin端）
 
     ```
     ./gradlew compileChinaDebugKotlin
+    ```
+
+* 通过性验证（native端）
+
+    ```
+    ./gradlew buildCMakeDebug
     ```
 
 ## 注意

@@ -45,6 +45,10 @@ layout(binding = 2, scalar) buffer AlignmentBuffer {
     vec2 offsets[]; // Alignment (u,v) per tile
 } alignBuffer;
 
+layout(binding = 3, scalar) buffer RobustnessBuffer {
+    float data[];
+} robustnessBuffer;
+
 float getGreenBlock(sampler2D tex, ivec2 planeCoord) {
     int sx = clamp(planeCoord.x * 2, 0, int(pc.sensorWidth) - 2);
     int sy = clamp(planeCoord.y * 2, 0, int(pc.sensorHeight) - 2);
@@ -77,6 +81,23 @@ float sampleGreenProxy(sampler2D tex, vec2 planePos) {
     return mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
 }
 
+float sampleInlier(vec2 planePos) {
+    vec2 clampedPos = clamp(
+        planePos,
+        vec2(0.0),
+        vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
+    ivec2 p0 = ivec2(floor(clampedPos));
+    ivec2 p1 = min(p0 + ivec2(1), ivec2(int(pc.planeWidth) - 1, int(pc.planeHeight) - 1));
+    vec2 f = clampedPos - vec2(p0);
+
+    float r00 = robustnessBuffer.data[p0.y * int(pc.planeWidth) + p0.x];
+    float r10 = robustnessBuffer.data[p0.y * int(pc.planeWidth) + p1.x];
+    float r01 = robustnessBuffer.data[p1.y * int(pc.planeWidth) + p0.x];
+    float r11 = robustnessBuffer.data[p1.y * int(pc.planeWidth) + p1.x];
+    float r = mix(mix(r00, r10, f.x), mix(r01, r11, f.x), f.y);
+    return clamp(r, 0.0, 1.0);
+}
+
 void main() {
     uint gx = gl_GlobalInvocationID.x;
     uint gy = gl_GlobalInvocationID.y;
@@ -104,63 +125,52 @@ void main() {
     float sIxIy = 0.0;
     float sIxIt = 0.0;
     float sIyIt = 0.0;
-    
-    uint tileW = pc.tileSize; // e.g. 16 (in plane pixels, so 32 raw pixels)
-    uint tileH = pc.tileSize;
-    
-    // Top-Left of the tile in Plane Coordinates
-    uint startX = gx * tileW;
-    uint startY = gy * tileH;
-    
-    vec2 planeDims = vec2(pc.planeWidth, pc.planeHeight);
-    
-    // Iterate over the tile
-    // Note: LK usually runs largely on gradients of the WARPED image I?
-    // Inverse Compositional vs Forward Additive.
-    // Inverse Compositional: Gradients of T (Base), constant A.
-    // Forward Additive: Gradients of I (Warped), recompute A every iter.
-    // Paper implies Forward Additive ("Iterative LK").
-    // But Inverse Compositional is much faster (precompute A).
-    // However, since we re-run this shader, we can recompute A.
-    // Let's implement Forward Additive for standard correctness.
-    // Gradients of I evaluated at x + p.
-    
-    for (uint y = 0; y < tileH; y++) {
-        for (uint x = 0; x < tileW; x++) {
-             // Coordinate in Plane
-             uint px = startX + x;
-             uint py = startY + y;
-             if (px >= pc.planeWidth || py >= pc.planeHeight) continue;
-             
-             vec2 basePoint = vec2(px, py);
-             
-             // 1. Sample Base Frame T(x) — green proxy keeps more text edge energy
+
+    const int windowRadius = 4;
+    const float sigma2 = 10.0;
+    vec2 dX = vec2(1.0, 0.0);
+    vec2 dY = vec2(0.0, 1.0);
+
+    vec2 tileCenter = vec2(float(gx * pc.tileSize + pc.tileSize / 2u),
+                           float(gy * pc.tileSize + pc.tileSize / 2u));
+
+    for (int oy = -windowRadius; oy <= windowRadius; ++oy) {
+        for (int ox = -windowRadius; ox <= windowRadius; ++ox) {
+             vec2 basePoint = tileCenter + vec2(float(ox), float(oy));
+             if (basePoint.x < 1.0 || basePoint.y < 1.0 ||
+                 basePoint.x > float(pc.planeWidth) - 2.0 ||
+                 basePoint.y > float(pc.planeHeight) - 2.0) {
+                 continue;
+             }
+
              float T = sampleGreenProxy(refImg, basePoint);
-             
-             // 2. Sample Current Frame I(x + p) in plane coordinates
              vec2 currentValPoint = basePoint + currentFlow;
              float I = sampleGreenProxy(trgImg, currentValPoint);
-             
-             // 3. Compute Gradient of I at (x + p) using plane-pixel steps
-             // One plane pixel = one 2×2 Bayer block
-             vec2 dX = vec2(1.0, 0.0);
-             vec2 dY = vec2(0.0, 1.0);
-             
-             float I_x = (sampleGreenProxy(trgImg, currentValPoint + dX) - sampleGreenProxy(trgImg, currentValPoint - dX)) * 0.5;
-             float I_y = (sampleGreenProxy(trgImg, currentValPoint + dY) - sampleGreenProxy(trgImg, currentValPoint - dY)) * 0.5;
-             
-             // 4. Temporal Derivative / Error
-             // It = I(x+p) - T(x)
+
+             float I_x = (sampleGreenProxy(trgImg, currentValPoint + dX) -
+                          sampleGreenProxy(trgImg, currentValPoint - dX)) * 0.5;
+             float I_y = (sampleGreenProxy(trgImg, currentValPoint + dY) -
+                          sampleGreenProxy(trgImg, currentValPoint - dY)) * 0.5;
+
+             float T_x = (sampleGreenProxy(refImg, basePoint + dX) -
+                          sampleGreenProxy(refImg, basePoint - dX)) * 0.5;
+             float T_y = (sampleGreenProxy(refImg, basePoint + dY) -
+                          sampleGreenProxy(refImg, basePoint - dY)) * 0.5;
+
+             float refDetail = max(abs(T_x), abs(T_y));
+             float trgDetail = max(abs(I_x), abs(I_y));
+             float detailGate = clamp(max(refDetail, trgDetail) * 18.0, 0.08, 1.0);
+             float spatialW = exp(-0.5 * float(ox * ox + oy * oy) / sigma2);
+             float w = spatialW * detailGate;
+
+             float inlierWeight = 0.25 + 0.75 * sampleInlier(basePoint);
              float It = I - T;
-             
-             // 5. Accumulate System Matrix components
-             sIxIx += I_x * I_x;
-             sIyIy += I_y * I_y;
-             sIxIy += I_x * I_y;
-             
-             // b = - sum ( gradI^T * It )
-             sIxIt += I_x * It;
-             sIyIt += I_y * It;
+             float totalWeight = w * inlierWeight;
+             sIxIx += totalWeight * I_x * I_x;
+             sIyIy += totalWeight * I_y * I_y;
+             sIxIy += totalWeight * I_x * I_y;
+             sIxIt += totalWeight * I_x * It;
+             sIyIt += totalWeight * I_y * It;
         }
     }
     
@@ -173,12 +183,13 @@ void main() {
     // So dp = - A^-1 * [sIxIt, sIyIt]^T
     
     // Determinant
+    float trace = sIxIx + sIyIy;
+    float lambda = max(1e-4, 0.015 * trace + 5e-4);
+    sIxIx += lambda;
+    sIyIy += lambda;
     float det = sIxIx * sIyIy - sIxIy * sIxIy;
     
     vec2 delta = vec2(0.0);
-    
-    // Regularization (Ridge Regression) for stability in flat areas
-    float lambda = 0.01; 
     
     if (det > 1e-7) {
         // Inverse A
@@ -195,7 +206,7 @@ void main() {
     }
     
     // Clamp Motion (Trust Region)
-    float maxJump = 2.0; // Max 2 pixel update per iteration for faster convergence
+    float maxJump = 1.25;
     float len = length(delta);
     if (isnan(len) || isinf(len)) {
         delta = vec2(0.0);

@@ -61,10 +61,11 @@ layout(set = 0, binding = 4, scalar) buffer RobustnessBuffer {
     float data[]; 
 } outRobustness;
 
-layout(set = 0, binding = 5) uniform sampler2D uLensShadingMap;
-layout(set = 0, binding = 6, scalar) buffer LocalTileMask {
+layout(set = 0, binding = 5, scalar) buffer FlowVarianceBuffer {
     float data[];
-} localTileMask;
+} flowVarianceBuffer;
+
+layout(set = 0, binding = 6) uniform sampler2D uLensShadingMap;
 
 float cubicWeight(float x) {
     x = abs(x);
@@ -151,15 +152,6 @@ vec3 getKernelMatrix(vec4 params) {
     return vec3(a, b, c_val);
 }
 
-float sampleLocalTileWeight(vec2 rawPos) {
-    vec2 planePos = rawPos * 0.5;
-    uint tilesX = (pc.planeWidth + 15u) / 16u;
-    uint tilesY = (pc.planeHeight + 15u) / 16u;
-    uint tileX = min(uint(clamp(floor(planePos.x / 16.0), 0.0, float(max(tilesX, 1u) - 1u))), max(tilesX, 1u) - 1u);
-    uint tileY = min(uint(clamp(floor(planePos.y / 16.0), 0.0, float(max(tilesY, 1u) - 1u))), max(tilesY, 1u) - 1u);
-    return clamp(localTileMask.data[tileY * tilesX + tileX], 0.0, 1.0);
-}
-
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
@@ -216,7 +208,6 @@ void main() {
     
     // Projected Center in Input Frame
     vec2 centerPos = vec2(float(outX) / pc.scale, float(outY) / pc.scale) + flowRaw;
-    float localTileWeight = sampleLocalTileWeight(centerPos);
     
     // Reconstruct on the Bayer color lattice instead of averaging over a dense
     // square neighborhood. This preserves sub-pixel sample placement better.
@@ -288,18 +279,24 @@ void main() {
                 int rX = clamp(samplePos.x / 2, 0, int(pc.planeWidth)-1);
                 int rY = clamp(samplePos.y / 2, 0, int(pc.planeHeight)-1);
              
-                float R = 1.0;
+                float pInlier = 1.0;
+                float flowVar = 0.03;
                 if (pc.isFirstFrame == 0) {
-                    R = outRobustness.data[rY * pc.planeWidth + rX];
+                    uint confidenceIdx = rY * pc.planeWidth + rX;
+                    pInlier = outRobustness.data[confidenceIdx];
+                    flowVar = flowVarianceBuffer.data[confidenceIdx];
                 }
              
                 vec2 d_hr = d_raw * pc.scale;
                 float reconWeight = cubicWeight(d_hr.x) * cubicWeight(d_hr.y);
                 if (reconWeight <= 0.0) continue;
-              
-                float w = exp(-0.5 * max(mahalanobis, 0.0)) *
-                          reconWeight * R * pc.frameWeight * familyWeight *
-                          localTileWeight;
+
+                float effectiveSigma2 = 1.0 + 4.0 * flowVar;
+                float inlierWeight = 0.18 + 0.82 * pInlier;
+                float w = inlierWeight *
+                          exp(-0.5 * max(mahalanobis, 0.0) / effectiveSigma2) *
+                          reconWeight * (0.45 + 0.55 * pc.frameWeight) *
+                          familyWeight;
              
                 accumVal += vec2(val * w, w);
             }

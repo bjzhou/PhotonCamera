@@ -100,6 +100,9 @@ private:
   VkBuffer robustnessBuffer = VK_NULL_HANDLE; // Robustness Mask Output
   VkDeviceMemory robustnessMemory = VK_NULL_HANDLE;
 
+  VkBuffer flowVarianceBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory flowVarianceMemory = VK_NULL_HANDLE;
+
   VkBuffer localTileMaskBuffer = VK_NULL_HANDLE;
   VkDeviceMemory localTileMaskMemory = VK_NULL_HANDLE;
 

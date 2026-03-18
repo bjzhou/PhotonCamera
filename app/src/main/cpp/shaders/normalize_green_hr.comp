@@ -92,13 +92,29 @@ void main() {
             float bLinear = float(outputBuffer.data[baseIndex + 2]) / 65535.0;
             float rbMean = 0.5 * (rLinear + bLinear);
             float rbMax = max(rLinear, bLinear);
-            float greenCeiling = max(rbMean * 1.35 + 0.015, rbMax * 1.18 + 0.010);
-            val = mix(val, min(val, greenCeiling), smoothstep(0.20, 0.75, inconsistency));
+            float highlight = smoothstep(0.68, 0.95, max(max(g0, g1), rbMax));
+            val = mix(val, avgVal, 0.35 * highlight);
+            float greenCeiling = mix(max(rbMean * 1.35 + 0.015, rbMax * 1.18 + 0.010),
+                                     max(rbMean * 1.08 + 0.003, rbMax * 1.04 + 0.002),
+                                     highlight);
+            val = mix(val, min(val, greenCeiling),
+                      smoothstep(0.20, 0.75, inconsistency) + 0.55 * highlight);
         } else if (has0) {
             val = g0;
         } else {
             val = g1;
         }
+
+        uint baseIndex = (outY * pc.width + outX) * 3;
+        float rLinear = float(outputBuffer.data[baseIndex + 0]) / 65535.0;
+        float bLinear = float(outputBuffer.data[baseIndex + 2]) / 65535.0;
+        float rbMean = 0.5 * (rLinear + bLinear);
+        float rbMax = max(rLinear, bLinear);
+        float highlight = smoothstep(0.72, 0.97, max(val, rbMax));
+        float singlePhasePenalty = (has0 ^^ has1) ? 1.0 : 0.0;
+        float strictCeiling = max(rbMean * 1.06 + 0.002, rbMax * 1.03 + 0.002);
+        float strictBlend = clamp(0.65 * highlight + 0.35 * singlePhasePenalty, 0.0, 1.0);
+        val = mix(val, min(val, strictCeiling), strictBlend);
 
         float gain = (pc.wbGains[1] + pc.wbGains[2]) * 0.5;
         float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;

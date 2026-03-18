@@ -15,6 +15,10 @@ layout(binding = 3, scalar) buffer RobustnessBuffer {
     float data[];
 } outRobustness;
 
+layout(binding = 4, scalar) buffer FlowVarianceBuffer {
+    float data[];
+} outFlowVariance;
+
 layout(push_constant, scalar) uniform PushConstants {
     uint width;
     uint height;
@@ -177,6 +181,7 @@ void main() {
     float sumRobustness = 0.0;
     float centerRobustness = 1.0;
     float weightSum = 0.0;
+    float centerResidualSq = 0.0;
 
     // Morphological Min Filter (Radius 1 = 3×3 — less aggressive than 5×5)
     for (int dy = -1; dy <= 1; dy++) {
@@ -219,6 +224,7 @@ void main() {
              minRobustness = min(minRobustness, R);
              if (dx == 0 && dy == 0) {
                  centerRobustness = R;
+                 centerResidualSq = d_corrected_sq;
              }
         }
     }
@@ -232,5 +238,20 @@ void main() {
     float robustness = minMix * minRobustness +
                        centerMix * centerRobustness +
                        avgMix * avgRobustness;
-    outRobustness.data[outIdx] = clamp(robustness, 0.0, 1.0);
+    robustness = clamp(robustness, 0.0, 1.0);
+
+    float residualRatio = centerResidualSq / max(sigma2, 1e-8);
+    float structureUncertainty = 1.0 / (0.25 + edgeStrength);
+    float flowSpread = flowRange * flowRange * 0.02;
+    float varianceFromResidual = min(residualRatio, 16.0) * 0.08;
+    float varianceFromFlowMag = max(flowMag - 1.0, 0.0) * 0.03;
+    float flowVariance = clamp(0.03 +
+                               0.18 * structureUncertainty +
+                               flowSpread +
+                               varianceFromResidual +
+                               varianceFromFlowMag,
+                               0.01, 2.5);
+
+    outRobustness.data[outIdx] = robustness;
+    outFlowVariance.data[outIdx] = flowVariance;
 }
