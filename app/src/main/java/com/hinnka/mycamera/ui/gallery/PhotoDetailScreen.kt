@@ -816,7 +816,27 @@ private fun ZoomableImage(
                     isLoading = false
                 }
 
+                if (loadedPreviewBitmap == null) {
+                    if (isActive) {
+                        hasHdr.value = false
+                    }
+                    hdrBitmap = null
+                    hdrVisible = false
+                    isLoading = true
+                    delay(500)
+                    loadBitmap()
+                    return
+                }
+
                 if (!isActive || effectiveShowOrigin) {
+                    return
+                }
+
+                if (!viewModel.shouldPrioritizeDetailBitmap(photo, showOrigin = effectiveShowOrigin)) {
+                    hasHdr.value = UltraHdrWriter.hasGainmap(loadedPreviewBitmap)
+                    hdrBitmap = null
+                    hdrVisible = false
+                    isLoading = false
                     return
                 }
 

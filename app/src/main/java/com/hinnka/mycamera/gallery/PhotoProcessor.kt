@@ -17,6 +17,8 @@ import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.processor.DepthBokehProcessor
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawHdrRenderResult
+import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.Dispatchers
@@ -188,6 +190,81 @@ class PhotoProcessor(
         return hlgImageProcessor.isHlgCapture(metadata)
     }
 
+    suspend fun prepareUltraHdrSourceFromRawResult(
+        context: Context,
+        photoId: String?,
+        rawResult: RawHdrRenderResult,
+        metadata: PhotoMetadata,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f,
+        applyMirror: Boolean = false,
+    ): GainmapSourceSet? = withContext(Dispatchers.IO) {
+        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+        val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
+        val finalChromaNoiseReduction =
+            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
+
+        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
+        val colorRecipeParams = metadata.colorRecipeParams
+            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
+
+        var sdrBitmap = rawResult.sdrBitmap
+        var hdrReferenceBitmap = rawResult.hdrReferenceBitmap
+
+        if (applyMirror && metadata.isMirrored) {
+            sdrBitmap = BitmapUtils.flipHorizontal(sdrBitmap)
+            hdrReferenceBitmap = hdrReferenceBitmap?.let { BitmapUtils.flipHorizontal(it) }
+        }
+
+        metadata.computationalAperture?.let { aperture ->
+            sdrBitmap = depthBokehProcessor.applyHighQualityBokeh(
+                context,
+                photoId,
+                sdrBitmap,
+                metadata.focusPointX,
+                metadata.focusPointY,
+                aperture
+            )
+            hdrReferenceBitmap = hdrReferenceBitmap?.let {
+                depthBokehProcessor.applyHighQualityBokeh(
+                    context,
+                    photoId,
+                    it,
+                    metadata.focusPointX,
+                    metadata.focusPointY,
+                    aperture
+                )
+            }
+            photoId?.let { id -> PhotoManager.saveBokehPhoto(context, id, sdrBitmap) }
+        }
+
+        sdrBitmap = lutImageProcessor.applyLut(
+            sdrBitmap,
+            lutConfig,
+            colorRecipeParams,
+            finalSharpening,
+            finalNoiseReduction,
+            finalChromaNoiseReduction
+        )
+
+        sdrBitmap = applyCrop(sdrBitmap, metadata)
+        sdrBitmap = applyFrame(sdrBitmap, metadata)
+        hdrReferenceBitmap = hdrReferenceBitmap?.let { applyFrame(applyCrop(it, metadata), metadata) }
+
+        GainmapSourceSet(
+            sdrBase = sdrBitmap,
+            hdrReference = hdrReferenceBitmap?.let {
+                HdrBuffer(
+                    bitmap = it,
+                    description = "raw_scene_normalized"
+                )
+            },
+            sourceKind = SourceKind.RAW,
+            confidence = 0.8f
+        )
+    }
+
     suspend fun process(
         context: Context, photoId: String, metadata: PhotoMetadata,
         sharpening: Float = 0f,
@@ -244,15 +321,6 @@ class PhotoProcessor(
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): GainmapSourceSet? = withContext(Dispatchers.IO) {
-        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
-        val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-        val finalChromaNoiseReduction =
-            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-
-        val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
-        val colorRecipeParams = metadata.colorRecipeParams
-            ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
-
         val droMode = metadata.droMode?.let {
             runCatching { MeteringSystem.DROMode.valueOf(it) }.getOrDefault(MeteringSystem.DROMode.OFF)
         } ?: MeteringSystem.DROMode.OFF
@@ -267,55 +335,15 @@ class PhotoProcessor(
             sharpeningValue = 0.4f,
             droMode = droMode
         ) ?: return@withContext null
-
-        var sdrBitmap = rawResult.sdrBitmap
-        var hdrReferenceBitmap = rawResult.hdrReferenceBitmap
-
-        metadata.computationalAperture?.let { aperture ->
-            sdrBitmap = depthBokehProcessor.applyHighQualityBokeh(
-                context,
-                photoId,
-                sdrBitmap,
-                metadata.focusPointX,
-                metadata.focusPointY,
-                aperture
-            )
-            hdrReferenceBitmap = hdrReferenceBitmap?.let {
-                depthBokehProcessor.applyHighQualityBokeh(
-                    context,
-                    photoId,
-                    it,
-                    metadata.focusPointX,
-                    metadata.focusPointY,
-                    aperture
-                )
-            }
-            photoId?.let { id -> PhotoManager.saveBokehPhoto(context, id, sdrBitmap) }
-        }
-
-        sdrBitmap = lutImageProcessor.applyLut(
-            sdrBitmap,
-            lutConfig,
-            colorRecipeParams,
-            finalSharpening,
-            finalNoiseReduction,
-            finalChromaNoiseReduction
-        )
-
-        sdrBitmap = applyCrop(sdrBitmap, metadata)
-        sdrBitmap = applyFrame(sdrBitmap, metadata)
-        hdrReferenceBitmap = hdrReferenceBitmap?.let { applyFrame(applyCrop(it, metadata), metadata) }
-
-        GainmapSourceSet(
-            sdrBase = sdrBitmap,
-            hdrReference = hdrReferenceBitmap?.let {
-                HdrBuffer(
-                    bitmap = it,
-                    description = "raw_scene_normalized"
-                )
-            },
-            sourceKind = SourceKind.RAW,
-            confidence = 0.8f
+        prepareUltraHdrSourceFromRawResult(
+            context = context,
+            photoId = photoId,
+            rawResult = rawResult,
+            metadata = metadata,
+            sharpening = sharpening,
+            noiseReduction = noiseReduction,
+            chromaNoiseReduction = chromaNoiseReduction,
+            applyMirror = true
         )
     }
 

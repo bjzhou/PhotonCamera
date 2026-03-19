@@ -334,6 +334,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         // 检查系统相册权限
         checkGalleryPermission()
 
+        viewModelScope.launch {
+            PhotoManager.detailHdrReadyEvents.collect { photoId ->
+                invalidatePreviewCache(photoId)
+                photoRefreshKeys[photoId] = System.currentTimeMillis()
+                PLog.d(TAG, "detail HDR ready, refreshed photo: $photoId")
+            }
+        }
+
         // 订阅 ContentRepository 的 StateFlow，结合用户自定义排序
         viewModelScope.launch {
             contentRepository.availableLuts.combine(
@@ -1617,6 +1625,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext getPreviewBitmap(photo, showOrigin = false)
                 }
 
+                if (PhotoManager.isHdrWorkInFlight(photo.id)) {
+                    PLog.d(TAG, "getDetailBitmap: HDR work in flight for ${photo.id}, using preview fallback")
+                    return@withContext getPreviewBitmap(photo, showOrigin = false)
+                }
+
                 if (shouldUseHdrDetail) {
                     val cachedDetail = detailBitmapCache.get(detailCacheKey)
                     if (cachedDetail != null && !cachedDetail.isRecycled) {
@@ -1672,45 +1685,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext reusedBitmap
                 }
 
-                val finalS = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening.value)
-                val finalNR = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction.value)
-                val finalCNR = metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
-
-                val ultraHdrSource = contentRepository.photoProcessor.prepareUltraHdrSource(
-                    context = context,
-                    photoId = photo.id,
-                    metadata = metadata,
-                    sharpening = finalS,
-                    noiseReduction = finalNR,
-                    chromaNoiseReduction = finalCNR
+                PLog.d(
+                    TAG,
+                    "getDetailBitmap: no ready HDR detail source for ${photo.id}, using preview fallback"
                 )
-                if (ultraHdrSource != null) {
-                    val gainmapResult = detailGainmapProducer.build(ultraHdrSource)
-                    if (gainmapResult != null) {
-                        val attached = UltraHdrWriter.attachGainmap(ultraHdrSource.sdrBase, gainmapResult.payload)
-                        PLog.d(
-                            TAG,
-                            "getDetailBitmap: built HDR detail for ${photo.id}, source=${ultraHdrSource.sourceKind}, attach=$attached, hasGainmap=${UltraHdrWriter.hasGainmap(ultraHdrSource.sdrBase)}"
-                        )
-                        PhotoManager.queueDetailHdrCacheBuild(
-                            context = context,
-                            photoId = photo.id,
-                            metadata = metadata,
-                            sharpening = finalS,
-                            noiseReduction = finalNR,
-                            chromaNoiseReduction = finalCNR
-                        )
-                    } else {
-                        PLog.d(
-                            TAG,
-                            "getDetailBitmap: no gainmap result for ${photo.id}, source=${ultraHdrSource.sourceKind}"
-                        )
-                    }
-                    detailBitmapCache.put(detailCacheKey, ultraHdrSource.sdrBase)
-                    return@withContext ultraHdrSource.sdrBase
-                }
-
-                PLog.d(TAG, "getDetailBitmap: fallback to preview for ${photo.id}")
                 val fallback = getPreviewBitmap(photo, showOrigin = false)
                 fallback?.let { detailBitmapCache.put(detailCacheKey, it) }
                 return@withContext fallback
@@ -1748,7 +1726,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: PhotoMetadata()
-                if (showOrigin || shouldUseHdrDetail(photo.id, metadata)) {
+                if (!showOrigin && PhotoManager.isHdrWorkInFlight(photo.id)) {
+                    PLog.d(TAG, "prefetchDetailBitmap: skip while HDR work is in flight for ${photo.id}")
+                    return@runCatching
+                }
+                if (showOrigin || shouldPrioritizeDetailBitmap(photo, showOrigin)) {
                     getDetailBitmap(photo, showOrigin)
                 }
             }.onFailure {

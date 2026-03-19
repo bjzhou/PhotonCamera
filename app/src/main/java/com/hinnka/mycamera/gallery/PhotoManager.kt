@@ -16,6 +16,7 @@ import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.hdr.GainmapSourceSet
 import com.hinnka.mycamera.hdr.GainmapResult
 import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
@@ -30,6 +31,9 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import com.hinnka.mycamera.utils.YuvProcessor
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.firstOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -68,6 +72,10 @@ object PhotoManager {
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val gainmapProducer = UnifiedGainmapProducer()
     private val detailHdrBuildJobs = ConcurrentHashMap<String, Job>()
+    private val _detailHdrReadyEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    val detailHdrReadyEvents: SharedFlow<String> = _detailHdrReadyEvents.asSharedFlow()
+    private val hdrWorkLock = Any()
+    private val hdrWorkCounts = ConcurrentHashMap<String, Int>()
 
     private fun getPhotosBaseDir(context: Context): File {
         return File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
@@ -131,6 +139,27 @@ object PhotoManager {
 
     fun getDetailHdrFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), DETAIL_HDR_FILE)
+    }
+
+    private fun beginHdrWork(photoId: String) {
+        synchronized(hdrWorkLock) {
+            hdrWorkCounts[photoId] = (hdrWorkCounts[photoId] ?: 0) + 1
+        }
+    }
+
+    private fun endHdrWork(photoId: String) {
+        synchronized(hdrWorkLock) {
+            val nextCount = (hdrWorkCounts[photoId] ?: 1) - 1
+            if (nextCount > 0) {
+                hdrWorkCounts[photoId] = nextCount
+            } else {
+                hdrWorkCounts.remove(photoId)
+            }
+        }
+    }
+
+    fun isHdrWorkInFlight(photoId: String): Boolean {
+        return (hdrWorkCounts[photoId] ?: 0) > 0
     }
 
     fun deleteDetailHdrFile(context: Context, photoId: String) {
@@ -203,8 +232,10 @@ object PhotoManager {
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
-        quality: Int = 92
+        quality: Int = 92,
+        preparedUltraHdrSource: GainmapSourceSet? = null,
     ): Boolean = withContext(Dispatchers.IO) {
+        beginHdrWork(photoId)
         try {
             val resolvedMetadata = metadata ?: loadMetadata(context, photoId) ?: return@withContext false
             if (!resolvedMetadata.manualHdrEffectEnabled) {
@@ -218,7 +249,7 @@ object PhotoManager {
             val tempFile = File(detailFile.parentFile, "detail_hdr_temp.jpg")
 
             val photoProcessor = ContentRepository.getInstance(context).photoProcessor
-            val ultraHdrSource = photoProcessor.prepareUltraHdrSource(
+            val ultraHdrSource = preparedUltraHdrSource ?: photoProcessor.prepareUltraHdrSource(
                 context = context,
                 photoId = photoId,
                 metadata = resolvedMetadata,
@@ -226,6 +257,9 @@ object PhotoManager {
                 noiseReduction = noiseReduction,
                 chromaNoiseReduction = chromaNoiseReduction
             )
+            if (preparedUltraHdrSource != null) {
+                PLog.d(TAG, "buildDetailHdrCache reusing prepared HDR source for $photoId")
+            }
 
             if (ultraHdrSource == null) {
                 if (detailFile.exists()) {
@@ -248,11 +282,14 @@ object PhotoManager {
             }
             tempFile.renameTo(detailFile)
             stableTimestamp?.let { photoDir.setLastModified(it) }
+            _detailHdrReadyEvents.tryEmit(photoId)
             PLog.d(TAG, "buildDetailHdrCache success: $photoId, source=${ultraHdrSource.sourceKind}, gainmap=${gainmapResult != null}")
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to build detail HDR cache for $photoId", e)
             false
+        } finally {
+            endHdrWork(photoId)
         }
     }
 
@@ -296,6 +333,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         suffix: String? = null,
+        preparedUltraHdrSource: GainmapSourceSet? = null,
     ): Boolean {
         return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
@@ -315,18 +353,22 @@ object PhotoManager {
                     }
                 }
 
-                var ultraHdrSource = null as com.hinnka.mycamera.hdr.GainmapSourceSet?
-                val ultraHdrPrepareElapsed = measureTimeMillis {
-                    ultraHdrSource = photoProcessor.prepareUltraHdrSource(
-                        context = context,
-                        photoId = id,
-                        metadata = metadata,
-                        sharpening = sharpeningValue,
-                        noiseReduction = noiseReductionValue,
-                        chromaNoiseReduction = chromaNoiseReductionValue
-                    )
+                var ultraHdrSource = preparedUltraHdrSource
+                if (ultraHdrSource == null) {
+                    val ultraHdrPrepareElapsed = measureTimeMillis {
+                        ultraHdrSource = photoProcessor.prepareUltraHdrSource(
+                            context = context,
+                            photoId = id,
+                            metadata = metadata,
+                            sharpening = sharpeningValue,
+                            noiseReduction = noiseReductionValue,
+                            chromaNoiseReduction = chromaNoiseReductionValue
+                        )
+                    }
+                    PLog.d(TAG, "prepareUltraHdrSource took ${ultraHdrPrepareElapsed}ms")
+                } else {
+                    PLog.d(TAG, "prepareUltraHdrSource reused in-memory source for export: $id")
                 }
-                PLog.d(TAG, "prepareUltraHdrSource took ${ultraHdrPrepareElapsed}ms")
                 var gainmapResult: GainmapResult? = null
                 val gainmapElapsed = measureTimeMillis {
                     gainmapResult = ultraHdrSource?.let { gainmapProducer.build(it) }
@@ -700,6 +742,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95
     ) = withContext(Dispatchers.IO) {
+        beginHdrWork(photoId)
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -765,6 +808,8 @@ object PhotoManager {
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
+        } finally {
+            endHdrWork(photoId)
         }
     }
 
@@ -815,16 +860,17 @@ object PhotoManager {
                 exportDng(context, photoId, array, metadata)
             }
 
-            var bitmap = RawDemosaicProcessor.getInstance().process(
+            val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
                 context,
                 dngFile.absolutePath,
-                aspectRatio,
+                aspectRatio = aspectRatio,
                 cropRegion = metadata.cropRegion,
-                rotation,
+                rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
                 sharpeningValue = 0.4f,
                 droMode = droMode
             ) ?: return@withContext
+            var bitmap = rawResult.sdrBitmap
 
             if (metadata.isMirrored) {
                 bitmap = BitmapUtils.flipHorizontal(bitmap)
@@ -834,14 +880,32 @@ object PhotoManager {
                 writeFinalJpeg(bitmap, outputStream, photoQuality)
             }
             tempFile.renameTo(photoFile)
-            queueDetailHdrCacheBuild(
-                context = context,
-                photoId = photoId,
-                metadata = metadata,
-                sharpening = sharpeningValue,
-                noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = chromaNoiseReductionValue
-            )
+            val preparedUltraHdrSource = if (metadata.manualHdrEffectEnabled) {
+                photoProcessor.prepareUltraHdrSourceFromRawResult(
+                    context = context,
+                    photoId = photoId,
+                    rawResult = rawResult,
+                    metadata = metadata,
+                    sharpening = sharpeningValue,
+                    noiseReduction = noiseReductionValue,
+                    chromaNoiseReduction = chromaNoiseReductionValue,
+                    applyMirror = true
+                )
+            } else {
+                null
+            }
+            preparedUltraHdrSource?.let {
+                PLog.d(TAG, "saveRawPhoto building detail HDR from in-memory RAW result: $photoId")
+                buildDetailHdrCache(
+                    context = context,
+                    photoId = photoId,
+                    metadata = metadata,
+                    sharpening = sharpeningValue,
+                    noiseReduction = noiseReductionValue,
+                    chromaNoiseReduction = chromaNoiseReductionValue,
+                    preparedUltraHdrSource = it
+                )
+            }
             if (shouldAutoSave) {
                 exportPhoto(
                     context,
@@ -852,10 +916,23 @@ object PhotoManager {
                     sharpeningValue,
                     noiseReductionValue,
                     chromaNoiseReductionValue,
-                    photoQuality
+                    photoQuality,
+                    preparedUltraHdrSource = preparedUltraHdrSource
                 )
             }
-            bitmap.recycle()
+            preparedUltraHdrSource?.hdrReference?.bitmap?.let {
+                if (!it.isRecycled) {
+                    it.recycle()
+                }
+            }
+            preparedUltraHdrSource?.sdrBase?.let {
+                if (it !== bitmap && !it.isRecycled) {
+                    it.recycle()
+                }
+            }
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
         }
