@@ -149,6 +149,12 @@ data class PhotoMetadata(
                     put("vibrance", colorRecipeParams.color.toDouble())
                     put("highlights", colorRecipeParams.highlights.toDouble())
                     put("shadows", colorRecipeParams.shadows.toDouble())
+                    put("toneToe", colorRecipeParams.toneToe.toDouble())
+                    put("toneShoulder", colorRecipeParams.toneShoulder.toDouble())
+                    put("tonePivot", colorRecipeParams.tonePivot.toDouble())
+                    put("paletteX", colorRecipeParams.paletteX.toDouble())
+                    put("paletteY", colorRecipeParams.paletteY.toDouble())
+                    put("paletteDensity", colorRecipeParams.paletteDensity.toDouble())
                     put("filmGrain", colorRecipeParams.filmGrain.toDouble())
                     put("vignette", colorRecipeParams.vignette.toDouble())
                     put("bleachBypass", colorRecipeParams.bleachBypass.toDouble())
@@ -322,6 +328,12 @@ data class PhotoMetadata(
                         color = colorRecipeParamsObj.optDouble("vibrance", 0.0).toFloat(),
                         highlights = colorRecipeParamsObj.optDouble("highlights", 0.0).toFloat(),
                         shadows = colorRecipeParamsObj.optDouble("shadows", 0.0).toFloat(),
+                        toneToe = colorRecipeParamsObj.optDouble("toneToe", 0.0).toFloat(),
+                        toneShoulder = colorRecipeParamsObj.optDouble("toneShoulder", 0.0).toFloat(),
+                        tonePivot = colorRecipeParamsObj.optDouble("tonePivot", 0.0).toFloat(),
+                        paletteX = colorRecipeParamsObj.optDouble("paletteX", 0.5).toFloat(),
+                        paletteY = colorRecipeParamsObj.optDouble("paletteY", 0.5).toFloat(),
+                        paletteDensity = colorRecipeParamsObj.optDouble("paletteDensity", 1.0).toFloat(),
                         filmGrain = colorRecipeParamsObj.optDouble("filmGrain", 0.0).toFloat(),
                         vignette = colorRecipeParamsObj.optDouble("vignette", 0.0).toFloat(),
                         bleachBypass = colorRecipeParamsObj.optDouble("bleachBypass", 0.0).toFloat(),

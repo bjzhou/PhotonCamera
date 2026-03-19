@@ -482,4 +482,9 @@
     <string name="virtual_aperture">虚拟光圈</string>
     <string name="settings_default_virtual_aperture">默认虚拟光圈</string>
     <string name="settings_default_virtual_aperture_description">开启后，拍摄及导入照片将自动应用所选光圈值的虚化效果。</string>
+    <string name="recipe_palette_title">调色盘</string>
+    <string name="recipe_palette_hint">拖动以调整色彩与影调</string>
+    <string name="recipe_palette_density">调色盘浓度</string>
+    <string name="recipe_palette_advanced">高级调整</string>
+    <string name="recipe_tab_palette">调色盘</string>
 </resources>

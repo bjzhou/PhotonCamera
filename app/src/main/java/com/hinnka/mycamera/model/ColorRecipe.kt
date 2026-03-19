@@ -17,6 +17,12 @@ data class ColorRecipeParams(
     val color: Float = 0f,       // -1.0 ~ 1.0 (蓝色增强，0为无调整)
     val highlights: Float = 0f,     // -1.0 ~ +1.0 (高光调整，0为无调整)
     val shadows: Float = 0f,        // -1.0 ~ +1.0 (阴影调整，0为无调整)
+    val toneToe: Float = 0f,        // -1.0 ~ +1.0 (影调曲线暗部塑形)
+    val toneShoulder: Float = 0f,   // -1.0 ~ +1.0 (影调曲线亮部塑形)
+    val tonePivot: Float = 0f,      // -1.0 ~ +1.0 (影调曲线中点偏移)
+    val paletteX: Float = 0.5f,     // 调色盘横向落点
+    val paletteY: Float = 0.5f,     // 调色盘纵向落点
+    val paletteDensity: Float = 1f, // 调色盘浓度
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
@@ -67,6 +73,12 @@ data class ColorRecipeParams(
                 color == 0f &&
                 highlights == 0f &&
                 shadows == 0f &&
+                toneToe == 0f &&
+                toneShoulder == 0f &&
+                tonePivot == 0f &&
+                paletteX == 0.5f &&
+                paletteY == 0.5f &&
+                paletteDensity == 1f &&
                 filmGrain == 0f &&
                 vignette == 0f &&
                 bleachBypass == 0f &&
@@ -117,6 +129,12 @@ data class ColorRecipeParams(
                 color == other.color &&
                 highlights == other.highlights &&
                 shadows == other.shadows &&
+                toneToe == other.toneToe &&
+                toneShoulder == other.toneShoulder &&
+                tonePivot == other.tonePivot &&
+                paletteX == other.paletteX &&
+                paletteY == other.paletteY &&
+                paletteDensity == other.paletteDensity &&
                 filmGrain == other.filmGrain &&
                 vignette == other.vignette &&
                 bleachBypass == other.bleachBypass &&

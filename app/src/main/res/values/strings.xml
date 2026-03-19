@@ -424,6 +424,11 @@
     <string name="settings_phantom_save_as_new_description">When enabled, the app will save the edited photo as a new image instead of overwriting the original one.</string>
     <string name="color_space">Color Space</string>
     <string name="advanced_options">Advanced Options</string>
+    <string name="recipe_palette_title">Palette</string>
+    <string name="recipe_palette_hint">Drag to shape color and tone</string>
+    <string name="recipe_palette_density">Palette Density</string>
+    <string name="recipe_palette_advanced">Advanced Adjustments</string>
+    <string name="recipe_tab_palette">Palette</string>
 
     <string name="settings_widget_theme">Widget Theme</string>
     <string name="settings_widget_theme_description">Set the color scheme for the home screen widget</string>

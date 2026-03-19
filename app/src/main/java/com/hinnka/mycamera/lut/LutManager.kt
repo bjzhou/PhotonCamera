@@ -45,6 +45,12 @@ class LutManager(private val context: Context) {
         private fun colorKey(lutId: String) = floatPreferencesKey("${lutId}_color")
         private fun highlightsKey(lutId: String) = floatPreferencesKey("${lutId}_highlights")
         private fun shadowsKey(lutId: String) = floatPreferencesKey("${lutId}_shadows")
+        private fun toneToeKey(lutId: String) = floatPreferencesKey("${lutId}_toneToe")
+        private fun toneShoulderKey(lutId: String) = floatPreferencesKey("${lutId}_toneShoulder")
+        private fun tonePivotKey(lutId: String) = floatPreferencesKey("${lutId}_tonePivot")
+        private fun paletteXKey(lutId: String) = floatPreferencesKey("${lutId}_paletteX")
+        private fun paletteYKey(lutId: String) = floatPreferencesKey("${lutId}_paletteY")
+        private fun paletteDensityKey(lutId: String) = floatPreferencesKey("${lutId}_paletteDensity")
         private fun filmGrainKey(lutId: String) = floatPreferencesKey("${lutId}_filmGrain")
         private fun vignetteKey(lutId: String) = floatPreferencesKey("${lutId}_vignette")
         private fun bleachBypassKey(lutId: String) = floatPreferencesKey("${lutId}_bleachBypass")
@@ -108,6 +114,12 @@ class LutManager(private val context: Context) {
                 color = preferences[colorKey(lutId)] ?: 0f,
                 highlights = preferences[highlightsKey(lutId)] ?: 0f,
                 shadows = preferences[shadowsKey(lutId)] ?: 0f,
+                toneToe = preferences[toneToeKey(lutId)] ?: 0f,
+                toneShoulder = preferences[toneShoulderKey(lutId)] ?: 0f,
+                tonePivot = preferences[tonePivotKey(lutId)] ?: 0f,
+                paletteX = preferences[paletteXKey(lutId)] ?: 0.5f,
+                paletteY = preferences[paletteYKey(lutId)] ?: 0.5f,
+                paletteDensity = preferences[paletteDensityKey(lutId)] ?: 1f,
                 filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
@@ -277,6 +289,12 @@ class LutManager(private val context: Context) {
             preferences[colorKey(lutId)] = params.color
             preferences[highlightsKey(lutId)] = params.highlights
             preferences[shadowsKey(lutId)] = params.shadows
+            preferences[toneToeKey(lutId)] = params.toneToe
+            preferences[toneShoulderKey(lutId)] = params.toneShoulder
+            preferences[tonePivotKey(lutId)] = params.tonePivot
+            preferences[paletteXKey(lutId)] = params.paletteX
+            preferences[paletteYKey(lutId)] = params.paletteY
+            preferences[paletteDensityKey(lutId)] = params.paletteDensity
             preferences[filmGrainKey(lutId)] = params.filmGrain
             preferences[vignetteKey(lutId)] = params.vignette
             preferences[bleachBypassKey(lutId)] = params.bleachBypass
@@ -335,6 +353,12 @@ class LutManager(private val context: Context) {
                 color = preferences[colorKey(lutId)] ?: 0f,
                 highlights = preferences[highlightsKey(lutId)] ?: 0f,
                 shadows = preferences[shadowsKey(lutId)] ?: 0f,
+                toneToe = preferences[toneToeKey(lutId)] ?: 0f,
+                toneShoulder = preferences[toneShoulderKey(lutId)] ?: 0f,
+                tonePivot = preferences[tonePivotKey(lutId)] ?: 0f,
+                paletteX = preferences[paletteXKey(lutId)] ?: 0.5f,
+                paletteY = preferences[paletteYKey(lutId)] ?: 0.5f,
+                paletteDensity = preferences[paletteDensityKey(lutId)] ?: 1f,
                 filmGrain = preferences[filmGrainKey(lutId)] ?: 0f,
                 vignette = preferences[vignetteKey(lutId)] ?: 0f,
                 bleachBypass = preferences[bleachBypassKey(lutId)] ?: 0f,
@@ -401,6 +425,12 @@ class LutManager(private val context: Context) {
             preferences.remove(colorKey(lutId))
             preferences.remove(highlightsKey(lutId))
             preferences.remove(shadowsKey(lutId))
+            preferences.remove(toneToeKey(lutId))
+            preferences.remove(toneShoulderKey(lutId))
+            preferences.remove(tonePivotKey(lutId))
+            preferences.remove(paletteXKey(lutId))
+            preferences.remove(paletteYKey(lutId))
+            preferences.remove(paletteDensityKey(lutId))
             preferences.remove(filmGrainKey(lutId))
             preferences.remove(vignetteKey(lutId))
             preferences.remove(bleachBypassKey(lutId))

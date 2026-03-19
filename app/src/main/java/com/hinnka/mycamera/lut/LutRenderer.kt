@@ -103,6 +103,9 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uVibranceLocation: Int = 0
     private var uHighlightsLocation: Int = 0
     private var uShadowsLocation: Int = 0
+    private var uToneToeLocation: Int = 0
+    private var uToneShoulderLocation: Int = 0
+    private var uTonePivotLocation: Int = 0
     private var uFilmGrainLocation: Int = 0
     private var uVignetteLocation: Int = 0
     private var uBleachBypassLocation: Int = 0
@@ -220,6 +223,15 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var shadows: Float = 0f // -1.0 ~ +1.0
+
+    @Volatile
+    var toneToe: Float = 0f // -1.0 ~ +1.0
+
+    @Volatile
+    var toneShoulder: Float = 0f // -1.0 ~ +1.0
+
+    @Volatile
+    var tonePivot: Float = 0f // -1.0 ~ +1.0
 
     @Volatile
     var filmGrain: Float = 0f // 0.0 ~ 1.0
@@ -626,6 +638,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1f(uVibranceLocation, vibrance)
             GLES30.glUniform1f(uHighlightsLocation, highlights)
             GLES30.glUniform1f(uShadowsLocation, shadows)
+            GLES30.glUniform1f(uToneToeLocation, toneToe)
+            GLES30.glUniform1f(uToneShoulderLocation, toneShoulder)
+            GLES30.glUniform1f(uTonePivotLocation, tonePivot)
             GLES30.glUniform1f(uFilmGrainLocation, filmGrain)
             GLES30.glUniform1f(uVignetteLocation, vignette)
             GLES30.glUniform1f(uBleachBypassLocation, bleachBypass)
@@ -742,6 +757,9 @@ class LutRenderer : GLSurfaceView.Renderer {
         uVibranceLocation = GLES30.glGetUniformLocation(programId, "uVibrance")
         uHighlightsLocation = GLES30.glGetUniformLocation(programId, "uHighlights")
         uShadowsLocation = GLES30.glGetUniformLocation(programId, "uShadows")
+        uToneToeLocation = GLES30.glGetUniformLocation(programId, "uToneToe")
+        uToneShoulderLocation = GLES30.glGetUniformLocation(programId, "uToneShoulder")
+        uTonePivotLocation = GLES30.glGetUniformLocation(programId, "uTonePivot")
         uFilmGrainLocation = GLES30.glGetUniformLocation(programId, "uFilmGrain")
         uVignetteLocation = GLES30.glGetUniformLocation(programId, "uVignette")
         uBleachBypassLocation = GLES30.glGetUniformLocation(programId, "uBleachBypass")
@@ -1696,6 +1714,9 @@ class LutRenderer : GLSurfaceView.Renderer {
             color = vibrance,
             highlights = highlights,
             shadows = shadows,
+            toneToe = toneToe,
+            toneShoulder = toneShoulder,
+            tonePivot = tonePivot,
             fade = fade,
             filmGrain = filmGrain,
             vignette = vignette,

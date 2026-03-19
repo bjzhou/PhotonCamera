@@ -15,8 +15,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
+import com.hinnka.mycamera.ui.components.ColorRecipePalettePanel
 import com.hinnka.mycamera.ui.components.CustomSliderThinThumb
 import com.hinnka.mycamera.viewmodel.LutEditViewModel
 import kotlinx.coroutines.Job
@@ -43,7 +47,9 @@ fun LutEditBottomSheet(
     val scope = rememberCoroutineScope()
 
     var editingParams by remember { mutableStateOf(ColorRecipeParams.DEFAULT) }
+    var paletteState by remember { mutableStateOf(ColorPaletteState.DEFAULT) }
     var saveJob by remember { mutableStateOf<Job?>(null) }
+    val openingInitialParams = remember(lutId) { initialParams }
 
     fun scheduleSave(params: ColorRecipeParams) {
         saveJob?.cancel()
@@ -58,8 +64,14 @@ fun LutEditBottomSheet(
         viewModel.saveLutColorRecipe(lutId, editingParams)
     }
 
-    LaunchedEffect(lutId, initialParams) {
-        editingParams = initialParams ?: viewModel.getColorRecipe(lutId)
+    LaunchedEffect(lutId) {
+        val loadedParams = openingInitialParams ?: viewModel.getColorRecipe(lutId)
+        editingParams = loadedParams
+        paletteState = ColorPaletteState(
+            x = loadedParams.paletteX,
+            y = loadedParams.paletteY,
+            density = loadedParams.paletteDensity
+        ).normalized()
     }
 
     ModalBottomSheet(
@@ -87,9 +99,17 @@ fun LutEditBottomSheet(
                 }
             )
 
-            // 底部色彩配方面板
             ColorRecipePanel(
                 currentParams = editingParams,
+                paletteState = paletteState,
+                onPaletteStateChange = { newState ->
+                    val normalizedState = newState.normalized()
+                    paletteState = normalizedState
+                    val newParams = ColorPaletteMapper.updatePaletteState(editingParams, normalizedState)
+                    editingParams = newParams
+                    onParamsPreviewChange?.invoke(newParams)
+                    scheduleSave(newParams)
+                },
                 onParamChange = { param, value ->
                     val newParams = param.setValue(editingParams, value)
                     editingParams = newParams
@@ -104,7 +124,7 @@ fun LutEditBottomSheet(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             )
         }
     }

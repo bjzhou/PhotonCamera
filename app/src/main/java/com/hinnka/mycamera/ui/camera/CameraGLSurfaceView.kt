@@ -11,6 +11,7 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -169,55 +170,60 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         params: ColorRecipeParams,
         aperture: Float,
     ) {
-        renderer.exposure = params.exposure
-        renderer.contrast = params.contrast
-        renderer.saturation = params.saturation
-        renderer.temperature = params.temperature
-        renderer.tint = params.tint
-        renderer.fade = params.fade
-        renderer.vibrance = params.color
-        renderer.highlights = params.highlights
-        renderer.shadows = params.shadows
-        renderer.filmGrain = params.filmGrain
-        renderer.vignette = params.vignette
-        renderer.bleachBypass = params.bleachBypass
-        renderer.chromaticAberration = params.chromaticAberration
-        renderer.noise = params.noise
-        renderer.lowRes = params.lowRes
-        renderer.halation = params.halation
-        renderer.lutIntensity = params.lutIntensity
+        val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
+
+        renderer.exposure = effectiveParams.exposure
+        renderer.contrast = effectiveParams.contrast
+        renderer.saturation = effectiveParams.saturation
+        renderer.temperature = effectiveParams.temperature
+        renderer.tint = effectiveParams.tint
+        renderer.fade = effectiveParams.fade
+        renderer.vibrance = effectiveParams.color
+        renderer.highlights = effectiveParams.highlights
+        renderer.shadows = effectiveParams.shadows
+        renderer.toneToe = effectiveParams.toneToe
+        renderer.toneShoulder = effectiveParams.toneShoulder
+        renderer.tonePivot = effectiveParams.tonePivot
+        renderer.filmGrain = effectiveParams.filmGrain
+        renderer.vignette = effectiveParams.vignette
+        renderer.bleachBypass = effectiveParams.bleachBypass
+        renderer.chromaticAberration = effectiveParams.chromaticAberration
+        renderer.noise = effectiveParams.noise
+        renderer.lowRes = effectiveParams.lowRes
+        renderer.halation = effectiveParams.halation
+        renderer.lutIntensity = effectiveParams.lutIntensity
         renderer.setLchAdjustments(
             floatArrayOf(
-                params.skinHue,
-                params.redHue,
-                params.orangeHue,
-                params.yellowHue,
-                params.greenHue,
-                params.cyanHue,
-                params.blueHue,
-                params.purpleHue,
-                params.magentaHue,
+                effectiveParams.skinHue,
+                effectiveParams.redHue,
+                effectiveParams.orangeHue,
+                effectiveParams.yellowHue,
+                effectiveParams.greenHue,
+                effectiveParams.cyanHue,
+                effectiveParams.blueHue,
+                effectiveParams.purpleHue,
+                effectiveParams.magentaHue,
             ),
             floatArrayOf(
-                params.skinChroma,
-                params.redChroma,
-                params.orangeChroma,
-                params.yellowChroma,
-                params.greenChroma,
-                params.cyanChroma,
-                params.blueChroma,
-                params.purpleChroma,
-                params.magentaChroma,
+                effectiveParams.skinChroma,
+                effectiveParams.redChroma,
+                effectiveParams.orangeChroma,
+                effectiveParams.yellowChroma,
+                effectiveParams.greenChroma,
+                effectiveParams.cyanChroma,
+                effectiveParams.blueChroma,
+                effectiveParams.purpleChroma,
+                effectiveParams.magentaChroma,
             ),
             floatArrayOf(
-                params.skinLightness,
-                params.redLightness,
-                params.orangeLightness,
-                params.yellowLightness,
-                params.greenLightness,
-                params.cyanLightness,
-                params.blueLightness,
-                params.purpleLightness,
+                effectiveParams.skinLightness,
+                effectiveParams.redLightness,
+                effectiveParams.orangeLightness,
+                effectiveParams.yellowLightness,
+                effectiveParams.greenLightness,
+                effectiveParams.cyanLightness,
+                effectiveParams.blueLightness,
+                effectiveParams.purpleLightness,
                 params.magentaLightness,
             )
         )

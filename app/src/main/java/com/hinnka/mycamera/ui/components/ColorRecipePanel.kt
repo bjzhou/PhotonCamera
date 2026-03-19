@@ -24,6 +24,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.RecipeParam
 
@@ -35,6 +36,8 @@ import com.hinnka.mycamera.model.RecipeParam
 @Composable
 fun ColorRecipePanel(
     currentParams: ColorRecipeParams,
+    paletteState: ColorPaletteState,
+    onPaletteStateChange: (ColorPaletteState) -> Unit,
     onParamChange: (RecipeParam, Float) -> Unit,
     onRemarksChange: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -43,6 +46,7 @@ fun ColorRecipePanel(
     var selectedLchTabIndex by remember { mutableIntStateOf(0) }
 
     val tabs = listOf(
+        R.string.recipe_tab_palette,
         R.string.recipe_tab_light,
         R.string.recipe_tab_color,
         R.string.recipe_tab_lch,
@@ -51,6 +55,7 @@ fun ColorRecipePanel(
         R.string.recipe_tab_remarks,
     )
     val parameterGroups = listOf(
+        emptyList(),
         listOf(
             RecipeParam.EXPOSURE,
             RecipeParam.CONTRAST,
@@ -185,7 +190,13 @@ fun ColorRecipePanel(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (selectedTabIndex == 2) {
+                    if (selectedTabIndex == 0) {
+                        ColorRecipePalettePanel(
+                            paletteState = paletteState,
+                            onPaletteStateChange = onPaletteStateChange,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else if (selectedTabIndex == 3) {
                         LchSecondaryTabs(
                             tabs = lchGroups.map { it.first },
                             selectedTabIndex = selectedLchTabIndex,

@@ -219,6 +219,9 @@ object Shaders {
     // 色彩配方参数（阶段2：高级参数）
     uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
     uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
+    uniform float uToneToe;       // -1.0 ~ +1.0 (暗部曲线塑形)
+    uniform float uToneShoulder;  // -1.0 ~ +1.0 (亮部曲线塑形)
+    uniform float uTonePivot;     // -1.0 ~ +1.0 (曲线中点偏移)
 
     // 色彩配方参数（阶段3：质感效果）
     uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
@@ -253,6 +256,50 @@ object Shaders {
         vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
         linearColor *= exp2(exposureEv);
         return linearToSrgb(linearColor);
+    }
+
+    float sanitizeFloat(float value) {
+        if (value != value) return 0.0;
+        if (value > 1.0) return 1.0;
+        if (value < 0.0) return 0.0;
+        return value;
+    }
+
+    vec3 sanitizeColor(vec3 color) {
+        return vec3(
+            sanitizeFloat(color.r),
+            sanitizeFloat(color.g),
+            sanitizeFloat(color.b)
+        );
+    }
+
+    float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
+        float safeLuma = clamp(luma, 0.0, 1.0);
+        float pivotPoint = clamp(0.5 + pivot * 0.12, 0.2, 0.8);
+        float toeGamma = mix(1.85, 0.68, clamp((toe + 1.0) * 0.5, 0.0, 1.0));
+        float shoulderGamma = mix(1.85, 0.72, clamp((shoulder + 1.0) * 0.5, 0.0, 1.0));
+
+        if (safeLuma <= pivotPoint) {
+            float segment = safeLuma / max(pivotPoint, 0.0001);
+            return pow(segment, toeGamma) * pivotPoint;
+        }
+
+        float segment = (safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001);
+        return 1.0 - pow(1.0 - segment, shoulderGamma) * (1.0 - pivotPoint);
+    }
+
+    vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
+        if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
+            return color;
+        }
+        vec3 safeColor = clamp(color, 0.0, 1.0);
+        float luma = dot(safeColor, W);
+        float curvedLuma = applyToneCurveToLuma(luma, toe, shoulder, pivot);
+        if (luma < 0.0001) {
+            return safeColor;
+        }
+        vec3 scaled = safeColor * (curvedLuma / luma);
+        return clamp(mix(vec3(curvedLuma), scaled, 0.92), 0.0, 1.0);
     }
 
     bool isLogLutCurve(int curveType) {
@@ -507,6 +554,7 @@ object Shaders {
             // 1. 曝光调整（在线性空间执行 EV 增益，再回到显示空间）
             if (abs(uExposure) > 0.001) {
                 color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             // 计算基础亮度，后续复用
@@ -529,36 +577,47 @@ object Shaders {
                     color.rgb = mix(color.rgb, shadowTarget, shadowMask);
                 }
                 // 更新亮度
+                color.rgb = sanitizeColor(color.rgb);
                 luma = dot(color.rgb, W);
             }
 
             // 3. 对比度（围绕中灰点调整）
             if (abs(uContrast - 1.0) > 0.001) {
                 color.rgb = (color.rgb - 0.5) * uContrast + 0.5;
+                color.rgb = sanitizeColor(color.rgb);
             }
+
+            // 3.5. 影调曲线（独立于简单对比度，塑造高调/低调 profile）
+            color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
+            color.rgb = sanitizeColor(color.rgb);
 
             // 4. 白平衡调整（色温 + 色调）
             color.r += uTemperature * 0.1;
             color.b -= uTemperature * 0.1;
             color.g += uTint * 0.05;
+            color.rgb = sanitizeColor(color.rgb);
 
             // 5. 饱和度
             if (abs(uSaturation - 1.0) > 0.001) {
                 luma = dot(color.rgb, W);
                 color.rgb = mix(vec3(luma), color.rgb, uSaturation);
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             // 6. 色彩密度（OkLCh density）
             if (abs(uVibrance) > 0.001) {
                 color.rgb = applyOklchDensity(color.rgb, uVibrance);
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             color.rgb = applyLchColorMixer(color.rgb);
+            color.rgb = sanitizeColor(color.rgb);
 
             // 7. 褪色效果
             if (uFade > 0.001) {
                 float fadeAmount = uFade * 0.3;
                 color.rgb = mix(color.rgb, vec3(0.5), fadeAmount) + fadeAmount * 0.1;
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             // 8. 留银冲洗
@@ -570,6 +629,7 @@ object Shaders {
                 desaturated.g *= 1.02;
                 desaturated.b *= 1.05;
                 color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             // 9. 晕影
@@ -581,6 +641,7 @@ object Shaders {
                 } else {
                     color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
                 }
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             // 10. 颗粒 (静态底片颗粒)
@@ -590,6 +651,7 @@ object Shaders {
                 luma = dot(color.rgb, W);
                 float grainMask = (1.0 - abs(luma - 0.5) * 2.0) * 0.5 + 0.5;
                 color.rgb += grainNoise * uFilmGrain * 0.1 * grainMask;
+                color.rgb = sanitizeColor(color.rgb);
             }
 
             // 11. 随机噪点 (增强的亮度和彩色噪点，动态刷新)
@@ -617,9 +679,10 @@ object Shaders {
 
                 // 基准强度为 0.3，效果较明显
                 color.rgb += finalNoise * uNoise * max(0.0, noiseMask);
+                color.rgb = sanitizeColor(color.rgb);
             }
 
-            color.rgb = clamp(color.rgb, 0.0, 1.0);
+            color.rgb = sanitizeColor(color.rgb);
         }
 
         // === LUT 处理（在色彩配方之后） ===
@@ -635,9 +698,10 @@ object Shaders {
                 lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
             }
             color.rgb = mix(color.rgb, lutColor.rgb, uLutIntensity);
+            color.rgb = sanitizeColor(color.rgb);
         }
 
-        fragColor = color;
+        fragColor = vec4(sanitizeColor(color.rgb), color.a);
     }
     """.trimIndent()
 
