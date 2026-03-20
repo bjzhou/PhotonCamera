@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.LayoutInflater
@@ -289,7 +290,7 @@ fun PhotoDetailScreen(
                             )
                         }
                     }
-                    if (currentPhoto != null && viewModel.canToggleManualHdrEnhance(currentPhoto)) {
+                    if (currentPhoto != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
                         val hdrEnabled = viewModel.isManualHdrEnhanceEnabled(currentPhoto)
                         TextButton(
                                     onClick = {

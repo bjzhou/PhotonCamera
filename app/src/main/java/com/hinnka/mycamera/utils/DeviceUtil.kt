@@ -34,6 +34,17 @@ object DeviceUtil {
                     platform.contains("qcom")
         }
 
+    val isHarmonyOS: Boolean
+        get() {
+            val list = listOf(
+                "ro.product.anco.devicetype",
+                "ro.sys.anco.product.software.version",
+                "ro.product.os.dist.anco.apiversion",
+                "ro.product.os.dist.anco.releasetype"
+            )
+            return list.any { SystemPropertiesUtil.get(it)?.isNotEmpty() == true }
+        }
+
     val isChinaFlavor: Boolean
         get() = BuildConfig.FLAVOR == "china"
 

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -166,6 +167,7 @@ fun SettingsScreen(
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
 
     val backupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -911,29 +913,31 @@ fun SettingsScreen(
                             )
                         }
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
+                        if (isHdrSettingsSupported) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
 
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture),
-                            description = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture_description),
-                            checked = autoEnableHdrForHdrCapture,
-                            onCheckedChange = { viewModel.setAutoEnableHdrForHdrCapture(it) }
-                        )
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture),
+                                description = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture_description),
+                                checked = autoEnableHdrForHdrCapture,
+                                onCheckedChange = { viewModel.setAutoEnableHdrForHdrCapture(it) }
+                            )
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
 
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos),
-                            description = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos_description),
-                            checked = autoEnableHdrForSdrPhotos,
-                            onCheckedChange = { viewModel.setAutoEnableHdrForSdrPhotos(it) }
-                        )
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos),
+                                description = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos_description),
+                                checked = autoEnableHdrForSdrPhotos,
+                                onCheckedChange = { viewModel.setAutoEnableHdrForSdrPhotos(it) }
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))

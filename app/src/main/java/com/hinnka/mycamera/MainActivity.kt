@@ -68,6 +68,7 @@ import com.hinnka.mycamera.viewmodel.GalleryTab
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.lut.creator.LutCreatorScreen
 import com.hinnka.mycamera.lut.creator.LutCreatorViewModel
+import com.hinnka.mycamera.utils.DeviceUtil
 
 /**
  * 路由常量
@@ -107,10 +108,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyPreferredWindowColorMode() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val configuration = resources.configuration
         when {
-            configuration.isScreenHdr -> {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS && configuration.isScreenHdr -> {
                 window.colorMode = ActivityInfo.COLOR_MODE_HDR
             }
             configuration.isScreenWideColorGamut -> {

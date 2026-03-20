@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.utils.DeviceUtil
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -800,7 +801,7 @@ class Camera2Controller(private val context: Context) {
             )
             val outputConfigs = surfaces.mapIndexed { index, outputSurface ->
                 OutputConfiguration(outputSurface).apply {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS) {
                         val profile = if (useHlgCapture && index == 1) {
                             DynamicRangeProfiles.HLG10
                         } else {
