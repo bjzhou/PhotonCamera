@@ -276,8 +276,14 @@ object Shaders {
     float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
         float safeLuma = clamp(luma, 0.0, 1.0);
         float pivotPoint = clamp(0.5 + pivot * 0.12, 0.2, 0.8);
-        float toeGamma = mix(1.85, 0.68, clamp((toe + 1.0) * 0.5, 0.0, 1.0));
-        float shoulderGamma = mix(1.85, 0.72, clamp((shoulder + 1.0) * 0.5, 0.0, 1.0));
+        float toeAmount = clamp(abs(toe), 0.0, 1.0);
+        float shoulderAmount = clamp(abs(shoulder), 0.0, 1.0);
+        float toeGamma = (toe >= 0.0)
+            ? mix(1.0, 0.68, toeAmount)
+            : mix(1.0, 1.85, toeAmount);
+        float shoulderGamma = (shoulder >= 0.0)
+            ? mix(1.0, 0.72, shoulderAmount)
+            : mix(1.0, 1.85, shoulderAmount);
 
         if (safeLuma <= pivotPoint) {
             float segment = safeLuma / max(pivotPoint, 0.0001);

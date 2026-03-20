@@ -71,6 +71,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -110,6 +111,7 @@ fun CameraScreen(
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
+    var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -377,7 +379,7 @@ fun CameraScreen(
                             lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                             calibrationOffset = calibrationOffset,
                             currentLut = viewModel.currentLutConfig,
-                            colorRecipeParams = currentRecipeParams,
+                            colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                             focusPoint = state.focusPoint,
                             isFocusing = state.isFocusing,
                             focusSuccess = state.focusSuccess,
@@ -757,6 +759,7 @@ fun CameraScreen(
                     currentLutId = currentLutId,
                     thumbnail = viewModel.previewThumbnail,
                     onLutSelected = { viewModel.setLut(it) },
+                    onParamsPreviewChange = { previewRecipeParamsOverride = it },
                     categoryOrder = categoryOrder,
                     modifier = Modifier.fillMaxWidth()
                         .then(if (isXpan) {

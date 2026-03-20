@@ -36,6 +36,7 @@ import coil.transform.Transformation
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
@@ -372,6 +373,7 @@ fun LutControlPanel(
     currentLutId: String?,
     thumbnail: Bitmap?,
     onLutSelected: (String?) -> Unit,
+    onParamsPreviewChange: ((ColorRecipeParams?) -> Unit)? = null,
     categoryOrder: List<String> = emptyList(),
     modifier: Modifier = Modifier
 ) {
@@ -380,7 +382,11 @@ fun LutControlPanel(
     if (showLutEditDialog && currentLutId != null) {
         LutEditBottomSheet(
             lutId = currentLutId,
-            onDismiss = { showLutEditDialog = false }
+            onParamsPreviewChange = { onParamsPreviewChange?.invoke(it) },
+            onDismiss = {
+                onParamsPreviewChange?.invoke(null)
+                showLutEditDialog = false
+            }
         )
     }
 

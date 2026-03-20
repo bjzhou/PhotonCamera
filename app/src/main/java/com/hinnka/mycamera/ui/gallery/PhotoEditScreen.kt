@@ -161,7 +161,6 @@ fun PhotoEditScreen(
         editTab == 3
     ) {
         if (currentPhoto == null) return@LaunchedEffect
-        delay(120)
         isLoadingPreview = previewBitmap == null
         previewBitmap = withContext(Dispatchers.IO) {
             viewModel.getPreviewBitmap(
