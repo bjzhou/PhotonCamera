@@ -162,7 +162,7 @@ class PhotoProcessor(
         }
 
         val photoFile = PhotoManager.getPhotoFile(context, photoId)
-        if (photoFile.exists() && metadata.manualHdrEffectEnabled) {
+        if (photoFile.exists()) {
             val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath) ?: return null
             val sdrBitmap = processBitmap(
                 context = context,
@@ -487,13 +487,6 @@ class PhotoProcessor(
     ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
 
-        // 优先从元数据中获取软件处理参数
-        // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
-        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
-        val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-        val finalChromaNoiseReduction =
-            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-
         val lutConfig = metadata.lutId?.let { lutManager.loadLut(it) }
         val colorRecipeParams = metadata.colorRecipeParams
             ?: metadata.lutId?.let { lutManager.loadColorRecipeParams(it) }
@@ -513,9 +506,9 @@ class PhotoProcessor(
             result,
             lutConfig,
             colorRecipeParams,
-            finalSharpening,
-            finalNoiseReduction,
-            finalChromaNoiseReduction
+            sharpening,
+            noiseReduction,
+            chromaNoiseReduction
         )
 
         result = applyCrop(result, metadata)

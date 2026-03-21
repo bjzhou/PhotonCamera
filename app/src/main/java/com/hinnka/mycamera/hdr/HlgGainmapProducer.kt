@@ -35,10 +35,7 @@ class HlgGainmapProducer : GainmapProducer {
         }
 
         return GainmapResult(
-            payload = GainmapPayload(
-                platformGainmap = gainmap,
-                description = "hlg_luminance_gainmap"
-            ),
+            gainmap = gainmap,
             sourceKind = source.sourceKind,
             confidence = source.confidence
         )

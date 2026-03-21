@@ -35,10 +35,7 @@ class RawGainmapProducer : GainmapProducer {
         }
 
         return GainmapResult(
-            payload = GainmapPayload(
-                platformGainmap = gainmap,
-                description = "raw_luminance_gainmap"
-            ),
+            gainmap = gainmap,
             sourceKind = source.sourceKind,
             confidence = source.confidence
         )

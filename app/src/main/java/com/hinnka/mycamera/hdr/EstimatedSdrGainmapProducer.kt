@@ -27,10 +27,7 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         }
 
         return GainmapResult(
-            payload = GainmapPayload(
-                platformGainmap = gainmap,
-                description = "estimated_sdr_highlight_gainmap"
-            ),
+            gainmap = gainmap,
             sourceKind = source.sourceKind,
             confidence = source.confidence
         )

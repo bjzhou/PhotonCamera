@@ -1,17 +1,12 @@
 package com.hinnka.mycamera.ui.gallery
 
 import android.app.Activity
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
-import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -23,7 +18,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -31,14 +25,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -47,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import com.hinnka.mycamera.R
 import androidx.compose.ui.res.painterResource
 import com.hinnka.mycamera.gallery.PhotoData
-import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
@@ -57,17 +50,18 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.foundation.Image
 import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
+import coil.request.ImageRequest
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import me.saket.telephoto.zoomable.ZoomSpec
 import me.saket.telephoto.zoomable.ZoomableContentLocation
+import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
+import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import me.saket.telephoto.zoomable.zoomable
-import java.io.File
 import kotlin.math.min
 
 /**
@@ -96,13 +90,6 @@ fun PhotoDetailScreen(
     val isSharing by viewModel.isSharing.collectAsState()
 
     val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
-    val currentHasHdr = remember { mutableStateOf(false) }
-    val hdrRefreshNonce = remember { mutableStateOf(0L) }
-    LaunchedEffect(currentHasHdr.value) {
-        if (currentHasHdr.value) {
-            hdrRefreshNonce.value = System.nanoTime()
-        }
-    }
 
     // Activity Result Launcher for delete confirmation
     val deletePhotoLauncher = rememberLauncherForActivityResult(
@@ -177,12 +164,7 @@ fun PhotoDetailScreen(
     // 同步当前索引，并在快到底部时加载更多系统照片
     LaunchedEffect(pagerState.currentPage, photos.size) {
         viewModel.setCurrentPhoto(pagerState.currentPage)
-        currentHasHdr.value = false
         currentColorSpace.value = null
-
-        photos.getOrNull(pagerState.currentPage)?.let { viewModel.prefetchDetailBitmap(it) }
-        photos.getOrNull(pagerState.currentPage - 1)?.let { viewModel.prefetchDetailBitmap(it) }
-        photos.getOrNull(pagerState.currentPage + 1)?.let { viewModel.prefetchDetailBitmap(it) }
 
         if (viewModel.selectedTab == GalleryTab.SYSTEM && pagerState.currentPage >= photos.size - 5) {
             viewModel.loadSystemPhotos(reset = false)
@@ -443,89 +425,72 @@ fun PhotoDetailScreen(
 
                             var showOrigin by remember { mutableStateOf(false) }
                             var isPlaying by remember { mutableStateOf(false) }
-                            var useNativeImageGestures by remember { mutableStateOf(false) }
 
-                            val gestureModifier = if (useNativeImageGestures) {
-                                Modifier.fillMaxSize()
-                            } else {
-                                Modifier.fillMaxSize().pointerInput(Unit) {
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            // 确认第一个手指按下，且当前只有一个指针
-                                            val downEvent = awaitPointerEvent(PointerEventPass.Initial)
-                                            if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
-                                                val touchSlop = viewConfiguration.touchSlop
-                                                val initialPosition = downEvent.changes[0].position
-                                                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-                                                var upEvent: PointerEvent? = null
-                                                var isMultiTouch = false
-                                                var isMoved = false
+                            Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        // 确认第一个手指按下，且当前只有一个指针
+                                        val downEvent = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (downEvent.type == PointerEventType.Press && downEvent.changes.size == 1) {
+                                            val touchSlop = viewConfiguration.touchSlop
+                                            val initialPosition = downEvent.changes[0].position
+                                            val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                                            var upEvent: PointerEvent? = null
+                                            var isMultiTouch = false
+                                            var isMoved = false
 
-                                                // 期间如果出现第二个手指，立即标志并退出
-                                                withTimeoutOrNull(longPressTimeout) {
-                                                    while (true) {
-                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                        if (event.changes.size > 1) {
-                                                            isMultiTouch = true
-                                                            break
-                                                        }
+                                            // 期间如果出现第二个手指，立即标志并退出
+                                            withTimeoutOrNull(longPressTimeout) {
+                                                while (true) {
+                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                    if (event.changes.size > 1) {
+                                                        isMultiTouch = true
+                                                        break
+                                                    }
 
-                                                        val currentPosition = event.changes[0].position
-                                                        if ((currentPosition - initialPosition).getDistance() > touchSlop) {
-                                                            isMoved = true
-                                                            break
-                                                        }
+                                                    val currentPosition = event.changes[0].position
+                                                    if ((currentPosition - initialPosition).getDistance() > touchSlop) {
+                                                        isMoved = true
+                                                        break
+                                                    }
 
-                                                        if (event.type == PointerEventType.Release) {
-                                                            upEvent = event
-                                                            break
-                                                        }
+                                                    if (event.type == PointerEventType.Release) {
+                                                        upEvent = event
+                                                        break
                                                     }
                                                 }
+                                            }
 
-                                                // 如果不是多指操作，才根据结果执行逻辑
-                                                if (!isMultiTouch && !isMoved) {
-                                                    if (upEvent == null) {
-                                                        // 确认为长按
-                                                        if (photo.isMotionPhoto) {
-                                                            isPlaying = true
-                                                        } else {
-                                                            showOrigin = true
-                                                        }
-                                                        // 继续监控直到手指抬起，或者变成多指（开始缩放）
-                                                        while (true) {
-                                                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                            if (event.type == PointerEventType.Release || event.changes.size > 1) {
-                                                                break
-                                                            }
-                                                        }
-                                                        showOrigin = false
-                                                        isPlaying = false
+                                            // 如果不是多指操作，才根据结果执行逻辑
+                                            if (!isMultiTouch && !isMoved) {
+                                                if (upEvent == null) {
+                                                    // 确认为长按
+                                                    if (photo.isMotionPhoto) {
+                                                        isPlaying = true
+                                                    } else {
+                                                        showOrigin = true
                                                     }
+                                                    // 继续监控直到手指抬起，或者变成多指（开始缩放）
+                                                    while (true) {
+                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                        if (event.type == PointerEventType.Release || event.changes.size > 1) {
+                                                            break
+                                                        }
+                                                    }
+                                                    showOrigin = false
+                                                    isPlaying = false
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-
-                            Box(modifier = gestureModifier) {
+                            }) {
                                 ZoomableImage(
                                     photo = photo,
                                     colorSpace = currentColorSpace,
-                                    hasHdr = currentHasHdr,
-                                    hdrRefreshNonce = hdrRefreshNonce.value,
-                                    isActive = page == pagerState.currentPage,
                                     showOrigin = showOrigin,
+                                    isActive = page == pagerState.currentPage,
                                     viewModel = viewModel,
-                                    onNativeGestureAvailabilityChange = { available ->
-                                        useNativeImageGestures = available
-                                    },
-                                    onPressAndHoldChange = { pressed ->
-                                        if (photo.isMotionPhoto) {
-                                            isPlaying = pressed
-                                        }
-                                    },
                                     onZoomChange = { zoomed ->
                                         if (page == pagerState.currentPage) {
                                             isZoomed = zoomed
@@ -730,59 +695,26 @@ private fun InfoRow(label: String, value: String) {
 private fun ZoomableImage(
     photo: PhotoData,
     colorSpace: MutableState<ColorSpace?>,
-    hasHdr: MutableState<Boolean>,
-    hdrRefreshNonce: Long,
-    isActive: Boolean,
     showOrigin: Boolean,
+    isActive: Boolean,
     viewModel: GalleryViewModel,
-    onNativeGestureAvailabilityChange: (Boolean) -> Unit,
-    onPressAndHoldChange: (Boolean) -> Unit,
     onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
     var isLoading by remember { mutableStateOf(true) }
-    var imageViewRef by remember { mutableStateOf<HdrZoomImageView?>(null) }
-    var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var hdrBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var hdrVisible by remember { mutableStateOf(false) }
-    val effectiveShowOrigin = showOrigin
-    val maxZoom = remember(photo.width, photo.height) {
-        min(photo.width, photo.height).coerceAtLeast(1) / 300f
-    }
-    val zoomableState = rememberZoomableState(
-        zoomSpec = ZoomSpec(maxZoomFactor = maxZoom.coerceAtLeast(2f)),
-        autoApplyTransformations = false
+    val maxZoom = min(photo.width, photo.height) / 300f
+    val zoomableState = rememberZoomableImageState(
+        zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoom))
     )
-    val hdrAlpha by animateFloatAsState(
-        targetValue = if (hdrVisible && hdrBitmap != null) 1f else 0f,
-        animationSpec = tween(durationMillis = 750, easing = LinearOutSlowInEasing),
-        label = "hdrFadeIn"
-    )
-    val shouldShowLoading = isLoading && previewBitmap == null && hdrBitmap == null
-    val contentTransformation = zoomableState.contentTransformation
 
-    LaunchedEffect(zoomableState.zoomFraction) {
-        onZoomChange((zoomableState.zoomFraction ?: 0f) > 0.01f)
-    }
-
-    LaunchedEffect(previewBitmap, hdrBitmap) {
-        val activeBitmap = hdrBitmap ?: previewBitmap
-        if (activeBitmap != null) {
-            zoomableState.setContentLocation(
-                ZoomableContentLocation.scaledInsideAndCenterAligned(
-                    androidx.compose.ui.geometry.Size(
-                        activeBitmap.width.toFloat(),
-                        activeBitmap.height.toFloat()
-                    )
-                )
-            )
-        }
+    LaunchedEffect(zoomableState.zoomableState.zoomFraction) {
+        onZoomChange((zoomableState.zoomableState.zoomFraction ?: 0f) > 0.01f)
     }
 
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .zoomable(state = zoomableState),
+        modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         // 使用 hashCode() 代替 toJson() 序列化，避免 composition 时做 JSON 序列化
@@ -790,170 +722,80 @@ private fun ZoomableImage(
             photo.metadata?.hashCode() ?: photo.relatedPhoto?.metadata?.hashCode() ?: 0
         }
 
+        var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+        var hdrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+        var showHdr by remember { mutableStateOf(false) }
+        val hdrAlpha by animateFloatAsState(
+            targetValue = if (showHdr) 1f else 0f,
+            animationSpec = tween(durationMillis = 750, easing = LinearOutSlowInEasing),
+            label = "hdrFadeIn"
+        )
         val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
 
-        LaunchedEffect(photo.id, metadataHash, effectiveShowOrigin, refreshKey, isActive) {
+        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey, isActive) {
             suspend fun loadBitmap() {
-                val minPreviewDisplayMs = 250L
-                isLoading = previewBitmap == null && hdrBitmap == null
-                if (effectiveShowOrigin) {
-                    hdrVisible = false
-                }
-
-                var previewShownAtMs = 0L
-                val loadedPreviewBitmap = viewModel.getPreviewBitmap(photo, showOrigin = effectiveShowOrigin)
-                if (loadedPreviewBitmap != null) {
-                    previewBitmap = loadedPreviewBitmap
-                    previewShownAtMs = SystemClock.elapsedRealtime()
-                    if (isActive) {
-                        colorSpace.value = loadedPreviewBitmap.colorSpace
-                        val previewHasHdr = UltraHdrWriter.hasGainmap(loadedPreviewBitmap)
-                        hasHdr.value = previewHasHdr
-                        PLog.d(
-                            "PhotoDetailScreen",
-                            "ZoomableImage preview loaded: photo=${photo.id}, active=$isActive, hasHdr=$previewHasHdr, colorSpace=${loadedPreviewBitmap.colorSpace?.name}"
-                        )
-                    }
-                    isLoading = false
-                }
-
-                if (loadedPreviewBitmap == null) {
-                    if (isActive) {
-                        hasHdr.value = false
-                    }
-                    hdrBitmap = null
-                    hdrVisible = false
-                    isLoading = true
+                isLoading = bitmap == null
+                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin, ignoreDenoise = !isActive)
+                if (bitmap == null) {
                     delay(500)
                     loadBitmap()
-                    return
                 }
+                colorSpace.value = bitmap?.colorSpace
+                isLoading = bitmap == null
 
-                if (!isActive || effectiveShowOrigin) {
-                    return
-                }
-
-                if (!viewModel.shouldPrioritizeDetailBitmap(photo, showOrigin = effectiveShowOrigin)) {
-                    hasHdr.value = UltraHdrWriter.hasGainmap(loadedPreviewBitmap)
-                    hdrBitmap = null
-                    hdrVisible = false
-                    isLoading = false
-                    return
-                }
-
-                hasHdr.value = false
-                val detailBitmap = viewModel.getDetailBitmap(photo, showOrigin = effectiveShowOrigin)
-                if (detailBitmap == null) {
-                    if (previewBitmap == null && hdrBitmap == null) {
-                        delay(500)
-                        loadBitmap()
+                if (photo.metadata?.manualHdrEffectEnabled == true) {
+                    hdrBitmap = viewModel.getDetailBitmap(photo)
+                    hdrBitmap?.let {
+                        colorSpace.value = it.colorSpace
                     }
-                    return
                 }
-
-                val detailHasHdr = UltraHdrWriter.hasGainmap(detailBitmap)
-                if (previewBitmap == null || !detailHasHdr) {
-                    previewBitmap = detailBitmap
-                }
-                colorSpace.value = detailBitmap.colorSpace
-                hasHdr.value = detailHasHdr
-                PLog.d(
-                    "PhotoDetailScreen",
-                    "ZoomableImage detail loaded: photo=${photo.id}, active=$isActive, hasHdr=$detailHasHdr, colorSpace=${detailBitmap.colorSpace?.name}"
-                )
-
-                if (detailHasHdr) {
-                    hdrBitmap = detailBitmap
-                    val elapsed = if (previewShownAtMs > 0L) {
-                        SystemClock.elapsedRealtime() - previewShownAtMs
-                    } else {
-                        minPreviewDisplayMs
-                    }
-                    val remainingDelay = (minPreviewDisplayMs - elapsed).coerceAtLeast(0L)
-                    if (remainingDelay > 0L) {
-                        delay(remainingDelay)
-                    }
-                    hdrVisible = true
-                } else {
-                    hdrBitmap = null
-                    hdrVisible = false
-                }
-                isLoading = false
+            }
+            if (isActive) {
+                delay(300L)
             }
             loadBitmap()
         }
 
-        previewBitmap?.let { sdrBitmap ->
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        if (contentTransformation.isSpecified) {
-                            scaleX = contentTransformation.scale.scaleX
-                            scaleY = contentTransformation.scale.scaleY
-                            translationX = contentTransformation.offset.x
-                            translationY = contentTransformation.offset.y
-                            transformOrigin = contentTransformation.transformOrigin
-                        }
-                    },
-                factory = { ctx ->
-                    HdrZoomImageView(ctx).apply {
-                        imageViewRef = this
-                        setBitmap(sdrBitmap)
-                    }
-                },
-                update = { view ->
-                    if (hdrBitmap == null) {
-                        imageViewRef = view
-                        view.setBitmap(sdrBitmap)
-                    }
-                }
+        LaunchedEffect(hdrBitmap, showOrigin, isActive) {
+            delay(300)
+            showHdr = hdrBitmap != null && !showOrigin && isActive
+        }
+
+        if (bitmap != null) {
+            val imageModel = remember(photo.id, metadataHash, bitmap) {
+                ImageRequest.Builder(context)
+                    .data(bitmap)
+                    .crossfade(false) // 禁用交叉淡入淡出，避免滑动时同时渲染两张大图
+                    .build()
+            }
+
+            ZoomableAsyncImage(
+                model = imageModel,
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Fit,
+                state = zoomableState,
+                modifier = Modifier.fillMaxSize()
             )
         }
 
-        hdrBitmap?.let { currentHdrBitmap ->
-            key(currentHdrBitmap, hasHdr.value, hdrRefreshNonce) {
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            alpha = hdrAlpha
-                            if (contentTransformation.isSpecified) {
-                                scaleX = contentTransformation.scale.scaleX
-                                scaleY = contentTransformation.scale.scaleY
-                                translationX = contentTransformation.offset.x
-                                translationY = contentTransformation.offset.y
-                                transformOrigin = contentTransformation.transformOrigin
-                            }
-                        },
-                    factory = { ctx ->
-                        HdrZoomImageView(ctx).apply {
-                            imageViewRef = this
-                            setBitmap(currentHdrBitmap)
-                        }
-                    },
-                    update = { view ->
-                        imageViewRef = view
-                        view.setBitmap(currentHdrBitmap)
-                    }
-                )
+        if (showHdr) {
+            val imageModel = remember(photo.id, metadataHash, hdrBitmap) {
+                ImageRequest.Builder(context)
+                    .data(hdrBitmap)
+                    .crossfade(false) // 禁用交叉淡入淡出，避免滑动时同时渲染两张大图
+                    .build()
             }
+
+            ZoomableAsyncImage(
+                model = imageModel,
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Fit,
+                state = zoomableState,
+                modifier = Modifier.fillMaxSize().alpha(hdrAlpha)
+            )
         }
 
-        LaunchedEffect(Unit) {
-            onNativeGestureAvailabilityChange(false)
-        }
-
-        LaunchedEffect(hasHdr.value, hdrRefreshNonce, imageViewRef, hdrBitmap, hdrVisible) {
-            if (isActive && hdrBitmap != null && hdrVisible) {
-                withFrameNanos { }
-                imageViewRef?.rebindForHdrMode()
-                withFrameNanos { }
-                imageViewRef?.refreshForHdrMode()
-            }
-        }
-
-        if (shouldShowLoading) {
+        if (isLoading) {
             CircularProgressIndicator(
                 color = AccentOrange,
                 modifier = Modifier.size(48.dp)

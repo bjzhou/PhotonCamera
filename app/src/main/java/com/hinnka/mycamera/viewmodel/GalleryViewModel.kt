@@ -22,7 +22,6 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
-import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
@@ -1458,7 +1457,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return "detail_${previewCacheKey(photoData, metadata, showOrigin)}"
     }
 
-    private fun shouldUseHdrDetail(photoId: String, metadata: PhotoMetadata): Boolean {
+    private fun shouldUseHdrDetail(metadata: PhotoMetadata): Boolean {
         return metadata.manualHdrEffectEnabled
     }
 
@@ -1485,6 +1484,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         showOrigin: Boolean = false,
         bitmap: Bitmap? = null,
         ignoreCrop: Boolean = false,
+        ignoreDenoise: Boolean = false,
         recipeParamsOverride: ColorRecipeParams? = null
     ): Bitmap? {
         return withContext(Dispatchers.IO) {
@@ -1492,9 +1492,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val context = getApplication<Application>()
 
                 var finalMetadata: PhotoMetadata
-                val finalS: Float
-                val finalNR: Float
-                val finalCNR: Float
+                var finalS = 0f
+                var finalNR = 0f
+                var finalCNR = 0f
 
                 val metadata =
                     photo.metadata
@@ -1534,13 +1534,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     finalCNR = editChromaNoiseReduction.value
                 } else {
                     finalMetadata = metadata
-                    finalS = finalMetadata.sharpening
-                        ?: (if (finalMetadata.isImported) 0f else sharpening.value)
-                    finalNR =
-                        finalMetadata.noiseReduction
-                            ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
-                    finalCNR = finalMetadata.chromaNoiseReduction
-                        ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
+
+                    if (!ignoreDenoise) {
+                        finalS = finalMetadata.sharpening
+                            ?: (if (finalMetadata.isImported) 0f else sharpening.value)
+                        finalNR =
+                            finalMetadata.noiseReduction
+                                ?: (if (finalMetadata.isImported) 0f else noiseReduction.value)
+                        finalCNR = finalMetadata.chromaNoiseReduction
+                            ?: (if (finalMetadata.isImported) 0f else chromaNoiseReduction.value)
+                    }
                         
                     if (ignoreCrop) {
                         finalMetadata = finalMetadata.copy(postCropRegion = null)
@@ -1593,7 +1596,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun getDetailBitmap(
         photo: PhotoData,
-        showOrigin: Boolean = false,
     ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
@@ -1604,94 +1606,41 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: PhotoManager.loadMetadata(getApplication(), photo.id)
                         ?: PhotoMetadata()
 
-                val detailCacheKey = detailCacheKey(photo, metadata, showOrigin)
-                val shouldUseHdrDetail = shouldUseHdrDetail(photo.id, metadata)
+                val detailCacheKey = detailCacheKey(photo, metadata, false)
+                val shouldUseHdrDetail = shouldUseHdrDetail(metadata)
 
                 // HDR detail must be derived from the original render path, not bokeh.jpg,
                 // otherwise SDR bokeh cache would override HDR-capable sources.
 
-                if (showOrigin) {
-                    val originalBitmap = if (selectedTab == GalleryTab.PHOTON) {
-                        PhotoManager.loadOriginalBitmap(context, photo.id, preserveHdr = true)
-                    } else {
-                        PhotoManager.loadBitmap(context, photo.id, preserveHdr = true)
-                            ?: PhotoManager.loadBitmap(context, photo.uri, preserveHdr = true)
-                    }
-                    originalBitmap?.let { detailBitmapCache.put(detailCacheKey, it) }
-                    return@withContext originalBitmap
-                }
-
                 if (!shouldUseHdrDetail) {
-                    return@withContext getPreviewBitmap(photo, showOrigin = false)
+                    return@withContext null
                 }
 
                 if (PhotoManager.isHdrWorkInFlight(photo.id)) {
                     PLog.d(TAG, "getDetailBitmap: HDR work in flight for ${photo.id}, using preview fallback")
-                    return@withContext getPreviewBitmap(photo, showOrigin = false)
+                    return@withContext null
                 }
 
-                if (shouldUseHdrDetail) {
-                    val cachedDetail = detailBitmapCache.get(detailCacheKey)
-                    if (cachedDetail != null && !cachedDetail.isRecycled) {
-                        PLog.d(TAG, "getDetailBitmap: hit detail cache for ${photo.id}")
-                        return@withContext cachedDetail
-                    }
+                val cachedDetail = detailBitmapCache.get(detailCacheKey)
+                if (cachedDetail != null && !cachedDetail.isRecycled) {
+                    PLog.d(TAG, "getDetailBitmap: hit detail cache for ${photo.id}")
+                    return@withContext cachedDetail
+                }
 
-                    val detailFile = PhotoManager.getDetailHdrFile(context, photo.id)
-                    if (detailFile.exists()) {
-                        val diskCached = PhotoManager.loadBitmap(context, Uri.fromFile(detailFile), preserveHdr = true)
-                        if (diskCached != null) {
-                            detailBitmapCache.put(detailCacheKey, diskCached)
+                val detailFile = PhotoManager.getDetailHdrFile(context, photo.id)
+                if (detailFile.exists()) {
+                    val diskCached = PhotoManager.loadBitmap(context, Uri.fromFile(detailFile), preserveHdr = true)
+                    if (diskCached != null) {
+                        detailBitmapCache.put(detailCacheKey, diskCached)
 //                            PLog.d(
 //                                TAG,
 //                                "getDetailBitmap: using disk detail HDR cache for ${photo.id}, hasGainmap=${UltraHdrWriter.hasGainmap(diskCached)}"
 //                            )
-                            return@withContext diskCached
-                        }
+                        return@withContext diskCached
                     }
                 }
 
-                val embeddedHdrBitmap = if (selectedTab == GalleryTab.PHOTON) {
-                    PhotoManager.loadOriginalBitmap(context, photo.id, preserveHdr = true)
-                } else {
-                    PhotoManager.loadBitmap(context, photo.id, preserveHdr = true)
-                        ?: PhotoManager.loadBitmap(context, photo.uri, preserveHdr = true)
-                }
-                if (UltraHdrWriter.hasGainmap(embeddedHdrBitmap)) {
-                    PLog.d(TAG, "getDetailBitmap: using embedded gainmap bitmap for ${photo.id}")
-                    embeddedHdrBitmap?.let { detailBitmapCache.put(detailCacheKey, it) }
-                    return@withContext embeddedHdrBitmap
-                }
-
-                val canReuseEmbeddedGainmap =
-                    metadata.hasEmbeddedGainmap &&
-                        metadata.lutId == null &&
-                        metadata.colorRecipeParams == null &&
-                        metadata.sharpening == null &&
-                        metadata.noiseReduction == null &&
-                        metadata.chromaNoiseReduction == null &&
-                        metadata.frameId == null &&
-                        metadata.cropRegion == null &&
-                        metadata.postCropRegion == null &&
-                        metadata.computationalAperture == null
-                if (canReuseEmbeddedGainmap) {
-                    val reusedBitmap = if (selectedTab == GalleryTab.PHOTON) {
-                        PhotoManager.loadOriginalBitmap(context, photo.id, preserveHdr = true)
-                    } else {
-                        PhotoManager.loadBitmap(context, photo.id, preserveHdr = true)
-                            ?: PhotoManager.loadBitmap(context, photo.uri, preserveHdr = true)
-                    }
-                    reusedBitmap?.let { detailBitmapCache.put(detailCacheKey, it) }
-                    return@withContext reusedBitmap
-                }
-
-                PLog.d(
-                    TAG,
-                    "getDetailBitmap: no ready HDR detail source for ${photo.id}, using preview fallback"
-                )
-                val fallback = getPreviewBitmap(photo, showOrigin = false)
-                fallback?.let { detailBitmapCache.put(detailCacheKey, it) }
-                return@withContext fallback
+                return@withContext null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1701,17 +1650,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun shouldPrioritizeDetailBitmap(photo: PhotoData, showOrigin: Boolean = false): Boolean {
-        if (showOrigin) return true
+    fun shouldPrioritizeDetailBitmap(photo: PhotoData): Boolean {
         val context = getApplication<Application>()
         val metadata =
             photo.metadata
                 ?: photo.relatedPhoto?.metadata
                 ?: PhotoMetadata()
-        if (!shouldUseHdrDetail(photo.id, metadata)) {
+        if (!shouldUseHdrDetail(metadata)) {
             return false
         }
-        val detailCacheKey = detailCacheKey(photo, metadata, showOrigin)
+        val detailCacheKey = detailCacheKey(photo, metadata, false)
         val cachedDetail = detailBitmapCache.get(detailCacheKey)
         if (cachedDetail != null && !cachedDetail.isRecycled) {
             return true
@@ -1720,25 +1668,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return true
         }
         return metadata.hasEmbeddedGainmap
-    }
-
-    fun prefetchDetailBitmap(photo: PhotoData, showOrigin: Boolean = false) {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                val metadata = photo.metadata ?: photo.relatedPhoto?.metadata ?: PhotoMetadata()
-                if (!showOrigin && PhotoManager.isHdrWorkInFlight(photo.id)) {
-                    PLog.d(TAG, "prefetchDetailBitmap: skip while HDR work is in flight for ${photo.id}")
-                    return@runCatching
-                }
-                if (showOrigin || shouldPrioritizeDetailBitmap(photo, showOrigin)) {
-                    getDetailBitmap(photo, showOrigin)
-                }
-            }.onFailure {
-                if (it !is CancellationException) {
-                    PLog.w(TAG, "Failed to prefetch detail bitmap for ${photo.id}", it)
-                }
-            }
-        }
     }
 
     /**

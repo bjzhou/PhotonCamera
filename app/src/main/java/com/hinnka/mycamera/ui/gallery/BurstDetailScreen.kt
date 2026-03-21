@@ -345,6 +345,7 @@ fun BurstDetailScreen(
                                     photo = photoData,
                                     photoFile = photo,
                                     showOrigin = showOrigin,
+                                    isActive = page == pagerState.currentPage,
                                     viewModel = viewModel,
                                     onZoomChange = { zoomed ->
                                         if (page == pagerState.currentPage) {
@@ -560,6 +561,7 @@ private fun ZoomableImage(
     photo: PhotoData,
     photoFile: File,
     showOrigin: Boolean,
+    isActive: Boolean,
     viewModel: GalleryViewModel,
     onZoomChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -587,13 +589,13 @@ private fun ZoomableImage(
         var bitmap by remember { mutableStateOf<Bitmap?>(null) }
         val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
 
-        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey, photoFile) {
+        LaunchedEffect(photo.id, metadataHash, showOrigin, refreshKey, photoFile, isActive) {
             val photoBitmap = withContext(Dispatchers.IO) {
                 BitmapFactory.decodeFile(photoFile.path)
             }
             suspend fun loadBitmap() {
                 isLoading = bitmap == null
-                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin, bitmap = photoBitmap)
+                bitmap = viewModel.getPreviewBitmap(photo, showOrigin = showOrigin, bitmap = photoBitmap, ignoreDenoise = !isActive)
                 if (bitmap == null) {
                     delay(500)
                     loadBitmap()

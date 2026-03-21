@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
@@ -214,7 +213,7 @@ object PhotoManager {
                     bitmap = bitmap,
                     outputStream = outputStream,
                     quality = quality,
-                    gainmap = gainmapResult?.payload,
+                    gainmap = gainmapResult?.gainmap,
                 )
             )
         }
@@ -1893,7 +1892,7 @@ object PhotoManager {
 
         val bitmap = runCatching {
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                if (preserveHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                if (preserveHdr) {
                     decoder.allocator = ImageDecoder.ALLOCATOR_HARDWARE
                 } else {
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
