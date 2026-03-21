@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,10 +28,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -71,6 +77,7 @@ fun CaptureAnimationOverlay(
         val expandProgress = remember(snapshot.id) { Animatable(0f) }
         val developProgress = remember(snapshot.id) { Animatable(0f) }
         val collapseProgress = remember(snapshot.id) { Animatable(0f) }
+        val skipSignal = remember(snapshot.id) { CompletableDeferred<Unit>() }
         var phase by remember(snapshot.id) { mutableStateOf(CaptureAnimationPhase.EXPAND) }
 
         LaunchedEffect(snapshot.id) {
@@ -79,16 +86,40 @@ fun CaptureAnimationOverlay(
             developProgress.snapTo(0f)
             collapseProgress.snapTo(0f)
 
-            expandProgress.animateTo(
+            val skippedDuringExpand = animateToWithSkip(
+                animatable = expandProgress,
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing),
+                skipSignal = skipSignal
             )
+            if (skippedDuringExpand) {
+                finishWithFastCollapse(
+                    expandProgress = expandProgress,
+                    developProgress = developProgress,
+                    collapseProgress = collapseProgress,
+                    setPhase = { phase = it },
+                    onFinished = onFinished
+                )
+                return@LaunchedEffect
+            }
 
             phase = CaptureAnimationPhase.DEVELOP
-            developProgress.animateTo(
+            val skippedDuringDevelop = animateToWithSkip(
+                animatable = developProgress,
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 4000, easing = LinearEasing)
+                animationSpec = tween(durationMillis = 4000, easing = LinearEasing),
+                skipSignal = skipSignal
             )
+            if (skippedDuringDevelop) {
+                finishWithFastCollapse(
+                    expandProgress = expandProgress,
+                    developProgress = developProgress,
+                    collapseProgress = collapseProgress,
+                    setPhase = { phase = it },
+                    onFinished = onFinished
+                )
+                return@LaunchedEffect
+            }
 
             phase = CaptureAnimationPhase.COLLAPSE
             collapseProgress.animateTo(
@@ -155,6 +186,15 @@ fun CaptureAnimationOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = scrimAlpha))
+                .pointerInput(snapshot.id, currentBounds, phase) {
+                    detectTapGestures { offset ->
+                        if (phase != CaptureAnimationPhase.COLLAPSE &&
+                            !currentBounds.contains(offset)
+                        ) {
+                            skipSignal.complete(Unit)
+                        }
+                    }
+                }
         )
 
         Box(
@@ -188,6 +228,42 @@ fun CaptureAnimationOverlay(
             )
         }
     }
+}
+
+private suspend fun animateToWithSkip(
+    animatable: Animatable<Float, *>,
+    targetValue: Float,
+    animationSpec: androidx.compose.animation.core.AnimationSpec<Float>,
+    skipSignal: CompletableDeferred<Unit>
+): Boolean = coroutineScope {
+    val animationJob = async {
+        animatable.animateTo(targetValue = targetValue, animationSpec = animationSpec)
+    }
+    select {
+        animationJob.onAwait { false }
+        skipSignal.onAwait {
+            animationJob.cancel()
+            true
+        }
+    }
+}
+
+private suspend fun finishWithFastCollapse(
+    expandProgress: Animatable<Float, *>,
+    developProgress: Animatable<Float, *>,
+    collapseProgress: Animatable<Float, *>,
+    setPhase: (CaptureAnimationPhase) -> Unit,
+    onFinished: () -> Unit
+) {
+    expandProgress.snapTo(1f)
+    developProgress.snapTo(1f)
+    setPhase(CaptureAnimationPhase.COLLAPSE)
+    collapseProgress.snapTo(0f)
+    collapseProgress.animateTo(
+        targetValue = 1f,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
+    )
+    onFinished()
 }
 
 private fun calculateCenterBounds(
