@@ -30,6 +30,210 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #endif
 
+static jbyteArray encodeBitmapThumbnailToJpeg(JNIEnv *env,
+                                              const libraw_processed_image_t *thumb,
+                                              int quality = 90) {
+  if (!thumb || !thumb->data || thumb->width <= 0 || thumb->height <= 0) {
+    return nullptr;
+  }
+
+  if (thumb->colors != 1 && thumb->colors != 3) {
+    LOGI("encodeBitmapThumbnailToJpeg: unsupported colors=%d", thumb->colors);
+    return nullptr;
+  }
+
+  const int pixelFormat = thumb->colors == 3 ? TJPF_RGB : TJPF_GRAY;
+  const int rowStride = thumb->width * thumb->colors;
+  std::vector<unsigned char> converted;
+  const unsigned char *src = thumb->data;
+
+  if (thumb->bits == 16) {
+    converted.resize(static_cast<size_t>(rowStride) * thumb->height);
+    const auto *src16 = reinterpret_cast<const unsigned short *>(thumb->data);
+    const size_t sampleCount =
+        static_cast<size_t>(thumb->width) * thumb->height * thumb->colors;
+    for (size_t i = 0; i < sampleCount; ++i) {
+      converted[i] = static_cast<unsigned char>(src16[i] >> 8);
+    }
+    src = converted.data();
+  } else if (thumb->bits != 8) {
+    LOGI("encodeBitmapThumbnailToJpeg: unsupported bits=%d", thumb->bits);
+    return nullptr;
+  }
+
+  tjhandle handle = tjInitCompress();
+  if (!handle) {
+    LOGE("encodeBitmapThumbnailToJpeg: tjInitCompress failed: %s",
+         tjGetErrorStr());
+    return nullptr;
+  }
+
+  unsigned char *jpegBuf = nullptr;
+  unsigned long jpegSize = 0;
+  const int ret =
+      tjCompress2(handle, src, thumb->width, rowStride, thumb->height,
+                  pixelFormat, &jpegBuf, &jpegSize, TJSAMP_420, quality,
+                  TJFLAG_NOREALLOC | TJFLAG_FASTDCT);
+  if (ret != 0 || !jpegBuf || jpegSize == 0) {
+    LOGE("encodeBitmapThumbnailToJpeg: tjCompress2 failed: %s",
+         tjGetErrorStr());
+    if (jpegBuf) {
+      tjFree(jpegBuf);
+    }
+    tjDestroy(handle);
+    return nullptr;
+  }
+
+  jbyteArray result = env->NewByteArray(static_cast<jsize>(jpegSize));
+  env->SetByteArrayRegion(result, 0, static_cast<jsize>(jpegSize),
+                          reinterpret_cast<const jbyte *>(jpegBuf));
+  tjFree(jpegBuf);
+  tjDestroy(handle);
+  return result;
+}
+
+static jobject createArgb8888Bitmap(JNIEnv *env, int width, int height) {
+  jclass bitmapClass = env->FindClass("android/graphics/Bitmap");
+  jclass configClass = env->FindClass("android/graphics/Bitmap$Config");
+  jfieldID argb8888Field =
+      env->GetStaticFieldID(configClass, "ARGB_8888",
+                            "Landroid/graphics/Bitmap$Config;");
+  jobject argb8888 = env->GetStaticObjectField(configClass, argb8888Field);
+  jmethodID createBitmapMethod =
+      env->GetStaticMethodID(bitmapClass, "createBitmap",
+                             "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+  return env->CallStaticObjectMethod(bitmapClass, createBitmapMethod, width,
+                                     height, argb8888);
+}
+
+static jobject createBitmapFromRgba(JNIEnv *env, int width, int height,
+                                    const unsigned char *rgbaData,
+                                    int strideBytes) {
+  if (!rgbaData || width <= 0 || height <= 0) {
+    return nullptr;
+  }
+
+  jobject bitmap = createArgb8888Bitmap(env, width, height);
+  if (!bitmap) {
+    LOGE("createBitmapFromRgba: failed to allocate Bitmap %dx%d", width,
+         height);
+    return nullptr;
+  }
+
+  void *pixels = nullptr;
+  if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS ||
+      !pixels) {
+    LOGE("createBitmapFromRgba: failed to lock pixels");
+    return nullptr;
+  }
+
+  AndroidBitmapInfo info;
+  if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+    AndroidBitmap_unlockPixels(env, bitmap);
+    LOGE("createBitmapFromRgba: failed to query bitmap info");
+    return nullptr;
+  }
+
+  const auto *src = rgbaData;
+  auto *dst = reinterpret_cast<unsigned char *>(pixels);
+  for (int y = 0; y < height; ++y) {
+    std::memcpy(dst + y * info.stride, src + y * strideBytes,
+                static_cast<size_t>(width) * 4);
+  }
+
+  AndroidBitmap_unlockPixels(env, bitmap);
+  return bitmap;
+}
+
+static jobject decodeJpegPreviewToBitmap(JNIEnv *env, const unsigned char *jpegData,
+                                         unsigned long jpegSize) {
+  if (!jpegData || jpegSize == 0) {
+    return nullptr;
+  }
+
+  tjhandle handle = tjInitDecompress();
+  if (!handle) {
+    LOGE("decodeJpegPreviewToBitmap: tjInitDecompress failed: %s",
+         tjGetErrorStr());
+    return nullptr;
+  }
+
+  int width = 0;
+  int height = 0;
+  int subsamp = 0;
+  auto *mutableJpegData = const_cast<unsigned char *>(jpegData);
+  if (tjDecompressHeader2(handle, mutableJpegData, jpegSize, &width, &height,
+                          &subsamp) != 0) {
+    LOGE("decodeJpegPreviewToBitmap: header decode failed: %s",
+         tjGetErrorStr());
+    tjDestroy(handle);
+    return nullptr;
+  }
+
+  std::vector<unsigned char> rgba(static_cast<size_t>(width) * height * 4);
+  if (tjDecompress2(handle, mutableJpegData, jpegSize, rgba.data(), width, width * 4,
+                    height, TJPF_RGBA, TJFLAG_FASTUPSAMPLE |
+                                            TJFLAG_FASTDCT) != 0) {
+    LOGE("decodeJpegPreviewToBitmap: jpeg decode failed: %s", tjGetErrorStr());
+    tjDestroy(handle);
+    return nullptr;
+  }
+
+  tjDestroy(handle);
+  return createBitmapFromRgba(env, width, height, rgba.data(), width * 4);
+}
+
+static jobject convertBitmapThumbnailToBitmap(JNIEnv *env,
+                                              const libraw_processed_image_t *thumb) {
+  if (!thumb || !thumb->data || thumb->width <= 0 || thumb->height <= 0) {
+    return nullptr;
+  }
+
+  if (thumb->colors != 1 && thumb->colors != 3) {
+    LOGI("convertBitmapThumbnailToBitmap: unsupported colors=%d", thumb->colors);
+    return nullptr;
+  }
+
+  const size_t pixelCount = static_cast<size_t>(thumb->width) * thumb->height;
+  std::vector<unsigned char> rgba(pixelCount * 4);
+
+  if (thumb->bits == 8) {
+    for (size_t i = 0; i < pixelCount; ++i) {
+      const size_t srcIndex = i * thumb->colors;
+      const unsigned char r = thumb->colors == 3 ? thumb->data[srcIndex] : thumb->data[i];
+      const unsigned char g = thumb->colors == 3 ? thumb->data[srcIndex + 1] : thumb->data[i];
+      const unsigned char b = thumb->colors == 3 ? thumb->data[srcIndex + 2] : thumb->data[i];
+      const size_t dstIndex = i * 4;
+      rgba[dstIndex] = r;
+      rgba[dstIndex + 1] = g;
+      rgba[dstIndex + 2] = b;
+      rgba[dstIndex + 3] = 255;
+    }
+  } else if (thumb->bits == 16) {
+    const auto *src16 = reinterpret_cast<const unsigned short *>(thumb->data);
+    for (size_t i = 0; i < pixelCount; ++i) {
+      const size_t srcIndex = i * thumb->colors;
+      const unsigned char r =
+          static_cast<unsigned char>((thumb->colors == 3 ? src16[srcIndex] : src16[i]) >> 8);
+      const unsigned char g = static_cast<unsigned char>(
+          (thumb->colors == 3 ? src16[srcIndex + 1] : src16[i]) >> 8);
+      const unsigned char b = static_cast<unsigned char>(
+          (thumb->colors == 3 ? src16[srcIndex + 2] : src16[i]) >> 8);
+      const size_t dstIndex = i * 4;
+      rgba[dstIndex] = r;
+      rgba[dstIndex + 1] = g;
+      rgba[dstIndex + 2] = b;
+      rgba[dstIndex + 3] = 255;
+    }
+  } else {
+    LOGI("convertBitmapThumbnailToBitmap: unsupported bits=%d", thumb->bits);
+    return nullptr;
+  }
+
+  return createBitmapFromRgba(env, thumb->width, thumb->height, rgba.data(),
+                              thumb->width * 4);
+}
+
 struct Matrix3x3 {
   float m[9];
 
@@ -1181,6 +1385,39 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     return nullptr;
   }
 
+  jobject embeddedPreviewBitmap = nullptr;
+  ret = RawProcessor.unpack_thumb();
+  if (ret == LIBRAW_SUCCESS) {
+    libraw_processed_image_t *thumb = RawProcessor.dcraw_make_mem_thumb(&ret);
+    if (thumb && ret == LIBRAW_SUCCESS) {
+      if (thumb->type == LIBRAW_IMAGE_JPEG && thumb->data &&
+          thumb->data_size > 0) {
+        embeddedPreviewBitmap =
+            decodeJpegPreviewToBitmap(env, thumb->data, thumb->data_size);
+        LOGI("processDngNative: extracted embedded JPEG preview (%d bytes)",
+             (int)thumb->data_size);
+      } else if (thumb->type == LIBRAW_IMAGE_BITMAP) {
+        embeddedPreviewBitmap = convertBitmapThumbnailToBitmap(env, thumb);
+        if (embeddedPreviewBitmap) {
+          LOGI("processDngNative: converted embedded bitmap preview %dx%d c=%d b=%d",
+               thumb->width, thumb->height, thumb->colors, thumb->bits);
+        } else {
+          LOGI("processDngNative: failed to convert embedded bitmap preview %dx%d c=%d b=%d",
+               thumb->width, thumb->height, thumb->colors, thumb->bits);
+        }
+      } else {
+        LOGI("processDngNative: embedded preview present but unsupported type=%d",
+             thumb->type);
+      }
+      LibRaw::dcraw_clear_mem(thumb);
+    } else {
+      LOGI("processDngNative: dcraw_make_mem_thumb failed ret=%d", ret);
+    }
+  } else {
+    LOGI("processDngNative: unpack_thumb failed ret=%d err=%s", ret,
+         libraw_strerror(ret));
+  }
+
   // 配置处理参数
   RawProcessor.imgdata.params.output_bps = 16;
   RawProcessor.imgdata.params.gamm[0] = 1.0; // Linear
@@ -1188,7 +1425,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   RawProcessor.imgdata.params.no_auto_bright = 1;
   RawProcessor.imgdata.params.use_camera_wb = 1;
   RawProcessor.imgdata.params.output_color = 0; // Raw color space
-  RawProcessor.imgdata.params.user_qual = 12;
+  RawProcessor.imgdata.params.user_qual = 14;
   RawProcessor.imgdata.params.fbdd_noiserd = 0;
   RawProcessor.imgdata.params.threshold = 0;
   RawProcessor.imgdata.params.med_passes = 0;
@@ -1218,7 +1455,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIF[F[F[FIIF[FIIFIJF[I[F)V");
+                       "(Ljava/nio/ByteBuffer;IIIF[F[F[F[FIIF[FIIFIJF[I[FLandroid/graphics/Bitmap;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -1226,6 +1463,14 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     float val = RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i];
     env->SetFloatArrayRegion(blackLevelArray, i, 1, &val);
   }
+
+  jfloatArray preMulArray = env->NewFloatArray(4);
+  float preMul[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  for (int i = 0; i < 4; i++) {
+    const float val = RawProcessor.imgdata.color.pre_mul[i];
+    preMul[i] = val > 0.0f ? val : 1.0f;
+  }
+  env->SetFloatArrayRegion(preMulArray, 0, 4, preMul);
 
   // 白平衡
   jfloatArray wbArray = env->NewFloatArray(4);
@@ -1534,9 +1779,10 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   jobject dngData = env->NewObject(
       dngDataClass, constructor, rawDataBuffer, width, height, rowStride,
-      whiteLevel, blackLevelArray, wbArray, colorMatrixArray, cfaPattern, 0,
-      baselineExposure, nullptr, 0, 0, exposureBias, iso, shutterSpeedLong,
-      aperture, activeArray, noiseProfileArray);
+      whiteLevel, blackLevelArray, preMulArray, wbArray, colorMatrixArray,
+      cfaPattern, 0, baselineExposure, nullptr, 0, 0, exposureBias, iso,
+      shutterSpeedLong, aperture, activeArray, noiseProfileArray,
+      embeddedPreviewBitmap);
 
   // 释放资源
   LibRaw::dcraw_clear_mem(image);

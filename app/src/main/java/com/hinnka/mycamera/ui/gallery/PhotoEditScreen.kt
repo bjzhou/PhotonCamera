@@ -52,7 +52,7 @@ import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
-import com.hinnka.mycamera.raw.MeteringSystem
+import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.theme.AccentOrange
@@ -681,7 +681,7 @@ fun PhotoEditScreen(
                         } else if (editTab == 2) {
                             RawEditPanel(
                                 viewModel = cameraViewModel,
-                                editDroMode = MeteringSystem.DROMode.valueOf(droMode),
+                                editDroMode = RawProcessingPreferences.DROMode.valueOf(droMode),
                                 editColorSpace = colorSpace,
                                 editLogCurve = logCurve,
                                 editRawLut = rawLut,
@@ -974,7 +974,7 @@ private fun ZoomableEditImage(
 @Composable
 private fun RawEditPanel(
     viewModel: CameraViewModel,
-    editDroMode: MeteringSystem.DROMode,
+    editDroMode: RawProcessingPreferences.DROMode,
     editColorSpace: ColorSpace,
     editLogCurve: LogCurve,
     editRawLut: String?,
@@ -1001,14 +1001,14 @@ private fun RawEditPanel(
         // DRO Mode
         SegmentedControl(
             title = stringResource(R.string.settings_dro_mode),
-            items = MeteringSystem.DROMode.entries,
+            items = RawProcessingPreferences.DROMode.entries,
             selectedItem = editDroMode,
             onItemSelected = { viewModel.setDroMode(it.name) },
             itemLabel = {
                 when (it) {
-                    MeteringSystem.DROMode.OFF -> droOff
-                    MeteringSystem.DROMode.LOW -> droLow
-                    MeteringSystem.DROMode.HIGH -> droHigh
+                    RawProcessingPreferences.DROMode.OFF -> droOff
+                    RawProcessingPreferences.DROMode.LOW -> droLow
+                    RawProcessingPreferences.DROMode.HIGH -> droHigh
                 }
             }
         )

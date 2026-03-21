@@ -45,6 +45,12 @@ data class RawMetadata(
     val whiteBalanceGains: FloatArray,
 
     /**
+     * 相机预乘子（LibRaw/RT pre_mul 语义）
+     * 顺序: [R, Gr, Gb, B]
+     */
+    val preMul: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
+
+    /**
      * 色彩校正矩阵（CCM）
      * 3x3 矩阵，行优先存储（9 个元素）
      * 用于将相机原始色彩空间转换到 sRGB
@@ -72,8 +78,7 @@ data class RawMetadata(
     val exposureBias: Float = 0f,
     val iso: Int = 100,
     val shutterSpeed: Long = 0L,
-    val aperture: Float = 0f,
-    val droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+    val aperture: Float = 0f
 ) {
     companion object {
         private const val TAG = "RawMetadata"
@@ -94,7 +99,6 @@ data class RawMetadata(
             characteristics: CameraCharacteristics,
             captureResult: CaptureResult,
             userExposureCompensation: Float? = null,
-            droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
             colorSpace: ColorSpace = ColorSpace.BT2020
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
@@ -268,6 +272,7 @@ data class RawMetadata(
                 blackLevel = blackLevel,
                 whiteLevel = whiteLevel,
                 whiteBalanceGains = whiteBalanceGains,
+                preMul = whiteBalanceGains.copyOf(),
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 lensShadingMap = lensShadingMap,
                 lensShadingMapWidth = shadingWidth,
@@ -282,8 +287,7 @@ data class RawMetadata(
                 exposureBias = userExposureCompensation ?: exposureCompensation,
                 iso = iso,
                 shutterSpeed = shutterSpeed,
-                aperture = aperture,
-                droMode = droMode
+                aperture = aperture
             )
         }
 

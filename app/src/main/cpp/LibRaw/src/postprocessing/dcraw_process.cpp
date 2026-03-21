@@ -185,6 +185,8 @@ int LibRaw::dcraw_process(void)
         aahd_interpolate();
       else if (quality == 13)
         lmmse_interpolate(0);
+      else if (quality == 14)
+        amaze_interpolate();
       // fallback to AHD
       else
       {

@@ -106,7 +106,8 @@ object RawProcessor {
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
         outputStream: java.io.OutputStream,
-        rotation: Int = 0
+        rotation: Int = 0,
+        thumbnail: Bitmap? = null
     ) {
         if (!isRawImage(image)) {
             throw IllegalArgumentException("Image is not RAW format: ${image.format}")
@@ -121,11 +122,34 @@ object RawProcessor {
                 else -> ExifInterface.ORIENTATION_NORMAL
             }
             dngCreator.setOrientation(orientation)
+            buildDngThumbnail(thumbnail)?.let {
+                dngCreator.setThumbnail(it)
+                PLog.d(TAG, "Embedded DNG thumbnail written: ${it.width}x${it.height}")
+            }
             dngCreator.writeImage(outputStream, image.image)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save DNG", e)
         } finally {
             dngCreator.close()
+        }
+    }
+
+    private fun buildDngThumbnail(source: Bitmap?): Bitmap? {
+        if (source == null || source.isRecycled) {
+            return null
+        }
+
+        val maxEdge = 256
+        val width = source.width.coerceAtLeast(1)
+        val height = source.height.coerceAtLeast(1)
+        val scale = minOf(maxEdge.toFloat() / width, maxEdge.toFloat() / height, 1f)
+        val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+        val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+
+        return if (targetWidth == width && targetHeight == height) {
+            source
+        } else {
+            Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
         }
     }
 }

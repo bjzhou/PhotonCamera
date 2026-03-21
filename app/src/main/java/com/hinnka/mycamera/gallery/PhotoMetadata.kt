@@ -278,7 +278,7 @@ data class PhotoMetadata(
             shutterSpeed = formatShutterSpeed(raw.shutterSpeed).takeIf { it.isNotEmpty() } ?: shutterSpeed,
             aperture = formatAperture(raw.aperture).takeIf { it.isNotEmpty() } ?: aperture,
             exposureBias = raw.exposureBias,
-            droMode = raw.droMode.name,
+            droMode = null,
             width = raw.width.takeIf { it > 0 } ?: width,
             height = raw.height.takeIf { it > 0 } ?: height
         )

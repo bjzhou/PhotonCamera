@@ -450,6 +450,7 @@ protected:
   void cielab(ushort rgb[3], short lab[3]);
   void xtrans_interpolate(int);
   void ahd_interpolate();
+  void amaze_interpolate();
   void dht_interpolate();
   void aahd_interpolate();
   void lmmse_interpolate(int gamma_apply);

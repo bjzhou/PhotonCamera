@@ -23,9 +23,9 @@ import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
-import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
@@ -817,6 +817,7 @@ object PhotoManager {
         context: Context,
         photoId: String,
         image: SafeImage,
+        thumbnail: Bitmap?,
         rotation: Int,
         aspectRatio: AspectRatio,
         characteristics: CameraCharacteristics,
@@ -828,7 +829,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         exposureBias: Float? = null,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -846,7 +847,14 @@ object PhotoManager {
             byteOutstream.use { outputStream ->
                 image.use {
                     try {
-                        RawProcessor.saveToDng(image, characteristics, captureResult, outputStream, rotation)
+                        RawProcessor.saveToDng(
+                            image,
+                            characteristics,
+                            captureResult,
+                            outputStream,
+                            rotation,
+                            thumbnail
+                        )
                     } catch (e: Throwable) {
                         PLog.e(TAG, "DNG save failed", e)
                     }
@@ -867,8 +875,7 @@ object PhotoManager {
                 cropRegion = metadata.cropRegion,
                 rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
-                sharpeningValue = 0.4f,
-                droMode = droMode
+                sharpeningValue = 0.4f
             ) ?: return@withContext
             var bitmap = rawResult.sdrBitmap
 
@@ -949,6 +956,7 @@ object PhotoManager {
         context: Context,
         photoId: String,
         image: SafeImage,
+        thumbnail: Bitmap? = null,
         rotation: Int,
         aspectRatio: AspectRatio,
         characteristics: CameraCharacteristics,
@@ -960,7 +968,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         exposureBias: Float? = null,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
     ) {
         // 根据图像格式处理
         when (val format = image.format) {
@@ -985,6 +993,7 @@ object PhotoManager {
                     context,
                     photoId,
                     image,
+                    thumbnail,
                     rotation,
                     aspectRatio,
                     characteristics,
@@ -1317,7 +1326,7 @@ object PhotoManager {
         useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -1341,7 +1350,6 @@ object PhotoManager {
                 characteristics,
                 captureResult,
                 exposureBias,
-                droMode,
                 RawDemosaicProcessor.getInstance().getRawColorSpace()
             )
 
@@ -1462,7 +1470,7 @@ object PhotoManager {
         useSuperResolution: Boolean = false,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -2113,7 +2121,7 @@ object PhotoManager {
         }
     }
 
-    suspend fun refreshRawPreview(context: Context, photoId: String, droMode: MeteringSystem.DROMode): Bitmap? {
+    suspend fun refreshRawPreview(context: Context, photoId: String, droMode: RawProcessingPreferences.DROMode): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val photoDir = getPhotoDir(context, photoId, true)
@@ -2132,7 +2140,6 @@ object PhotoManager {
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
                     sharpeningValue = 0.4f,
-                    droMode = metadata?.droMode?.let { MeteringSystem.DROMode.valueOf(it) } ?: droMode,
                     onMetadata = { raw ->
                         updatedMetadata = updatedMetadata?.merge(raw) ?: PhotoMetadata().merge(raw)
                     }

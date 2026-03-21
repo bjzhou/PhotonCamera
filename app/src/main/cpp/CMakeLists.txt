@@ -8,6 +8,7 @@ include_directories(${LIB_PATH}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo/src)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../../rawtherapee-5.12/rtengine)
 
 file(GLOB JXL_LIBS "${LIB_PATH}/lib/${ANDROID_ABI}/*.a")
 

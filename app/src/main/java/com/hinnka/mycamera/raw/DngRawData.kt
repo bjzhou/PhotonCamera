@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import android.graphics.Bitmap
 import androidx.annotation.Keep
 import java.nio.ByteBuffer
 
@@ -29,6 +30,7 @@ data class DngRawData @Keep constructor(
     val rowStride: Int,
     val whiteLevel: Float,
     val blackLevel: FloatArray,
+    val preMul: FloatArray,
     val whiteBalance: FloatArray,
     val colorMatrix: FloatArray,
     val cfaPattern: Int, // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
@@ -43,6 +45,7 @@ data class DngRawData @Keep constructor(
     val aperture: Float,
     val activeArray: IntArray?, // [left, top, right, bottom]
     val noiseProfile: FloatArray?, // NoiseProfile [S1, O1, S2, O2, ...]
+    val embeddedPreview: Bitmap? = null,
 ) : AutoCloseable {
 
     @Volatile
@@ -82,6 +85,7 @@ data class DngRawData @Keep constructor(
         if (rowStride != other.rowStride) return false
         if (whiteLevel != other.whiteLevel) return false
         if (!blackLevel.contentEquals(other.blackLevel)) return false
+        if (!preMul.contentEquals(other.preMul)) return false
         if (!whiteBalance.contentEquals(other.whiteBalance)) return false
         if (!colorMatrix.contentEquals(other.colorMatrix)) return false
         if (cfaPattern != other.cfaPattern) return false
@@ -93,6 +97,10 @@ data class DngRawData @Keep constructor(
         } else if (other.lensShadingMap != null) return false
         if (lensShadingMapWidth != other.lensShadingMapWidth) return false
         if (lensShadingMapHeight != other.lensShadingMapHeight) return false
+        if (embeddedPreview != null) {
+            if (other.embeddedPreview == null) return false
+            if (!embeddedPreview.sameAs(other.embeddedPreview)) return false
+        } else if (other.embeddedPreview != null) return false
 
         return true
     }
@@ -104,6 +112,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + rowStride
         result = 31 * result + whiteLevel.hashCode()
         result = 31 * result + blackLevel.contentHashCode()
+        result = 31 * result + preMul.contentHashCode()
         result = 31 * result + whiteBalance.contentHashCode()
         result = 31 * result + colorMatrix.contentHashCode()
         result = 31 * result + cfaPattern
@@ -112,6 +121,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + (lensShadingMap?.contentHashCode() ?: 0)
         result = 31 * result + lensShadingMapWidth
         result = 31 * result + lensShadingMapHeight
+        result = 31 * result + (embeddedPreview?.hashCode() ?: 0)
         return result
     }
 

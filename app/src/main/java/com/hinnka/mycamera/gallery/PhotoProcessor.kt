@@ -15,7 +15,6 @@ import com.hinnka.mycamera.hdr.SourceKind
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.processor.DepthBokehProcessor
-import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -321,10 +320,6 @@ class PhotoProcessor(
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): GainmapSourceSet? = withContext(Dispatchers.IO) {
-        val droMode = metadata.droMode?.let {
-            runCatching { MeteringSystem.DROMode.valueOf(it) }.getOrDefault(MeteringSystem.DROMode.OFF)
-        } ?: MeteringSystem.DROMode.OFF
-
         val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
             context = context,
             dngFilePath = dngPath,
@@ -332,8 +327,7 @@ class PhotoProcessor(
             cropRegion = metadata.cropRegion,
             rotation = metadata.rotation,
             exposureBias = metadata.exposureBias ?: 0f,
-            sharpeningValue = 0.4f,
-            droMode = droMode
+            sharpeningValue = 0.4f
         ) ?: return@withContext null
         prepareUltraHdrSourceFromRawResult(
             context = context,

@@ -1899,9 +1899,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
             val droModeForProcessing = try {
-                com.hinnka.mycamera.raw.MeteringSystem.DROMode.valueOf(droModeString)
+                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.valueOf(droModeString)
             } catch (e: Exception) {
-                com.hinnka.mycamera.raw.MeteringSystem.DROMode.OFF
+                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.OFF
             }
             val currentCameraId = cameraController.getCurrentCameraId()
 
@@ -1993,6 +1993,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     context,
                     photoId,
                     image,
+                    previewThumbnail,
                     rotation,
                     aspectRatio,
                     characteristics,
@@ -2035,9 +2036,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
             val droModeForProcessing = try {
-                com.hinnka.mycamera.raw.MeteringSystem.DROMode.valueOf(droModeString)
+                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.valueOf(droModeString)
             } catch (e: Exception) {
-                com.hinnka.mycamera.raw.MeteringSystem.DROMode.OFF
+                com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode.OFF
             }
             val currentCameraId = cameraController.getCurrentCameraId()
 

@@ -12,7 +12,6 @@ import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
-import com.hinnka.mycamera.utils.SplineInterpolator
 
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -53,14 +52,14 @@ class RawDemosaicProcessor {
      */
     private fun convertDngRawDataToMetadata(
         dngRawData: DngRawData,
-        exposureBias: Float,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF
+        exposureBias: Float
     ): RawMetadata {
         // CFA 模式：使用从 JNI 传递过来的实际值
         val cfaPattern = dngRawData.cfaPattern
 
         // 黑电平：DngRawData 提供的是 [R, Gr, Gb, B] 四通道
         val blackLevel = dngRawData.blackLevel
+        val preMul = dngRawData.preMul
 
         // 白电平
         val whiteLevel = dngRawData.whiteLevel
@@ -96,6 +95,7 @@ class RawDemosaicProcessor {
             blackLevel = blackLevel,
             whiteLevel = whiteLevel,
             whiteBalanceGains = whiteBalanceGains,
+            preMul = preMul,
             colorCorrectionMatrix = colorCorrectionMatrix,
             lensShadingMap = dngRawData.lensShadingMap,
             lensShadingMapWidth = dngRawData.lensShadingMapWidth,
@@ -106,8 +106,7 @@ class RawDemosaicProcessor {
             shutterSpeed = dngRawData.shutterSpeed,
             aperture = dngRawData.aperture,
             activeArray = activeArray,
-            noiseProfile = dngRawData.noiseProfile ?: floatArrayOf(0f, 0f),
-            droMode = droMode
+            noiseProfile = dngRawData.noiseProfile ?: floatArrayOf(0f, 0f)
         )
     }
 
@@ -316,7 +315,6 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -333,7 +331,6 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 exposureBias = exposureBias,
                 sharpeningValue = sharpeningValue,
-                droMode = droMode,
                 dngFile = dngFile,
                 onMetadata = onMetadata
             )?.sdrBitmap
@@ -392,7 +389,6 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -409,7 +405,6 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 exposureBias = exposureBias,
                 sharpeningValue = sharpeningValue,
-                droMode = droMode,
                 dngFile = dngFile,
                 onMetadata = onMetadata,
                 includeHdrReference = true
@@ -435,7 +430,6 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
-        droMode: MeteringSystem.DROMode = MeteringSystem.DROMode.OFF,
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false
@@ -470,7 +464,7 @@ class RawDemosaicProcessor {
             actualWidth = dngRawData.width
             actualHeight = dngRawData.height
             actualRowStride = dngRawData.rowStride
-            actualMetadata = convertDngRawDataToMetadata(dngRawData, exposureBias, droMode)
+            actualMetadata = convertDngRawDataToMetadata(dngRawData, exposureBias)
             actualRotation = dngRawData.rotation
             onMetadata?.invoke(actualMetadata)
         }
@@ -564,10 +558,18 @@ class RawDemosaicProcessor {
             )
             renderLinearPass(actualMetadata)
 
-            // 场景分析: 从 GPU demosaic 纹理读回精确的 Linear RGB 数据
-            // 计算平均亮度
+            // RT-style histogram matching uses the embedded preview as source and
+            // our neutral RAW render as target. When no preview is available, it
+            // falls back to a neutral curve.
             val sceneStats =
-                analyzeFromGpuTexture(demosaicTextureId, actualWidth, actualHeight, logCurve, actualMetadata)
+                analyzeFromGpuTexture(
+                    demosaicTextureId,
+                    actualWidth,
+                    actualHeight,
+                    logCurve,
+                    actualMetadata,
+                    dngRawDataCleanup?.embeddedPreview
+                )
             val renderPlan = sceneStats.toRenderPlan()
             val workingColorSpace = resolveWorkingColorSpace()
 
@@ -1693,7 +1695,8 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         logCurve: LogCurve,
-        metadata: RawMetadata? = null
+        metadata: RawMetadata,
+        referencePreview: Bitmap? = null
     ): SceneStats {
         // 1. 生成 mipmap
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
@@ -1749,41 +1752,23 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        // Determine focus point in normalized (0..1) coordinates
-        var focusX = 0.5f
-        var focusY = 0.5f
-
-        metadata?.let { meta ->
-            val afRegion = meta.afRegions?.firstOrNull()
-            val activeArray = meta.activeArray
-            if (afRegion != null && activeArray != null) {
-                // Map AF region center to 0..1 based on ACTIVE_ARRAY
-                focusX = (afRegion.rect.centerX().toFloat() - activeArray.left) / activeArray.width()
-                focusY = (afRegion.rect.centerY().toFloat() - activeArray.top) / activeArray.height()
-
-                // Clamp to 0..1
-                focusX = focusX.coerceIn(0f, 1f)
-                focusY = focusY.coerceIn(0f, 1f)
-
-                // Adjust for Y-axis inversion (OpenGLES texture has origin at bottom-left)
-                focusY = 1.0f - focusY
-            }
-        }
-
-        // 5. 调用外部测光系统进行分析
-        val analysis = MeteringSystem.analyze(
-            floatBuffer,
-            mipWidth,
-            mipHeight,
-            focusX,
-            focusY,
-            logCurve,
-            metadata
+        val analysis = HistogramMatching.analyze(
+            neutralBuffer = floatBuffer,
+            width = mipWidth,
+            height = mipHeight,
+            logCurve = logCurve,
+            referenceBitmap = referencePreview
         )
 
-        return SceneStats(analysis.exposureGain, analysis.curveLut)
+        val normalizationGain = ExposureNormalization.compute(metadata)
+        val curveLut = analysis.curveLut ?: DefaultToneCurve.analyze(
+            neutralBuffer = floatBuffer,
+            width = mipWidth,
+            height = mipHeight,
+            logCurve = logCurve
+        )
+        return SceneStats(normalizationGain, curveLut)
     }
-
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
     private fun transposeMatrix3x3(matrix: FloatArray): FloatArray {
