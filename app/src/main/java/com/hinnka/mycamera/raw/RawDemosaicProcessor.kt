@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.media.Image
 import android.opengl.*
-import android.util.Log
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutParser
@@ -315,6 +314,7 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
+        denoiseValue: Float? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -331,6 +331,7 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 exposureBias = exposureBias,
                 sharpeningValue = sharpeningValue,
+                denoiseValue = denoiseValue,
                 dngFile = dngFile,
                 onMetadata = onMetadata
             )?.sdrBitmap
@@ -354,6 +355,7 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         sharpeningValue: Float = 0f,
+        denoiseValue: Float? = null,
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
@@ -374,6 +376,7 @@ class RawDemosaicProcessor {
                 cropRegion = cropRegion,
                 rotation = rotation,
                 sharpeningValue = sharpeningValue,
+                denoiseValue = denoiseValue,
             )?.sdrBitmap
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW buffer", e)
@@ -389,6 +392,7 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
+        denoiseValue: Float? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         val dngFile = File(dngFilePath)
@@ -405,6 +409,7 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 exposureBias = exposureBias,
                 sharpeningValue = sharpeningValue,
+                denoiseValue = denoiseValue,
                 dngFile = dngFile,
                 onMetadata = onMetadata,
                 includeHdrReference = true
@@ -430,6 +435,7 @@ class RawDemosaicProcessor {
         rotation: Int,
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
+        denoiseValue: Float? = null,
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false
@@ -455,7 +461,6 @@ class RawDemosaicProcessor {
                     RawHdrRenderResult(
                         sdrBitmap = it,
                         hdrReferenceBitmap = null,
-                        renderPlan = RawRenderPlan(sceneNormalizationGain = 1.0f)
                     )
                 }
             }
@@ -561,36 +566,36 @@ class RawDemosaicProcessor {
             // RT-style histogram matching uses the embedded preview as source and
             // our neutral RAW render as target. When no preview is available, it
             // falls back to a neutral curve.
-            val sceneStats =
+            val curveLut =
                 analyzeFromGpuTexture(
                     demosaicTextureId,
                     actualWidth,
                     actualHeight,
                     logCurve,
-                    actualMetadata,
                     dngRawDataCleanup?.embeddedPreview
                 )
-            val renderPlan = sceneStats.toRenderPlan()
             val workingColorSpace = resolveWorkingColorSpace()
 
-            // NLM 降噪 (Combined 之后)
-            val denoiseStart = System.currentTimeMillis()
-            renderNLMPass(
-                sourceTextureId = demosaicTextureId,
-                width = actualWidth,
-                height = actualHeight,
-                metadata = actualMetadata,
-                sceneStats = sceneStats
-            )
-            val denoiseOutputTexture = gfTexId[1]
-            PLog.d(TAG, "NLM Denoise took: ${System.currentTimeMillis() - denoiseStart}ms")
+            val denoiseValue = denoiseValue ?: 0.2f
+            val outputTexture = if (denoiseValue > 0f) {
+                // NLM 降噪
+                renderNLMPass(
+                    sourceTextureId = demosaicTextureId,
+                    width = actualWidth,
+                    height = actualHeight,
+                    metadata = actualMetadata,
+                    denoiseValue = denoiseValue
+                )
+                gfTexId[1]
+            } else {
+                demosaicTextureId
+            }
 
             val hdrReferenceBitmap = if (includeHdrReference) {
                 setupHdrReferenceFramebuffer(actualWidth, actualHeight)
                 renderHdrReferencePass(
                     metadata = actualMetadata,
-                    renderPlan = renderPlan,
-                    inputTextureId = denoiseOutputTexture
+                    inputTextureId = outputTexture
                 )
                 setupOutputFramebuffer(finalWidth, finalHeight)
                 renderOutputPass(
@@ -608,7 +613,7 @@ class RawDemosaicProcessor {
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             setupCombinedFramebuffer(actualWidth, actualHeight)
             val combinedStart = System.currentTimeMillis()
-            renderCombinedPass(actualMetadata, sceneStats, baseLut, logCurve, inputTextureId = denoiseOutputTexture)
+            renderCombinedPass(actualMetadata, curveLut, baseLut, logCurve, inputTextureId = outputTexture)
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
 
             // 6. 第三步：锐化 (Sharpen Pass)
@@ -641,7 +646,6 @@ class RawDemosaicProcessor {
                 RawHdrRenderResult(
                     sdrBitmap = it,
                     hdrReferenceBitmap = hdrReferenceBitmap,
-                    renderPlan = renderPlan
                 )
             }
         } finally {
@@ -1062,7 +1066,7 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         metadata: RawMetadata,
-        sceneStats: SceneStats
+        denoiseValue: Float
     ) {
         setupNLMFramebuffers(width, height)
 
@@ -1078,23 +1082,25 @@ class RawDemosaicProcessor {
         // 增益由三部分组成：传感器 ISO、ISP 数字增益、后期 Tonemap 增益
         val isoGain = metadata.iso / 100.0f
         val digitalGain = metadata.postRawSensitivityBoost
-        val postGain = sceneStats.exposureGain
+        val postGain = ExposureNormalization.compute(metadata)
         val totalGain = (isoGain * digitalGain * postGain).coerceAtLeast(0f)
 
         // 基于噪声特性的基础强度
         val s = metadata.noiseProfile[0]
         val o = metadata.noiseProfile[1]
         // 估算标准差，映射到一个易用的量级 (使用 1e-3 作为中等 RAW 亮度的估算)
-        val noiseBase = sqrt((s * 1e-3f + o * 1e-6f).toDouble()).toFloat() * 100.0f
+        val noiseBase = (sqrt((s * 1e-3f + o * 1e-6f).toDouble()).toFloat() * 100.0f)
 
         // 动态计算 h 值 (衰减系数)
         // 规则：基础强度 + 增益强度系数 + 传感器噪声水平系数
         // 使用 sqrt(totalGain) 是因为噪声标准差随增益的平方根增加（近似）
-        val baseH = 0.003f
-        val dynamicH = 0.003f * sqrt(totalGain.toDouble()).toFloat()
-        val noiseCorrection = (noiseBase * 0.1f).coerceIn(0f, 0.02f)
+        val noise = if (noiseBase > 0f) {
+            noiseBase * denoiseValue * 0.5f + 0.002f * sqrt(totalGain.toDouble()).toFloat()
+        } else {
+            denoiseValue * 0.008f * sqrt(totalGain.toDouble()).toFloat()
+        }
 
-        val h = (baseH + dynamicH + noiseCorrection).coerceIn(0.01f, 0.1f)
+        val h = noise.coerceIn(0.001f, 0.1f)
         PLog.d(
             TAG,
             "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, h=$h"
@@ -1695,9 +1701,8 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         logCurve: LogCurve,
-        metadata: RawMetadata,
         referencePreview: Bitmap? = null
-    ): SceneStats {
+    ): FloatArray? {
         // 1. 生成 mipmap
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_NEAREST)
@@ -1735,7 +1740,7 @@ class RawDemosaicProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            return SceneStats(1.0f)
+            return null
         }
 
         // 4. 读取整个 mip 的像素数据 (RGBA float)
@@ -1752,22 +1757,13 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        val analysis = HistogramMatching.analyze(
+        return HistogramMatching.analyze(
             neutralBuffer = floatBuffer,
             width = mipWidth,
             height = mipHeight,
             logCurve = logCurve,
             referenceBitmap = referencePreview
         )
-
-        val normalizationGain = ExposureNormalization.compute(metadata)
-        val curveLut = analysis.curveLut ?: DefaultToneCurve.analyze(
-            neutralBuffer = floatBuffer,
-            width = mipWidth,
-            height = mipHeight,
-            logCurve = logCurve
-        )
-        return SceneStats(normalizationGain, curveLut)
     }
 
     // 辅助函数: 3x3 矩阵转置 (行主序 -> 列主序)
@@ -1848,7 +1844,7 @@ class RawDemosaicProcessor {
      */
     private fun renderCombinedPass(
         metadata: RawMetadata,
-        sceneStats: SceneStats,
+        curveLut: FloatArray?,
         lutConfig: LutConfig?,
         logCurve: LogCurve,
         inputTextureId: Int = demosaicTextureId
@@ -1875,14 +1871,10 @@ class RawDemosaicProcessor {
             GLES30.glGetUniformLocation(combinedProgram, "uLutEnabled"),
             if (lutConfig != null) 1 else 0
         )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(combinedProgram, "uExposureGain"),
-            sceneStats.exposureGain
-        )
 
         // S-Curve LUT
-        if (sceneStats.curveLut != null) {
-            uploadCurveTexture(sceneStats.curveLut)
+        if (curveLut != null) {
+            uploadCurveTexture(curveLut)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveTexture"), 2)
@@ -1915,7 +1907,6 @@ class RawDemosaicProcessor {
 
     private fun renderHdrReferencePass(
         metadata: RawMetadata,
-        renderPlan: RawRenderPlan,
         inputTextureId: Int
     ) {
         GLES30.glUseProgram(hdrReferenceProgram)
@@ -1926,10 +1917,6 @@ class RawDemosaicProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdrReferenceProgram, "uInputTexture"), 0)
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uExposureGain"),
-            renderPlan.sceneNormalizationGain
-        )
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -2003,6 +1990,12 @@ class RawDemosaicProcessor {
             GLES30.glGetUniformLocation(linearProgram, "uTexMatrix"),
             1, false, identity, 0
         )
+        val normalizationGain = ExposureNormalization.compute(metadata)
+        PLog.d(
+            TAG,
+            "compute: normalizationGain=$normalizationGain baseline=${metadata.baselineExposure}"
+        )
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(linearProgram, "uExposureGain"), normalizationGain)
         drawQuad(linearProgram)
     }
 

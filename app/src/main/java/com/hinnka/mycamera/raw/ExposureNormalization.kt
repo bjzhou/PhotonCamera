@@ -27,11 +27,6 @@ object ExposureNormalization {
         if (metadata.baselineExposure.isFinite() && metadata.baselineExposure != 0f) {
             gain *= 2.0f.pow(metadata.baselineExposure)
         }
-
-        PLog.d(
-            TAG,
-            "compute: gain=$gain preMul=${preMul.joinToString()} wb=${wb.joinToString()} black=${black.joinToString()} white=${metadata.whiteLevel} baseline=${metadata.baselineExposure}"
-        )
         return gain.coerceIn(1f, 8f)
     }
 

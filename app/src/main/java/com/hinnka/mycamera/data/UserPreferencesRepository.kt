@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.raw.RawProfile
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -73,7 +74,7 @@ data class UserPreferences(
     val applyUltraHDR: Boolean = false, // 是否应用 Ultra HDR 策略
     val colorSpace: ColorSpace = ColorSpace.BT2020, // 默认 F-Gamut
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
-    val rawLuts: Map<String, String> = emptyMap(),
+    val rawLuts: Map<String, String> = mapOf(LogCurve.FLOG2.name to RawProfile.FUJI_PROVIA.rawLut),
     val useP010: Boolean = false,
     val useP3ColorSpace: Boolean = false,
     val autoEnableHdrForHdrCapture: Boolean = false,
@@ -614,6 +615,14 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawLut(logCurve: LogCurve, lut: String) {
         context.dataStore.edit { preferences ->
             preferences[stringPreferencesKey("${logCurve.name}_raw_lut")] = lut
+        }
+    }
+
+    suspend fun saveRawProfile(rawProfile: RawProfile) {
+        context.dataStore.edit { preferences ->
+            preferences[COLOR_SPACE] = rawProfile.colorSpace.name
+            preferences[LOG_CURVE] = rawProfile.logCurve.name
+            preferences[stringPreferencesKey("${rawProfile.logCurve.name}_raw_lut")] = rawProfile.rawLut
         }
     }
 

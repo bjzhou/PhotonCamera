@@ -248,6 +248,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editChromaNoiseReduction = MutableStateFlow(0f)
         private set
+    var editRawDenoise = MutableStateFlow(0.2f)
+        private set
 
     // Computational Bokeh editing state
     var editComputationalAperture = MutableStateFlow<Float?>(null)
@@ -747,6 +749,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = m.sharpening ?: 0f
             editNoiseReduction.value = m.noiseReduction ?: 0f
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
+            editRawDenoise.value = m.rawDenoiseValue ?: 0.2f
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -1263,6 +1266,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editChromaNoiseReduction.value =
                 metadata.chromaNoiseReduction
                     ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
+            editRawDenoise.value = metadata.rawDenoiseValue ?: 0.2f
             
             editComputationalAperture.value = metadata.computationalAperture
             editFocusPointX.value = metadata.focusPointX
@@ -1275,6 +1279,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = sharpening.value
             editNoiseReduction.value = noiseReduction.value
             editChromaNoiseReduction.value = chromaNoiseReduction.value
+            editRawDenoise.value = 0.2f
             editComputationalAperture.value = null
             editFocusPointX.value = null
             editFocusPointY.value = null
@@ -1301,6 +1306,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editFrameId.value = null
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
+        editRawDenoise.value = 0.2f
     }
 
     /**
@@ -1384,6 +1390,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     fun setChromaNoiseReduction(value: Float) {
         editChromaNoiseReduction.value = value
+    }
+
+    fun setRawDenoiseValue(value: Float) {
+        editRawDenoise.value = value
     }
 
     /**
@@ -1517,6 +1527,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
+                        rawDenoiseValue = editRawDenoise.value,
                         computationalAperture = editComputationalAperture.value,
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
@@ -1736,6 +1747,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     sharpening = editSharpening.value,
                     noiseReduction = editNoiseReduction.value,
                     chromaNoiseReduction = editChromaNoiseReduction.value,
+                    rawDenoiseValue = editRawDenoise.value,
                     computationalAperture = editComputationalAperture.value,
                     focusPointX = editFocusPointX.value,
                     focusPointY = editFocusPointY.value,

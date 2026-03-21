@@ -90,8 +90,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
+import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
@@ -138,11 +137,7 @@ fun SettingsScreen(
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
-    val droMode by viewModel.droMode.collectAsState()
-    val applyUltraHDR by viewModel.applyUltraHDR.collectAsState()
-    val colorSpace by viewModel.colorSpace.collectAsState()
-    val logCurve by viewModel.logCurve.collectAsState()
-    val rawLut by viewModel.rawLut.collectAsState()
+    val rawProfile by viewModel.rawProfile.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
     val autoEnableHdrForHdrCapture by viewModel.autoEnableHdrForHdrCapture.collectAsState()
@@ -156,8 +151,6 @@ fun SettingsScreen(
     val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
     val useBuiltInAiService by viewModel.useBuiltInAiService.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
-    val openAIUrl by viewModel.openAIUrl.collectAsState()
-    val openAIModel by viewModel.openAIModel.collectAsState()
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
@@ -212,11 +205,8 @@ fun SettingsScreen(
     var showLogViewerDialog by remember { mutableStateOf(false) }
     var softwareProcessingExpanded by remember { mutableStateOf(false) }
     var calibrationExpanded by remember { mutableStateOf(false) }
-    var availableRawLutMap by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
-
-    val noneStr = stringResource(R.string.none)
 
     val ghostLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -224,13 +214,6 @@ fun SettingsScreen(
             // Results are handled via the ON_RESUME lifecycle effect to avoid self-reference issues
         }
     )
-
-    LaunchedEffect(logCurve) {
-        availableRawLutMap = listOf("none" to noneStr) + viewModel.getAvailableRawLutList(context, logCurve)
-            .map {
-                it to it.substringBeforeLast(".")
-            }
-    }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (isGhostPermissionFlowActive) {
@@ -652,42 +635,11 @@ fun SettingsScreen(
                 SettingsTab.IMAGING -> {
                     // AI 服务设置
                     SettingsSection(title = stringResource(R.string.lut_creator_title)) {
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_use_built_in_ai),
-                            description = stringResource(R.string.settings_use_built_in_ai_desc),
-                            checked = useBuiltInAiService,
-                            onCheckedChange = { viewModel.setUseBuiltInAiService(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        if (!useBuiltInAiService) {
-                            TextInputSettingItem(
-                                title = stringResource(R.string.settings_openai_api_key),
-                                description = stringResource(R.string.settings_openai_api_key_desc),
-                                value = openAIApiKey ?: "",
-                                onValueChange = { viewModel.setOpenAIApiKey(it) }
-                            )
-
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        }
-
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_ai_model),
-                            description = stringResource(R.string.settings_ai_model_desc),
-                            value = if (useBuiltInAiService) com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_IMAGE_MODEL else openAIModel
-                                ?: "",
-                            options = if (useBuiltInAiService) listOf(com.hinnka.mycamera.lut.creator.OpenAIApiClient.BUILT_IN_IMAGE_MODEL) else availableOpenAIModels,
-                            isLoading = isFetchingAIModels,
-                            enabled = !useBuiltInAiService,
-                            onExpanded = { viewModel.fetchAvailableAIModels() },
-                            onOptionSelected = { viewModel.setOpenAIModel(it) }
+                        TextInputSettingItem(
+                            title = stringResource(R.string.settings_openai_api_key),
+                            description = stringResource(R.string.settings_openai_api_key_desc),
+                            value = openAIApiKey ?: "",
+                            onValueChange = { viewModel.setOpenAIApiKey(it) }
                         )
                     }
 
@@ -823,54 +775,11 @@ fun SettingsScreen(
                         )
 
                         QualityLevelSetting(
-                            title = stringResource(R.string.settings_dro_mode),
-                            description = stringResource(R.string.settings_dro_mode_description),
-                            levels = listOf(
-                                "OFF" to stringResource(R.string.settings_dro_off),
-                                "LOW" to stringResource(R.string.settings_dro_low),
-                                "HIGH" to stringResource(R.string.settings_dro_high)
-                            ),
-                            currentLevel = droMode,
-                            onLevelSelected = { viewModel.setDroMode(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_color_space),
-                            description = stringResource(R.string.settings_color_space_description),
-                            levels = ColorSpace.entries.map { it to it.name },
-                            currentLevel = colorSpace,
-                            onLevelSelected = { viewModel.setColorSpace(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_log_curve),
-                            description = stringResource(R.string.settings_log_curve_description),
-                            levels = LogCurve.entries.map { it to it.name },
-                            currentLevel = logCurve,
-                            onLevelSelected = { viewModel.setLogCurve(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
-                        QualityLevelSetting(
-                            title = stringResource(R.string.settings_raw_restore_lut),
-                            description = stringResource(R.string.settings_raw_restore_lut_description),
-                            levels = availableRawLutMap,
-                            currentLevel = rawLut,
-                            onLevelSelected = { viewModel.setRawLut(logCurve, it) }
+                            title = stringResource(R.string.settings_raw_profile),
+                            description = stringResource(R.string.settings_raw_profile_description),
+                            levels = RawProfile.entries.map { it to rawProfileLabel(it) },
+                            currentLevel = rawProfile,
+                            onLevelSelected = { viewModel.setRawProfile(it) }
                         )
 
                         /*HorizontalDivider(
@@ -1856,6 +1765,15 @@ fun <T> QualityLevelSetting(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun rawProfileLabel(rawProfile: RawProfile): String {
+    return when (rawProfile) {
+        RawProfile.ACES_CINE -> stringResource(R.string.raw_profile_aces_cine)
+        RawProfile.FUJI_PROVIA -> stringResource(R.string.raw_profile_fuji_provia)
+        RawProfile.STANDARD_SRGB -> stringResource(R.string.raw_profile_standard_srgb)
     }
 }
 

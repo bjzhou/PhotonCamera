@@ -390,6 +390,8 @@
     <string name="settings_default_focal_length_description">Set the focal length to automatically switch to when the app starts.</string>
     <string name="settings_raw_restore_lut">RAW Restore LUT</string>
     <string name="settings_raw_restore_lut_description">Choose the LUT used for RAW color restoration. Use \"None\" for log output.</string>
+    <string name="settings_raw_profile">RAW Look</string>
+    <string name="settings_raw_profile_description">Choose a unified RAW rendering profile that sets the color space, log curve, and restore LUT together.</string>
     <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>
     <string name="settings_dro_mode_description">Optimizes shadow detail and highlight compression by utilizing Log curve headroom. Higher values preserve more highlights but may require more light.</string>
     <string name="settings_dro_off">Off</string>
@@ -401,6 +403,14 @@
     <string name="settings_color_space_description">Choose the target color space for RAW processing.</string>
     <string name="settings_log_curve">RAW Gamma</string>
     <string name="settings_log_curve_description">Choose the transfer function for RAW processing (Log Curve).</string>
+    <string name="raw_profile_aces_cine">ACES Cine</string>
+    <string name="raw_profile_apple_cinema">Apple Cinema</string>
+    <string name="raw_profile_arri_master">ARRI Master</string>
+    <string name="raw_profile_fuji_provia">Fuji Provia</string>
+    <string name="raw_profile_standard_srgb">Standard sRGB</string>
+    <string name="settings_raw_nlm_base_h">RAW NLM Base Strength</string>
+    <string name="settings_raw_nlm_gain_factor">RAW NLM Gain Response</string>
+    <string name="settings_raw_nlm_noise_factor">RAW Denoise</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Enable 10-bit YUV output for better image data precision. Effective on supported devices when RAW is disabled.</string>
     <string name="settings_use_p3_color_space">P3 Color Space</string>

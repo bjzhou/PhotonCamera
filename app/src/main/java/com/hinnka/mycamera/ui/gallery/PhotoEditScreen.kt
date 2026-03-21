@@ -31,7 +31,6 @@ import com.hinnka.mycamera.ui.common.WatermarkEditSheet
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -47,23 +46,15 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.frame.TextType
-import com.hinnka.mycamera.gallery.PhotoData
-import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.raw.ColorSpace
-import com.hinnka.mycamera.raw.LogCurve
-import com.hinnka.mycamera.raw.RawProcessingPreferences
+import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.theme.AccentOrange
-import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import me.saket.telephoto.zoomable.ZoomSpec
 import java.text.SimpleDateFormat
 import java.util.*
@@ -113,6 +104,7 @@ fun PhotoEditScreen(
     val editSharpening by viewModel.editSharpening.collectAsState()
     val editNoiseReduction by viewModel.editNoiseReduction.collectAsState()
     val editChromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
+    val editRawNlmNoiseFactor by viewModel.editRawDenoise.collectAsState()
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
     val editFocusX by viewModel.editFocusPointX.collectAsState()
@@ -121,10 +113,7 @@ fun PhotoEditScreen(
     val editCropRect by viewModel.editCropRect.collectAsState()
     val editCropAspectOption by viewModel.editCropAspectOption.collectAsState()
 
-    val droMode by cameraViewModel.droMode.collectAsState()
-    val colorSpace by cameraViewModel.colorSpace.collectAsState()
-    val logCurve by cameraViewModel.logCurve.collectAsState()
-    val rawLut by cameraViewModel.rawLut.collectAsState()
+    val rawProfile by cameraViewModel.rawProfile.collectAsState()
 
     val isRaw = currentPhoto?.let { viewModel.isRaw(it.id) } ?: false
 
@@ -681,10 +670,9 @@ fun PhotoEditScreen(
                         } else if (editTab == 2) {
                             RawEditPanel(
                                 viewModel = cameraViewModel,
-                                editDroMode = RawProcessingPreferences.DROMode.valueOf(droMode),
-                                editColorSpace = colorSpace,
-                                editLogCurve = logCurve,
-                                editRawLut = rawLut,
+                                rawProfile = rawProfile,
+                                rawNlmNoiseFactor = editRawNlmNoiseFactor,
+                                onRawNlmNoiseFactorChange = viewModel::setRawDenoiseValue,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         } else if (editTab == 3) {
@@ -974,71 +962,40 @@ private fun ZoomableEditImage(
 @Composable
 private fun RawEditPanel(
     viewModel: CameraViewModel,
-    editDroMode: RawProcessingPreferences.DROMode,
-    editColorSpace: ColorSpace,
-    editLogCurve: LogCurve,
-    editRawLut: String?,
+    rawProfile: RawProfile,
+    rawNlmNoiseFactor: Float,
+    onRawNlmNoiseFactorChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    var availableRawLuts by remember { mutableStateOf(listOf<String>()) }
-
-    LaunchedEffect(editLogCurve) {
-        availableRawLuts = listOf("none") + viewModel.getAvailableRawLutList(context, editLogCurve)
-    }
-
-    val droOff = stringResource(R.string.settings_dro_off)
-    val droLow = stringResource(R.string.settings_dro_low)
-    val droHigh = stringResource(R.string.settings_dro_high)
-    val none = stringResource(R.string.none)
-
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // DRO Mode
         SegmentedControl(
-            title = stringResource(R.string.settings_dro_mode),
-            items = RawProcessingPreferences.DROMode.entries,
-            selectedItem = editDroMode,
-            onItemSelected = { viewModel.setDroMode(it.name) },
-            itemLabel = {
-                when (it) {
-                    RawProcessingPreferences.DROMode.OFF -> droOff
-                    RawProcessingPreferences.DROMode.LOW -> droLow
-                    RawProcessingPreferences.DROMode.HIGH -> droHigh
-                }
-            }
+            title = stringResource(R.string.settings_raw_profile),
+            items = RawProfile.entries.toList(),
+            selectedItem = rawProfile,
+            onItemSelected = { viewModel.setRawProfile(it) },
+            itemLabel = { rawProfileLabel(it) }
         )
 
-        // Color Space
-        SegmentedControl(
-            title = stringResource(R.string.settings_color_space),
-            items = ColorSpace.values().toList(),
-            selectedItem = editColorSpace,
-            onItemSelected = { viewModel.setColorSpace(it) },
-            itemLabel = { it.name }
+        SliderSettingItem(
+            title = stringResource(R.string.settings_raw_nlm_noise_factor),
+            value = rawNlmNoiseFactor,
+            valueRange = 0f..1f,
+            onValueChange = onRawNlmNoiseFactorChange
         )
+    }
+}
 
-        // Log Curve
-        SegmentedControl(
-            title = stringResource(R.string.settings_log_curve),
-            items = LogCurve.values().toList(),
-            selectedItem = editLogCurve,
-            onItemSelected = { viewModel.setLogCurve(it) },
-            itemLabel = { it.name }
-        )
-
-        // RAW LUT
-        SegmentedControl(
-            title = stringResource(R.string.settings_raw_restore_lut),
-            items = availableRawLuts,
-            selectedItem = editRawLut ?: "none",
-            onItemSelected = { viewModel.setRawLut(editLogCurve, it) },
-            itemLabel = { if (it == "none") none else it.substringBeforeLast(".") }
-        )
+@Composable
+private fun rawProfileLabel(rawProfile: RawProfile): String {
+    return when (rawProfile) {
+        RawProfile.ACES_CINE -> stringResource(R.string.raw_profile_aces_cine)
+        RawProfile.FUJI_PROVIA -> stringResource(R.string.raw_profile_fuji_provia)
+        RawProfile.STANDARD_SRGB -> stringResource(R.string.raw_profile_standard_srgb)
     }
 }
 
@@ -1048,7 +1005,7 @@ private fun <T> SegmentedControl(
     items: List<T>,
     selectedItem: T,
     onItemSelected: (T) -> Unit,
-    itemLabel: (T) -> String
+    itemLabel: @Composable (T) -> String
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(

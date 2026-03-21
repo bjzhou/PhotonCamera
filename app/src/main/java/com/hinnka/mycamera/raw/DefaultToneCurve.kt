@@ -13,6 +13,7 @@ import kotlin.math.roundToInt
 object DefaultToneCurve {
     private const val TAG = "DefaultToneCurve"
     private const val LUT_SIZE = 256
+    private const val MIN_X_STEP = 1e-4f
 
     fun analyze(
         neutralBuffer: FloatBuffer,
@@ -37,7 +38,7 @@ object DefaultToneCurve {
         val midOut = (p50 + midLift).coerceAtMost((p99 - 0.08f).coerceAtLeast(p50 + 0.03f))
         val highOut = (p99 + shoulderPush).coerceIn(midOut + 0.08f, 0.985f)
 
-        val x = floatArrayOf(
+        val rawX = floatArrayOf(
             0f,
             (p01 * 0.5f).coerceIn(0f, 0.08f),
             p01,
@@ -45,7 +46,7 @@ object DefaultToneCurve {
             p99,
             1f
         )
-        val y = floatArrayOf(
+        val rawY = floatArrayOf(
             0f,
             logCurve.logToLinear(shadowToe * 0.28f).coerceAtLeast(0f),
             logCurve.logToLinear(shadowToe).coerceAtLeast(0f),
@@ -53,13 +54,58 @@ object DefaultToneCurve {
             logCurve.logToLinear(highOut).coerceAtLeast(0f),
             logCurve.logToLinear(1f).coerceAtLeast(0f)
         )
+        val (x, y) = buildStrictControlPoints(rawX, rawY)
+        val pointsDescription = x.joinToString(prefix = "[", postfix = "]")
 
         PLog.d(
             TAG,
-            "analyze: p01=$p01 p50=$p50 p99=$p99 dr=$dynamicRange headroom=$headroom midOut=$midOut highOut=$highOut"
+            "analyze: p01=$p01 p50=$p50 p99=$p99 dr=$dynamicRange headroom=$headroom midOut=$midOut highOut=$highOut points=$pointsDescription"
         )
 
         return SplineInterpolator(x, y).generateLut(LUT_SIZE)
+    }
+
+    private fun buildStrictControlPoints(
+        x: FloatArray,
+        y: FloatArray
+    ): Pair<FloatArray, FloatArray> {
+        require(x.size == y.size) { "Control point arrays must have the same size" }
+
+        val strictX = ArrayList<Float>(x.size)
+        val strictY = ArrayList<Float>(y.size)
+
+        for (i in x.indices) {
+            val nextX = x[i].coerceIn(0f, 1f)
+            val nextY = y[i].coerceAtLeast(0f)
+            val lastIndex = strictX.lastIndex
+
+            if (lastIndex >= 0 && nextX <= strictX[lastIndex] + MIN_X_STEP) {
+                strictX[lastIndex] = nextX.coerceAtLeast(strictX[lastIndex])
+                strictY[lastIndex] = maxOf(strictY[lastIndex], nextY)
+                continue
+            }
+
+            strictX.add(nextX)
+            strictY.add(nextY)
+        }
+
+        if (strictX.size < 2) {
+            val fallbackEndY = strictY.lastOrNull() ?: 1f
+            strictX.clear()
+            strictY.clear()
+            strictX.add(0f)
+            strictY.add(0f)
+            strictX.add(1f)
+            strictY.add(fallbackEndY)
+            PLog.w(TAG, "buildStrictControlPoints: fell back to linear endpoints")
+        } else if (strictX.size != x.size) {
+            PLog.w(
+                TAG,
+                "buildStrictControlPoints: collapsed duplicate x values from ${x.size} to ${strictX.size}"
+            )
+        }
+
+        return strictX.toFloatArray() to strictY.toFloatArray()
     }
 
     private fun buildHistogramFromNeutral(

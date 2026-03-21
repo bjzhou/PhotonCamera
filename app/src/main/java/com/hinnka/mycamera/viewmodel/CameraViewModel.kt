@@ -33,6 +33,7 @@ import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
@@ -202,8 +203,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, LogCurve.FLOG2)
 
     val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.rawLuts[it.logCurve.name] ?: "sRGB.plut" }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "sRGB.plut")
+        .map { prefs ->
+            prefs.rawLuts[prefs.logCurve.name] ?: RawProfile.defaultLutFor(prefs.colorSpace, prefs.logCurve)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawProfile.default.rawLut)
+    val rawProfile: StateFlow<RawProfile> = userPreferencesRepository.userPreferences
+        .map { prefs ->
+            RawProfile.fromComponents(
+                colorSpace = prefs.colorSpace,
+                logCurve = prefs.logCurve,
+                rawLut = prefs.rawLuts[prefs.logCurve.name]
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawProfile.default)
 
     val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP010 }
@@ -361,7 +373,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 RawDemosaicProcessor.getInstance().setRawColorSpace(it.colorSpace)
                 RawDemosaicProcessor.getInstance().setRawLogCurve(it.logCurve)
                 // 同步当前 Log 曲线对应的 RAW LUT
-                val currentRawLut = it.rawLuts[it.logCurve.name] ?: "Default.plut"
+                val currentRawLut = it.rawLuts[it.logCurve.name]
+                    ?: RawProfile.defaultLutFor(it.colorSpace, it.logCurve)
                 RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
@@ -1760,6 +1773,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setRawLut(logCurve: LogCurve, lut: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawLut(logCurve, lut)
+        }
+    }
+
+    fun setRawProfile(rawProfile: RawProfile) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawProfile(rawProfile)
         }
     }
 

@@ -10,7 +10,6 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
-import android.util.Log
 import com.hinnka.mycamera.raw.RawMetadata
 import java.text.SimpleDateFormat
 import java.util.*
@@ -31,6 +30,7 @@ data class PhotoMetadata(
     val sharpening: Float? = null,
     val noiseReduction: Float? = null,
     val chromaNoiseReduction: Float? = null,
+    val rawDenoiseValue: Float? = null,
     // 边框水印配置
     val frameId: String? = null,
     // 图片尺寸
@@ -198,6 +198,7 @@ data class PhotoMetadata(
             put("sharpening", sharpening?.toDouble() ?: JSONObject.NULL)
             put("noiseReduction", noiseReduction?.toDouble() ?: JSONObject.NULL)
             put("chromaNoiseReduction", chromaNoiseReduction?.toDouble() ?: JSONObject.NULL)
+            put("denoiseValue", rawDenoiseValue?.toDouble() ?: JSONObject.NULL)
 
             put("frameId", frameId ?: JSONObject.NULL)
             put("width", width)
@@ -383,6 +384,7 @@ data class PhotoMetadata(
                         .toFloat(),
                     chromaNoiseReduction = if (obj.isNull("chromaNoiseReduction")) null else obj.optDouble("chromaNoiseReduction")
                         .toFloat(),
+                    rawDenoiseValue = if (obj.isNull("denoiseValue")) null else obj.optDouble("denoiseValue").toFloat(),
                     frameId = if (obj.isNull("frameId")) null else obj.optString("frameId"),
                     width = obj.optInt("width", 0),
                     height = obj.optInt("height", 0),

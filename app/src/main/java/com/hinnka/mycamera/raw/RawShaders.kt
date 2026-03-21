@@ -63,6 +63,8 @@ object RawShaders {
 
             // 1. CCM
             rgb = uColorCorrectionMatrix * rgb;
+            
+            rgb = rgb * uExposureGain;
 
             // Output Linear (由下一步 ToneMap Pass 处理)
             fragColor = vec4(rgb, 1.0);
@@ -128,7 +130,6 @@ object RawShaders {
         uniform mediump sampler3D uLutTexture;
         uniform float uLutSize;
         uniform bool uLutEnabled;
-        uniform float uExposureGain;
         
         uniform sampler2D uCurveTexture;
         uniform bool uCurveEnabled;
@@ -177,7 +178,7 @@ object RawShaders {
             vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
             
             // 1. Exposure
-            vec3 color = rawColor * uExposureGain;
+            vec3 color = rawColor;
             
             // 2. 线性空间曲线应用 (Tonemapping)
             if (uCurveEnabled) {
@@ -249,10 +250,9 @@ object RawShaders {
         out vec4 fragColor;
 
         uniform sampler2D uInputTexture;
-        uniform float uExposureGain;
 
         void main() {
-            vec3 color = texture(uInputTexture, vTexCoord).rgb * uExposureGain;
+            vec3 color = texture(uInputTexture, vTexCoord).rgb;
             fragColor = vec4(max(color, vec3(0.0)), 1.0);
         }
     """.trimIndent()

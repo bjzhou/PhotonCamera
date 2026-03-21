@@ -2030,13 +2030,14 @@ object PhotoManager {
 
                     // 3. 处理 RAW 以生成 JPEG 预览
                     var updatedMetadata = metadata
-                    val processedBitmap = RawDemosaicProcessor.getInstance().process(
-                        context,
-                        dngFile.absolutePath, null, null, 0,
-                        sharpeningValue = 0.4f,
-                        onMetadata = { raw ->
-                            updatedMetadata = updatedMetadata.merge(raw)
-                        }
+                val processedBitmap = RawDemosaicProcessor.getInstance().process(
+                    context,
+                    dngFile.absolutePath, null, null, 0,
+                    sharpeningValue = 0.4f,
+                    denoiseValue = updatedMetadata.rawDenoiseValue,
+                    onMetadata = { raw ->
+                        updatedMetadata = updatedMetadata.merge(raw)
+                    }
                     )
 
                     if (processedBitmap != null) {
@@ -2139,6 +2140,7 @@ object PhotoManager {
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
                     sharpeningValue = 0.4f,
+                    denoiseValue = (updatedMetadata ?: PhotoMetadata()).rawDenoiseValue,
                     onMetadata = { raw ->
                         updatedMetadata = updatedMetadata?.merge(raw) ?: PhotoMetadata().merge(raw)
                     }

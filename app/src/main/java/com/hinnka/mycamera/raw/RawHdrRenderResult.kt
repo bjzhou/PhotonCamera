@@ -10,5 +10,4 @@ data class RawRenderPlan(
 data class RawHdrRenderResult(
     val sdrBitmap: Bitmap,
     val hdrReferenceBitmap: Bitmap? = null,
-    val renderPlan: RawRenderPlan,
 )
