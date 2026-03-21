@@ -135,6 +135,7 @@ fun SettingsScreen(
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
+    val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
     val rawProfile by viewModel.rawProfile.collectAsState()
@@ -767,6 +768,18 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_use_live_photo_description),
                             checked = useLivePhoto,
                             onCheckedChange = { viewModel.setUseLivePhoto(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_develop_animation),
+                            description = stringResource(R.string.settings_develop_animation_description),
+                            checked = enableDevelopAnimation,
+                            onCheckedChange = { viewModel.setEnableDevelopAnimation(it) }
                         )
 
                         HorizontalDivider(

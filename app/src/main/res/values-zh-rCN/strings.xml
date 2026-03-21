@@ -137,6 +137,8 @@
     <string name="settings_raw_engine_self_developed">自研</string>
     <string name="settings_use_live_photo">动态照片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照时同时录制一段短视频，让照片动起来。</string>
+    <string name="settings_develop_animation">显影动画</string>
+    <string name="settings_develop_animation_description">拍摄后显示胶片显影动画效果。</string>
     <string name="settings_use_gpu_acceleration">GPU 加速</string>
     <string name="settings_use_gpu_acceleration_description">使用 GPU (Vulkan) 加速多帧合成，建议开启。</string>
     <string name="settings_section_frame">边框水印</string>

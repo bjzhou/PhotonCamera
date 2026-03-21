@@ -68,6 +68,7 @@ data class UserPreferences(
     val useSuperResolution: Boolean = false, // 是否使用超分辨率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
+    val enableDevelopAnimation: Boolean = true, // 是否启用拍摄后的显影动画
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
     val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
     val droMode: String = "OFF", // DRO 模式
@@ -139,6 +140,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
+        private val ENABLE_DEVELOP_ANIMATION = booleanPreferencesKey("enable_develop_animation")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
         private val USE_GPU_ACCELERATION = booleanPreferencesKey("use_gpu_acceleration")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
@@ -202,6 +204,7 @@ class UserPreferencesRepository(private val context: Context) {
                 useSuperResolution = preferences[USE_SUPER_RESOLUTION] ?: false,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
+                enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: true,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
                 useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
                 droMode = preferences[DRO_MODE] ?: "OFF",
@@ -552,6 +555,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveUseLivePhoto(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_LIVE_PHOTO] = enabled
+        }
+    }
+
+    /**
+     * 保存是否启用显影动画
+     */
+    suspend fun saveEnableDevelopAnimation(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[ENABLE_DEVELOP_ANIMATION] = enabled
         }
     }
 

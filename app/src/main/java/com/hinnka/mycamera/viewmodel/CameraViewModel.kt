@@ -183,6 +183,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val enableDevelopAnimation: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.enableDevelopAnimation }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.backgroundImage }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
@@ -1472,6 +1475,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setUseLivePhoto(enabled)
         viewModelScope.launch {
             userPreferencesRepository.saveUseLivePhoto(enabled)
+        }
+    }
+
+    fun setEnableDevelopAnimation(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveEnableDevelopAnimation(enabled)
         }
     }
 

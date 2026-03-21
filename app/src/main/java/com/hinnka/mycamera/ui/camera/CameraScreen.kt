@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Environment
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -54,7 +55,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -109,9 +112,14 @@ fun CameraScreen(
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useSuperResolution by viewModel.useSuperResolution.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
+    val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
     var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
+    var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var previewBounds by remember { mutableStateOf<Rect?>(null) }
+    var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
+    var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
 
     // 标记相机是否已打开
     var cameraOpened by remember { mutableStateOf(false) }
@@ -180,6 +188,29 @@ fun CameraScreen(
     LaunchedEffect(Unit) {
         viewModel.imageSavedEvent.collect {
             galleryViewModel.refreshLatestPhoto()
+            if (!enableDevelopAnimation) {
+                pendingCaptureAnimationBitmap = null
+                captureAnimationSnapshot = null
+                MyCameraApplication.updateWidgets(context)
+                return@collect
+            }
+            val sourceBounds = previewBounds
+            val targetBounds = galleryThumbnailBounds
+
+            fun startCaptureAnimation(bitmap: Bitmap) {
+                if (sourceBounds == null || targetBounds == null) {
+                    return
+                }
+                captureAnimationSnapshot = CaptureAnimationSnapshot(
+                    bitmap = bitmap.asImageBitmap(),
+                    sourceBounds = sourceBounds,
+                    targetBounds = targetBounds
+                )
+            }
+
+            pendingCaptureAnimationBitmap?.let(::startCaptureAnimation)
+                ?: viewModel.glSurfaceView?.capturePreviewFrame(::startCaptureAnimation)
+            pendingCaptureAnimationBitmap = null
             MyCameraApplication.updateWidgets(context)
         }
     }
@@ -348,6 +379,9 @@ fun CameraScreen(
                             .padding(4.dp)
                             .weight(1f)
                             .background(Color.Black)
+                            .onGloballyPositioned { coordinates ->
+                                previewBounds = coordinates.boundsInRoot()
+                            }
                             .pointerInput(Unit) {
                                 var totalDrag = 0f
                                 detectHorizontalDragGestures(
@@ -656,6 +690,17 @@ fun CameraScreen(
                         latestPhoto = latestPhoto,
                         useMultipleExposure = useMultipleExposure,
                         multipleExposureState = multipleExposureState,
+                        onGalleryThumbnailBoundsChanged = { bounds ->
+                            galleryThumbnailBounds = bounds
+                        },
+                        onCaptureTap = {
+                            if (enableDevelopAnimation) {
+                                viewModel.glSurfaceView?.capturePreviewFrame { bitmap ->
+                                    pendingCaptureAnimationBitmap = bitmap
+                                }
+                            }
+                            viewModel.capture()
+                        },
                         onGalleryClick = {
                             galleryViewModel.loadPhotos()
                             onGalleryClick()
@@ -683,6 +728,18 @@ fun CameraScreen(
                             activePanel = ActivePanel.NONE
                         }
                     }
+            )
+        }
+
+        captureAnimationSnapshot?.let { snapshot ->
+            CaptureAnimationOverlay(
+                snapshot = snapshot,
+                modifier = Modifier.fillMaxSize(),
+                onFinished = {
+                    if (captureAnimationSnapshot?.id == snapshot.id) {
+                        captureAnimationSnapshot = null
+                    }
+                }
             )
         }
 
@@ -871,6 +928,8 @@ fun Controls(
     latestPhoto: com.hinnka.mycamera.gallery.PhotoData?,
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
+    onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
+    onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit
 ) {
     BoxWithConstraints(
@@ -889,6 +948,9 @@ fun Controls(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .padding(start = 32.dp)
+                .onGloballyPositioned { coordinates ->
+                    onGalleryThumbnailBoundsChanged(coordinates.boundsInRoot())
+                }
                 .autoRotate()
         ) {
             GalleryThumbnail(
@@ -905,7 +967,7 @@ fun Controls(
             multipleExposureEnabled = useMultipleExposure,
             multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
                 multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
-            onTap = { viewModel.capture() },
+            onTap = onCaptureTap,
             onLongPressStart = { viewModel.startContinuousCapture() },
             onLongPressEnd = { viewModel.stopContinuousCapture() }
         )
