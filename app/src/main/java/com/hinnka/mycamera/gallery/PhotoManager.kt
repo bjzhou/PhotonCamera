@@ -15,8 +15,8 @@ import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.hdr.GainmapSourceSet
 import com.hinnka.mycamera.hdr.GainmapResult
+import com.hinnka.mycamera.hdr.GainmapSourceSet
 import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
@@ -43,8 +43,17 @@ import java.nio.IntBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.use
+import kotlin.io.copyTo
+import kotlin.io.deleteRecursively
+import kotlin.io.extension
+import kotlin.io.inputStream
+import kotlin.io.readBytes
+import kotlin.io.readText
+import kotlin.io.walkBottomUp
+import kotlin.io.writeText
+import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
+import kotlin.use
 
 /**
  * 照片管理器
@@ -188,16 +197,16 @@ object PhotoManager {
 
     private fun canReuseEmbeddedGainmap(metadata: PhotoMetadata): Boolean {
         return metadata.manualHdrEffectEnabled &&
-            metadata.hasEmbeddedGainmap &&
-            metadata.lutId == null &&
-            metadata.colorRecipeParams == null &&
-            metadata.sharpening == null &&
-            metadata.noiseReduction == null &&
-            metadata.chromaNoiseReduction == null &&
-            metadata.frameId == null &&
-            metadata.cropRegion == null &&
-            metadata.postCropRegion == null &&
-            metadata.computationalAperture == null
+                metadata.hasEmbeddedGainmap &&
+                metadata.lutId == null &&
+                metadata.colorRecipeParams == null &&
+                metadata.sharpening == null &&
+                metadata.noiseReduction == null &&
+                metadata.chromaNoiseReduction == null &&
+                metadata.frameId == null &&
+                metadata.cropRegion == null &&
+                metadata.postCropRegion == null &&
+                metadata.computationalAperture == null
     }
 
     private fun writeFinalJpeg(
@@ -282,7 +291,10 @@ object PhotoManager {
             tempFile.renameTo(detailFile)
             stableTimestamp?.let { photoDir.setLastModified(it) }
             _detailHdrReadyEvents.tryEmit(photoId)
-            PLog.d(TAG, "buildDetailHdrCache success: $photoId, source=${ultraHdrSource.sourceKind}, gainmap=${gainmapResult != null}")
+            PLog.d(
+                TAG,
+                "buildDetailHdrCache success: $photoId, source=${ultraHdrSource.sourceKind}, gainmap=${gainmapResult != null}"
+            )
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to build detail HDR cache for $photoId", e)
@@ -623,13 +635,58 @@ object PhotoManager {
             }
         }
 
+    suspend fun exportDng(context: Context, photoId: String, sourceFile: File, metadata: PhotoMetadata) =
+        withContext(Dispatchers.IO) {
+            try {
+                if (!sourceFile.exists() || sourceFile.length() <= 0L) {
+                    PLog.w(TAG, "Skipping DNG export because source file is missing or empty: ${sourceFile.absolutePath}")
+                    return@withContext
+                }
+
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                    .format(Date())
+                val dngFilename = "PhotonCamera_${timestamp}.dng"
+                val dngContentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, dngFilename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/x-adobe-dng")
+                    put(
+                        MediaStore.MediaColumns.RELATIVE_PATH,
+                        Environment.DIRECTORY_DCIM + "/PhotonCamera"
+                    )
+                }
+
+                val dngUri = context.contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    dngContentValues
+                )
+
+                dngUri?.let { uri ->
+                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        sourceFile.inputStream().use { inputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                    }
+                    PLog.d(TAG, "DNG exported from file: $uri")
+
+                    val currentMetadata = loadMetadata(context, photoId) ?: metadata
+                    val updatedMetadata = currentMetadata.copy(
+                        exportedUris = currentMetadata.exportedUris + uri.toString()
+                    )
+                    saveMetadata(context, photoId, updatedMetadata)
+                    PLog.d(TAG, "Exported URI saved: $uri")
+                }
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to export DNG", e)
+            }
+        }
+
     suspend fun preparePhoto(
         context: Context,
         metadata: PhotoMetadata,
         captureResult: CaptureResult?,
         thumbnail: Bitmap?,
         useLivePhoto: Boolean,
-        useSuperResolution: Boolean,
+        superResolutionScale: Float,
         photoId: String? = null,
     ) = withContext(Dispatchers.IO) {
         try {
@@ -641,9 +698,13 @@ object PhotoManager {
             val metadataFile = File(photoDir, METADATA_FILE)
 
             var cropRegion = captureResult?.get(CaptureResult.SCALER_CROP_REGION)
-            if (useSuperResolution && cropRegion != null) {
-                cropRegion =
-                    Rect(cropRegion.left * 2, cropRegion.top * 2, cropRegion.right * 2, cropRegion.bottom * 2)
+            if (superResolutionScale > 1.0f && cropRegion != null) {
+                cropRegion = Rect(
+                    (cropRegion.left * superResolutionScale).roundToInt(),
+                    (cropRegion.top * superResolutionScale).roundToInt(),
+                    (cropRegion.right * superResolutionScale).roundToInt(),
+                    (cropRegion.bottom * superResolutionScale).roundToInt()
+                )
             }
 
             val dimensions =
@@ -836,14 +897,15 @@ object PhotoManager {
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
             val dngFile = File(photoDir, DNG_FILE)
+            val tempDngFile = File(photoDir, "temp.dng")
             val tempFile = File(photoDir, "temp.jpg")
 
             val metadata = loadMetadata(context, photoId) ?: return@withContext
 
             captureResult ?: return@withContext
 
-            val byteOutstream = ByteArrayOutputStream()
-            byteOutstream.use { outputStream ->
+            var dngSaveAttempted = false
+            FileOutputStream(tempDngFile).use { outputStream ->
                 image.use {
                     try {
                         RawProcessor.saveToDng(
@@ -854,17 +916,26 @@ object PhotoManager {
                             rotation,
                             thumbnail
                         )
+                        dngSaveAttempted = true
                     } catch (e: Throwable) {
                         PLog.e(TAG, "DNG save failed", e)
                     }
                 }
             }
-            val array = byteOutstream.toByteArray()
-            FileOutputStream(dngFile).use {
-                it.write(array)
+            val dngWritten = dngSaveAttempted && tempDngFile.exists() && tempDngFile.length() > 0L
+            if (!dngWritten) {
+                tempDngFile.delete()
+                return@withContext
+            }
+            if (dngFile.exists()) {
+                dngFile.delete()
+            }
+            if (!tempDngFile.renameTo(dngFile)) {
+                tempDngFile.copyTo(dngFile, overwrite = true)
+                tempDngFile.delete()
             }
             if (shouldAutoSave) {
-                exportDng(context, photoId, array, metadata)
+                exportDng(context, photoId, dngFile, metadata)
             }
 
             val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
@@ -1099,7 +1170,12 @@ object PhotoManager {
 
     fun getMultipleExposureFrameFiles(context: Context, sessionId: String): List<File> {
         val dir = getMultipleExposureSessionDir(context, sessionId)
-        return dir.listFiles { file -> file.isFile && file.name.startsWith("frame_") && file.extension.equals("jpg", ignoreCase = true) }
+        return dir.listFiles { file ->
+            file.isFile && file.name.startsWith("frame_") && file.extension.equals(
+                "jpg",
+                ignoreCase = true
+            )
+        }
             ?.sortedBy { it.name }
             ?: emptyList()
     }
@@ -1240,6 +1316,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
+        superResolutionScale: Float = 1.0f,
         useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
@@ -1323,6 +1400,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
+        superResolutionScale: Float = 1.0f,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
         droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
@@ -1332,6 +1410,7 @@ object PhotoManager {
 
             // 预先准备所有文件路径
             val photoFile = File(photoDir, PHOTO_FILE)
+            val dngFile = File(photoDir, DNG_FILE)
             val tempFile = File(photoDir, "temp.jpg")
             val yuvFile = File(photoDir, YUV_FILE)
 
@@ -1353,9 +1432,10 @@ object PhotoManager {
             )
 
             var currentUseSuperResolution = useSuperResolution
-            var byteBuffer = MultiFrameStacker.processBurstRaw(
-                images, characteristics,
+            var rawStackResult = MultiFrameStacker.processBurstRaw(
+                images, rawMetadata.cfaPattern,
                 currentUseSuperResolution,
+                superResolutionScale,
                 useGpuAcceleration,
                 masterBlackLevel = rawMetadata.blackLevel,
                 whiteLevel = rawMetadata.whiteLevel.toInt(),
@@ -1367,12 +1447,13 @@ object PhotoManager {
                 lensShadingHeight = 0,
             )
 
-            if (byteBuffer == null && currentUseSuperResolution) {
+            if (rawStackResult == null && currentUseSuperResolution) {
                 PLog.w(TAG, "processBurstRaw failed with SR, retrying without SR")
                 currentUseSuperResolution = false
-                byteBuffer = MultiFrameStacker.processBurstRaw(
-                    images, characteristics,
+                rawStackResult = MultiFrameStacker.processBurstRaw(
+                    images, rawMetadata.cfaPattern,
                     currentUseSuperResolution,
+                    1.0f,
                     useGpuAcceleration,
                     masterBlackLevel = rawMetadata.blackLevel,
                     whiteLevel = rawMetadata.whiteLevel.toInt(),
@@ -1384,14 +1465,15 @@ object PhotoManager {
                 )
             }
 
-            val finalByteBuffer = byteBuffer ?: return@withContext
+            val finalStackResult = rawStackResult ?: return@withContext
 
             val result: Bitmap = run {
                 // Construct metadata for Linear RGB
-                val finalScale = if (currentUseSuperResolution) 2 else 1
+                val finalWidth = finalStackResult.width
+                val finalHeight = finalStackResult.height
                 val linearMetadata = rawMetadata.copy(
-                    width = firstImageWidth * finalScale,
-                    height = firstImageHeight * finalScale,
+                    width = finalWidth,
+                    height = finalHeight,
                     cfaPattern = RawMetadata.CFA_LINEAR_RGB,
                     blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
                     whiteLevel = 65535f,
@@ -1401,15 +1483,17 @@ object PhotoManager {
                 )
                 var bitmap = RawDemosaicProcessor.getInstance().process(
                     context,
-                    finalByteBuffer,
-                    firstImageWidth * finalScale,
-                    firstImageHeight * finalScale,
-                    firstImageWidth * finalScale * 6, // 3 channels * 2 bytes
+                    finalStackResult.stackedRgbBuffer,
+                    finalWidth,
+                    finalHeight,
+                    finalWidth * 6, // 3 channels * 2 bytes
                     linearMetadata,
                     aspectRatio,
                     metadata.cropRegion,
                     rotation,
-                    sharpeningValue = 0.4f
+                    sharpeningValue = 0.4f,
+                    denoiseValue = 0f,
+                    chromaDenoiseValue = 0.2f
                 )
 
                 if (metadata.isMirrored && bitmap != null) {
@@ -1424,6 +1508,26 @@ object PhotoManager {
 
                 bitmap
             } ?: return@withContext
+
+            processingScope.launch {
+                trySaveStackedRawDng(
+                    context = context,
+                    photoId = photoId,
+                    dngFile = dngFile,
+                    fusedBayerBuffer = finalStackResult.fusedBayerBuffer,
+                    width = finalStackResult.width,
+                    height = finalStackResult.height,
+                    rawMetadata = rawMetadata,
+                    isNormalizedSensorData = finalStackResult.isNormalizedSensorData,
+                    characteristics = characteristics,
+                    captureResult = captureResult,
+                    rotation = rotation,
+                    thumbnail = result,
+                    metadata = metadata,
+                    shouldAutoSave = shouldAutoSave
+                )
+            }
+
             // Save Original (Stacked Result)
             FileOutputStream(tempFile).use { outputStream ->
                 writeFinalJpeg(result, outputStream, photoQuality)
@@ -1448,6 +1552,76 @@ object PhotoManager {
         }
     }
 
+    private suspend fun trySaveStackedRawDng(
+        context: Context,
+        photoId: String,
+        dngFile: File,
+        fusedBayerBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rawMetadata: RawMetadata,
+        isNormalizedSensorData: Boolean,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+        rotation: Int,
+        thumbnail: Bitmap?,
+        metadata: PhotoMetadata,
+        shouldAutoSave: Boolean,
+    ) {
+        val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
+        val dngWritten = try {
+            FileOutputStream(tempDngFile).use { outputStream ->
+                RawProcessor.saveRawBufferToDng(
+                    rawBuffer = fusedBayerBuffer,
+                    width = width,
+                    height = height,
+                    characteristics = characteristics,
+                    captureResult = captureResult,
+                    outputStream = outputStream,
+                    rotation = rotation,
+                    thumbnail = thumbnail,
+                    cfaPattern = rawMetadata.cfaPattern,
+                    blackLevel = rawMetadata.blackLevel,
+                    whiteLevel = rawMetadata.whiteLevel.toInt(),
+                    valueDomain = if (isNormalizedSensorData) {
+                        RawProcessor.RawBufferValueDomain.NORMALIZED_SENSOR_RANGE
+                    } else {
+                        RawProcessor.RawBufferValueDomain.SENSOR
+                    }
+                )
+            }
+        } catch (e: Throwable) {
+            PLog.w(TAG, "Failed to build stacked RAW DNG, ignoring", e)
+            false
+        }
+
+        if (!dngWritten || !tempDngFile.exists() || tempDngFile.length() <= 0L) {
+            tempDngFile.delete()
+            return
+        }
+
+        try {
+            if (dngFile.exists()) {
+                dngFile.delete()
+            }
+            if (!tempDngFile.renameTo(dngFile)) {
+                tempDngFile.copyTo(dngFile, overwrite = true)
+                tempDngFile.delete()
+            }
+        } catch (e: Exception) {
+            tempDngFile.delete()
+            if (dngFile.exists()) {
+                dngFile.delete()
+            }
+            PLog.w(TAG, "Failed to persist stacked RAW DNG, ignoring", e)
+            return
+        }
+
+        if (shouldAutoSave) {
+            exportDng(context, photoId, dngFile, metadata)
+        }
+    }
+
 
     /**
      * 保存堆栈合成后的照片
@@ -1467,6 +1641,7 @@ object PhotoManager {
         chromaNoiseReductionValue: Float,
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
+        superResolutionScale: Float = 1.0f,
         useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
         droMode: RawProcessingPreferences.DROMode = RawProcessingPreferences.DROMode.OFF
@@ -1486,6 +1661,7 @@ object PhotoManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     useSuperResolution,
+                    superResolutionScale,
                     useGpuAcceleration
                 )
             }
@@ -1506,6 +1682,7 @@ object PhotoManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     useSuperResolution,
+                    superResolutionScale,
                     useGpuAcceleration,
                     exposureBias,
                     droMode
@@ -1877,7 +2054,12 @@ object PhotoManager {
         return loadBitmap(context, Uri.fromFile(photoFile), maxEdge, preserveHdr)
     }
 
-    fun loadOriginalBitmap(context: Context, photoId: String, maxEdge: Int? = null, preserveHdr: Boolean = false): Bitmap? {
+    fun loadOriginalBitmap(
+        context: Context,
+        photoId: String,
+        maxEdge: Int? = null,
+        preserveHdr: Boolean = false
+    ): Bitmap? {
         val photoFile = getPhotoFile(context, photoId)
         if (!photoFile.exists()) {
             return null
@@ -2011,7 +2193,8 @@ object PhotoManager {
                 // 1. 检测是否为 RAW 文件
                 val mimeType = context.contentResolver.getType(uri)
                 val fileName = getFileName(context, uri) ?: ""
-                val userPrefs = ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
+                val userPrefs =
+                    ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
                 val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
                         mimeType?.contains("dng", ignoreCase = true) == true ||
                         fileName.endsWith(".dng", ignoreCase = true) ||
@@ -2030,14 +2213,14 @@ object PhotoManager {
 
                     // 3. 处理 RAW 以生成 JPEG 预览
                     var updatedMetadata = metadata
-                val processedBitmap = RawDemosaicProcessor.getInstance().process(
-                    context,
-                    dngFile.absolutePath, null, null, 0,
-                    sharpeningValue = 0.4f,
-                    denoiseValue = updatedMetadata.rawDenoiseValue,
-                    onMetadata = { raw ->
-                        updatedMetadata = updatedMetadata.merge(raw)
-                    }
+                    val processedBitmap = RawDemosaicProcessor.getInstance().process(
+                        context,
+                        dngFile.absolutePath, null, null, 0,
+                        sharpeningValue = 0.4f,
+                        denoiseValue = updatedMetadata.rawDenoiseValue,
+                        onMetadata = { raw ->
+                            updatedMetadata = updatedMetadata.merge(raw)
+                        }
                     )
 
                     if (processedBitmap != null) {
@@ -2121,7 +2304,11 @@ object PhotoManager {
         }
     }
 
-    suspend fun refreshRawPreview(context: Context, photoId: String, droMode: RawProcessingPreferences.DROMode): Bitmap? {
+    suspend fun refreshRawPreview(
+        context: Context,
+        photoId: String,
+        droMode: RawProcessingPreferences.DROMode
+    ): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 val photoDir = getPhotoDir(context, photoId, true)

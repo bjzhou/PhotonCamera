@@ -1,12 +1,12 @@
 #include "vulkan_raw_stacker.h"
-#include "accumulate_raw.comp.h"
 #include "align_lk.comp.h"
 #include "common.h"
 #include "color_scatter_raw.comp.h"
 #include "green_scatter_raw.comp.h"
 #include "normalize_color_hr.comp.h"
-#include "normalize_raw.comp.h"
 #include "normalize_green_hr.comp.h"
+#include "reference_preprocess_raw.comp.h"
+#include "reference_prior_raw.comp.h"
 #include "raw_structure_tensor.comp.h"
 #include "robustness_raw.comp.h"
 #include <algorithm>
@@ -27,14 +27,158 @@
 constexpr uint32_t kDenseAlignmentGridSpacing = 8;
 constexpr int kAlignmentRegularizationPasses = 2;
 constexpr float kAlignmentOutlierThreshold = 0.65f;
+constexpr bool kEnableRawSuperResPerfLogs = false;
+
+using PerfClock = std::chrono::steady_clock;
+
+inline double elapsedMillis(PerfClock::time_point start,
+                            PerfClock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+inline double elapsedMillis(PerfClock::time_point start) {
+  return elapsedMillis(start, PerfClock::now());
+}
+
+inline double averageMillis(double totalMs, size_t count) {
+  return count > 0 ? totalMs / static_cast<double>(count) : 0.0;
+}
+
+inline void logRawSuperResStage(const char *stage, double elapsedMs) {
+  if (!kEnableRawSuperResPerfLogs)
+    return;
+  LOGI("RawSuperResPerf[%s]: %.3f ms", stage, elapsedMs);
+}
+
+#undef TIME_START
+#undef TIME_END
+#define TIME_START(name) const auto start_##name = PerfClock::now()
+#define TIME_END(name)                                                        \
+  const double elapsed_##name = elapsedMillis(start_##name);                  \
+  logRawSuperResStage(#name, elapsed_##name)
+
+struct RawSuperResPerfStats {
+  double totalMs = 0.0;
+  double scoreCalculationMs = 0.0;
+  double descriptorSetupMs = 0.0;
+
+  double phase1UploadAndPyramidMs = 0.0;
+  double proxyBuildMs = 0.0;
+  double pyramidBuildMs = 0.0;
+  double gpuUploadMs = 0.0;
+
+  double referencePriorMs = 0.0;
+  double structureTensorMs = 0.0;
+
+  double coarseAlignmentMs = 0.0;
+  double coarseAlignmentComputeMs = 0.0;
+
+  double globalReliabilityMs = 0.0;
+  double globalReliabilitySeedMs = 0.0;
+  double globalReliabilityLkStage1Ms = 0.0;
+  double globalReliabilityRegularize1Ms = 0.0;
+  double globalReliabilityRobustness1Ms = 0.0;
+  double globalReliabilityLkStage2Ms = 0.0;
+  double globalReliabilityRobustness1AndLkStage2Ms = 0.0;
+  double globalReliabilityRegularize2Ms = 0.0;
+  double globalReliabilityRobustness2Ms = 0.0;
+  double globalReliabilityReadbackMs = 0.0;
+
+  double tileProcessingMs = 0.0;
+  double outputClearMs = 0.0;
+  double tileClearMs = 0.0;
+  double localMaskUploadMs = 0.0;
+  double tileRefinedStateUploadMs = 0.0;
+  double tileAlignmentSeedMs = 0.0;
+  double tileAlignmentLkStage1Ms = 0.0;
+  double tileAlignmentRegularize1Ms = 0.0;
+  double tileRobustness1Ms = 0.0;
+  double tileAlignmentLkStage2Ms = 0.0;
+  double tileAlignmentRegularize2Ms = 0.0;
+  double tileRobustness2Ms = 0.0;
+  double scatterMs = 0.0;
+  double normalizeMs = 0.0;
+
+  double outputReadbackMs = 0.0;
+  double cleanupMs = 0.0;
+
+  size_t totalFrames = 0;
+  size_t keptFrames = 0;
+  size_t skippedFrames = 0;
+  size_t tilesProcessed = 0;
+  size_t coarseAlignedFrames = 0;
+  size_t globalReliabilityFrames = 0;
+  size_t tileAlignedFrameInstances = 0;
+  size_t tileScatterFrameInstances = 0;
+
+  void logSummary(uint32_t outputW, uint32_t outputH, float scale) const {
+    if (!kEnableRawSuperResPerfLogs)
+      return;
+    LOGI(
+        "RawSuperResPerf summary: total=%.3f ms output=%ux%u scale=%.2f "
+        "frames=%zu kept=%zu skipped=%zu tiles=%zu",
+        totalMs, outputW, outputH, scale, totalFrames, keptFrames,
+        skippedFrames, tilesProcessed);
+    LOGI(
+        "RawSuperResPerf phases: score=%.3f setup=%.3f upload=%.3f prior=%.3f "
+        "tensor=%.3f coarse=%.3f reliability=%.3f tile=%.3f readback=%.3f "
+        "cleanup=%.3f",
+        scoreCalculationMs, descriptorSetupMs, phase1UploadAndPyramidMs,
+        referencePriorMs, structureTensorMs, coarseAlignmentMs,
+        globalReliabilityMs, tileProcessingMs, outputReadbackMs, cleanupMs);
+    LOGI(
+        "RawSuperResPerf upload-detail: proxy=%.3f pyramid=%.3f gpuUpload=%.3f "
+        "avgFrame=%.3f",
+        proxyBuildMs, pyramidBuildMs, gpuUploadMs,
+        averageMillis(phase1UploadAndPyramidMs, totalFrames));
+    if (coarseAlignedFrames > 0 || globalReliabilityFrames > 0) {
+      LOGI(
+          "RawSuperResPerf align-detail: coarse=%.3f avgCoarse=%.3f "
+          "seed=%.3f lk1=%.3f reg1=%.3f rb1=%.3f lk2=%.3f rb1+lk2=%.3f "
+          "reg2=%.3f rb2=%.3f summary=%.3f avgReliabilityFrame=%.3f",
+          coarseAlignmentComputeMs,
+          averageMillis(coarseAlignmentComputeMs, coarseAlignedFrames),
+          globalReliabilitySeedMs, globalReliabilityLkStage1Ms,
+          globalReliabilityRegularize1Ms, globalReliabilityRobustness1Ms,
+          globalReliabilityLkStage2Ms,
+          globalReliabilityRobustness1AndLkStage2Ms,
+          globalReliabilityRegularize2Ms, globalReliabilityRobustness2Ms,
+          globalReliabilityReadbackMs,
+          averageMillis(globalReliabilityMs, globalReliabilityFrames));
+    }
+    if (tilesProcessed > 0) {
+      LOGI(
+          "RawSuperResPerf tile-detail: clearOut=%.3f clearTile=%.3f "
+          "maskUpload=%.3f refinedUpload=%.3f alignSeed=%.3f lk1=%.3f reg1=%.3f rb1=%.3f "
+          "lk2=%.3f reg2=%.3f rb2=%.3f scatter=%.3f normalize=%.3f "
+          "avgTile=%.3f avgScatterFrame=%.3f avgNonRefFramePrep=%.3f",
+          outputClearMs, tileClearMs, localMaskUploadMs,
+          tileRefinedStateUploadMs, tileAlignmentSeedMs,
+          tileAlignmentLkStage1Ms, tileAlignmentRegularize1Ms,
+          tileRobustness1Ms, tileAlignmentLkStage2Ms,
+          tileAlignmentRegularize2Ms, tileRobustness2Ms, scatterMs,
+          normalizeMs, averageMillis(tileProcessingMs, tilesProcessed),
+          averageMillis(scatterMs, tileScatterFrameInstances),
+          averageMillis(tileRefinedStateUploadMs + tileAlignmentSeedMs +
+                            tileAlignmentLkStage1Ms +
+                            tileAlignmentRegularize1Ms + tileRobustness1Ms +
+                            tileAlignmentLkStage2Ms +
+                            tileAlignmentRegularize2Ms + tileRobustness2Ms,
+                        tileAlignedFrameInstances));
+    }
+  }
+};
 
 VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool enableSuperRes,
+                                   float superResScale,
                                    const float *blackLevel, float whiteLevel,
                                    const float *wbGains,
                                    const float *noiseModel,
                                    const float *lensShadingMap,
                                    uint32_t lscWidth, uint32_t lscHeight)
     : width(w), height(h), mEnableSuperRes(enableSuperRes),
+      mSuperResScale(enableSuperRes ? std::clamp(superResScale, 1.0f, 2.0f)
+                                    : 1.0f),
       mWhiteLevel(whiteLevel), mLscWidth(lscWidth), mLscHeight(lscHeight) {
 
   if (blackLevel)
@@ -49,9 +193,8 @@ VulkanRawStacker::VulkanRawStacker(uint32_t w, uint32_t h, bool enableSuperRes,
   }
 
   if (mEnableSuperRes) {
-    uint32_t scale = 2;
-    uint32_t outW = width * scale;
-    uint32_t outH = height * scale;
+    uint32_t outW = (uint32_t)std::lround(width * mSuperResScale);
+    uint32_t outH = (uint32_t)std::lround(height * mSuperResScale);
     const uint32_t MAX_TILE_SIZE = 4096;
     numTilesX = (outW + MAX_TILE_SIZE - 1) / MAX_TILE_SIZE;
     numTilesY = (outH + MAX_TILE_SIZE - 1) / MAX_TILE_SIZE;
@@ -73,9 +216,9 @@ void VulkanRawStacker::initVulkanResources() {
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  uint32_t scale = mEnableSuperRes ? 2 : 1;
-  uint32_t outW = width * scale;
-  uint32_t outH = height * scale;
+  float scale = mEnableSuperRes ? mSuperResScale : 1.0f;
+  uint32_t outW = (uint32_t)std::lround(width * scale);
+  uint32_t outH = (uint32_t)std::lround(height * scale);
 
   uint32_t planeW = outW;
   uint32_t planeH = outH;
@@ -90,56 +233,24 @@ void VulkanRawStacker::initVulkanResources() {
   VkDeviceSize accumBufferSize =
       (VkDeviceSize)stride * (tileH + 16) * sizeof(float) * 2;
 
-  // Sequential tile processing: only allocate 3 accum buffers (R/G/B).
-  // Tiles are processed one at a time, reusing the same 3 buffers.
-  // This drastically reduces VRAM usage from ~2GB to ~25MB.
+  alignLkSets.resize(1);
+  robustnessSets.resize(1);
 
-  int totalBuffers = 3; // Only R, G, B channels
-  accumBuffers.resize(totalBuffers);
-  accumMemories.resize(totalBuffers);
-  accumSets.resize(totalBuffers);
-  normalizeSets.resize(totalBuffers);
-  alignLkSets.resize(totalBuffers);
-  robustnessSets.resize(totalBuffers);
-
-  for (int i = 0; i < totalBuffers; ++i) {
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = accumBufferSize;
-    bufferInfo.usage =
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VK_CHECK(vkCreateBuffer(device, &bufferInfo, nullptr, &accumBuffers[i]));
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(device, accumBuffers[i], &memReqs);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = vm.findMemoryType(
-        memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    VK_CHECK(vkAllocateMemory(device, &allocInfo, nullptr, &accumMemories[i]));
-    vkBindBufferMemory(device, accumBuffers[i], accumMemories[i], 0);
-  }
-
-  // Staging Buffer for Planar RGB (3 channels * 16-bit)
-  VkDeviceSize stagingSize =
-      (VkDeviceSize)width * height * scale * scale * 3 * sizeof(uint16_t);
+  // Host-visible fused Bayer output buffer.
+  VkDeviceSize fusedBayerSize =
+      (VkDeviceSize)outW * outH * sizeof(uint16_t);
   VkBufferCreateInfo stagingInfo{};
   stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  stagingInfo.size = stagingSize;
+  stagingInfo.size = fusedBayerSize;
   stagingInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                       VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   stagingInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-  VK_CHECK(vkCreateBuffer(device, &stagingInfo, nullptr, &stagingBuffer));
+  VK_CHECK(vkCreateBuffer(device, &stagingInfo, nullptr, &fusedBayerBuffer));
 
   VkMemoryRequirements stagingReqs;
-  vkGetBufferMemoryRequirements(device, stagingBuffer, &stagingReqs);
+  vkGetBufferMemoryRequirements(device, fusedBayerBuffer, &stagingReqs);
 
   VkMemoryAllocateInfo stagingAlloc{};
   stagingAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -148,8 +259,8 @@ void VulkanRawStacker::initVulkanResources() {
       stagingReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-  VK_CHECK(vkAllocateMemory(device, &stagingAlloc, nullptr, &stagingMemory));
-  vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
+  VK_CHECK(vkAllocateMemory(device, &stagingAlloc, nullptr, &fusedBayerMemory));
+  vkBindBufferMemory(device, fusedBayerBuffer, fusedBayerMemory, 0);
 
   // Descriptor Pool — sized for 3 channels, not all tiles
   VkDescriptorPoolSize poolSizes[2] = {};
@@ -311,21 +422,55 @@ void VulkanRawStacker::initVulkanResources() {
                        rbScatterAccumMemories[c], 0);
   }
 
-  // Clear Accumulator Buffers (only 3 now)
+  VkDeviceSize priorBufferSize =
+      (VkDeviceSize)outW * outH * sizeof(uint16_t);
+  VkBufferCreateInfo priorInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  priorInfo.size = priorBufferSize;
+  priorInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  priorInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &priorInfo, nullptr, &priorBayerBuffer));
+  VK_CHECK(vkCreateBuffer(device, &priorInfo, nullptr, &priorWeightBuffer));
+
+  VkMemoryRequirements priorReqs;
+  vkGetBufferMemoryRequirements(device, priorBayerBuffer, &priorReqs);
+  VkMemoryAllocateInfo priorAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  priorAlloc.allocationSize = priorReqs.size;
+  priorAlloc.memoryTypeIndex = vm.findMemoryType(
+      priorReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device, &priorAlloc, nullptr, &priorBayerMemory));
+  vkBindBufferMemory(device, priorBayerBuffer, priorBayerMemory, 0);
+
+  vkGetBufferMemoryRequirements(device, priorWeightBuffer, &priorReqs);
+  priorAlloc.allocationSize = priorReqs.size;
+  priorAlloc.memoryTypeIndex = vm.findMemoryType(
+      priorReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device, &priorAlloc, nullptr, &priorWeightMemory));
+  vkBindBufferMemory(device, priorWeightBuffer, priorWeightMemory, 0);
+
+  VkDeviceSize normalizedReferenceSize =
+      (VkDeviceSize)width * height * sizeof(uint16_t);
+  VkBufferCreateInfo normalizedReferenceInfo{
+      VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  normalizedReferenceInfo.size = normalizedReferenceSize;
+  normalizedReferenceInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  normalizedReferenceInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VK_CHECK(vkCreateBuffer(device, &normalizedReferenceInfo, nullptr,
+                          &normalizedReferenceBuffer));
+
+  VkMemoryRequirements normalizedReferenceReqs;
+  vkGetBufferMemoryRequirements(device, normalizedReferenceBuffer,
+                                &normalizedReferenceReqs);
+  VkMemoryAllocateInfo normalizedReferenceAlloc{
+      VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  normalizedReferenceAlloc.allocationSize = normalizedReferenceReqs.size;
+  normalizedReferenceAlloc.memoryTypeIndex = vm.findMemoryType(
+      normalizedReferenceReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device, &normalizedReferenceAlloc, nullptr,
+                            &normalizedReferenceMemory));
+  vkBindBufferMemory(device, normalizedReferenceBuffer,
+                     normalizedReferenceMemory, 0);
+
   VkCommandBuffer cb = vm.beginSingleTimeCommands();
-  for (int i = 0; i < 3; ++i) {
-    vkCmdFillBuffer(cb, accumBuffers[i], 0, accumBufferSize, 0);
-    VkBufferMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask =
-        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.buffer = accumBuffers[i];
-    barrier.size = accumBufferSize;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
-                         &barrier, 0, nullptr);
-  }
   for (int phase = 0; phase < 2; ++phase) {
     vkCmdFillBuffer(cb, greenPhaseAccumBuffers[phase], 0, greenAccumSize, 0);
     VkBufferMemoryBarrier barrier{};
@@ -352,6 +497,17 @@ void VulkanRawStacker::initVulkanResources() {
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                          &barrier, 0, nullptr);
   }
+  vkCmdFillBuffer(cb, fusedBayerBuffer, 0, fusedBayerSize, 0);
+  VkBufferMemoryBarrier fusedBarrier{};
+  fusedBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  fusedBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  fusedBarrier.dstAccessMask =
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  fusedBarrier.buffer = fusedBayerBuffer;
+  fusedBarrier.size = fusedBayerSize;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                       &fusedBarrier, 0, nullptr);
 
   // Initial Clear for Alignment Buffer
   void *ptr;
@@ -681,58 +837,81 @@ void VulkanRawStacker::createPipelines() {
       device, colorScatterPipelineLayout, color_scatter_raw_comp_spv,
       color_scatter_raw_comp_spv_size);
 
-  // --- 6. Accumulate Pipeline ---
-  // Updated with 7 bindings: 0=Input, 1=Accum, 2=Align, 3=Kernel,
-  // 4=Robustness, 5=LSC, 6=Local tile mask
-  VkDescriptorSetLayoutBinding bindings[8] = {};
-  bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[6] = {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-  bindings[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  // --- 6. Reference Normalize Pipeline ---
+  VkDescriptorSetLayoutBinding rnBindings[3] = {};
+  rnBindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  rnBindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  rnBindings[2] = {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-  VkDescriptorSetLayoutCreateInfo layoutInfo{};
-  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 8;
-  layoutInfo.pBindings = bindings;
-  vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
-                              &descriptorSetLayout);
+  VkDescriptorSetLayoutCreateInfo rnLayoutInfo{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  rnLayoutInfo.bindingCount = 3;
+  rnLayoutInfo.pBindings = rnBindings;
+  vkCreateDescriptorSetLayout(device, &rnLayoutInfo, nullptr,
+                              &referenceNormalizeSetLayout);
 
-  VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-  pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  pipelineLayoutInfo.setLayoutCount = 1;
-  pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-  pipelineLayoutInfo.pushConstantRangeCount = 1;
-  pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-  vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+  VkPipelineLayoutCreateInfo rnPLInfo{
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  rnPLInfo.setLayoutCount = 1;
+  rnPLInfo.pSetLayouts = &referenceNormalizeSetLayout;
+  rnPLInfo.pushConstantRangeCount = 1;
+  rnPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &rnPLInfo, nullptr,
+                         &referenceNormalizePipelineLayout);
 
-  accumulatePipeline =
-      createComputePipeline(device, pipelineLayout, accumulate_raw_comp_spv,
-                            accumulate_raw_comp_spv_size);
+  referenceNormalizePipeline = createComputePipeline(
+      device, referenceNormalizePipelineLayout,
+      reference_preprocess_raw_comp_spv,
+      reference_preprocess_raw_comp_spv_size);
 
-  // --- 7. Green Normalize Pipeline ---
-  VkDescriptorSetLayoutBinding gnBindings[3] = {};
+  // --- 7. Reference Prior Pipeline ---
+  VkDescriptorSetLayoutBinding rpBindings[3] = {};
+  rpBindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  rpBindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  rpBindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+
+  VkDescriptorSetLayoutCreateInfo rpLayoutInfo{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  rpLayoutInfo.bindingCount = 3;
+  rpLayoutInfo.pBindings = rpBindings;
+  vkCreateDescriptorSetLayout(device, &rpLayoutInfo, nullptr,
+                              &referencePriorSetLayout);
+
+  VkPipelineLayoutCreateInfo rpPLInfo{
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  rpPLInfo.setLayoutCount = 1;
+  rpPLInfo.pSetLayouts = &referencePriorSetLayout;
+  rpPLInfo.pushConstantRangeCount = 1;
+  rpPLInfo.pPushConstantRanges = &pushConstantRange;
+  vkCreatePipelineLayout(device, &rpPLInfo, nullptr,
+                         &referencePriorPipelineLayout);
+
+  referencePriorPipeline = createComputePipeline(
+      device, referencePriorPipelineLayout, reference_prior_raw_comp_spv,
+      reference_prior_raw_comp_spv_size);
+
+  // --- 8. Green Normalize Pipeline ---
+  VkDescriptorSetLayoutBinding gnBindings[5] = {};
   gnBindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Output
   gnBindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Phase 0
   gnBindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Phase 1
+  gnBindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Prior value
+  gnBindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // Prior weight
 
   VkDescriptorSetLayoutCreateInfo gnLayoutInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  gnLayoutInfo.bindingCount = 3;
+  gnLayoutInfo.bindingCount = 5;
   gnLayoutInfo.pBindings = gnBindings;
   vkCreateDescriptorSetLayout(device, &gnLayoutInfo, nullptr,
                               &greenNormalizeSetLayout);
@@ -750,16 +929,20 @@ void VulkanRawStacker::createPipelines() {
       device, greenNormalizePipelineLayout, normalize_green_hr_comp_spv,
       normalize_green_hr_comp_spv_size);
 
-  // --- 8. Color Normalize Pipeline ---
-  VkDescriptorSetLayoutBinding cnBindings[2] = {};
+  // --- 9. Color Normalize Pipeline ---
+  VkDescriptorSetLayoutBinding cnBindings[4] = {};
   cnBindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
   cnBindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  cnBindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+  cnBindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
   VkDescriptorSetLayoutCreateInfo cnLayoutInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  cnLayoutInfo.bindingCount = 2;
+  cnLayoutInfo.bindingCount = 4;
   cnLayoutInfo.pBindings = cnBindings;
   vkCreateDescriptorSetLayout(device, &cnLayoutInfo, nullptr,
                               &colorNormalizeSetLayout);
@@ -776,41 +959,6 @@ void VulkanRawStacker::createPipelines() {
   colorNormalizePipeline = createComputePipeline(
       device, colorNormalizePipelineLayout, normalize_color_hr_comp_spv,
       normalize_color_hr_comp_spv_size);
-
-  // --- 9. Normalization Pipeline ---
-
-  VkDescriptorSetLayoutBinding normalizeBindings[2] = {};
-  normalizeBindings[0].binding = 0; // Output buffer
-  normalizeBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  normalizeBindings[0].descriptorCount = 1;
-  normalizeBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-  normalizeBindings[1].binding = 1; // Accumulator buffer
-  normalizeBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  normalizeBindings[1].descriptorCount = 1;
-  normalizeBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-  VkDescriptorSetLayoutCreateInfo normalizeLayoutInfo{};
-  normalizeLayoutInfo.sType =
-      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  normalizeLayoutInfo.bindingCount = 2;
-  normalizeLayoutInfo.pBindings = normalizeBindings;
-  vkCreateDescriptorSetLayout(device, &normalizeLayoutInfo, nullptr,
-                              &normalizeSetLayout);
-
-  VkPipelineLayoutCreateInfo normalizePipelineLayoutInfo{};
-  normalizePipelineLayoutInfo.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  normalizePipelineLayoutInfo.setLayoutCount = 1;
-  normalizePipelineLayoutInfo.pSetLayouts = &normalizeSetLayout;
-  normalizePipelineLayoutInfo.pushConstantRangeCount = 1;
-  normalizePipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-  vkCreatePipelineLayout(device, &normalizePipelineLayoutInfo, nullptr,
-                         &normalizePipelineLayout);
-
-  normalizePipeline = createComputePipeline(device, normalizePipelineLayout,
-                                            normalize_raw_comp_spv,
-                                            normalize_raw_comp_spv_size);
 
   LOGD("Pipelines created");
 }
@@ -946,6 +1094,13 @@ struct LocalReliabilityMap {
   LocalReliabilitySummary summary;
 };
 
+struct RefinedFrameCache {
+  std::vector<Point> alignment;
+  std::vector<float> robustness;
+  std::vector<float> flowVariance;
+  bool valid = false;
+};
+
 struct GreenPhaseSummary {
   ScalarStats phase0Mean;
   ScalarStats phase1Mean;
@@ -1064,6 +1219,28 @@ inline RobustnessSummary readRobustnessSummary(VkDevice device,
   return summary;
 }
 
+inline RobustnessSummary readRobustnessSummary(const std::vector<float> &robustness,
+                                               uint32_t planeW,
+                                               uint32_t planeH) {
+  RobustnessSummary summary;
+  if (planeW == 0 || planeH == 0 || robustness.empty())
+    return summary;
+
+  size_t count = std::min((size_t)planeW * planeH, robustness.size());
+  summary.values = computeScalarStats(robustness.data(), count);
+  size_t weak015 = 0;
+  size_t weak05 = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (robustness[i] < 0.15f)
+      ++weak015;
+    if (robustness[i] < 0.5f)
+      ++weak05;
+  }
+  summary.weak015Fraction = (float)weak015 / (float)count;
+  summary.weak05Fraction = (float)weak05 / (float)count;
+  return summary;
+}
+
 inline bool uploadAlignmentField(VkDevice device, VkDeviceMemory alignMem,
                                  const std::vector<Point> &field) {
   if (field.empty())
@@ -1078,6 +1255,23 @@ inline bool uploadAlignmentField(VkDevice device, VkDeviceMemory alignMem,
 
   std::memcpy(mapPtr, field.data(), field.size() * sizeof(Point));
   vkUnmapMemory(device, alignMem);
+  return true;
+}
+
+inline bool uploadFloatBuffer(VkDevice device, VkDeviceMemory memory,
+                              const std::vector<float> &values) {
+  if (values.empty())
+    return false;
+
+  void *mapPtr = nullptr;
+  VkResult res = vkMapMemory(device, memory, 0,
+                             (VkDeviceSize)values.size() * sizeof(float), 0,
+                             &mapPtr);
+  if (res != VK_SUCCESS || mapPtr == nullptr)
+    return false;
+
+  std::memcpy(mapPtr, values.data(), values.size() * sizeof(float));
+  vkUnmapMemory(device, memory);
   return true;
 }
 
@@ -1113,6 +1307,24 @@ inline bool downloadAlignmentField(VkDevice device, VkDeviceMemory alignMem,
   field.resize(count);
   std::memcpy(field.data(), mapPtr, count * sizeof(Point));
   vkUnmapMemory(device, alignMem);
+  return true;
+}
+
+inline bool downloadFloatBuffer(VkDevice device, VkDeviceMemory memory,
+                                size_t count, std::vector<float> &values) {
+  if (count == 0)
+    return false;
+
+  void *mapPtr = nullptr;
+  VkResult res =
+      vkMapMemory(device, memory, 0, (VkDeviceSize)count * sizeof(float), 0,
+                  &mapPtr);
+  if (res != VK_SUCCESS || mapPtr == nullptr)
+    return false;
+
+  values.resize(count);
+  std::memcpy(values.data(), mapPtr, count * sizeof(float));
+  vkUnmapMemory(device, memory);
   return true;
 }
 
@@ -1388,6 +1600,142 @@ inline LocalReliabilityMap readLocalReliabilityMap(VkDevice device,
   return result;
 }
 
+inline LocalReliabilityMap
+readLocalReliabilityMap(const std::vector<float> &robustness, uint32_t planeW,
+                        uint32_t planeH, const GrayImage &referenceProxy) {
+  LocalReliabilityMap result;
+  if (planeW == 0 || planeH == 0 || referenceProxy.data.empty() ||
+      robustness.empty())
+    return result;
+
+  const uint32_t localTileSize = 16;
+  const uint32_t tilesX = (planeW + localTileSize - 1) / localTileSize;
+  const uint32_t tilesY = (planeH + localTileSize - 1) / localTileSize;
+  result.tilesX = tilesX;
+  result.tilesY = tilesY;
+  result.tileWeights.resize((size_t)tilesX * tilesY, 1.0f);
+  auto saturate = [](float v) { return std::clamp(v, 0.0f, 1.0f); };
+
+  struct TileMetric {
+    float detailScore = 0.0f;
+    float meanRobustness = 0.0f;
+    float weakFraction = 0.0f;
+  };
+
+  std::vector<TileMetric> tileMetrics;
+  tileMetrics.reserve((size_t)tilesX * tilesY);
+  std::vector<float> tileDetails;
+  std::vector<float> tileRobustnessMeans;
+  tileDetails.reserve((size_t)tilesX * tilesY);
+  tileRobustnessMeans.reserve((size_t)tilesX * tilesY);
+
+  for (uint32_t ty = 0; ty < tilesY; ++ty) {
+    for (uint32_t tx = 0; tx < tilesX; ++tx) {
+      uint32_t x0 = tx * localTileSize;
+      uint32_t y0 = ty * localTileSize;
+      uint32_t x1 = std::min(x0 + localTileSize, planeW);
+      uint32_t y1 = std::min(y0 + localTileSize, planeH);
+
+      double detailSum = 0.0;
+      double robustSum = 0.0;
+      size_t weakCount = 0;
+      size_t count = 0;
+
+      for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+          size_t idx = (size_t)y * planeW + x;
+          float center = (float)referenceProxy.data[idx];
+          float xp = (float)referenceProxy
+                         .data[(size_t)y * planeW + std::min(x + 1, planeW - 1)];
+          float xm = (float)referenceProxy
+                         .data[(size_t)y * planeW + (x > 0 ? x - 1 : 0)];
+          float yp = (float)referenceProxy.data[(size_t)std::min(y + 1, planeH - 1) *
+                                                    planeW +
+                                                x];
+          float ym = (float)referenceProxy
+                         .data[(size_t)(y > 0 ? y - 1 : 0) * planeW + x];
+          float gx = std::abs(xp - xm);
+          float gy = std::abs(yp - ym);
+          float lap = std::abs(4.0f * center - xp - xm - yp - ym);
+          detailSum += gx + gy + 0.5 * lap;
+
+          float r = robustness[idx];
+          robustSum += r;
+          if (r < 0.5f)
+            ++weakCount;
+          ++count;
+        }
+      }
+
+      TileMetric metric;
+      if (count > 0) {
+        metric.detailScore = (float)(detailSum / (double)count);
+        metric.meanRobustness = (float)(robustSum / (double)count);
+        metric.weakFraction = (float)weakCount / (float)count;
+      }
+      tileMetrics.push_back(metric);
+      tileDetails.push_back(metric.detailScore);
+      tileRobustnessMeans.push_back(metric.meanRobustness);
+    }
+  }
+
+  result.summary.tileRobustness =
+      computeScalarStats(tileRobustnessMeans.data(), tileRobustnessMeans.size());
+  ScalarStats detailStats =
+      computeScalarStats(tileDetails.data(), tileDetails.size());
+  float edgeThreshold = std::max(detailStats.p50, detailStats.p90 * 0.65f);
+  float textThreshold = std::max(detailStats.p90, detailStats.p99 * 0.75f);
+
+  size_t edgeTiles = 0;
+  size_t edgeGoodTiles = 0;
+  size_t textTiles = 0;
+  size_t textGoodTiles = 0;
+  for (size_t idx = 0; idx < tileMetrics.size(); ++idx) {
+    const TileMetric &metric = tileMetrics[idx];
+    bool isEdgeTile = metric.detailScore >= edgeThreshold;
+    bool isTextTile = metric.detailScore >= textThreshold;
+    float robustNorm = saturate((metric.meanRobustness - 0.58f) / 0.24f);
+    float weakPenalty =
+        saturate(1.0f - std::max(0.0f, metric.weakFraction - 0.10f) / 0.30f);
+    float detailBoost = isTextTile ? 1.0f : (isEdgeTile ? 0.70f : 0.35f);
+    float tileWeight = saturate((0.55f * robustNorm + 0.45f * weakPenalty) *
+                                (0.55f + 0.45f * detailBoost));
+    if (isTextTile) {
+      tileWeight = std::max(tileWeight, 0.35f);
+    } else if (isEdgeTile) {
+      tileWeight = std::max(tileWeight, 0.20f);
+    }
+    result.tileWeights[idx] = tileWeight;
+    if (isEdgeTile) {
+      ++edgeTiles;
+      if (metric.meanRobustness >= 0.70f && metric.weakFraction <= 0.22f) {
+        ++edgeGoodTiles;
+      }
+    }
+    if (isTextTile) {
+      ++textTiles;
+      if (metric.meanRobustness >= 0.74f && metric.weakFraction <= 0.16f) {
+        ++textGoodTiles;
+      }
+    }
+  }
+
+  size_t totalTiles = tileMetrics.size();
+  if (totalTiles > 0) {
+    result.summary.edgeTileFraction = (float)edgeTiles / (float)totalTiles;
+  }
+  if (edgeTiles > 0) {
+    result.summary.edgeGoodFraction = (float)edgeGoodTiles / (float)edgeTiles;
+  }
+  if (textTiles > 0) {
+    result.summary.textGoodFraction = (float)textGoodTiles / (float)textTiles;
+  } else {
+    result.summary.textGoodFraction = result.summary.edgeGoodFraction;
+  }
+
+  return result;
+}
+
 inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 
 inline float computeFusionFrameWeight(const TileAlignment &alignment,
@@ -1597,21 +1945,26 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   if (pendingFrames.empty())
     return false;
 
+  RawSuperResPerfStats perf;
+  perf.totalFrames = pendingFrames.size();
+  const auto processStackStart = PerfClock::now();
+
   // 1. Calculate scores and sort (Highest score first = Reference)
   TIME_START(scoreCalculation);
   selectReferenceFrame();
   TIME_END(scoreCalculation);
+  perf.scoreCalculationMs = elapsed_scoreCalculation;
 
   VulkanManager &vm = VulkanManager::getInstance();
   VkDevice device = vm.getDevice();
 
-  if (accumulatePipeline == VK_NULL_HANDLE) {
+  if (structureTensorPipeline == VK_NULL_HANDLE) {
     createPipelines();
   }
 
-  uint32_t scale = mEnableSuperRes ? 2 : 1;
-  uint32_t outputW = width * scale;
-  uint32_t outputH = height * scale;
+  float scale = mEnableSuperRes ? mSuperResScale : 1.0f;
+  uint32_t outputW = (uint32_t)std::lround(width * scale);
+  uint32_t outputH = (uint32_t)std::lround(height * scale);
   uint32_t inputW = width / 2;
   uint32_t inputH = height / 2;
   uint32_t localTilesX = (inputW + 15) / 16;
@@ -1621,6 +1974,8 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
   uint32_t tileW = (outputW + numTilesX - 1) / numTilesX;
   uint32_t tileH = (outputH + numTilesY - 1) / numTilesY;
+
+  TIME_START(descriptorSetup);
 
   // Global Sampler
   VkSampler sampler;
@@ -1657,6 +2012,12 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &colorScatterSets[c]));
   }
 
+  allocInfo.pSetLayouts = &referenceNormalizeSetLayout;
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &referenceNormalizeSet));
+
+  allocInfo.pSetLayouts = &referencePriorSetLayout;
+  VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &referencePriorSet));
+
   allocInfo.pSetLayouts = &greenNormalizeSetLayout;
   VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &greenNormalizeSet));
 
@@ -1664,34 +2025,6 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   for (int c = 0; c < 2; ++c) {
     VK_CHECK(
         vkAllocateDescriptorSets(device, &allocInfo, &colorNormalizeSets[c]));
-  }
-
-  // Allocate descriptor sets for 3 channels (R/G/B)
-  allocInfo.pSetLayouts = &descriptorSetLayout;
-  for (int c = 0; c < 3; ++c) {
-    if (accumSets[c] == VK_NULL_HANDLE) {
-      VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &accumSets[c]));
-    }
-    updateBufferDescriptorSet(device, accumSets[c], accumBuffers[c],
-                              VK_WHOLE_SIZE, 1);
-    updateBufferDescriptorSet(device, accumSets[c], alignmentBuffer,
-                              VK_WHOLE_SIZE, 2);
-    updateBufferDescriptorSet(device, accumSets[c], kernelBuffer, VK_WHOLE_SIZE,
-                              3);
-    updateBufferDescriptorSet(device, accumSets[c], robustnessBuffer,
-                              VK_WHOLE_SIZE, 4);
-    updateBufferDescriptorSet(device, accumSets[c], flowVarianceBuffer,
-                              VK_WHOLE_SIZE, 5);
-    updateImageDescriptorSet(device, accumSets[c], lscView, lscSampler, 6);
-    updateBufferDescriptorSet(device, accumSets[c], localTileMaskBuffer,
-                              VK_WHOLE_SIZE, 7);
-  }
-
-  allocInfo.pSetLayouts = &normalizeSetLayout;
-  for (int c = 0; c < 3; ++c) {
-    if (normalizeSets[c] == VK_NULL_HANDLE) {
-      VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &normalizeSets[c]));
-    }
   }
 
   // Pre-update constant bindings for other pipelines
@@ -1736,6 +2069,18 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     updateImageDescriptorSet(device, colorScatterSets[c], lscView, lscSampler,
                              6);
   }
+  updateBufferDescriptorSet(device, referenceNormalizeSet,
+                            normalizedReferenceBuffer, VK_WHOLE_SIZE, 1);
+  updateImageDescriptorSet(device, referenceNormalizeSet, lscView, lscSampler,
+                           2);
+  updateBufferDescriptorSet(device, referencePriorSet,
+                            normalizedReferenceBuffer, VK_WHOLE_SIZE, 0);
+  updateBufferDescriptorSet(device, referencePriorSet, priorBayerBuffer,
+                            VK_WHOLE_SIZE, 1);
+  updateBufferDescriptorSet(device, referencePriorSet, priorWeightBuffer,
+                            VK_WHOLE_SIZE, 2);
+  TIME_END(descriptorSetup);
+  perf.descriptorSetupMs = elapsed_descriptorSetup;
 
   // =====================================================================
   // Phase 1: Upload all frames to GPU and build proxies/pyramids
@@ -1755,13 +2100,19 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
     // Build grayscale proxy
     {
+      const auto proxyBuildStart = PerfClock::now();
       uploadedFrames[i].proxy = buildAlignmentProxy(frame);
+      perf.proxyBuildMs += elapsedMillis(proxyBuildStart);
     }
 
     // Build pyramid
-    uploadedFrames[i].pyramid = buildPyramid(
-        uploadedFrames[i].proxy.data.data(), uploadedFrames[i].proxy.width,
-        uploadedFrames[i].proxy.height, 4);
+    {
+      const auto pyramidBuildStart = PerfClock::now();
+      uploadedFrames[i].pyramid = buildPyramid(
+          uploadedFrames[i].proxy.data.data(), uploadedFrames[i].proxy.width,
+          uploadedFrames[i].proxy.height, 4);
+      perf.pyramidBuildMs += elapsedMillis(pyramidBuildStart);
+    }
 
     if (i == 0) {
       referencePyramid = uploadedFrames[i].pyramid;
@@ -1769,6 +2120,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
     // Upload frame to GPU
     {
+      const auto gpuUploadStart = PerfClock::now();
       VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
       imgInfo.imageType = VK_IMAGE_TYPE_2D;
       imgInfo.format = VK_FORMAT_R16_UNORM;
@@ -1798,9 +2150,9 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
       VkDeviceSize size = width * height * 2;
       void *map;
-      vkMapMemory(device, stagingMemory, 0, size, 0, &map);
+      vkMapMemory(device, fusedBayerMemory, 0, size, 0, &map);
       memcpy(map, frame.rawData.data(), size);
-      vkUnmapMemory(device, stagingMemory);
+      vkUnmapMemory(device, fusedBayerMemory);
 
       VkCommandBuffer cb = vm.beginSingleTimeCommands();
       VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -1816,7 +2168,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
       VkBufferImageCopy copyReg{};
       copyReg.imageExtent = {width, height, 1};
       copyReg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      vkCmdCopyBufferToImage(cb, stagingBuffer, uploadedFrames[i].image,
+      vkCmdCopyBufferToImage(cb, fusedBayerBuffer, uploadedFrames[i].image,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyReg);
 
       barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -1828,9 +2180,93 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                            0, nullptr, 1, &barrier);
 
       vm.endSingleTimeCommands(cb);
+      perf.gpuUploadMs += elapsedMillis(gpuUploadStart);
     }
   }
   TIME_END(phase1_UploadAndPyramid);
+  perf.phase1UploadAndPyramidMs = elapsed_phase1_UploadAndPyramid;
+
+  // =====================================================================
+  // Phase 1B: Build dense HR Bayer prior from the reference frame
+  // =====================================================================
+  {
+    TIME_START(phase1b_ReferencePrior);
+    VkCommandBuffer cb = vm.beginSingleTimeCommands();
+
+    updateImageDescriptorSet(device, referenceNormalizeSet, uploadedFrames[0].view,
+                             sampler, 0);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      referenceNormalizePipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            referenceNormalizePipelineLayout, 0, 1,
+                            &referenceNormalizeSet, 0, nullptr);
+
+    PushConstants normalizePc{};
+    normalizePc.width = outputW;
+    normalizePc.height = outputH;
+    normalizePc.planeWidth = outputW;
+    normalizePc.planeHeight = outputH;
+    normalizePc.sensorWidth = width;
+    normalizePc.sensorHeight = height;
+    normalizePc.scale = scale;
+    normalizePc.cfaPattern = (uint32_t)mCfaPattern;
+    normalizePc.whiteLevel = mWhiteLevel;
+    memcpy(normalizePc.blackLevel, mBlackLevel, 4 * sizeof(float));
+    memcpy(normalizePc.wbGains, mWbGains, 4 * sizeof(float));
+    vkCmdPushConstants(cb, referenceNormalizePipelineLayout,
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(normalizePc),
+                       &normalizePc);
+    vkCmdDispatch(cb, (width + 15) / 16, (height + 15) / 16, 1);
+
+    VkBufferMemoryBarrier normalizedReferenceBarrier{
+        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    normalizedReferenceBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    normalizedReferenceBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    normalizedReferenceBarrier.buffer = normalizedReferenceBuffer;
+    normalizedReferenceBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         1, &normalizedReferenceBarrier, 0, nullptr);
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      referencePriorPipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            referencePriorPipelineLayout, 0, 1,
+                            &referencePriorSet, 0, nullptr);
+
+    PushConstants priorPc{};
+    priorPc.width = outputW;
+    priorPc.height = outputH;
+    priorPc.planeWidth = outputW;
+    priorPc.planeHeight = outputH;
+    priorPc.sensorWidth = width;
+    priorPc.sensorHeight = height;
+    priorPc.scale = scale;
+    priorPc.cfaPattern = (uint32_t)mCfaPattern;
+    priorPc.whiteLevel = mWhiteLevel;
+    memcpy(priorPc.blackLevel, mBlackLevel, 4 * sizeof(float));
+    memcpy(priorPc.wbGains, mWbGains, 4 * sizeof(float));
+    vkCmdPushConstants(cb, referencePriorPipelineLayout,
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(priorPc),
+                       &priorPc);
+    vkCmdDispatch(cb, (outputW + 15) / 16, (outputH + 15) / 16, 1);
+
+    VkBufferMemoryBarrier priorBarriers[2]{};
+    for (int i = 0; i < 2; ++i) {
+      priorBarriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+      priorBarriers[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      priorBarriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      priorBarriers[i].buffer = (i == 0) ? priorBayerBuffer : priorWeightBuffer;
+      priorBarriers[i].size = VK_WHOLE_SIZE;
+    }
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         2, priorBarriers, 0, nullptr);
+
+    vm.endSingleTimeCommands(cb);
+    TIME_END(phase1b_ReferencePrior);
+    perf.referencePriorMs = elapsed_phase1b_ReferencePrior;
+  }
 
   // Phase 2: Structure tensor pass on reference frame (global, once)
   // =====================================================================
@@ -1885,6 +2321,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     vm.endSingleTimeCommands(cb);
   }
   TIME_END(phase2_StructureTensor);
+  perf.structureTensorMs = elapsed_phase2_StructureTensor;
 
   // =====================================================================
   // Phase 3: Pre-compute alignment for each non-reference frame
@@ -1899,10 +2336,14 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   std::vector<bool> skipFusionFrame(pendingFrames.size(), false);
   std::vector<LocalReliabilitySummary> frameLocalSummaries(pendingFrames.size());
   std::vector<LocalReliabilityMap> frameLocalMaps(pendingFrames.size());
+  std::vector<RefinedFrameCache> frameRefinedCaches(pendingFrames.size());
   const float referenceScore = std::max(pendingFrames.front().score, 1.0f);
   for (size_t i = 1; i < pendingFrames.size(); ++i) {
+    const auto coarseAlignStart = PerfClock::now();
     frameAlignments[i].coarseAlign =
         computeTileAlignment(referencePyramid, uploadedFrames[i].pyramid, 64);
+    perf.coarseAlignmentComputeMs += elapsedMillis(coarseAlignStart);
+    ++perf.coarseAlignedFrames;
     logAlignmentDiagnostics("coarse", i, frameAlignments[i].coarseAlign);
     float sharpnessRatio = pendingFrames[i].score / referenceScore;
     float frameWeight = computeFusionFrameWeight(frameAlignments[i].coarseAlign,
@@ -1911,6 +2352,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     skipFusionFrame[i] = frameWeight < 0.12f;
   }
   TIME_END(phase3_CoarseAlignment);
+  perf.coarseAlignmentMs = elapsed_phase3_CoarseAlignment;
 
   // =====================================================================
   // Phase 3B: Global reliability pre-pass using actual refined flow +
@@ -1921,6 +2363,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     if (skipFusionFrame[i]) {
       continue;
     }
+    ++perf.globalReliabilityFrames;
 
     PushConstants pc{};
     pc.width = outputW;
@@ -1948,12 +2391,15 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     pc.bufferStride = tileW + 16;
 
     const auto &coarseAlign = frameAlignments[i].coarseAlign;
+    const auto reliabilitySeedStart = PerfClock::now();
     std::vector<Point> seededFlow =
         buildDenseAlignmentSeed(coarseAlign, (uint32_t)gridW, (uint32_t)gridH,
                                 (uint32_t)tileSize);
     uploadAlignmentField(device, alignmentMemory, seededFlow);
     fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH, 1.0f);
+    perf.globalReliabilitySeedMs += elapsedMillis(reliabilitySeedStart);
 
+    const auto reliabilityLkStage1Start = PerfClock::now();
     VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
     VkBufferMemoryBarrier hostBarriers[2]{};
@@ -1998,14 +2444,20 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     }
 
     vm.endSingleTimeCommands(cb);
+    perf.globalReliabilityLkStage1Ms +=
+        elapsedMillis(reliabilityLkStage1Start);
 
+    const auto reliabilityRegularize1Start = PerfClock::now();
     if (downloadAlignmentField(device, alignmentMemory, (uint32_t)gridW,
                                (uint32_t)gridH, seededFlow)) {
       regularizeAlignmentField(seededFlow, (uint32_t)gridW, (uint32_t)gridH,
                                (uint32_t)tileSize, uploadedFrames[0].proxy);
       uploadAlignmentField(device, alignmentMemory, seededFlow);
     }
+    perf.globalReliabilityRegularize1Ms +=
+        elapsedMillis(reliabilityRegularize1Start);
 
+    const auto reliabilityRobustness1AndLkStage2Start = PerfClock::now();
     cb = vm.beginSingleTimeCommands();
     VkBufferMemoryBarrier refinedHostBarrier{
         VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
@@ -2044,9 +2496,6 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2,
                          rbBarriers, 0, nullptr);
 
-    vm.endSingleTimeCommands(cb);
-
-    cb = vm.beginSingleTimeCommands();
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, alignLkPipeline);
     updateImageDescriptorSet(device, alignSet, uploadedFrames[0].view, sampler,
                              0);
@@ -2070,15 +2519,22 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
                            1, &lkBarrier, 0, nullptr);
     }
-    vm.endSingleTimeCommands(cb);
 
+    vm.endSingleTimeCommands(cb);
+    perf.globalReliabilityRobustness1AndLkStage2Ms +=
+        elapsedMillis(reliabilityRobustness1AndLkStage2Start);
+
+    const auto reliabilityRegularize2Start = PerfClock::now();
     if (downloadAlignmentField(device, alignmentMemory, (uint32_t)gridW,
                                (uint32_t)gridH, seededFlow)) {
       regularizeAlignmentField(seededFlow, (uint32_t)gridW, (uint32_t)gridH,
                                (uint32_t)tileSize, uploadedFrames[0].proxy);
       uploadAlignmentField(device, alignmentMemory, seededFlow);
     }
+    perf.globalReliabilityRegularize2Ms +=
+        elapsedMillis(reliabilityRegularize2Start);
 
+    const auto reliabilityRobustness2Start = PerfClock::now();
     cb = vm.beginSingleTimeCommands();
     VkBufferMemoryBarrier finalAlignBarrier{
         VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
@@ -2118,14 +2574,51 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                          finalRbBarriers, 0, nullptr);
 
     vm.endSingleTimeCommands(cb);
+    perf.globalReliabilityRobustness2Ms +=
+        elapsedMillis(reliabilityRobustness2Start);
 
-    FlowSummary refinedFlow =
-        readFlowSummary(device, alignmentMemory, gridW, gridH);
+    const auto reliabilityReadbackStart = PerfClock::now();
+    RefinedFrameCache &refinedCache = frameRefinedCaches[i];
+    refinedCache.alignment = seededFlow;
+    refinedCache.valid = downloadFloatBuffer(device, robustnessMemory,
+                                             (size_t)inputW * inputH,
+                                             refinedCache.robustness) &&
+                         downloadFloatBuffer(device, flowVarianceMemory,
+                                             (size_t)inputW * inputH,
+                                             refinedCache.flowVariance);
+    if (!refinedCache.valid) {
+      if (kEnableRawSuperResPerfLogs) {
+        LOGW("RawSuperResPerf: failed to cache refined state for frame %zu",
+             i);
+      }
+    }
+
+    FlowSummary refinedFlow;
+    if (!refinedCache.alignment.empty()) {
+      std::vector<float> magnitudes;
+      magnitudes.reserve(refinedCache.alignment.size());
+      double sumX = 0.0;
+      double sumY = 0.0;
+      for (const Point &point : refinedCache.alignment) {
+        sumX += point.x;
+        sumY += point.y;
+        magnitudes.push_back(std::sqrt(point.x * point.x + point.y * point.y));
+      }
+      refinedFlow.magnitude =
+          computeScalarStats(magnitudes.data(), magnitudes.size());
+      refinedFlow.meanX = (float)(sumX / (double)magnitudes.size());
+      refinedFlow.meanY = (float)(sumY / (double)magnitudes.size());
+    }
     RobustnessSummary robustSummary =
-        readRobustnessSummary(device, robustnessMemory, inputW, inputH);
+        refinedCache.valid
+            ? readRobustnessSummary(refinedCache.robustness, inputW, inputH)
+            : readRobustnessSummary(device, robustnessMemory, inputW, inputH);
     LocalReliabilityMap localMap =
-        readLocalReliabilityMap(device, robustnessMemory, inputW, inputH,
-                                uploadedFrames[0].proxy);
+        refinedCache.valid
+            ? readLocalReliabilityMap(refinedCache.robustness, inputW, inputH,
+                                      uploadedFrames[0].proxy)
+            : readLocalReliabilityMap(device, robustnessMemory, inputW, inputH,
+                                      uploadedFrames[0].proxy);
     LocalReliabilitySummary localSummary = localMap.summary;
     frameLocalMaps[i] = std::move(localMap);
     frameLocalSummaries[i] = localSummary;
@@ -2139,6 +2632,8 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     frameRetentionScores[i] = retentionScore;
     float keepThreshold = (localPriority > 0.58f) ? 0.16f : 0.20f;
     skipFusionFrame[i] = frameFusionWeights[i] < keepThreshold;
+    perf.globalReliabilityReadbackMs +=
+        elapsedMillis(reliabilityReadbackStart);
 
   }
 
@@ -2175,27 +2670,58 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
     }
   }
   TIME_END(phase3b_GlobalReliability);
+  perf.globalReliabilityMs = elapsed_phase3b_GlobalReliability;
+
+  perf.keptFrames = pendingFrames.empty() ? 0 : 1;
+  for (size_t i = 1; i < pendingFrames.size(); ++i) {
+    if (skipFusionFrame[i]) {
+      ++perf.skippedFrames;
+      std::vector<Point>().swap(frameRefinedCaches[i].alignment);
+      std::vector<float>().swap(frameRefinedCaches[i].robustness);
+      std::vector<float>().swap(frameRefinedCaches[i].flowVariance);
+      frameRefinedCaches[i].valid = false;
+    } else {
+      ++perf.keptFrames;
+    }
+  }
 
   // Phase 4: Sequential tile processing
   // For each tile: clear accum → accumulate all frames → normalize
   // =====================================================================
   TIME_START(phase4_TileProcessing);
-  VkDeviceSize accumBufferSize =
-      (VkDeviceSize)(tileW + 16) * (tileH + 16) * sizeof(float) * 2;
   VkDeviceSize greenAccumBufferSize =
       (VkDeviceSize)(tileW + 16) * (tileH + 16) * sizeof(uint32_t) * 2;
+  VkDeviceSize fusedBayerSize =
+      (VkDeviceSize)outputW * outputH * sizeof(uint16_t);
+
+  {
+    const auto outputClearStart = PerfClock::now();
+    VkCommandBuffer cb = vm.beginSingleTimeCommands();
+    vkCmdFillBuffer(cb, fusedBayerBuffer, 0, fusedBayerSize, 0);
+    VkBufferMemoryBarrier outBarrier{
+        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    outBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    outBarrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    outBarrier.buffer = fusedBayerBuffer;
+    outBarrier.size = fusedBayerSize;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         1, &outBarrier, 0, nullptr);
+    vm.endSingleTimeCommands(cb);
+    perf.outputClearMs += elapsedMillis(outputClearStart);
+  }
 
   for (int ty = 0; ty < numTilesY; ++ty) {
     for (int tx = 0; tx < numTilesX; ++tx) {
+      ++perf.tilesProcessed;
       uint32_t currentTileW = std::min(tileW, outputW - tx * tileW);
       uint32_t currentTileH = std::min(tileH, outputH - ty * tileH);
 
       // Clear accumulators for this tile
       {
+        const auto tileClearStart = PerfClock::now();
         VkCommandBuffer cb = vm.beginSingleTimeCommands();
-        for (int c = 0; c < 3; ++c) {
-          vkCmdFillBuffer(cb, accumBuffers[c], 0, accumBufferSize, 0);
-        }
         for (int phase = 0; phase < 2; ++phase) {
           vkCmdFillBuffer(cb, greenPhaseAccumBuffers[phase], 0,
                           greenAccumBufferSize, 0);
@@ -2212,6 +2738,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                              &memBarrier, 0, nullptr, 0, nullptr);
         vm.endSingleTimeCommands(cb);
+        perf.tileClearMs += elapsedMillis(tileClearStart);
       }
 
       // Process all frames for this tile
@@ -2222,6 +2749,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
         if (!isRef && skipFusionFrame[i]) {
           continue;
         }
+        ++perf.tileScatterFrameInstances;
 
         PushConstants pc{};
         pc.width = outputW;
@@ -2247,6 +2775,7 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
             (!isRef && !frameLocalMaps[i].tileWeights.empty())
                 ? frameLocalMaps[i].tileWeights
                 : defaultLocalTileMask;
+        const auto localMaskUploadStart = PerfClock::now();
         void *localMaskPtr = nullptr;
         VkResult localMaskRes =
             vkMapMemory(device, localTileMaskMemory, 0, VK_WHOLE_SIZE, 0,
@@ -2256,212 +2785,284 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                       localTileMask.size() * sizeof(float));
           vkUnmapMemory(device, localTileMaskMemory);
         }
+        perf.localMaskUploadMs += elapsedMillis(localMaskUploadStart);
+        const RefinedFrameCache *refinedCache =
+            (!isRef && frameRefinedCaches[i].valid) ? &frameRefinedCaches[i]
+                                                    : nullptr;
 
         if (!isRef) {
-          // Upload coarse alignment for this frame
-          const auto &coarseAlign = frameAlignments[i].coarseAlign;
-          std::vector<Point> seededFlow = buildDenseAlignmentSeed(
-              coarseAlign, (uint32_t)gridW, (uint32_t)gridH,
-              (uint32_t)tileSize);
-          uploadAlignmentField(device, alignmentMemory, seededFlow);
-          fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH,
-                          1.0f);
+          ++perf.tileAlignedFrameInstances;
+          if (refinedCache != nullptr) {
+            const auto tileRefinedStateUploadStart = PerfClock::now();
+            uploadAlignmentField(device, alignmentMemory, refinedCache->alignment);
+            uploadFloatBuffer(device, robustnessMemory, refinedCache->robustness);
+            uploadFloatBuffer(device, flowVarianceMemory,
+                              refinedCache->flowVariance);
+            perf.tileRefinedStateUploadMs +=
+                elapsedMillis(tileRefinedStateUploadStart);
+          } else {
+            const auto tileAlignmentSeedStart = PerfClock::now();
+            // Upload coarse alignment for this frame
+            const auto &coarseAlign = frameAlignments[i].coarseAlign;
+            std::vector<Point> seededFlow = buildDenseAlignmentSeed(
+                coarseAlign, (uint32_t)gridW, (uint32_t)gridH,
+                (uint32_t)tileSize);
+            uploadAlignmentField(device, alignmentMemory, seededFlow);
+            fillFloatBuffer(device, robustnessMemory, (size_t)inputW * inputH,
+                            1.0f);
+            perf.tileAlignmentSeedMs += elapsedMillis(tileAlignmentSeedStart);
 
-          // LK alignment + Robustness
-          VkCommandBuffer cb = vm.beginSingleTimeCommands();
+            // LK alignment + Robustness
+            const auto tileLkStage1Start = PerfClock::now();
+            VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
-          // HOST_WRITE -> SHADER barrier
-          VkBufferMemoryBarrier hostBarriers[2]{};
-          hostBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-          hostBarriers[0].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-          hostBarriers[0].dstAccessMask =
-              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-          hostBarriers[0].buffer = alignmentBuffer;
-          hostBarriers[0].size = VK_WHOLE_SIZE;
-          hostBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-          hostBarriers[1].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-          hostBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          hostBarriers[1].buffer = robustnessBuffer;
-          hostBarriers[1].size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 2, hostBarriers, 0, nullptr);
-
-          // Set pre-processing tile range (plane resolution)
-          pc.tileX = 0;
-          pc.tileY = 0;
-          pc.tileW = inputW;
-          pc.tileH = inputH;
-          pc.bufferStride = tileW + 16;
-
-          // LK Alignment
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            alignLkPipeline);
-          updateImageDescriptorSet(device, alignSet, uploadedFrames[0].view,
-                                   sampler, 0);
-          updateImageDescriptorSet(device, alignSet, uploadedFrames[i].view,
-                                   sampler, 1);
-          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  alignLkPipelineLayout, 0, 1, &alignSet, 0,
-                                  nullptr);
-          vkCmdPushConstants(cb, alignLkPipelineLayout,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-
-          for (int iter = 0; iter < 5; ++iter) {
-            vkCmdDispatch(cb, (gridW + 15) / 16, (gridH + 15) / 16, 1);
-            VkBufferMemoryBarrier lkBarrier{
-                VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-            lkBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            lkBarrier.dstAccessMask =
+            // HOST_WRITE -> SHADER barrier
+            VkBufferMemoryBarrier hostBarriers[2]{};
+            hostBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            hostBarriers[0].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            hostBarriers[0].dstAccessMask =
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            lkBarrier.buffer = alignmentBuffer;
-            lkBarrier.size = VK_WHOLE_SIZE;
+            hostBarriers[0].buffer = alignmentBuffer;
+            hostBarriers[0].size = VK_WHOLE_SIZE;
+            hostBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            hostBarriers[1].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            hostBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            hostBarriers[1].buffer = robustnessBuffer;
+            hostBarriers[1].size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                 nullptr, 2, hostBarriers, 0, nullptr);
+
+            // Set pre-processing tile range (plane resolution)
+            pc.tileX = 0;
+            pc.tileY = 0;
+            pc.tileW = inputW;
+            pc.tileH = inputH;
+            pc.bufferStride = tileW + 16;
+
+            // LK Alignment
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              alignLkPipeline);
+            updateImageDescriptorSet(device, alignSet, uploadedFrames[0].view,
+                                     sampler, 0);
+            updateImageDescriptorSet(device, alignSet, uploadedFrames[i].view,
+                                     sampler, 1);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    alignLkPipelineLayout, 0, 1, &alignSet, 0,
+                                    nullptr);
+            vkCmdPushConstants(cb, alignLkPipelineLayout,
+                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+            for (int iter = 0; iter < 5; ++iter) {
+              vkCmdDispatch(cb, (gridW + 15) / 16, (gridH + 15) / 16, 1);
+              VkBufferMemoryBarrier lkBarrier{
+                  VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+              lkBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+              lkBarrier.dstAccessMask =
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+              lkBarrier.buffer = alignmentBuffer;
+              lkBarrier.size = VK_WHOLE_SIZE;
+              vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                   nullptr, 1, &lkBarrier, 0, nullptr);
+            }
+
+            vm.endSingleTimeCommands(cb);
+            perf.tileAlignmentLkStage1Ms += elapsedMillis(tileLkStage1Start);
+
+            const auto tileRegularize1Start = PerfClock::now();
+            if (downloadAlignmentField(device, alignmentMemory, (uint32_t)gridW,
+                                       (uint32_t)gridH, seededFlow)) {
+              regularizeAlignmentField(seededFlow, (uint32_t)gridW,
+                                       (uint32_t)gridH, (uint32_t)tileSize,
+                                       uploadedFrames[0].proxy);
+              uploadAlignmentField(device, alignmentMemory, seededFlow);
+            }
+            perf.tileAlignmentRegularize1Ms +=
+                elapsedMillis(tileRegularize1Start);
+
+            const auto tileRobustness1Start = PerfClock::now();
+            cb = vm.beginSingleTimeCommands();
+            VkBufferMemoryBarrier refinedHostBarrier{
+                VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+            refinedHostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            refinedHostBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            refinedHostBarrier.buffer = alignmentBuffer;
+            refinedHostBarrier.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                 nullptr, 1, &refinedHostBarrier, 0, nullptr);
+
+            // Robustness
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              robustnessPipeline);
+            updateImageDescriptorSet(device, robustSet, uploadedFrames[0].view,
+                                     sampler, 0);
+            updateImageDescriptorSet(device, robustSet, uploadedFrames[i].view,
+                                     sampler, 1);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    robustnessPipelineLayout, 0, 1, &robustSet,
+                                    0, nullptr);
+            vkCmdPushConstants(cb, robustnessPipelineLayout,
+                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
+
+            VkBufferMemoryBarrier rbBarriers[2]{};
+            rbBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            rbBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            rbBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            rbBarriers[0].buffer = robustnessBuffer;
+            rbBarriers[0].size = VK_WHOLE_SIZE;
+            rbBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            rbBarriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            rbBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            rbBarriers[1].buffer = flowVarianceBuffer;
+            rbBarriers[1].size = VK_WHOLE_SIZE;
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                                 nullptr, 1, &lkBarrier, 0, nullptr);
-          }
+                                 nullptr, 2, rbBarriers, 0, nullptr);
 
-          vm.endSingleTimeCommands(cb);
+            vm.endSingleTimeCommands(cb);
+            perf.tileRobustness1Ms += elapsedMillis(tileRobustness1Start);
 
-          if (downloadAlignmentField(device, alignmentMemory, (uint32_t)gridW,
-                                     (uint32_t)gridH, seededFlow)) {
-            regularizeAlignmentField(seededFlow, (uint32_t)gridW,
-                                     (uint32_t)gridH, (uint32_t)tileSize,
-                                     uploadedFrames[0].proxy);
-            uploadAlignmentField(device, alignmentMemory, seededFlow);
-          }
+            const auto tileLkStage2Start = PerfClock::now();
+            cb = vm.beginSingleTimeCommands();
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              alignLkPipeline);
+            updateImageDescriptorSet(device, alignSet, uploadedFrames[0].view,
+                                     sampler, 0);
+            updateImageDescriptorSet(device, alignSet, uploadedFrames[i].view,
+                                     sampler, 1);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    alignLkPipelineLayout, 0, 1, &alignSet, 0,
+                                    nullptr);
+            vkCmdPushConstants(cb, alignLkPipelineLayout,
+                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            for (int iter = 0; iter < 2; ++iter) {
+              vkCmdDispatch(cb, (gridW + 15) / 16, (gridH + 15) / 16, 1);
+              VkBufferMemoryBarrier lkBarrier{
+                  VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+              lkBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+              lkBarrier.dstAccessMask =
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+              lkBarrier.buffer = alignmentBuffer;
+              lkBarrier.size = VK_WHOLE_SIZE;
+              vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                   nullptr, 1, &lkBarrier, 0, nullptr);
+            }
+            vm.endSingleTimeCommands(cb);
+            perf.tileAlignmentLkStage2Ms += elapsedMillis(tileLkStage2Start);
 
-          cb = vm.beginSingleTimeCommands();
-          VkBufferMemoryBarrier refinedHostBarrier{
-              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-          refinedHostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-          refinedHostBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          refinedHostBarrier.buffer = alignmentBuffer;
-          refinedHostBarrier.size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 1, &refinedHostBarrier, 0, nullptr);
+            const auto tileRegularize2Start = PerfClock::now();
+            if (downloadAlignmentField(device, alignmentMemory, (uint32_t)gridW,
+                                       (uint32_t)gridH, seededFlow)) {
+              regularizeAlignmentField(seededFlow, (uint32_t)gridW,
+                                       (uint32_t)gridH, (uint32_t)tileSize,
+                                       uploadedFrames[0].proxy);
+              uploadAlignmentField(device, alignmentMemory, seededFlow);
+            }
+            perf.tileAlignmentRegularize2Ms +=
+                elapsedMillis(tileRegularize2Start);
 
-          // Robustness
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            robustnessPipeline);
-          updateImageDescriptorSet(device, robustSet, uploadedFrames[0].view,
-                                   sampler, 0);
-          updateImageDescriptorSet(device, robustSet, uploadedFrames[i].view,
-                                   sampler, 1);
-          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  robustnessPipelineLayout, 0, 1, &robustSet, 0,
-                                  nullptr);
-          vkCmdPushConstants(cb, robustnessPipelineLayout,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-          vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
-
-          VkBufferMemoryBarrier rbBarriers[2]{};
-          rbBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-          rbBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          rbBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          rbBarriers[0].buffer = robustnessBuffer;
-          rbBarriers[0].size = VK_WHOLE_SIZE;
-          rbBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-          rbBarriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          rbBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          rbBarriers[1].buffer = flowVarianceBuffer;
-          rbBarriers[1].size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 2, rbBarriers, 0, nullptr);
-
-          vm.endSingleTimeCommands(cb);
-
-          cb = vm.beginSingleTimeCommands();
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            alignLkPipeline);
-          updateImageDescriptorSet(device, alignSet, uploadedFrames[0].view,
-                                   sampler, 0);
-          updateImageDescriptorSet(device, alignSet, uploadedFrames[i].view,
-                                   sampler, 1);
-          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  alignLkPipelineLayout, 0, 1, &alignSet, 0,
-                                  nullptr);
-          vkCmdPushConstants(cb, alignLkPipelineLayout,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-          for (int iter = 0; iter < 2; ++iter) {
-            vkCmdDispatch(cb, (gridW + 15) / 16, (gridH + 15) / 16, 1);
-            VkBufferMemoryBarrier lkBarrier{
+            const auto tileRobustness2Start = PerfClock::now();
+            cb = vm.beginSingleTimeCommands();
+            VkBufferMemoryBarrier finalAlignBarrier{
                 VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-            lkBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            lkBarrier.dstAccessMask =
-                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            lkBarrier.buffer = alignmentBuffer;
-            lkBarrier.size = VK_WHOLE_SIZE;
+            finalAlignBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            finalAlignBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            finalAlignBarrier.buffer = alignmentBuffer;
+            finalAlignBarrier.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                 nullptr, 1, &finalAlignBarrier, 0, nullptr);
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              robustnessPipeline);
+            updateImageDescriptorSet(device, robustSet, uploadedFrames[0].view,
+                                     sampler, 0);
+            updateImageDescriptorSet(device, robustSet, uploadedFrames[i].view,
+                                     sampler, 1);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    robustnessPipelineLayout, 0, 1, &robustSet,
+                                    0, nullptr);
+            vkCmdPushConstants(cb, robustnessPipelineLayout,
+                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
+
+            VkBufferMemoryBarrier finalRbBarriers[2]{};
+            finalRbBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            finalRbBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            finalRbBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            finalRbBarriers[0].buffer = robustnessBuffer;
+            finalRbBarriers[0].size = VK_WHOLE_SIZE;
+            finalRbBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            finalRbBarriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            finalRbBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            finalRbBarriers[1].buffer = flowVarianceBuffer;
+            finalRbBarriers[1].size = VK_WHOLE_SIZE;
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                                 nullptr, 1, &lkBarrier, 0, nullptr);
+                                 nullptr, 2, finalRbBarriers, 0, nullptr);
+
+            vm.endSingleTimeCommands(cb);
+            perf.tileRobustness2Ms += elapsedMillis(tileRobustness2Start);
           }
-          vm.endSingleTimeCommands(cb);
-
-          if (downloadAlignmentField(device, alignmentMemory, (uint32_t)gridW,
-                                     (uint32_t)gridH, seededFlow)) {
-            regularizeAlignmentField(seededFlow, (uint32_t)gridW,
-                                     (uint32_t)gridH, (uint32_t)tileSize,
-                                     uploadedFrames[0].proxy);
-            uploadAlignmentField(device, alignmentMemory, seededFlow);
-          }
-
-          cb = vm.beginSingleTimeCommands();
-          VkBufferMemoryBarrier finalAlignBarrier{
-              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-          finalAlignBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-          finalAlignBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          finalAlignBarrier.buffer = alignmentBuffer;
-          finalAlignBarrier.size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 1, &finalAlignBarrier, 0, nullptr);
-
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            robustnessPipeline);
-          updateImageDescriptorSet(device, robustSet, uploadedFrames[0].view,
-                                   sampler, 0);
-          updateImageDescriptorSet(device, robustSet, uploadedFrames[i].view,
-                                   sampler, 1);
-          vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  robustnessPipelineLayout, 0, 1, &robustSet, 0,
-                                  nullptr);
-          vkCmdPushConstants(cb, robustnessPipelineLayout,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-          vkCmdDispatch(cb, (inputW + 15) / 16, (inputH + 15) / 16, 1);
-
-          VkBufferMemoryBarrier finalRbBarriers[2]{};
-          finalRbBarriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-          finalRbBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          finalRbBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          finalRbBarriers[0].buffer = robustnessBuffer;
-          finalRbBarriers[0].size = VK_WHOLE_SIZE;
-          finalRbBarriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-          finalRbBarriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          finalRbBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          finalRbBarriers[1].buffer = flowVarianceBuffer;
-          finalRbBarriers[1].size = VK_WHOLE_SIZE;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 2, finalRbBarriers, 0, nullptr);
-
-          vm.endSingleTimeCommands(cb);
         }
 
         // Accumulate this frame's contribution for this tile's 3 channels
         {
+          const auto scatterStart = PerfClock::now();
           VkCommandBuffer cb = vm.beginSingleTimeCommands();
-          VkBufferMemoryBarrier localMaskBarrier{
-              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-          localMaskBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-          localMaskBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          localMaskBarrier.buffer = localTileMaskBuffer;
-          localMaskBarrier.size = VK_WHOLE_SIZE;
+          VkBufferMemoryBarrier preScatterBarriers[4]{};
+          uint32_t preScatterBarrierCount = 0;
+
+          preScatterBarriers[preScatterBarrierCount].sType =
+              VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+          preScatterBarriers[preScatterBarrierCount].srcAccessMask =
+              VK_ACCESS_HOST_WRITE_BIT;
+          preScatterBarriers[preScatterBarrierCount].dstAccessMask =
+              VK_ACCESS_SHADER_READ_BIT;
+          preScatterBarriers[preScatterBarrierCount].buffer = localTileMaskBuffer;
+          preScatterBarriers[preScatterBarrierCount].size = VK_WHOLE_SIZE;
+          ++preScatterBarrierCount;
+
+          if (refinedCache != nullptr) {
+            preScatterBarriers[preScatterBarrierCount].sType =
+                VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            preScatterBarriers[preScatterBarrierCount].srcAccessMask =
+                VK_ACCESS_HOST_WRITE_BIT;
+            preScatterBarriers[preScatterBarrierCount].dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT;
+            preScatterBarriers[preScatterBarrierCount].buffer = alignmentBuffer;
+            preScatterBarriers[preScatterBarrierCount].size = VK_WHOLE_SIZE;
+            ++preScatterBarrierCount;
+
+            preScatterBarriers[preScatterBarrierCount].sType =
+                VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            preScatterBarriers[preScatterBarrierCount].srcAccessMask =
+                VK_ACCESS_HOST_WRITE_BIT;
+            preScatterBarriers[preScatterBarrierCount].dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT;
+            preScatterBarriers[preScatterBarrierCount].buffer = robustnessBuffer;
+            preScatterBarriers[preScatterBarrierCount].size = VK_WHOLE_SIZE;
+            ++preScatterBarrierCount;
+
+            preScatterBarriers[preScatterBarrierCount].sType =
+                VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            preScatterBarriers[preScatterBarrierCount].srcAccessMask =
+                VK_ACCESS_HOST_WRITE_BIT;
+            preScatterBarriers[preScatterBarrierCount].dstAccessMask =
+                VK_ACCESS_SHADER_READ_BIT;
+            preScatterBarriers[preScatterBarrierCount].buffer =
+                flowVarianceBuffer;
+            preScatterBarriers[preScatterBarrierCount].size = VK_WHOLE_SIZE;
+            ++preScatterBarrierCount;
+          }
           vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_HOST_BIT,
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                               nullptr, 1, &localMaskBarrier, 0, nullptr);
+                               nullptr, preScatterBarrierCount,
+                               preScatterBarriers, 0, nullptr);
 
           updateImageDescriptorSet(device, greenScatterSet,
                                    uploadedFrames[i].view, sampler, 0);
@@ -2533,35 +3134,40 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                                nullptr, 2, colorBarriers, 0, nullptr);
 
           vm.endSingleTimeCommands(cb);
-
+          perf.scatterMs += elapsedMillis(scatterStart);
         }
       } // end for each frame
 
-      // Normalize this tile and write to staging buffer
+      // Normalize this tile and write to the fused Bayer output buffer.
       // NOTE: Bind staging buffer with a row offset to stay within
-      // maxStorageBufferRange. The shader uses outIndex = (outY * width + outX)
-      // * 3 + planeIndex, so we offset the binding to the start of this tile's
-      // first row (tileY * outputW * 3 * 2). We then shift the shader's tileY
-      // to 0 and height to currentTileH, so outY ranges [0, currentTileH)
-      // relative to the buffer binding.
+      // maxStorageBufferRange. The normalize shaders write local row indices
+      // into the bound row band, but still use global output coordinates for
+      // CFA parity.
       {
+        const auto normalizeStart = PerfClock::now();
         VkCommandBuffer cb = vm.beginSingleTimeCommands();
 
         // Compute the byte offset into staging buffer for this tile's row band
         VkDeviceSize rowBandOffset =
-            (VkDeviceSize)(ty * tileH) * outputW * 3 * sizeof(uint16_t);
+            (VkDeviceSize)(ty * tileH) * outputW * sizeof(uint16_t);
         // Range covers from this row band to the end of the buffer
         VkDeviceSize stagingTotalSize =
-            (VkDeviceSize)outputW * outputH * 3 * sizeof(uint16_t);
+            (VkDeviceSize)outputW * outputH * sizeof(uint16_t);
         VkDeviceSize rowBandRange = stagingTotalSize - rowBandOffset;
 
         for (int colorIdx = 0; colorIdx < 2; ++colorIdx) {
           updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
-                                    stagingBuffer, rowBandRange, 0,
+                                    fusedBayerBuffer, rowBandRange, 0,
                                     rowBandOffset);
           updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
                                     rbScatterAccumBuffers[colorIdx],
                                     VK_WHOLE_SIZE, 1);
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
+                                    priorBayerBuffer, rowBandRange, 2,
+                                    rowBandOffset);
+          updateBufferDescriptorSet(device, colorNormalizeSets[colorIdx],
+                                    priorWeightBuffer, rowBandRange, 3,
+                                    rowBandOffset);
           vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                             colorNormalizePipeline);
           vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -2570,12 +3176,13 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
           PushConstants colorPc{};
           colorPc.width = outputW;
-          colorPc.height = outputH - ty * tileH;
+          colorPc.height = outputH;
+          colorPc.scale = (float)scale;
           colorPc.planeWidth = outputW;
           colorPc.planeHeight = outputH;
           colorPc.bufferStride = tileW + 16;
           colorPc.tileX = tx * tileW;
-          colorPc.tileY = 0;
+          colorPc.tileY = ty * tileH;
           colorPc.tileW = currentTileW;
           colorPc.tileH = currentTileH;
           colorPc.planeIndex = (colorIdx == 0) ? 0u : 2u;
@@ -2591,20 +3198,16 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                         (currentTileH + 15) / 16, 1);
         }
 
-        VkMemoryBarrier rbReadyBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        rbReadyBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        rbReadyBarrier.dstAccessMask =
-            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
-                             &rbReadyBarrier, 0, nullptr, 0, nullptr);
-
-        updateBufferDescriptorSet(device, greenNormalizeSet, stagingBuffer,
+        updateBufferDescriptorSet(device, greenNormalizeSet, fusedBayerBuffer,
                                   rowBandRange, 0, rowBandOffset);
         updateBufferDescriptorSet(device, greenNormalizeSet,
                                   greenPhaseAccumBuffers[0], VK_WHOLE_SIZE, 1);
         updateBufferDescriptorSet(device, greenNormalizeSet,
                                   greenPhaseAccumBuffers[1], VK_WHOLE_SIZE, 2);
+        updateBufferDescriptorSet(device, greenNormalizeSet, priorBayerBuffer,
+                                  rowBandRange, 3, rowBandOffset);
+        updateBufferDescriptorSet(device, greenNormalizeSet, priorWeightBuffer,
+                                  rowBandRange, 4, rowBandOffset);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                           greenNormalizePipeline);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -2613,12 +3216,13 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
 
         PushConstants greenPc{};
         greenPc.width = outputW;
-        greenPc.height = outputH - ty * tileH;
+        greenPc.height = outputH;
+        greenPc.scale = (float)scale;
         greenPc.planeWidth = outputW;
         greenPc.planeHeight = outputH;
         greenPc.bufferStride = tileW + 16;
         greenPc.tileX = tx * tileW;
-        greenPc.tileY = 0;
+        greenPc.tileY = ty * tileH;
         greenPc.tileW = currentTileW;
         greenPc.tileH = currentTileH;
         greenPc.planeIndex = 1;
@@ -2634,11 +3238,13 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
                       (currentTileH + 15) / 16, 1);
 
         vm.endSingleTimeCommands(cb);
+        perf.normalizeMs += elapsedMillis(normalizeStart);
       }
 
     } // end for tx
   } // end for ty
   TIME_END(phase4_TileProcessing);
+  perf.tileProcessingMs = elapsed_phase4_TileProcessing;
 
   // =====================================================================
   // Phase 5: Read back result from staging buffer
@@ -2646,20 +3252,23 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   {
     TIME_START(phase5_OutputReadback);
     void *mapData;
-    VK_CHECK(vkMapMemory(device, stagingMemory, 0, VK_WHOLE_SIZE, 0, &mapData));
-    size_t reqSize = (size_t)outputW * outputH * 3 * sizeof(uint16_t);
+    VK_CHECK(
+        vkMapMemory(device, fusedBayerMemory, 0, VK_WHOLE_SIZE, 0, &mapData));
+    size_t reqSize = (size_t)outputW * outputH * sizeof(uint16_t);
     if (bufferSize >= reqSize) {
       memcpy(outBuffer, mapData, reqSize);
     } else {
       LOGE("Buffer too small! Req: %zu, Has: %zu", reqSize, bufferSize);
     }
-    vkUnmapMemory(device, stagingMemory);
+    vkUnmapMemory(device, fusedBayerMemory);
     TIME_END(phase5_OutputReadback);
+    perf.outputReadbackMs = elapsed_phase5_OutputReadback;
   }
 
   // =====================================================================
   // Cleanup
   // =====================================================================
+  const auto cleanupStart = PerfClock::now();
   for (auto &uf : uploadedFrames) {
     if (uf.view)
       vkDestroyImageView(device, uf.view, nullptr);
@@ -2670,6 +3279,9 @@ bool VulkanRawStacker::processStack(uint16_t *outBuffer, size_t bufferSize) {
   }
 
   vkDestroySampler(device, sampler, nullptr);
+  perf.cleanupMs = elapsedMillis(cleanupStart);
+  perf.totalMs = elapsedMillis(processStackStart);
+  perf.logSummary(outputW, outputH, scale);
   return true;
 }
 
@@ -2680,20 +3292,6 @@ void VulkanRawStacker::releaseVulkanResources() {
 
   if (descriptorPool != VK_NULL_HANDLE)
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-  if (descriptorSetLayout != VK_NULL_HANDLE)
-    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-  if (pipelineLayout != VK_NULL_HANDLE)
-    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-  if (accumulatePipeline != VK_NULL_HANDLE)
-    vkDestroyPipeline(device, accumulatePipeline, nullptr);
-
-  if (normalizeSetLayout != VK_NULL_HANDLE)
-    vkDestroyDescriptorSetLayout(device, normalizeSetLayout, nullptr);
-  if (normalizePipelineLayout != VK_NULL_HANDLE)
-    vkDestroyPipelineLayout(device, normalizePipelineLayout, nullptr);
-  if (normalizePipeline != VK_NULL_HANDLE)
-    vkDestroyPipeline(device, normalizePipeline, nullptr);
-
   // New Pipelines
   if (structureTensorSetLayout)
     vkDestroyDescriptorSetLayout(device, structureTensorSetLayout, nullptr);
@@ -2730,6 +3328,20 @@ void VulkanRawStacker::releaseVulkanResources() {
   if (colorScatterPipeline)
     vkDestroyPipeline(device, colorScatterPipeline, nullptr);
 
+  if (referenceNormalizeSetLayout)
+    vkDestroyDescriptorSetLayout(device, referenceNormalizeSetLayout, nullptr);
+  if (referenceNormalizePipelineLayout)
+    vkDestroyPipelineLayout(device, referenceNormalizePipelineLayout, nullptr);
+  if (referenceNormalizePipeline)
+    vkDestroyPipeline(device, referenceNormalizePipeline, nullptr);
+
+  if (referencePriorSetLayout)
+    vkDestroyDescriptorSetLayout(device, referencePriorSetLayout, nullptr);
+  if (referencePriorPipelineLayout)
+    vkDestroyPipelineLayout(device, referencePriorPipelineLayout, nullptr);
+  if (referencePriorPipeline)
+    vkDestroyPipeline(device, referencePriorPipeline, nullptr);
+
   if (greenNormalizeSetLayout)
     vkDestroyDescriptorSetLayout(device, greenNormalizeSetLayout, nullptr);
   if (greenNormalizePipelineLayout)
@@ -2744,17 +3356,10 @@ void VulkanRawStacker::releaseVulkanResources() {
   if (colorNormalizePipeline)
     vkDestroyPipeline(device, colorNormalizePipeline, nullptr);
 
-  for (size_t i = 0; i < accumBuffers.size(); ++i) {
-    if (accumBuffers[i] != VK_NULL_HANDLE)
-      vkDestroyBuffer(device, accumBuffers[i], nullptr);
-    if (accumMemories[i] != VK_NULL_HANDLE)
-      vkFreeMemory(device, accumMemories[i], nullptr);
-  }
-
-  if (stagingBuffer != VK_NULL_HANDLE)
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-  if (stagingMemory != VK_NULL_HANDLE)
-    vkFreeMemory(device, stagingMemory, nullptr);
+  if (fusedBayerBuffer != VK_NULL_HANDLE)
+    vkDestroyBuffer(device, fusedBayerBuffer, nullptr);
+  if (fusedBayerMemory != VK_NULL_HANDLE)
+    vkFreeMemory(device, fusedBayerMemory, nullptr);
 
   if (alignmentBuffer != VK_NULL_HANDLE)
     vkDestroyBuffer(device, alignmentBuffer, nullptr);
@@ -2791,6 +3396,18 @@ void VulkanRawStacker::releaseVulkanResources() {
     if (rbScatterAccumMemories[c])
       vkFreeMemory(device, rbScatterAccumMemories[c], nullptr);
   }
+  if (priorBayerBuffer)
+    vkDestroyBuffer(device, priorBayerBuffer, nullptr);
+  if (priorBayerMemory)
+    vkFreeMemory(device, priorBayerMemory, nullptr);
+  if (priorWeightBuffer)
+    vkDestroyBuffer(device, priorWeightBuffer, nullptr);
+  if (priorWeightMemory)
+    vkFreeMemory(device, priorWeightMemory, nullptr);
+  if (normalizedReferenceBuffer)
+    vkDestroyBuffer(device, normalizedReferenceBuffer, nullptr);
+  if (normalizedReferenceMemory)
+    vkFreeMemory(device, normalizedReferenceMemory, nullptr);
 
   if (lscView)
     vkDestroyImageView(device, lscView, nullptr);

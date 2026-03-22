@@ -1,0 +1,84 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D inputRawSampler;
+layout(binding = 1, scalar) buffer NormalizedReferenceBuffer {
+    uint16_t data[];
+} normalizedReferenceBuffer;
+layout(binding = 2) uniform sampler2D uLensShadingMap;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    float scale;
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+    float frameWeight;
+} pc;
+
+int getBayerIndex(uint cfaPattern, uvec2 pos) {
+    uint phase = ((pos.y & 1u) << 1u) | (pos.x & 1u);
+    if (cfaPattern == 0u) {
+        return int(phase);
+    } else if (cfaPattern == 1u) {
+        const int map[4] = int[4](1, 0, 3, 2);
+        return map[phase];
+    } else if (cfaPattern == 2u) {
+        const int map[4] = int[4](2, 3, 0, 1);
+        return map[phase];
+    } else {
+        const int map[4] = int[4](3, 2, 1, 0);
+        return map[phase];
+    }
+}
+
+float getLscGain(int bayerIndex, ivec2 samplePos) {
+    vec2 lscUV = (vec2(samplePos) + 0.5) / vec2(pc.sensorWidth, pc.sensorHeight);
+    vec4 lscGains = texture(uLensShadingMap, lscUV);
+    if (bayerIndex == 0) return lscGains.r;
+    if (bayerIndex == 1) return lscGains.g;
+    if (bayerIndex == 2) return lscGains.b;
+    return lscGains.a;
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.sensorWidth || y >= pc.sensorHeight) return;
+
+    ivec2 samplePos = ivec2(x, y);
+    int bayerIndex = getBayerIndex(pc.cfaPattern, uvec2(x, y));
+
+    float raw = texelFetch(inputRawSampler, samplePos, 0).r;
+    float val = max(0.0, raw * 65535.0 - pc.blackLevel[bayerIndex]);
+    val = (val * getLscGain(bayerIndex, samplePos)) / 65535.0;
+    float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);
+    float normalized = clamp((val * 65535.0) / whiteRange, 0.0, 1.0);
+
+    normalizedReferenceBuffer.data[y * pc.sensorWidth + x] =
+        uint16_t(clamp(normalized * 65535.0, 0.0, 65535.0));
+}

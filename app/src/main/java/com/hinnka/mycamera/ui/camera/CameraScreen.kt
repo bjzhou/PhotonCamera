@@ -12,10 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
@@ -33,8 +31,6 @@ import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Undo
-import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,7 +56,6 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Constraints
@@ -108,9 +103,9 @@ fun CameraScreen(
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
-    val useMultiFrame by viewModel.useMultiFrame.collectAsState()
+    val useMFNR by viewModel.useMFNR.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
-    val useSuperResolution by viewModel.useSuperResolution.collectAsState()
+    val useMFSR by viewModel.useMFSR.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
@@ -774,21 +769,15 @@ fun CameraScreen(
                 activePanel = ActivePanel.NONE
                 onSettingsClick()
             },
-            useMultiFrame = useMultiFrame,
-            onMultiFrameToggle = {
-                if (!it) {
-                    viewModel.setUseSuperResolution(false)
-                }
-                viewModel.setUseMultiFrame(it)
+            useMFNR = useMFNR,
+            onMFNRToggle = {
+                viewModel.setUseMFNR(it)
             },
             useMultipleExposure = useMultipleExposure,
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
-            useSuperResolution = useSuperResolution,
-            onSuperResolutionToggle = {
-                if (it) {
-                    viewModel.setUseMultiFrame(true)
-                }
-                viewModel.setUseSuperResolution(it)
+            useMFSR = useMFSR,
+            onMFSRToggle = {
+                viewModel.setUseMFSR(it)
             }
         )
 

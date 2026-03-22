@@ -114,8 +114,8 @@
     <string name="settings_level_description">在拍摄时显示水平仪，帮助保持画面水平</string>
     <string name="settings_grid_lines">网格线显示</string>
     <string name="settings_grid_description">在拍摄时显示网格线，辅助构图</string>
-    <string name="settings_use_multi_frame">多帧合成</string>
-    <string name="settings_use_multi_frame_description">拍摄多张照片并合成，以获得更好的画质和更低的噪点。</string>
+    <string name="settings_use_multi_frame">多帧降噪</string>
+    <string name="settings_use_multi_frame_description">在 YUV 路径拍摄多张照片并融合，主要用于降低噪点。</string>
     <string name="settings_use_multiple_exposure">多重曝光</string>
     <string name="settings_use_multiple_exposure_description">通过多次快门逐步叠加一张作品，并提供幽灵预览辅助构图。</string>
     <string name="multiple_exposure_short">多曝</string>
@@ -127,10 +127,12 @@
     <string name="multiple_exposure_ready">已就绪，等待下一次曝光</string>
     <string name="settings_multiple_exposure_count">多重曝光张数</string>
     <string name="settings_multiple_exposure_count_description">最终合成所使用的曝光张数。默认 2 张，更接近经典双重曝光工作流。</string>
-    <string name="settings_multi_frame_count">多帧合成帧数</string>
-    <string name="settings_multi_frame_count_description">多帧合成所使用的帧数（帧数越多效果越好，但合成也越慢）。</string>
-    <string name="settings_use_super_resolution">超分辨率</string>
-    <string name="settings_use_super_resolution_description">使用 2x 多帧超分辨率以获得更多细节。（需要开启多帧合成）</string>
+    <string name="settings_multi_frame_count">多帧降噪帧数</string>
+    <string name="settings_multi_frame_count_description">YUV 多帧降噪使用的帧数（帧数越多降噪越明显，但处理也越慢）。</string>
+    <string name="settings_use_super_resolution">多帧超分</string>
+    <string name="settings_use_super_resolution_description">启用 RAW 多帧超分，仅作用于 RAW 多帧拍摄。</string>
+    <string name="settings_super_resolution_scale">超分倍率</string>
+    <string name="settings_super_resolution_scale_description">设置 RAW 多帧超分倍率，默认 1x。</string>
     <string name="settings_raw_engine">RAW 处理引擎</string>
     <string name="settings_raw_engine_description">选择用于处理 RAW 数据的引擎</string>
     <string name="settings_raw_engine_native">原生</string>

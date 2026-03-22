@@ -61,11 +61,12 @@ data class UserPreferences(
     val frameOrder: List<String> = emptyList(),    // 边框排序（ID列表）
     val categoryOrder: List<String> = emptyList(), // 分类排序
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
-    val useMultiFrame: Boolean = false, // 是否使用多帧合成
-    val multiFrameCount: Int = 8, // 多帧合成帧数
+    val useMFNR: Boolean = false, // 是否使用多帧降噪
+    val multiFrameCount: Int = 8, // 多帧降噪帧数
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
-    val useSuperResolution: Boolean = false, // 是否使用超分辨率
+    val useMFSR: Boolean = false, // 是否启用 RAW 多帧超分
+    val rawSuperResolutionScale: Float = 1f, // RAW 多帧超分倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val enableDevelopAnimation: Boolean = true, // 是否启用拍摄后的显影动画
@@ -138,6 +139,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_MULTIPLE_EXPOSURE = booleanPreferencesKey("use_multiple_exposure")
         private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
         private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
+        private val RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val ENABLE_DEVELOP_ANIMATION = booleanPreferencesKey("enable_develop_animation")
@@ -197,11 +199,12 @@ class UserPreferencesRepository(private val context: Context) {
                 frameOrder = preferences[FRAME_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 categoryOrder = preferences[CATEGORY_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList(),
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
-                useMultiFrame = preferences[USE_MULTI_FRAME] ?: false,
+                useMFNR = preferences[USE_MULTI_FRAME] ?: false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT] ?: 8,
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
-                useSuperResolution = preferences[USE_SUPER_RESOLUTION] ?: false,
+                useMFSR = preferences[USE_SUPER_RESOLUTION] ?: false,
+                rawSuperResolutionScale = preferences[RAW_SUPER_RESOLUTION_SCALE] ?: 1.5f,
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: true,
@@ -498,7 +501,7 @@ class UserPreferencesRepository(private val context: Context) {
     /**
      * 保存是否使用多帧合成
      */
-    suspend fun saveUseMultiFrame(enabled: Boolean) {
+    suspend fun setUseMFNR(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_MULTI_FRAME] = enabled
         }
@@ -534,9 +537,15 @@ class UserPreferencesRepository(private val context: Context) {
     /**
      * 保存是否使用超分辨率
      */
-    suspend fun saveUseSuperResolution(enabled: Boolean) {
+    suspend fun saveUseMFSR(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[USE_SUPER_RESOLUTION] = enabled
+        }
+    }
+
+    suspend fun saveRawSuperResolutionScale(scale: Float) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_SUPER_RESOLUTION_SCALE] = scale.coerceIn(1.0f, 2.0f)
         }
     }
 

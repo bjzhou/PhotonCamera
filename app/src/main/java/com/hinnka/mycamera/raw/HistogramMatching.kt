@@ -37,6 +37,12 @@ object HistogramMatching {
         referenceBitmap: Bitmap?
     ): FloatArray {
         val baseCurve = buildAcr3BaseCurve(logCurve)
+
+        if (logCurve != LogCurve.SRGB) {
+            PLog.d(TAG, "using ACR3 base curve for log curve")
+            return stabilizeCurve(baseCurve, baseCurve, logCurve)
+        }
+
         if (referenceBitmap == null) {
             PLog.d(TAG, "No embedded preview found, using ACR3 base curve")
             return stabilizeCurve(baseCurve, baseCurve, logCurve)

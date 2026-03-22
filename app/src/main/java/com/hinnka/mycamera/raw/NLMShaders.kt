@@ -101,6 +101,10 @@ object NLMShaders {
         
         void main() {
             vec3 centerVal = texture(uInputTexture, vTexCoord).rgb;
+            if (uH <= 0.00001) {
+                fragColor = vec4(centerVal, 1.0);
+                return;
+            }
             
             float h2 = max(uH * uH, 1e-5);
             float patchArea = float((2 * PATCH_RADIUS + 1) * (2 * PATCH_RADIUS + 1));
@@ -173,6 +177,10 @@ object NLMShaders {
         
         void main() {
             vec3 centerValBlur = texture(uBlurTexture, vTexCoord).rgb;
+            if (uH <= 0.00001) {
+                fragColor = vec4(centerValBlur, 1.0);
+                return;
+            }
             
             float h2 = max(uH * uH, 1e-5);
             float patchArea = float((2 * PATCH_RADIUS + 1) * (2 * PATCH_RADIUS + 1));

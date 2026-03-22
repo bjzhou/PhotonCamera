@@ -356,6 +356,7 @@ class RawDemosaicProcessor {
         rotation: Int,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
+        chromaDenoiseValue: Float? = null,
     ): Bitmap? = withContext(glDispatcher) {
         try {
             if (!isInitialized) {
@@ -377,6 +378,7 @@ class RawDemosaicProcessor {
                 rotation = rotation,
                 sharpeningValue = sharpeningValue,
                 denoiseValue = denoiseValue,
+                chromaDenoiseValue = chromaDenoiseValue
             )?.sdrBitmap
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to process RAW buffer", e)
@@ -436,6 +438,7 @@ class RawDemosaicProcessor {
         exposureBias: Float = 0f,
         sharpeningValue: Float = 0f,
         denoiseValue: Float? = null,
+        chromaDenoiseValue: Float? = null,
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false
@@ -577,14 +580,16 @@ class RawDemosaicProcessor {
             val workingColorSpace = resolveWorkingColorSpace()
 
             val denoiseValue = denoiseValue ?: 0.2f
-            val outputTexture = if (denoiseValue > 0f) {
+            val chromaDenoiseValue = chromaDenoiseValue ?: 0.2f
+            val outputTexture = if (denoiseValue > 0f || chromaDenoiseValue > 0f) {
                 // NLM 降噪
                 renderNLMPass(
                     sourceTextureId = demosaicTextureId,
                     width = actualWidth,
                     height = actualHeight,
                     metadata = actualMetadata,
-                    denoiseValue = denoiseValue
+                    denoiseValue = denoiseValue,
+                    chromaDenoiseValue = chromaDenoiseValue,
                 )
                 gfTexId[1]
             } else {
@@ -1066,7 +1071,8 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         metadata: RawMetadata,
-        denoiseValue: Float
+        denoiseValue: Float,
+        chromaDenoiseValue: Float,
     ) {
         setupNLMFramebuffers(width, height)
 
@@ -1096,15 +1102,16 @@ class RawDemosaicProcessor {
         // 1. noiseBase 直接决定主体强度
         // 2. totalGain 同时以 sqrt 与线性两部分参与，提升高增益场景下的去噪力度
         val gainSqrt = sqrt(totalGain.toDouble()).toFloat()
-        val gainNoise = denoiseValue * (0.0035f * gainSqrt + 0.0006f * totalGain)
+        val gainNoise = 0.0035f * gainSqrt + 0.0006f * totalGain
         val baseNoise = if (noiseBase > 0f) {
-            noiseBase * denoiseValue * 0.8f
+            noiseBase * 0.8f
         } else {
-            denoiseValue * 0.010f * gainSqrt
+             0.010f * gainSqrt
         }
         val noise = baseNoise + gainNoise
 
-        val h = noise.coerceIn(0.001f, 0.1f)
+        val h = (noise * denoiseValue).coerceIn(0.0f, 0.1f)
+        val ch = (noise * chromaDenoiseValue).coerceIn(0.0f, 0.1f)
         PLog.d(
             TAG,
             "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, baseNoise=$baseNoise, gainNoise=$gainNoise, h=$h"
@@ -1126,7 +1133,7 @@ class RawDemosaicProcessor {
             GLES30.glGetUniformLocation(gfPass0Program, "uTexMatrix"),
             1, false, identityMatrix, 0
         )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(gfPass0Program, "uH"), h)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(gfPass0Program, "uH"), ch)
         drawQuad(gfPass0Program)
 
         // ===== NLM Pass 1: Horizontal (gfChromaTexId -> gfFboId[0]) =====

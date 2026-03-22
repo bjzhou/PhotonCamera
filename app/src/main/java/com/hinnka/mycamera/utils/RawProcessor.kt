@@ -10,6 +10,7 @@ import android.util.Log
 import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import java.io.File
 import java.io.FileInputStream
@@ -26,6 +27,11 @@ import java.nio.ShortBuffer
 object RawProcessor {
 
     private const val TAG = "RawProcessor"
+
+    enum class RawBufferValueDomain {
+        SENSOR,
+        NORMALIZED_SENSOR_RANGE,
+    }
 
     /**
      * 检查图像是否为 RAW 格式
@@ -131,6 +137,116 @@ object RawProcessor {
             PLog.e(TAG, "Failed to save DNG", e)
         } finally {
             dngCreator.close()
+        }
+    }
+
+    fun saveRawBufferToDng(
+        rawBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+        outputStream: java.io.OutputStream,
+        rotation: Int = 0,
+        thumbnail: Bitmap? = null,
+        cfaPattern: Int = RawMetadata.CFA_RGGB,
+        blackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
+        whiteLevel: Int = 65535,
+        valueDomain: RawBufferValueDomain = RawBufferValueDomain.SENSOR,
+    ): Boolean {
+        val dngCreator = DngCreator(characteristics, captureResult)
+        return try {
+            val orientation = when (rotation) {
+                90 -> ExifInterface.ORIENTATION_ROTATE_90
+                180 -> ExifInterface.ORIENTATION_ROTATE_180
+                270 -> ExifInterface.ORIENTATION_ROTATE_270
+                else -> ExifInterface.ORIENTATION_NORMAL
+            }
+            dngCreator.setOrientation(orientation)
+            buildDngThumbnail(thumbnail)?.let {
+                dngCreator.setThumbnail(it)
+                PLog.d(TAG, "Embedded stacked DNG thumbnail written: ${it.width}x${it.height}")
+            }
+
+            val dngInputBuffer = rawBuffer.duplicate().order(ByteOrder.nativeOrder())
+            if (valueDomain == RawBufferValueDomain.NORMALIZED_SENSOR_RANGE) {
+                denormalizeNormalizedRawBufferInPlace(
+                    rawBuffer = dngInputBuffer,
+                    width = width,
+                    height = height,
+                    cfaPattern = cfaPattern,
+                    blackLevel = blackLevel,
+                    whiteLevel = whiteLevel
+                )
+            }
+            dngInputBuffer.rewind()
+            dngCreator.writeByteBuffer(outputStream, Size(width, height), dngInputBuffer, 0)
+            true
+        } catch (e: Exception) {
+            PLog.w(TAG, "Failed to save stacked RAW buffer as DNG, ignoring", e)
+            false
+        } finally {
+            dngCreator.close()
+        }
+    }
+
+    private fun denormalizeNormalizedRawBufferInPlace(
+        rawBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        cfaPattern: Int,
+        blackLevel: FloatArray,
+        whiteLevel: Int,
+    ) {
+        val output = rawBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
+        var index = 0
+        for (y in 0 until height) {
+            val rowParity = y and 1
+            for (x in 0 until width) {
+                val channelIndex = getRggbChannelIndex(x and 1, rowParity, cfaPattern)
+                val encoded = output.get(index).toInt() and 0xFFFF
+                val channelBlackLevel = blackLevel.getOrElse(channelIndex) { 0f }
+                val channelWhiteLevel = whiteLevel.coerceAtLeast(channelBlackLevel.toInt() + 1)
+                val sensorValue = ((encoded / 65535f) * (channelWhiteLevel - channelBlackLevel) + channelBlackLevel)
+                    .toInt()
+                    .coerceIn(0, channelWhiteLevel)
+                output.put(index, sensorValue.toShort())
+                index++
+            }
+        }
+    }
+
+    private fun getRggbChannelIndex(xParity: Int, yParity: Int, cfaPattern: Int): Int {
+        return when (cfaPattern) {
+            RawMetadata.CFA_RGGB -> when {
+                yParity == 0 && xParity == 0 -> 0
+                yParity == 0 && xParity == 1 -> 1
+                yParity == 1 && xParity == 0 -> 2
+                else -> 3
+            }
+
+            RawMetadata.CFA_GRBG -> when {
+                yParity == 0 && xParity == 0 -> 1
+                yParity == 0 && xParity == 1 -> 0
+                yParity == 1 && xParity == 0 -> 3
+                else -> 2
+            }
+
+            RawMetadata.CFA_GBRG -> when {
+                yParity == 0 && xParity == 0 -> 2
+                yParity == 0 && xParity == 1 -> 3
+                yParity == 1 && xParity == 0 -> 0
+                else -> 1
+            }
+
+            RawMetadata.CFA_BGGR -> when {
+                yParity == 0 && xParity == 0 -> 3
+                yParity == 0 && xParity == 1 -> 2
+                yParity == 1 && xParity == 0 -> 1
+                else -> 0
+            }
+
+            else -> 0
         }
     }
 

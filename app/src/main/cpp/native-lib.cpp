@@ -367,6 +367,57 @@ static inline float hlgToLinear(float value) {
   return linear * kHdrReferenceScale;
 }
 
+static void copyJavaFloatArray(JNIEnv *env, jfloatArray src, float *dst,
+                               size_t count, float defaultValue) {
+  for (size_t i = 0; i < count; ++i) {
+    dst[i] = defaultValue;
+  }
+
+  if (!src) {
+    return;
+  }
+
+  const jsize length = std::min<jsize>(env->GetArrayLength(src),
+                                       static_cast<jsize>(count));
+  if (length <= 0) {
+    return;
+  }
+
+  jfloat *elements = env->GetFloatArrayElements(src, nullptr);
+  if (!elements) {
+    return;
+  }
+
+  std::memcpy(dst, elements, static_cast<size_t>(length) * sizeof(float));
+  env->ReleaseFloatArrayElements(src, elements, JNI_ABORT);
+}
+
+static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
+  switch (cfaPattern) {
+  case 0:
+    return LIBRAW_OPENBAYER_RGGB;
+  case 1:
+    return LIBRAW_OPENBAYER_GRBG;
+  case 2:
+    return LIBRAW_OPENBAYER_GBRG;
+  case 3:
+    return LIBRAW_OPENBAYER_BGGR;
+  default:
+    return 0;
+  }
+}
+
+static void mapProjectRggbToLibRawRgbg(const float src[4], float dst[4]) {
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[3];
+  dst[3] = src[2];
+}
+
+static int roundNonNegative(float value) {
+  return static_cast<int>(std::lround(std::max(0.0f, value)));
+}
+
 extern "C" {
 
 /**
@@ -629,12 +680,151 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
   }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_MultiFrameStacker_demosaicStackedRawWithLibRawNative(
+    JNIEnv *env, jobject /* this */, jobject fusedBayerBuffer, jint width,
+    jint height, jint cfaPattern, jfloatArray blackLevelArray, jint whiteLevel,
+    jfloatArray wbGainsArray, jobject outputBuffer) {
+  if (!fusedBayerBuffer || !outputBuffer || width <= 0 || height <= 0) {
+    LOGE("demosaicStackedRawWithLibRawNative: invalid arguments");
+    return JNI_FALSE;
+  }
+
+  auto *fusedBayerData = static_cast<unsigned char *>(
+      env->GetDirectBufferAddress(fusedBayerBuffer));
+  auto *outputData =
+      static_cast<unsigned char *>(env->GetDirectBufferAddress(outputBuffer));
+  if (!fusedBayerData || !outputData) {
+    LOGE("demosaicStackedRawWithLibRawNative: failed to get buffer address");
+    return JNI_FALSE;
+  }
+
+  const size_t inputBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) *
+      sizeof(uint16_t);
+  const size_t outputBytes =
+      static_cast<size_t>(width) * static_cast<size_t>(height) * 3 *
+      sizeof(uint16_t);
+  const jlong inputCapacity = env->GetDirectBufferCapacity(fusedBayerBuffer);
+  const jlong outputCapacity = env->GetDirectBufferCapacity(outputBuffer);
+  if (inputCapacity < static_cast<jlong>(inputBytes) ||
+      outputCapacity < static_cast<jlong>(outputBytes)) {
+    LOGE("demosaicStackedRawWithLibRawNative: buffer too small in=%ld/%ld out=%ld/%ld",
+         static_cast<long>(inputCapacity), static_cast<long>(inputBytes),
+         static_cast<long>(outputCapacity), static_cast<long>(outputBytes));
+    return JNI_FALSE;
+  }
+
+  const unsigned char libRawPattern = mapCfaPatternToLibRaw(cfaPattern);
+  if (libRawPattern == 0) {
+    LOGE("demosaicStackedRawWithLibRawNative: unsupported CFA pattern %d",
+         cfaPattern);
+    return JNI_FALSE;
+  }
+
+  float projectBlackLevel[4];
+  float projectWbGains[4];
+  float libRawWbGains[4];
+  int libRawBlackLevels[4];
+  int libRawBlackResiduals[4];
+  copyJavaFloatArray(env, blackLevelArray, projectBlackLevel, 4, 0.0f);
+  copyJavaFloatArray(env, wbGainsArray, projectWbGains, 4, 1.0f);
+  mapProjectRggbToLibRawRgbg(projectWbGains, libRawWbGains);
+  for (int i = 0; i < 4; ++i) {
+    if (libRawWbGains[i] <= 0.0f) {
+      libRawWbGains[i] = 1.0f;
+    }
+  }
+
+  float projectBlackLevelOrdered[4];
+  mapProjectRggbToLibRawRgbg(projectBlackLevel, projectBlackLevelOrdered);
+  for (int i = 0; i < 4; ++i) {
+    libRawBlackLevels[i] = roundNonNegative(projectBlackLevelOrdered[i]);
+  }
+
+  const int commonBlack =
+      *std::min_element(std::begin(libRawBlackLevels), std::end(libRawBlackLevels));
+  for (int i = 0; i < 4; ++i) {
+    libRawBlackResiduals[i] = libRawBlackLevels[i] - commonBlack;
+  }
+
+  const int effectiveWhiteLevel =
+      whiteLevel > commonBlack ? whiteLevel : 65535;
+
+  LibRaw rawProcessor;
+  int ret = rawProcessor.open_bayer(
+      fusedBayerData, static_cast<unsigned>(inputBytes),
+      static_cast<ushort>(width), static_cast<ushort>(height), 0, 0, 0, 0, 0,
+      libRawPattern, 0, 0, static_cast<unsigned>(commonBlack));
+  if (ret != LIBRAW_SUCCESS) {
+    LOGE("demosaicStackedRawWithLibRawNative: open_bayer failed ret=%d err=%s",
+         ret, libraw_strerror(ret));
+    return JNI_FALSE;
+  }
+
+  rawProcessor.imgdata.params.output_bps = 16;
+  rawProcessor.imgdata.params.gamm[0] = 1.0;
+  rawProcessor.imgdata.params.gamm[1] = 1.0;
+  rawProcessor.imgdata.params.no_auto_bright = 1;
+  rawProcessor.imgdata.params.use_camera_wb = 0;
+  rawProcessor.imgdata.params.use_auto_wb = 0;
+  rawProcessor.imgdata.params.output_color = 0;
+  rawProcessor.imgdata.params.user_qual = 14;
+  rawProcessor.imgdata.params.fbdd_noiserd = 0;
+  rawProcessor.imgdata.params.threshold = 0;
+  rawProcessor.imgdata.params.med_passes = 0;
+  rawProcessor.imgdata.params.user_black = commonBlack;
+  rawProcessor.imgdata.params.user_sat = effectiveWhiteLevel;
+  for (int i = 0; i < 4; ++i) {
+    rawProcessor.imgdata.params.user_mul[i] = libRawWbGains[i];
+    rawProcessor.imgdata.params.user_cblack[i] = libRawBlackResiduals[i];
+  }
+
+  ret = rawProcessor.unpack();
+  if (ret != LIBRAW_SUCCESS) {
+    LOGE("demosaicStackedRawWithLibRawNative: unpack failed ret=%d err=%s", ret,
+         libraw_strerror(ret));
+    return JNI_FALSE;
+  }
+
+  ret = rawProcessor.dcraw_process();
+  if (ret != LIBRAW_SUCCESS) {
+    LOGE("demosaicStackedRawWithLibRawNative: dcraw_process failed ret=%d err=%s",
+         ret, libraw_strerror(ret));
+    return JNI_FALSE;
+  }
+
+  libraw_processed_image_t *image = rawProcessor.dcraw_make_mem_image(&ret);
+  if (!image || ret != LIBRAW_SUCCESS) {
+    LOGE("demosaicStackedRawWithLibRawNative: dcraw_make_mem_image failed ret=%d err=%s",
+         ret, libraw_strerror(ret));
+    return JNI_FALSE;
+  }
+
+  const bool validImage = image->type == LIBRAW_IMAGE_BITMAP &&
+                          image->colors == 3 && image->bits == 16 &&
+                          image->width == width && image->height == height &&
+                          image->data_size >= outputBytes;
+  if (!validImage) {
+    LOGE("demosaicStackedRawWithLibRawNative: unexpected image type=%d colors=%d bits=%d size=%u %dx%d",
+         image->type, image->colors, image->bits, image->data_size,
+         image->width, image->height);
+    LibRaw::dcraw_clear_mem(image);
+    return JNI_FALSE;
+  }
+
+  std::memcpy(outputData, image->data, outputBytes);
+  LibRaw::dcraw_clear_mem(image);
+  return JNI_TRUE;
+}
+
 /**
  * Vulkan Raw Stacking JNI Interface
  */
 JNIEXPORT jlong JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNative(
     JNIEnv *env, jobject, jint width, jint height, jboolean enableSuperRes,
+    jfloat superResScale,
     jfloatArray blackLevel, jint whiteLevel, jfloatArray wbGains,
     jfloatArray noiseModel, jfloatArray lensShadingMap, jint lscWidth,
     jint lscHeight) {
@@ -665,7 +855,8 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNativ
     lsc = env->GetFloatArrayElements(lensShadingMap, nullptr);
   }
 
-  auto *stacker = new VulkanRawStacker(width, height, enableSuperRes, bl,
+  auto *stacker = new VulkanRawStacker(width, height, enableSuperRes,
+                                       superResScale, bl,
                                        (float)whiteLevel, wb, noise, lsc,
                                        (uint32_t)lscWidth, (uint32_t)lscHeight);
 

@@ -41,12 +41,12 @@ fun CameraTopSheet(
     phantomMode: Boolean,
     onPhantomModeToggle: (Boolean) -> Unit,
     onMoreSettingsClick: () -> Unit,
-    useMultiFrame: Boolean,
-    onMultiFrameToggle: (Boolean) -> Unit,
+    useMFNR: Boolean,
+    onMFNRToggle: (Boolean) -> Unit,
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
-    useSuperResolution: Boolean,
-    onSuperResolutionToggle: (Boolean) -> Unit,
+    useMFSR: Boolean,
+    onMFSRToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -94,28 +94,29 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-
                 QuickSettingToggle(
                     title = stringResource(R.string.settings_use_multi_frame),
-                    checked = useMultiFrame,
-                    onCheckedChange = onMultiFrameToggle,
-                    modifier = Modifier.weight(1f)
-                )
-
-                QuickSettingToggle(
-                    title = stringResource(R.string.settings_use_super_resolution),
-                    checked = useSuperResolution,
-                    onCheckedChange = onSuperResolutionToggle,
+                    checked = useMFNR,
+                    onCheckedChange = onMFNRToggle,
                     modifier = Modifier.weight(1f)
                 )
 
                 if (isRawSupported) {
+                    QuickSettingToggle(
+                        title = stringResource(R.string.settings_use_super_resolution),
+                        checked = useMFSR,
+                        onCheckedChange = onMFSRToggle,
+                        modifier = Modifier.weight(1f)
+                    )
+
                     QuickSettingToggle(
                         title = stringResource(R.string.settings_use_raw),
                         checked = useRaw,
                         onCheckedChange = onRawToggle,
                         modifier = Modifier.weight(1f)
                     )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
 

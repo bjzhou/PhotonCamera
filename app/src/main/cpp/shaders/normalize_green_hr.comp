@@ -17,6 +17,14 @@ layout(binding = 2, scalar) buffer GreenPhase1 {
     uvec2 data[];
 } greenPhase1;
 
+layout(binding = 3, scalar) buffer PriorBuffer {
+    uint16_t data[];
+} priorBuffer;
+
+layout(binding = 4, scalar) buffer PriorWeightBuffer {
+    uint16_t data[];
+} priorWeightBuffer;
+
 layout(push_constant, scalar) uniform PushConstants {
     uint width;
     uint height;
@@ -51,76 +59,155 @@ layout(push_constant, scalar) uniform PushConstants {
     float frameWeight;
 } pc;
 
+float accumMean(uvec2 accum) {
+    if (accum.y == 0u) return 0.0;
+    return float(accum.x) / max(float(accum.y), 1.0) / 65535.0;
+}
+
+uvec2 readGreenAccum(int familyIndex, int x, int y) {
+    x = clamp(x, 0, int(pc.tileW) - 1);
+    y = clamp(y, 0, int(pc.tileH) - 1);
+    uint idx = uint(y) * pc.bufferStride + uint(x);
+    return (familyIndex == 0) ? greenPhase0.data[idx] : greenPhase1.data[idx];
+}
+
+void gatherGreenNeighborhood(int familyIndex, int centerX, int centerY,
+                             out float meanVal, out float support) {
+    float sum = 0.0;
+    float weight = 0.0;
+    for (int oy = -2; oy <= 2; ++oy) {
+        for (int ox = -2; ox <= 2; ++ox) {
+            if (ox == 0 && oy == 0) continue;
+            uvec2 neighAccum = readGreenAccum(familyIndex, centerX + ox, centerY + oy);
+            if (neighAccum.y == 0u) continue;
+
+            float spatialWeight = 1.0 / (1.0 + float(ox * ox + oy * oy));
+            float sampleSupport = clamp(float(neighAccum.y) / 256.0, 0.15, 1.0);
+            float w = spatialWeight * sampleSupport;
+            sum += accumMean(neighAccum) * w;
+            weight += w;
+        }
+    }
+
+    if (weight > 0.0) {
+        meanVal = sum / weight;
+        support = clamp(weight / 3.0, 0.0, 1.0);
+    } else {
+        meanVal = 0.0;
+        support = 0.0;
+    }
+}
+
+bool getGreenSite(uint cfaPattern, uvec2 pos, out int familyIndex, out int bayerIndex) {
+    uint phase = ((pos.y & 1u) << 1u) | (pos.x & 1u);
+    familyIndex = -1;
+    bayerIndex = -1;
+
+    if (cfaPattern == 0u) { // RGGB
+        if (phase == 1u) { familyIndex = 0; bayerIndex = 1; return true; }
+        if (phase == 2u) { familyIndex = 1; bayerIndex = 2; return true; }
+    } else if (cfaPattern == 1u) { // GRBG
+        if (phase == 0u) { familyIndex = 0; bayerIndex = 1; return true; }
+        if (phase == 3u) { familyIndex = 1; bayerIndex = 2; return true; }
+    } else if (cfaPattern == 2u) { // GBRG
+        if (phase == 3u) { familyIndex = 0; bayerIndex = 1; return true; }
+        if (phase == 0u) { familyIndex = 1; bayerIndex = 2; return true; }
+    } else { // BGGR
+        if (phase == 2u) { familyIndex = 0; bayerIndex = 1; return true; }
+        if (phase == 1u) { familyIndex = 1; bayerIndex = 2; return true; }
+    }
+
+    return false;
+}
+
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
 
-    uint outX = pc.tileX + tx;
-    uint outY = pc.tileY + ty;
+    uint globalX = pc.tileX + tx;
+    uint globalY = pc.tileY + ty;
     if (tx >= pc.tileW || ty >= pc.tileH) return;
-    if (outX >= pc.width || outY >= pc.height) return;
+    if (globalX >= pc.width || globalY >= pc.height) return;
 
-    uint idx = ty * pc.bufferStride + tx;
-    uvec2 p0 = greenPhase0.data[idx];
-    uvec2 p1 = greenPhase1.data[idx];
-
-    float weight0 = float(p0.y);
-    float weight1 = float(p1.y);
-    float resLinear = 0.0;
-    if (weight0 + weight1 > 0.0) {
-        bool has0 = weight0 > 0.0;
-        bool has1 = weight1 > 0.0;
-        float g0 = has0 ? (float(p0.x) / max(weight0, 1e-6) / 65535.0) : 0.0;
-        float g1 = has1 ? (float(p1.x) / max(weight1, 1e-6) / 65535.0) : 0.0;
-        float blend0 = weight0;
-        float blend1 = weight1;
-
-        float val = 0.0;
-
-        if (has0 && has1) {
-            float diff = abs(g0 - g1);
-            float consistency = 1.0 - smoothstep(0.010, 0.050, diff);
-            float dominant0 = step(blend1, blend0);
-            float dominant1 = 1.0 - dominant0;
-            float avgVal = (g0 * blend0 + g1 * blend1) / max(blend0 + blend1, 1e-6);
-            float dominantVal = g0 * dominant0 + g1 * dominant1;
-            val = mix(dominantVal, avgVal, consistency);
-
-            float inconsistency = 1.0 - consistency;
-            uint baseIndex = (outY * pc.width + outX) * 3;
-            float rLinear = float(outputBuffer.data[baseIndex + 0]) / 65535.0;
-            float bLinear = float(outputBuffer.data[baseIndex + 2]) / 65535.0;
-            float rbMean = 0.5 * (rLinear + bLinear);
-            float rbMax = max(rLinear, bLinear);
-            float highlight = smoothstep(0.68, 0.95, max(max(g0, g1), rbMax));
-            val = mix(val, avgVal, 0.35 * highlight);
-            float greenCeiling = mix(max(rbMean * 1.35 + 0.015, rbMax * 1.18 + 0.010),
-                                     max(rbMean * 1.08 + 0.003, rbMax * 1.04 + 0.002),
-                                     highlight);
-            val = mix(val, min(val, greenCeiling),
-                      smoothstep(0.20, 0.75, inconsistency) + 0.55 * highlight);
-        } else if (has0) {
-            val = g0;
-        } else {
-            val = g1;
-        }
-
-        uint baseIndex = (outY * pc.width + outX) * 3;
-        float rLinear = float(outputBuffer.data[baseIndex + 0]) / 65535.0;
-        float bLinear = float(outputBuffer.data[baseIndex + 2]) / 65535.0;
-        float rbMean = 0.5 * (rLinear + bLinear);
-        float rbMax = max(rLinear, bLinear);
-        float highlight = smoothstep(0.72, 0.97, max(val, rbMax));
-        float singlePhasePenalty = (has0 ^^ has1) ? 1.0 : 0.0;
-        float strictCeiling = max(rbMean * 1.06 + 0.002, rbMax * 1.03 + 0.002);
-        float strictBlend = clamp(0.65 * highlight + 0.35 * singlePhasePenalty, 0.0, 1.0);
-        val = mix(val, min(val, strictCeiling), strictBlend);
-
-        float gain = (pc.wbGains[1] + pc.wbGains[2]) * 0.5;
-        float bl_avg = (pc.blackLevel[0] + pc.blackLevel[1] + pc.blackLevel[2] + pc.blackLevel[3]) * 0.25;
-        resLinear = (val * 65535.0) / (pc.whiteLevel - bl_avg) * gain;
+    int familyIndex = -1;
+    int bayerIndex = -1;
+    if (!getGreenSite(pc.cfaPattern, uvec2(globalX, globalY), familyIndex, bayerIndex)) {
+        return;
     }
 
-    uint outIndex = (outY * pc.width + outX) * 3 + 1;
-    outputBuffer.data[outIndex] = uint16_t(clamp(resLinear * 65535.0, 0.0, 65535.0));
+    uint idx = ty * pc.bufferStride + tx;
+    uvec2 primary = (familyIndex == 0) ? greenPhase0.data[idx] : greenPhase1.data[idx];
+    uvec2 secondary = (familyIndex == 0) ? greenPhase1.data[idx] : greenPhase0.data[idx];
+    float primaryNeighborVal = 0.0;
+    float primaryNeighborSupport = 0.0;
+    float secondaryNeighborVal = 0.0;
+    float secondaryNeighborSupport = 0.0;
+    gatherGreenNeighborhood(familyIndex, int(tx), int(ty),
+                            primaryNeighborVal, primaryNeighborSupport);
+    gatherGreenNeighborhood(1 - familyIndex, int(tx), int(ty),
+                            secondaryNeighborVal, secondaryNeighborSupport);
+
+    uint outIndex = ty * pc.width + globalX;
+    float priorNorm = float(priorBuffer.data[outIndex]) / 65535.0;
+    float priorSupport = float(priorWeightBuffer.data[outIndex]) / 65535.0;
+
+    float observationNorm = 0.0;
+    float observationSupport = 0.0;
+    float normalizedRaw = 0.0;
+    if (primary.y > 0u || secondary.y > 0u ||
+        primaryNeighborSupport > 0.0 || secondaryNeighborSupport > 0.0) {
+        float primaryVal = accumMean(primary);
+        float secondaryVal = accumMean(secondary);
+        float primaryConfidence = clamp(float(primary.y) / 768.0, 0.0, 1.0);
+        float secondaryConfidence = clamp(float(secondary.y) / 768.0, 0.0, 1.0);
+        observationSupport = max(primaryConfidence, 0.70 * secondaryConfidence);
+        observationSupport = max(observationSupport, 0.28 * primaryNeighborSupport);
+        observationSupport = max(observationSupport, 0.20 * secondaryNeighborSupport);
+        float val = (primary.y > 0u) ? primaryVal :
+                    (secondary.y > 0u ? secondaryVal :
+                     (primaryNeighborSupport >= secondaryNeighborSupport
+                          ? primaryNeighborVal
+                          : secondaryNeighborVal));
+
+        if (primary.y > 0u && secondary.y > 0u) {
+            float phaseDiff = abs(primaryVal - secondaryVal);
+            float crossPhaseBlend = 1.0 - smoothstep(0.020, 0.080, phaseDiff);
+            val = mix(secondaryVal, primaryVal, max(primaryConfidence, 0.25));
+            val = mix(val, 0.5 * (primaryVal + secondaryVal), 0.25 * crossPhaseBlend);
+        } else if (primary.y == 0u && secondary.y == 0u) {
+            if (primaryNeighborSupport > 0.0 && secondaryNeighborSupport > 0.0) {
+                float blend = primaryNeighborSupport /
+                              max(primaryNeighborSupport + secondaryNeighborSupport, 1e-5);
+                val = mix(secondaryNeighborVal, primaryNeighborVal, blend);
+            } else if (primaryNeighborSupport > 0.0) {
+                val = primaryNeighborVal;
+            } else {
+                val = secondaryNeighborVal;
+            }
+            observationSupport = max(0.22 * primaryNeighborSupport,
+                                     0.18 * secondaryNeighborSupport);
+        }
+
+        if (primaryNeighborSupport > 0.0 && primaryConfidence < 0.999) {
+            val = mix(primaryNeighborVal, val, primaryConfidence);
+        }
+        if (primary.y == 0u && secondaryNeighborSupport > 0.0 && secondaryConfidence < 0.999) {
+            val = mix(secondaryNeighborVal, val, max(secondaryConfidence, 0.35));
+        }
+
+        float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);
+        observationNorm = (val * 65535.0) / whiteRange;
+    }
+
+    if (observationSupport > 0.0 && priorSupport > 0.0) {
+        float obsBlend = observationSupport /
+                         max(observationSupport + priorSupport, 1e-5);
+        normalizedRaw = mix(priorNorm, observationNorm, obsBlend);
+    } else if (observationSupport > 0.0) {
+        normalizedRaw = observationNorm;
+    } else if (priorSupport > 0.0) {
+        normalizedRaw = priorNorm;
+    }
+
+    outputBuffer.data[outIndex] = uint16_t(clamp(normalizedRaw * 65535.0, 0.0, 65535.0));
 }

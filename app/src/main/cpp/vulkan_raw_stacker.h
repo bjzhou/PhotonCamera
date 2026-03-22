@@ -16,6 +16,7 @@
 class VulkanRawStacker {
 public:
   VulkanRawStacker(uint32_t width, uint32_t height, bool enableSuperRes,
+                   float superResScale,
                    const float *blackLevel, float whiteLevel,
                    const float *wbGains, const float *noiseModel,
                    const float *lensShadingMap = nullptr, uint32_t lscWidth = 0,
@@ -31,6 +32,7 @@ public:
 private:
   uint32_t width, height;
   bool mEnableSuperRes = false;
+  float mSuperResScale = 1.0f;
   bool isFirstFrame = true;
   int mCfaPattern = 0; // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
 
@@ -38,14 +40,7 @@ private:
   int numTilesX = 1;
   int numTilesY = 1;
 
-  std::vector<VkBuffer> accumBuffers;
-  std::vector<VkDeviceMemory> accumMemories;
-
-  VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
   VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-  std::vector<VkDescriptorSet> accumSets;
-  VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-  VkPipeline accumulatePipeline = VK_NULL_HANDLE;
 
   // New Pipelines for Handheld Super-Res
   VkPipelineLayout alignLkPipelineLayout = VK_NULL_HANDLE;
@@ -74,6 +69,16 @@ private:
   VkDescriptorSetLayout colorScatterSetLayout = VK_NULL_HANDLE;
   VkDescriptorSet colorScatterSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
+  VkDescriptorSetLayout referenceNormalizeSetLayout = VK_NULL_HANDLE;
+  VkPipelineLayout referenceNormalizePipelineLayout = VK_NULL_HANDLE;
+  VkPipeline referenceNormalizePipeline = VK_NULL_HANDLE;
+  VkDescriptorSet referenceNormalizeSet = VK_NULL_HANDLE;
+
+  VkDescriptorSetLayout referencePriorSetLayout = VK_NULL_HANDLE;
+  VkPipelineLayout referencePriorPipelineLayout = VK_NULL_HANDLE;
+  VkPipeline referencePriorPipeline = VK_NULL_HANDLE;
+  VkDescriptorSet referencePriorSet = VK_NULL_HANDLE;
+
   VkDescriptorSetLayout greenNormalizeSetLayout = VK_NULL_HANDLE;
   VkPipelineLayout greenNormalizePipelineLayout = VK_NULL_HANDLE;
   VkPipeline greenNormalizePipeline = VK_NULL_HANDLE;
@@ -83,12 +88,6 @@ private:
   VkPipelineLayout colorNormalizePipelineLayout = VK_NULL_HANDLE;
   VkPipeline colorNormalizePipeline = VK_NULL_HANDLE;
   VkDescriptorSet colorNormalizeSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-
-  // Normalization
-  VkDescriptorSetLayout normalizeSetLayout = VK_NULL_HANDLE;
-  VkPipelineLayout normalizePipelineLayout = VK_NULL_HANDLE;
-  VkPipeline normalizePipeline = VK_NULL_HANDLE;
-  std::vector<VkDescriptorSet> normalizeSets;
 
   // Intermediate Buffers
   VkBuffer kernelBuffer = VK_NULL_HANDLE; // Structure Tensor Output
@@ -111,8 +110,15 @@ private:
   VkBuffer rbScatterAccumBuffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
   VkDeviceMemory rbScatterAccumMemories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
-  VkBuffer stagingBuffer = VK_NULL_HANDLE;
-  VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+  VkBuffer priorBayerBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory priorBayerMemory = VK_NULL_HANDLE;
+  VkBuffer priorWeightBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory priorWeightMemory = VK_NULL_HANDLE;
+  VkBuffer normalizedReferenceBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory normalizedReferenceMemory = VK_NULL_HANDLE;
+
+  VkBuffer fusedBayerBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory fusedBayerMemory = VK_NULL_HANDLE;
 
   // Lens Shading Map
   VkImage lscImage = VK_NULL_HANDLE;
@@ -129,11 +135,6 @@ private:
 
   // Reference pyramid for CPU-side coarse alignment (plane resolution proxy)
   std::vector<GrayImage> referencePyramid;
-
-  // Accumulated RGB buffers (3 planes: R, G, B) instead of Bayer
-  // We reuse accumBuffers but maybe need to change count/size logic?
-  // Current logic: numTilesX * numTilesY * 4.
-  // We will likely use indices 0, 1, 2 for R, G, B.
 
   struct PushConstants {
     uint32_t width;        // 0

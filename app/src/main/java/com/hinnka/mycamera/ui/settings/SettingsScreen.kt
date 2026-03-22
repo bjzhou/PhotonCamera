@@ -126,6 +126,8 @@ fun SettingsScreen(
     val nrLevel by viewModel.nrLevel.collectAsState(initial = 1)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
+    val useSuperResolution by viewModel.useMFSR.collectAsState(initial = false)
+    val rawSuperResolutionScale by viewModel.rawSuperResolutionScale.collectAsState(initial = 1f)
     // 软件处理参数
     val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
@@ -713,6 +715,25 @@ fun SettingsScreen(
                             ),
                             currentLevel = multiFrameCount,
                             onLevelSelected = { viewModel.setMultiFrameCount(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_super_resolution_scale),
+                            description = stringResource(R.string.settings_super_resolution_scale_description),
+                            levels = listOf(
+                                1f to "1x",
+                                1.25f to "1.25x",
+                                1.5f to "1.5x",
+                                1.75f to "1.75x",
+                                2.0f to "2.0x"
+                            ),
+                            currentLevel = rawSuperResolutionScale,
+                            onLevelSelected = { viewModel.setRawSuperResolutionScale(it) }
                         )
 
                         HorizontalDivider(

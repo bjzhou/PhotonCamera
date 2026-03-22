@@ -552,7 +552,8 @@ class Camera2Controller(private val context: Context) {
                         }
                         val rawImage = when {
                             state.value.burstCapturing -> reader.acquireNextImage()
-                            state.value.useMultiFrame -> reader.acquireNextImage()
+                            state.value.useMFNR -> reader.acquireNextImage()
+                            state.value.useMFSR -> reader.acquireNextImage()
                             else -> reader.acquireLatestImage()
                         }
                         val image = trackImage(rawImage)
@@ -1101,7 +1102,7 @@ class Camera2Controller(private val context: Context) {
      */
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
-            val isBurst = _state.value.useMultiFrame
+            val isBurst = _state.value.useMFNR || _state.value.useMFSR
             val effectiveEdgeLevel = if (isBurst && edgeLevel == 2) 1 else edgeLevel
             val edgeMode = when (effectiveEdgeLevel) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
@@ -1909,12 +1910,16 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(showGrid = show)
     }
 
-    fun setUseMultiFrame(useMultiFrame: Boolean, multiFrameCount: Int) {
-        _state.value = _state.value.copy(useMultiFrame = useMultiFrame, multiFrameCount = multiFrameCount)
+    fun setUseMFNR(useMultiFrame: Boolean) {
+        _state.value = _state.value.copy(useMFNR = useMultiFrame)
     }
 
-    fun setUseSuperResolution(useSuperResolution: Boolean) {
-        _state.value = _state.value.copy(useSuperResolution = useSuperResolution)
+    fun setUseMFSR(useSuperResolution: Boolean) {
+        _state.value = _state.value.copy(useMFSR = useSuperResolution)
+    }
+
+    fun setMultiFrameCount(multiFrameCount: Int) {
+        _state.value = _state.value.copy(multiFrameCount = multiFrameCount)
     }
 
 
@@ -2009,15 +2014,13 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
 
-                applyUltraHDR(this)
-
                 PLog.d(
                     TAG,
                     "Capture request built and ready to send. ISO: ${_state.value.iso}, shutter: ${_state.value.shutterSpeed}, AE: ${_state.value.isAutoExposure}"
                 )
             }
 
-            if (state.value.useMultiFrame) {
+            if (state.value.useMFNR || _state.value.useMFSR) {
                 // Burst Mode
                 val requests = ArrayList<CaptureRequest>()
                 val request = captureBuilder.build()
@@ -2160,110 +2163,6 @@ class Camera2Controller(private val context: Context) {
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to reset preview", e)
-        }
-    }
-
-    // RAW + MultiFrame 曝光控制策略（手动曝光自适应版本）
-    // 原理：多帧堆叠提升 SNR √N 倍，理论上可缩减 0.5*log2(N) EV 的曝光来换取高光余量。
-    fun applyUltraHDR(builder: CaptureRequest.Builder) {
-        if (!_state.value.applyUltraHDR) return
-        if (!_state.value.useRaw) return
-        if (!_state.value.useMultiFrame) return
-        if (!_state.value.isIsoAuto) return
-        if (!_state.value.isShutterSpeedAuto) return
-        if (!isManualSensorSupported) return
-        val characteristics = cachedCharacteristics ?: return
-        try {
-            // 计算光照等级 (LV)
-            val aperture = _state.value.physicalAperture.toDouble()
-            val shutterSpeed = _state.value.shutterSpeed.toDouble() / 1_000_000_000.0
-            val iso = _state.value.iso.toDouble()
-            val ev = ln(aperture * aperture / shutterSpeed) / ln(2.0)
-            val lv = ev - ln(iso / 100.0) / ln(2.0)
-
-            // 只有在光照等级足够时才触发 Ultra HDR 曝光压制策略
-            // 阈值设为 7.0 (办公室内典型照明)，低于此数值通常认为是暗光，不应压低曝光以保护信噪比。
-            if (lv < 7.0) {
-                PLog.d(TAG, "applyUltraHDR: Light level too low (LV=${String.format("%.2f", lv)}), skip HDR reduction")
-                return
-            }
-
-            val count = _state.value.multiFrameCount.toDouble()
-            // 理论最大降幅: 0.5 * log2(N)
-            val maxReductionEv = ln(count.pow(0.5)) / ln(2.0)
-
-            // 基于当前预览直方图的亮点（满井像素）比例，动态决定要压多少曝光（scaleFactor）来保护高光
-            // 亮点越多，压得越狠；如果不满井，则不压曝光，保持原始亮度以保护暗部。
-            val histogram = _state.value.histogram ?: intArrayOf()
-            val scaleFactor = if (histogram.size >= 256) {
-                val totalPixels = histogram.sum().toDouble().coerceAtLeast(1.0)
-                // 满井像素在直方图最后一格 (255)
-                val saturatedPixels = histogram[255].toDouble()
-                val saturatedRatio = saturatedPixels / totalPixels
-
-                // 定义自适应阈值：
-                // - 当满井比例 ≤ 0.2% (lowRatio): 认为是琐碎亮点或可接受裁切，不压曝光 (scaleFactor = 0.0)
-                // - 当满井比例 ≥ 2.0% (highRatio): 认为存在大面积高光过曝，全力压低曝光 (scaleFactor = 1.0)
-                // - 中间区域：线性过渡
-                val lowRatio = 0.002
-                val highRatio = 0.02
-                if (saturatedRatio <= lowRatio) 0.0
-                else if (saturatedRatio >= highRatio) 1.0
-                else (saturatedRatio - lowRatio) / (highRatio - lowRatio)
-            } else {
-                // 直方图数据缺失时，默认不进行额外的降曝光压制
-                0.0
-            }
-
-            val currentIso = _state.value.iso
-            val currentShutter = _state.value.shutterSpeed
-
-            val actualReductionEv = maxReductionEv * scaleFactor
-            val reductionFactor = 2.0.pow(actualReductionEv)
-
-            // 优先调整快门以避免感光度不足（低 ISO）在暗部产生的噪点碎片或色差。
-            // 在 RAW 流程中，较高的 ISO（在合理范围内）往往比过低的 ISO 配合后期提亮有更好的底噪表现。
-            var targetShutter = (currentShutter / reductionFactor).toLong()
-            var targetIso = currentIso
-
-            // 约束调整：如果快门已经达到硬件极限，则补偿 ISO
-            val shutterRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-
-            if (shutterRange != null && isoRange != null) {
-                if (targetShutter < shutterRange.lower) {
-                    val remainingFactor = shutterRange.lower.toDouble() / targetShutter.toDouble()
-                    targetShutter = shutterRange.lower
-                    targetIso = (targetIso / remainingFactor).toInt().coerceIn(isoRange.lower, isoRange.upper)
-                }
-            }
-
-            // 应用手动曝光设置，覆盖 applyBaseCameraSettings
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, targetIso)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, targetShutter)
-
-            PLog.d(
-                TAG, "RAW MultiFrame Histogram-Adaptive Manual Capture (LV=${String.format("%.2f", lv)}): " +
-                        "saturated=${
-                            String.format(
-                                "%.2f",
-                                (histogram.getOrElse(255) { 0 }.toDouble() / histogram.sum().toDouble()
-                                    .coerceAtLeast(1.0)) * 100
-                            )
-                        }%, " +
-                        "scale=${String.format("%.2f", scaleFactor)}, " +
-                        "target: ISO=$targetIso (from $currentIso), " +
-                        "Shutter=${String.format("%.2f", targetShutter / 1_000_000.0)}ms (from ${
-                            String.format(
-                                "%.2f",
-                                currentShutter / 1_000_000.0
-                            )
-                        }ms), " +
-                        "reduction=${String.format("%.2f", actualReductionEv)}EV"
-            )
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to apply adaptive manual exposure", e)
         }
     }
 

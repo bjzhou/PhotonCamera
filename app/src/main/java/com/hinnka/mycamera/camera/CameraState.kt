@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.camera
 
 import android.graphics.Rect
-import android.hardware.camera2.CameraMetadata
 import android.util.Range
 
 /**
@@ -177,9 +176,9 @@ data class CameraState(
     val availableNrModes: IntArray = intArrayOf(),
 
     val isRawSupported: Boolean = false,
-    val useMultiFrame: Boolean = false,
+    val useMFNR: Boolean = false,
     val multiFrameCount: Int = 0,
-    val useSuperResolution: Boolean = false,
+    val useMFSR: Boolean = false,
     val useRaw: Boolean = false,
     val useLivePhoto: Boolean = false,
     // 是否正在拍摄 Live Photo (用于 UI 动画)

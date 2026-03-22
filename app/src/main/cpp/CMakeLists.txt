@@ -32,13 +32,13 @@ set(SHADER_SOURCES
     shaders/align_tiles.comp
     shaders/build_pyramid.comp
     shaders/normalize.comp
-    shaders/accumulate_raw.comp
-    shaders/normalize_raw.comp
     shaders/structure_tensor.comp
     shaders/align_lk.comp
     shaders/raw_structure_tensor.comp
     shaders/robustness_raw.comp
     shaders/green_scatter_raw.comp
+    shaders/reference_preprocess_raw.comp
+    shaders/reference_prior_raw.comp
     shaders/normalize_green_hr.comp
     shaders/color_scatter_raw.comp
     shaders/normalize_color_hr.comp

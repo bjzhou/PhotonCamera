@@ -1,11 +1,8 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ShortcutInfo
-import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
@@ -38,6 +35,7 @@ import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
 import kotlinx.coroutines.*
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.util.UUID
@@ -165,8 +163,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
     val userPreferences: StateFlow<com.hinnka.mycamera.data.UserPreferences> = userPreferencesRepository.userPreferences
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.UserPreferences())
-    val useMultiFrame: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useMultiFrame }
+    val useMFNR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useMFNR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultipleExposure }
@@ -177,9 +175,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 8)
-    val useSuperResolution: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useSuperResolution }
+    val useMFSR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useMFSR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val rawSuperResolutionScale: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map { it.rawSuperResolutionScale }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 1f)
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -315,7 +316,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 viewModelScope.launch {
                     handleMultipleExposureFrameCaptured(image, captureInfo)
                 }
-            } else if (state.value.useMultiFrame) {
+            } else if (state.value.useMFNR || state.value.useMFSR) {
                 val count = state.value.multiFrameCount
                 PLog.d(TAG, "Burst frame received: ${stackingImages.size + 1}/$count")
                 stackingImages.add(image)
@@ -462,8 +463,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 应用保存的网格线设置
                 cameraController.setShowGrid(prefs.showGrid)
 
-                cameraController.setUseMultiFrame(prefs.useMultiFrame, prefs.multiFrameCount)
-                cameraController.setUseSuperResolution(prefs.useSuperResolution)
+                cameraController.setUseMFNR(prefs.useMFNR)
+                cameraController.setUseMFSR(prefs.useMFSR)
+                cameraController.setMultiFrameCount(prefs.multiFrameCount)
                 cameraController.setUseLivePhoto(prefs.useLivePhoto)
 
                 // 应用保存的虚拟光圈
@@ -645,8 +647,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (enabled) {
-            cameraController.setUseMultiFrame(false, multiFrameCount.value)
-            cameraController.setUseSuperResolution(false)
+            cameraController.setUseMFNR(false)
+            cameraController.setUseMFSR(false)
             cameraController.setUseLivePhoto(false)
             cameraController.setUseRaw(false)
         }
@@ -654,8 +656,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveUseMultipleExposure(enabled)
             if (enabled) {
-                userPreferencesRepository.saveUseMultiFrame(false)
-                userPreferencesRepository.saveUseSuperResolution(false)
+                userPreferencesRepository.setUseMFNR(false)
+                userPreferencesRepository.saveUseMFSR(false)
                 userPreferencesRepository.saveUseLivePhoto(false)
                 userPreferencesRepository.saveUseRaw(false)
             }
@@ -712,7 +714,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     null,
                     previewThumbnail,
                     false,
-                    false
+                    1.0f
                 ) ?: run {
                     composedBitmap.recycle()
                     multipleExposureState = multipleExposureState.copy(isProcessing = false)
@@ -1413,21 +1415,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // ==================== 延时拍摄和网格线相关方法 ====================
 
     /**
-     * 设置是否使用多帧合成
+     * 设置是否使用多帧降噪
      */
-    fun setUseMultiFrame(enabled: Boolean) {
+    fun setUseMFNR(enabled: Boolean) {
         if (enabled) {
             setUseMultipleExposure(false)
+            setUseRaw(false)
+            cameraController.setUseMFSR(false)
         }
-        /*if (enabled) {
-            cameraController.setUseRaw(false)
-            viewModelScope.launch {
-                userPreferencesRepository.saveUseRaw(false)
-            }
-        }*/
-        cameraController.setUseMultiFrame(enabled, multiFrameCount.value)
+        cameraController.setUseMFNR(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.saveUseMultiFrame(enabled)
+            userPreferencesRepository.setUseMFNR(enabled)
         }
         reopenCamera()
     }
@@ -1436,7 +1434,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置多帧合成帧数
      */
     fun setMultiFrameCount(count: Int) {
-        cameraController.setUseMultiFrame(state.value.useMultiFrame, count)
+        cameraController.setMultiFrameCount(count)
         viewModelScope.launch {
             userPreferencesRepository.saveMultiFrameCount(count)
             //reopenCamera()
@@ -1454,15 +1452,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置是否使用超分辨率
      */
-    fun setUseSuperResolution(enabled: Boolean) {
+    fun setUseMFSR(enabled: Boolean) {
         if (enabled) {
             setUseMultipleExposure(false)
+            setUseRaw(true)
+            setUseMFNR(false)
         }
-        cameraController.setUseSuperResolution(enabled)
+        cameraController.setUseMFSR(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.saveUseSuperResolution(enabled)
+            userPreferencesRepository.saveUseMFSR(enabled)
         }
         reopenCamera()
+    }
+
+    fun setRawSuperResolutionScale(scale: Float) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawSuperResolutionScale(scale)
+        }
     }
 
     /**
@@ -1526,14 +1532,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setUseRaw(useRaw: Boolean) {
         if (useRaw) {
+            setUseMFNR(false)
             setUseMultipleExposure(false)
+        } else {
+            setUseMFSR(false)
         }
-        /*if (useRaw) {
-            cameraController.setUseMultiFrame(false, multiFrameCount.value)
-            viewModelScope.launch {
-                userPreferencesRepository.saveUseMultiFrame(false)
-            }
-        }*/
         cameraController.setUseRaw(useRaw)
         viewModelScope.launch {
             userPreferencesRepository.saveUseRaw(useRaw)
@@ -2009,7 +2012,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId =
-                PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value, false)
+                PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value, 1.0f)
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save image")
                 return
@@ -2092,7 +2095,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val useSuperRes = useSuperResolution.value
+            val useSuperRes = useMFSR.value
+            val rawSuperResScale =
+                if (useSuperRes && useRaw.value) rawSuperResolutionScale.value else 1.0f
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
@@ -2112,8 +2117,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
-                width = images[0].width * (if (useSuperRes) 2 else 1),
-                height = images[0].height * (if (useSuperRes) 2 else 1),
+                width = (images[0].width.toFloat() * rawSuperResScale).roundToInt(),
+                height = (images[0].height.toFloat() * rawSuperResScale).roundToInt(),
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
@@ -2151,7 +2156,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             characteristics ?: return
             val photoId = PhotoManager.preparePhoto(
                 context, metadata, captureResult, previewThumbnail,
-                useLivePhoto.value, useSuperRes
+                useLivePhoto.value, rawSuperResScale
             )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save burst image")
@@ -2176,6 +2181,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReductionValue,
                     photoQualityValue,
                     useSuperResolution = useSuperRes,
+                    superResolutionScale = rawSuperResScale,
                     useGpuAcceleration = useGpuAcceleration.value,
                     exposureBias = state.value.exposureBias,
                     droMode = droModeForProcessing
@@ -2262,7 +2268,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         PhotoManager.preparePhoto(
             context, metadata, null, previewThumbnail,
-            false, false, photoId
+            false, 1.0f, photoId
         )
     }
 

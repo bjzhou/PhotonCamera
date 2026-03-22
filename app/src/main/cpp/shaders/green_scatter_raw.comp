@@ -87,6 +87,22 @@ vec2 sampleFlow(vec2 planeCoord) {
     return mix(mix(f00, f10, gf.x), mix(f01, f11, gf.x), gf.y);
 }
 
+int getBayerIndex(int cfaPattern, ivec2 samplePos) {
+    int phase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
+    if (cfaPattern == 0) {
+        return phase; // RGGB -> R, Gr, Gb, B
+    } else if (cfaPattern == 1) {
+        const int map[4] = int[4](1, 0, 3, 2);
+        return map[phase];
+    } else if (cfaPattern == 2) {
+        const int map[4] = int[4](2, 3, 0, 1);
+        return map[phase];
+    } else {
+        const int map[4] = int[4](3, 2, 1, 0);
+        return map[phase];
+    }
+}
+
 int getGreenFamily(int cfaPattern, ivec2 samplePos, out int lscIdx) {
     int phase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
     lscIdx = -1;
@@ -177,8 +193,8 @@ void main() {
     vec2 outCenter = refPos * pc.scale;
 
     float raw = texelFetch(inputRawSampler, samplePos, 0).r;
-    int samplePhase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
-    float val = max(0.0, raw * 65535.0 - pc.blackLevel[samplePhase]);
+    int bayerIndex = getBayerIndex(int(pc.cfaPattern), samplePos);
+    float val = max(0.0, raw * 65535.0 - pc.blackLevel[bayerIndex]);
 
     vec2 lscUV = (vec2(samplePos) + 0.5) / vec2(pc.sensorWidth, pc.sensorHeight);
     vec4 lscGains = texture(uLensShadingMap, lscUV);

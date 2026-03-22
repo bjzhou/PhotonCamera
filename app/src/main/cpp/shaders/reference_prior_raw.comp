@@ -1,0 +1,127 @@
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, scalar) buffer NormalizedReferenceBuffer {
+    uint16_t data[];
+} normalizedReferenceBuffer;
+layout(binding = 1, scalar) buffer PriorBuffer { uint16_t data[]; } priorBuffer;
+layout(binding = 2, scalar) buffer PriorWeightBuffer { uint16_t data[]; } priorWeightBuffer;
+
+layout(push_constant, scalar) uniform PushConstants {
+    uint width;
+    uint height;
+    uint planeWidth;
+    uint planeHeight;
+    uint sensorWidth;
+    uint sensorHeight;
+    float scale;
+    float blackLevel[4];
+    float whiteLevel;
+    float wbGains[4];
+    uint isFirstFrame;
+    uint outputChannel;
+    uint cfaPattern;
+    uint planeIndex;
+    uint tileX;
+    uint tileY;
+    uint tileW;
+    uint tileH;
+    uint bufferStride;
+    uint gridW;
+    uint gridH;
+    uint tileSize;
+    float noiseAlpha;
+    float noiseBeta;
+    float baseNoise;
+    float frameWeight;
+} pc;
+
+int getBayerIndex(uint cfaPattern, uvec2 pos) {
+    uint phase = ((pos.y & 1u) << 1u) | (pos.x & 1u);
+    if (cfaPattern == 0u) {
+        return int(phase); // RGGB -> R, Gr, Gb, B
+    } else if (cfaPattern == 1u) {
+        const int map[4] = int[4](1, 0, 3, 2);
+        return map[phase];
+    } else if (cfaPattern == 2u) {
+        const int map[4] = int[4](2, 3, 0, 1);
+        return map[phase];
+    } else {
+        const int map[4] = int[4](3, 2, 1, 0);
+        return map[phase];
+    }
+}
+
+ivec2 getBayerOffset(uint cfaPattern, int bayerIndex) {
+    if (cfaPattern == 0u) {
+        const ivec2 map[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        return map[bayerIndex];
+    } else if (cfaPattern == 1u) {
+        const ivec2 map[4] = ivec2[4](ivec2(1, 0), ivec2(0, 0), ivec2(1, 1), ivec2(0, 1));
+        return map[bayerIndex];
+    } else if (cfaPattern == 2u) {
+        const ivec2 map[4] = ivec2[4](ivec2(0, 1), ivec2(1, 1), ivec2(0, 0), ivec2(1, 0));
+        return map[bayerIndex];
+    } else {
+        const ivec2 map[4] = ivec2[4](ivec2(1, 1), ivec2(0, 1), ivec2(1, 0), ivec2(0, 0));
+        return map[bayerIndex];
+    }
+}
+
+float fetchNormalizedRaw(int bayerIndex, ivec2 samplePos) {
+    samplePos.x = clamp(samplePos.x, 0, int(pc.sensorWidth) - 1);
+    samplePos.y = clamp(samplePos.y, 0, int(pc.sensorHeight) - 1);
+    uint idx = uint(samplePos.y) * pc.sensorWidth + uint(samplePos.x);
+    return float(normalizedReferenceBuffer.data[idx]) / 65535.0;
+}
+
+void samplePrior(int bayerIndex, vec2 sourcePos,
+                 out float normalizedRaw, out float support) {
+    ivec2 offset = getBayerOffset(pc.cfaPattern, bayerIndex);
+    vec2 latticePos = 0.5 * (sourcePos - vec2(offset));
+    ivec2 base = ivec2(floor(latticePos));
+    vec2 frac = latticePos - vec2(base);
+
+    ivec2 p00 = offset + 2 * base;
+    ivec2 p10 = p00 + ivec2(2, 0);
+    ivec2 p01 = p00 + ivec2(0, 2);
+    ivec2 p11 = p00 + ivec2(2, 2);
+
+    float v00 = fetchNormalizedRaw(bayerIndex, p00);
+    float v10 = fetchNormalizedRaw(bayerIndex, p10);
+    float v01 = fetchNormalizedRaw(bayerIndex, p01);
+    float v11 = fetchNormalizedRaw(bayerIndex, p11);
+
+    float vx0 = mix(v00, v10, frac.x);
+    float vx1 = mix(v01, v11, frac.x);
+    normalizedRaw = mix(vx0, vx1, frac.y);
+
+    float sampleMin = min(min(v00, v10), min(v01, v11));
+    float sampleMax = max(max(v00, v10), max(v01, v11));
+    float coherence = 1.0 - smoothstep(0.04, 0.18, sampleMax - sampleMin);
+    float interpolationPenalty =
+        0.5 * (4.0 * frac.x * (1.0 - frac.x) + 4.0 * frac.y * (1.0 - frac.y));
+    float exactness = 1.0 - interpolationPenalty;
+    support = clamp(0.18 + 0.22 * coherence + 0.20 * exactness, 0.18, 0.60);
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.width || y >= pc.height) return;
+
+    uint outIndex = y * pc.width + x;
+    int bayerIndex = getBayerIndex(pc.cfaPattern, uvec2(x, y));
+
+    vec2 sourcePos = vec2(x, y) / max(pc.scale, 1e-5);
+    float normalizedRaw = 0.0;
+    float support = 0.0;
+    samplePrior(bayerIndex, sourcePos, normalizedRaw, support);
+
+    priorBuffer.data[outIndex] = uint16_t(clamp(normalizedRaw * 65535.0, 0.0, 65535.0));
+    priorWeightBuffer.data[outIndex] = uint16_t(clamp(support * 65535.0, 0.0, 65535.0));
+}
