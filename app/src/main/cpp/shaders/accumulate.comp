@@ -224,13 +224,30 @@ void main() {
         
         if (isnan(centerRobustness) || isinf(centerRobustness)) centerRobustness = 0.0;
         
-        // Gentle motion error penalty
-        centerRobustness *= (1.0 / (1.0 + motionError * 0.005));
+        float kernelDetail = max(kp.x, kp.y);
+        float detailSignal = smoothstep(4.0, 18.0, kernelDetail);
+        float motionPenalty = mix(0.008, 0.028, detailSignal);
+        centerRobustness *= (1.0 / (1.0 + motionError * motionPenalty));
         if (isnan(centerRobustness)) centerRobustness = 0.0;
     }
     float localTileWeight = sampleLocalTileWeight(finalUV);
-    float detailStrength = smoothstep(6.0, 28.0, max(kp.x, kp.y));
-    int supportRadius = (detailStrength > 0.45) ? 1 : 2;
+    float detailStrength = smoothstep(4.0, 18.0, max(kp.x, kp.y));
+    float detailSuppression = (pc.isFirstFrame == 0)
+        ? (1.0 - detailStrength)
+        : 1.0;
+    float fusionMask = localTileWeight;
+    int supportRadius = 2;
+
+    if (pc.isFirstFrame == 0) {
+        fusionMask *= (0.06 + 0.94 * detailSuppression * detailSuppression);
+        if (detailStrength > 0.55) {
+            supportRadius = 0;
+        } else if (detailStrength > 0.20) {
+            supportRadius = 1;
+        }
+    } else if (detailStrength > 0.45) {
+        supportRadius = 1;
+    }
 
     // Accumulate neighbors
     for (int j = -2; j <= 2; ++j) {
@@ -261,7 +278,7 @@ void main() {
             // We multiply the inverse variances by 0.25 to normalize the spatial spread.
             float w = exp(-0.5 * (u*u * kp.x * 0.25 + v*v * kp.y * 0.25));
             
-            float combinedWeight = w * robustness * pc.frameWeight * localTileWeight;
+            float combinedWeight = w * robustness * pc.frameWeight * fusionMask;
             if (isnan(combinedWeight) || isinf(combinedWeight)) combinedWeight = 0.0;
             
             vec4 increment = vec4(sampleColor * combinedWeight, combinedWeight);

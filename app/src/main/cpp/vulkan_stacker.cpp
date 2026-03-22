@@ -30,11 +30,18 @@ struct ScalarStats {
 
 struct LocalReliabilityMap {
   std::vector<float> tileWeights;
-  float edgeGoodFraction = 0.0f;
-  float textGoodFraction = 0.0f;
+  float flatGoodFraction = 0.0f;
+  float flatAreaFraction = 0.0f;
+  float detailAreaFraction = 0.0f;
 };
 
 inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
+
+inline float smoothstepf(float edge0, float edge1, float x) {
+  float width = std::max(edge1 - edge0, 1e-6f);
+  float t = clamp01((x - edge0) / width);
+  return t * t * (3.0f - 2.0f * t);
+}
 
 inline ScalarStats computeScalarStats(const std::vector<float> &values) {
   ScalarStats stats;
@@ -101,40 +108,48 @@ LocalReliabilityMap buildLocalReliabilityMap(const GrayImage &reference,
   }
 
   ScalarStats detailStats = computeScalarStats(detailScores);
-  float edgeThreshold = std::max(detailStats.p50, detailStats.p90 * 0.65f);
-  float textThreshold = std::max(detailStats.p90, detailStats.maxValue * 0.70f);
-  size_t edgeCount = 0;
-  size_t edgeGood = 0;
-  size_t textCount = 0;
-  size_t textGood = 0;
+  float flatThreshold = detailStats.minValue +
+                        (detailStats.p50 - detailStats.minValue) * 0.70f;
+  float detailThreshold = std::max(
+      detailStats.p50, detailStats.minValue +
+                           (detailStats.p90 - detailStats.minValue) * 0.55f);
+  size_t flatCount = 0;
+  size_t flatGood = 0;
+  size_t detailCount = 0;
 
   for (size_t idx = 0; idx < errorMap.size() && idx < detailScores.size(); ++idx) {
     float detail = detailScores[idx];
     float err = errorMap[idx];
-    bool isEdge = detail >= edgeThreshold;
-    bool isText = detail >= textThreshold;
-    float errorWeight = clamp01(1.0f - std::max(0.0f, err - 10.0f) / 28.0f);
-    float detailBoost = isText ? 1.0f : (isEdge ? 0.72f : 0.38f);
-    float tileWeight = clamp01(errorWeight * (0.55f + 0.45f * detailBoost));
-    if (isText) {
-      tileWeight = std::max(tileWeight, 0.35f);
-      ++textCount;
-      if (err < 16.0f)
-        ++textGood;
-    } else if (isEdge) {
-      tileWeight = std::max(tileWeight, 0.20f);
-      ++edgeCount;
-      if (err < 18.0f)
-        ++edgeGood;
+    float detailPenalty = smoothstepf(flatThreshold, detailThreshold, detail);
+    float flatness = 1.0f - detailPenalty;
+    float errorWeight = clamp01(1.0f - std::max(0.0f, err - 8.0f) / 18.0f);
+    float tileWeight =
+        clamp01(errorWeight * (0.04f + 0.96f * flatness * flatness));
+
+    if (detailPenalty > 0.60f) {
+      tileWeight *= 0.10f;
+      ++detailCount;
+    } else if (detailPenalty > 0.30f) {
+      tileWeight *= 0.35f;
+    } else {
+      ++flatCount;
+      if (err < 12.0f)
+        ++flatGood;
     }
-    result.tileWeights[idx] = tileWeight;
+
+    if (err > 20.0f) {
+      tileWeight *= 0.35f;
+    }
+
+    result.tileWeights[idx] = clamp01(tileWeight);
   }
 
-  result.edgeGoodFraction =
-      (edgeCount > 0) ? (float)edgeGood / (float)edgeCount : 0.0f;
-  result.textGoodFraction =
-      (textCount > 0) ? (float)textGood / (float)textCount
-                      : result.edgeGoodFraction;
+  float tileCount = static_cast<float>(detailScores.size());
+  result.flatGoodFraction =
+      (flatCount > 0) ? (float)flatGood / (float)flatCount : 0.0f;
+  result.flatAreaFraction = (tileCount > 0.0f) ? (float)flatCount / tileCount : 0.0f;
+  result.detailAreaFraction =
+      (tileCount > 0.0f) ? (float)detailCount / tileCount : 0.0f;
   return result;
 }
 
@@ -142,17 +157,18 @@ float computeFrameFusionWeight(const std::vector<float> &errorMap,
                                float sharpnessRatio,
                                const LocalReliabilityMap &localMap) {
   if (errorMap.empty())
-    return clamp01(0.35f + 0.65f * sharpnessRatio);
+    return clamp01(0.18f + 0.22f * sharpnessRatio);
 
   ScalarStats errStats = computeScalarStats(errorMap);
   float errorWeight =
-      clamp01(1.0f - std::max(0.0f, errStats.p90 - 14.0f) / 18.0f);
-  float sharpnessWeight = clamp01(0.35f + 0.65f * sharpnessRatio);
-  float localWeight =
-      clamp01(0.55f * localMap.edgeGoodFraction + 0.45f * localMap.textGoodFraction);
-  float rescueFloor = 0.18f * localWeight;
-  return std::max(errorWeight * sharpnessWeight * (0.72f + 0.28f * localWeight),
-                  rescueFloor);
+      clamp01(1.0f - std::max(0.0f, errStats.p90 - 10.0f) / 12.0f);
+  float sharpnessGuard = clamp01(0.80f + 0.20f * sharpnessRatio);
+  float flatCoverage = clamp01(0.10f + 0.90f * localMap.flatAreaFraction);
+  float flatReliability = clamp01(0.15f + 0.85f * localMap.flatGoodFraction);
+  float detailPenalty = clamp01(1.0f - 0.55f * localMap.detailAreaFraction);
+  float baseWeight =
+      0.06f + 0.44f * errorWeight * flatCoverage * flatReliability * detailPenalty;
+  return clamp01(baseWeight * sharpnessGuard);
 }
 
 } // namespace
