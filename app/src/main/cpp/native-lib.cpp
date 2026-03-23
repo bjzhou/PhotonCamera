@@ -283,30 +283,797 @@ struct Matrix3x3 {
   }
 };
 
+struct Vec3 {
+  float v[3];
+
+  float &operator[](int index) { return v[index]; }
+  const float &operator[](int index) const { return v[index]; }
+};
+
+static Vec3 multiplyMatrixVec3(const Matrix3x3 &matrix, const Vec3 &vector) {
+  Vec3 result = {};
+  for (int row = 0; row < 3; ++row) {
+    result[row] = matrix.m[row * 3 + 0] * vector[0] +
+                  matrix.m[row * 3 + 1] * vector[1] +
+                  matrix.m[row * 3 + 2] * vector[2];
+  }
+  return result;
+}
+
+struct DngGainMap {
+  uint32_t top = 0;
+  uint32_t left = 0;
+  uint32_t bottom = 0;
+  uint32_t right = 0;
+  uint32_t plane = 0;
+  uint32_t planes = 0;
+  uint32_t rowPitch = 0;
+  uint32_t colPitch = 0;
+  uint32_t mapPointsV = 0;
+  uint32_t mapPointsH = 0;
+  double mapSpacingV = 0.0;
+  double mapSpacingH = 0.0;
+  double mapOriginV = 0.0;
+  double mapOriginH = 0.0;
+  uint32_t mapPlanes = 0;
+  std::vector<float> mapGain;
+};
+
+static Matrix3x3 mixMatrix3x3(const Matrix3x3 &first, float firstWeight,
+                              const Matrix3x3 &second, float secondWeight) {
+  Matrix3x3 result;
+  for (int i = 0; i < 9; ++i) {
+    result.m[i] = first.m[i] * firstWeight + second.m[i] * secondWeight;
+  }
+  return result;
+}
+
+static Matrix3x3 makeMatrix3x3(const float values[9]) {
+  Matrix3x3 result;
+  std::memcpy(result.m, values, 9 * sizeof(float));
+  return result;
+}
+
+static float illuminantToTemp(int illuminant);
+
+static std::array<float, 2> xyzToXy(const Vec3 &xyz) {
+  const float total = xyz[0] + xyz[1] + xyz[2];
+  if (total <= 1e-6f) {
+    return {0.3457f, 0.3585f};
+  }
+  return {xyz[0] / total, xyz[1] / total};
+}
+
+static Vec3 xyToXyz(std::array<float, 2> xy) {
+  xy[0] = std::clamp(xy[0], 1e-6f, 0.999999f);
+  xy[1] = std::clamp(xy[1], 1e-6f, 0.999999f);
+
+  const float sum = xy[0] + xy[1];
+  if (sum > 0.999999f) {
+    const float scale = 0.999999f / sum;
+    xy[0] *= scale;
+    xy[1] *= scale;
+  }
+
+  return {xy[0] / xy[1], 1.0f, (1.0f - xy[0] - xy[1]) / xy[1]};
+}
+
+static Matrix3x3 mapWhiteMatrix(const Vec3 &sourceWhite, const Vec3 &targetWhite) {
+  Matrix3x3 bradford;
+  const float values[9] = {
+      0.8951f,  0.2664f, -0.1614f,
+     -0.7502f,  1.7135f,  0.0367f,
+      0.0389f, -0.0685f,  1.0296f,
+  };
+  std::memcpy(bradford.m, values, sizeof(values));
+
+  Vec3 sourceBradford = multiplyMatrixVec3(bradford, sourceWhite);
+  Vec3 targetBradford = multiplyMatrixVec3(bradford, targetWhite);
+  for (int i = 0; i < 3; ++i) {
+    sourceBradford[i] = std::max(sourceBradford[i], 0.0f);
+    targetBradford[i] = std::max(targetBradford[i], 0.0f);
+  }
+
+  Matrix3x3 scale = Matrix3x3::identity();
+  for (int i = 0; i < 3; ++i) {
+    const float ratio = sourceBradford[i] > 0.0f ? targetBradford[i] / sourceBradford[i] : 10.0f;
+    scale.m[i * 3 + i] = std::clamp(ratio, 0.1f, 10.0f);
+  }
+
+  return bradford.invert().multiply(scale).multiply(bradford);
+}
+
+static float xyCoordToTemperature(const std::array<float, 2> &whiteXy) {
+  struct Ruvt {
+    float reciprocalMegakelvin;
+    float u;
+    float v;
+    float slope;
+  };
+
+  static const Ruvt table[] = {
+      {0.f, 0.18006f, 0.26352f, -0.24341f},
+      {10.f, 0.18066f, 0.26589f, -0.25479f},
+      {20.f, 0.18133f, 0.26846f, -0.26876f},
+      {30.f, 0.18208f, 0.27119f, -0.28539f},
+      {40.f, 0.18293f, 0.27407f, -0.30470f},
+      {50.f, 0.18388f, 0.27709f, -0.32675f},
+      {60.f, 0.18494f, 0.28021f, -0.35156f},
+      {70.f, 0.18611f, 0.28342f, -0.37915f},
+      {80.f, 0.18740f, 0.28668f, -0.40955f},
+      {90.f, 0.18880f, 0.28997f, -0.44278f},
+      {100.f, 0.19032f, 0.29326f, -0.47888f},
+      {125.f, 0.19462f, 0.30141f, -0.58204f},
+      {150.f, 0.19962f, 0.30921f, -0.70471f},
+      {175.f, 0.20525f, 0.31647f, -0.84901f},
+      {200.f, 0.21142f, 0.32312f, -1.0182f},
+      {225.f, 0.21807f, 0.32909f, -1.2168f},
+      {250.f, 0.22511f, 0.33439f, -1.4512f},
+      {275.f, 0.23247f, 0.33904f, -1.7298f},
+      {300.f, 0.24010f, 0.34308f, -2.0637f},
+      {325.f, 0.24702f, 0.34655f, -2.4681f},
+      {350.f, 0.25591f, 0.34951f, -2.9641f},
+      {375.f, 0.26400f, 0.35200f, -3.5814f},
+      {400.f, 0.27218f, 0.35407f, -4.3633f},
+      {425.f, 0.28039f, 0.35577f, -5.3762f},
+      {450.f, 0.28863f, 0.35714f, -6.7262f},
+      {475.f, 0.29685f, 0.35823f, -8.5955f},
+      {500.f, 0.30505f, 0.35907f, -11.324f},
+      {525.f, 0.31320f, 0.35968f, -15.628f},
+      {550.f, 0.32129f, 0.36011f, -23.325f},
+      {575.f, 0.32931f, 0.36038f, -40.770f},
+      {600.f, 0.33724f, 0.36051f, -116.45f},
+  };
+
+  const float denominator = 1.5f - whiteXy[0] + 6.0f * whiteXy[1];
+  if (std::abs(denominator) < 1e-6f) {
+    return 5000.0f;
+  }
+
+  const float u = 2.0f * whiteXy[0] / denominator;
+  const float v = 3.0f * whiteXy[1] / denominator;
+  float lastDt = 0.0f;
+
+  for (size_t index = 1; index < std::size(table); ++index) {
+    float du = 1.0f;
+    float dv = table[index].slope;
+    const float length = std::sqrt(1.0f + dv * dv);
+    du /= length;
+    dv /= length;
+
+    const float uu = u - table[index].u;
+    const float vv = v - table[index].v;
+    float dt = -uu * dv + vv * du;
+
+    if (dt <= 0.0f || index == std::size(table) - 1) {
+      if (dt > 0.0f) {
+        dt = 0.0f;
+      }
+      dt = -dt;
+
+      float fraction = 0.0f;
+      if (index > 1) {
+        fraction = dt / (lastDt + dt);
+      }
+
+      const float reciprocal = table[index - 1].reciprocalMegakelvin * fraction +
+                               table[index].reciprocalMegakelvin * (1.0f - fraction);
+      return reciprocal > 0.0f ? 1.0e6f / reciprocal : 5000.0f;
+    }
+
+    lastDt = dt;
+  }
+
+  return 5000.0f;
+}
+
+static bool hasAnyMatrix(const Matrix3x3 &matrix) {
+  for (float value : matrix.m) {
+    if (std::abs(value) > 1e-5f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static Matrix3x3 loadDngMatrix(const libraw_dng_color_t &dngColor, bool forwardMatrix) {
+  Matrix3x3 result;
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      result.m[row * 3 + col] = forwardMatrix ? dngColor.forwardmatrix[row][col]
+                                              : dngColor.colormatrix[row][col];
+    }
+  }
+  return result;
+}
+
+static std::array<float, 2> neutralToXy(const Vec3 &neutral, int preferredIlluminant,
+                                        const libraw_dng_color_t *dngColors) {
+  std::array<float, 2> currentXy = {0.3457f, 0.3585f};
+  constexpr Vec3 kD50White = {0.3457f / 0.3585f, 1.0f, (1.0f - 0.3457f - 0.3585f) / 0.3585f};
+
+  const Matrix3x3 colorMatrix1 = loadDngMatrix(dngColors[0], false);
+  const Matrix3x3 colorMatrix2 = loadDngMatrix(dngColors[1], false);
+  const bool hasColorMatrix1 = hasAnyMatrix(colorMatrix1);
+  const bool hasColorMatrix2 = hasAnyMatrix(colorMatrix2);
+  const float temperature1 = illuminantToTemp(dngColors[0].illuminant);
+  const float temperature2 = illuminantToTemp(dngColors[1].illuminant);
+
+  for (int pass = 0; pass < 30; ++pass) {
+    float mix = 1.0f;
+    if (hasColorMatrix1 && hasColorMatrix2 && temperature1 > 0.0f && temperature2 > 0.0f &&
+        temperature1 != temperature2) {
+      const float currentTemp = xyCoordToTemperature(currentXy);
+      if (currentTemp <= temperature1) {
+        mix = 1.0f;
+      } else if (currentTemp >= temperature2) {
+        mix = 0.0f;
+      } else {
+        const float inverseTemp = 1.0f / currentTemp;
+        mix = (inverseTemp - (1.0f / temperature2)) /
+              ((1.0f / temperature1) - (1.0f / temperature2));
+      }
+    } else if (preferredIlluminant == 2 && hasColorMatrix2) {
+      mix = 0.0f;
+    }
+
+    Matrix3x3 xyzToCamera = hasColorMatrix1 ? colorMatrix1 : colorMatrix2;
+    if (hasColorMatrix1 && hasColorMatrix2) {
+      xyzToCamera = mixMatrix3x3(colorMatrix1, mix, colorMatrix2, 1.0f - mix);
+    }
+
+    const Vec3 whiteXyz = xyToXyz(currentXy);
+    xyzToCamera = xyzToCamera.multiply(mapWhiteMatrix(kD50White, whiteXyz));
+    const Vec3 nextXyz = multiplyMatrixVec3(xyzToCamera.invert(), neutral);
+    std::array<float, 2> nextXy = xyzToXy(nextXyz);
+
+    if (std::abs(nextXy[0] - currentXy[0]) + std::abs(nextXy[1] - currentXy[1]) < 1e-7f) {
+      return nextXy;
+    }
+
+    if (pass == 29) {
+      nextXy[0] = (currentXy[0] + nextXy[0]) * 0.5f;
+      nextXy[1] = (currentXy[1] + nextXy[1]) * 0.5f;
+    }
+    currentXy = nextXy;
+  }
+
+  return currentXy;
+}
+
+static bool parseDngGainMapOpcode(const uint8_t *data, size_t size, size_t &offset,
+                                  DngGainMap &gainMap) {
+  if (offset + 12 > size) {
+    return false;
+  }
+  offset += 12; // skip opcode version, flags and payload size
+
+  auto readUInt = [&](uint32_t &out) -> bool {
+    if (offset + 4 > size) {
+      return false;
+    }
+    out = readBigEndian<uint32_t>(data + offset);
+    offset += 4;
+    return true;
+  };
+  auto readDouble = [&](double &out) -> bool {
+    if (offset + 8 > size) {
+      return false;
+    }
+    out = readBigEndian<double>(data + offset);
+    offset += 8;
+    return true;
+  };
+  auto readFloat = [&](float &out) -> bool {
+    if (offset + 4 > size) {
+      return false;
+    }
+    out = readBigEndian<float>(data + offset);
+    offset += 4;
+    return true;
+  };
+
+  if (!readUInt(gainMap.top) || !readUInt(gainMap.left) || !readUInt(gainMap.bottom) ||
+      !readUInt(gainMap.right) || !readUInt(gainMap.plane) || !readUInt(gainMap.planes) ||
+      !readUInt(gainMap.rowPitch) || !readUInt(gainMap.colPitch) ||
+      !readUInt(gainMap.mapPointsV) || !readUInt(gainMap.mapPointsH) ||
+      !readDouble(gainMap.mapSpacingV) || !readDouble(gainMap.mapSpacingH) ||
+      !readDouble(gainMap.mapOriginV) || !readDouble(gainMap.mapOriginH) ||
+      !readUInt(gainMap.mapPlanes)) {
+    return false;
+  }
+
+  const size_t count = static_cast<size_t>(gainMap.mapPointsV) *
+                       static_cast<size_t>(gainMap.mapPointsH) *
+                       static_cast<size_t>(gainMap.mapPlanes);
+  gainMap.mapGain.resize(count);
+  for (size_t i = 0; i < count; ++i) {
+    if (!readFloat(gainMap.mapGain[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool parseDngGainMaps(const libraw_dng_rawopcode_t &opcodeData,
+                             std::vector<DngGainMap> &gainMaps) {
+  gainMaps.clear();
+  if (!opcodeData.data || opcodeData.len < 4) {
+    return false;
+  }
+
+  const auto *bytes = static_cast<const uint8_t *>(opcodeData.data);
+  size_t offset = 0;
+  const uint32_t opcodeCount = readBigEndian<uint32_t>(bytes + offset);
+  offset += 4;
+
+  for (uint32_t i = 0; i < opcodeCount && offset + 4 <= opcodeData.len; ++i) {
+    const uint32_t opcode = readBigEndian<uint32_t>(bytes + offset);
+    offset += 4;
+    if (opcode == 9 && gainMaps.size() < 4) {
+      DngGainMap gainMap;
+      if (!parseDngGainMapOpcode(bytes, opcodeData.len, offset, gainMap)) {
+        return false;
+      }
+      gainMaps.push_back(std::move(gainMap));
+    } else {
+      if (offset + 12 > opcodeData.len) {
+        return false;
+      }
+      offset += 8;
+      const uint32_t payloadSize = readBigEndian<uint32_t>(bytes + offset);
+      offset += 4;
+      if (offset + payloadSize > opcodeData.len) {
+        return false;
+      }
+      offset += payloadSize;
+    }
+  }
+
+  return !gainMaps.empty();
+}
+
+static float sampleDngGainMapBilinear(const DngGainMap &gainMap, float x, float y) {
+  const float maxX = static_cast<float>(std::max<int>(0, gainMap.mapPointsH - 1));
+  const float maxY = static_cast<float>(std::max<int>(0, gainMap.mapPointsV - 1));
+  const float fx = std::clamp(x, 0.0f, maxX);
+  const float fy = std::clamp(y, 0.0f, maxY);
+
+  const int x0 = static_cast<int>(std::floor(fx));
+  const int y0 = static_cast<int>(std::floor(fy));
+  const int x1 = std::min(x0 + 1, static_cast<int>(gainMap.mapPointsH) - 1);
+  const int y1 = std::min(y0 + 1, static_cast<int>(gainMap.mapPointsV) - 1);
+  const float tx = fx - static_cast<float>(x0);
+  const float ty = fy - static_cast<float>(y0);
+
+  auto at = [&](int sx, int sy) -> float {
+    const size_t index =
+        (static_cast<size_t>(sy) * gainMap.mapPointsH + static_cast<size_t>(sx)) * gainMap.mapPlanes;
+    return gainMap.mapGain[index];
+  };
+
+  const float v00 = at(x0, y0);
+  const float v10 = at(x1, y0);
+  const float v01 = at(x0, y1);
+  const float v11 = at(x1, y1);
+  const float top = v00 + (v10 - v00) * tx;
+  const float bottom = v01 + (v11 - v01) * tx;
+  return top + (bottom - top) * ty;
+}
+
+static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLevels[4]) {
+  if (!rawProcessor.imgdata.rawdata.raw_image || !rawProcessor.imgdata.idata.filters) {
+    return false;
+  }
+
+  std::vector<DngGainMap> gainMaps;
+  if (!parseDngGainMaps(rawProcessor.imgdata.color.dng_levels.rawopcodes[1], gainMaps)) {
+    return false;
+  }
+
+  if (gainMaps.size() != 4) {
+    LOGI("dng gain map: unsupported map count=%zu", gainMaps.size());
+    return false;
+  }
+
+  unsigned check = 0;
+  bool isNoOp = true;
+  for (const auto &gainMap : gainMaps) {
+    if (gainMap.rowPitch != 2 || gainMap.colPitch != 2 || gainMap.mapPlanes != 1 ||
+        gainMap.mapGain.empty() ||
+        gainMap.mapGain.size() != static_cast<size_t>(gainMap.mapPointsV) *
+                                     static_cast<size_t>(gainMap.mapPointsH) *
+                                     static_cast<size_t>(gainMap.mapPlanes)) {
+      LOGI("dng gain map: unsupported layout top=%u left=%u rowPitch=%u colPitch=%u mapPlanes=%u size=%zu",
+           gainMap.top, gainMap.left, gainMap.rowPitch, gainMap.colPitch, gainMap.mapPlanes,
+           gainMap.mapGain.size());
+      return false;
+    }
+
+    if ((gainMap.top & 1u) == 0u) {
+      check += ((gainMap.left & 1u) == 0u) ? 1u : 2u;
+    } else {
+      check += ((gainMap.left & 1u) == 0u) ? 4u : 8u;
+    }
+
+    for (float value : gainMap.mapGain) {
+      if (std::abs(value - 1.0f) > 1e-6f) {
+        isNoOp = false;
+        break;
+      }
+    }
+  }
+
+  if (isNoOp || check != 15u) {
+    LOGI("dng gain map: unsupported combination noop=%d check=%u", isNoOp ? 1 : 0, check);
+    return false;
+  }
+
+  const int rawWidth = rawProcessor.imgdata.sizes.raw_width;
+  const int rawHeight = rawProcessor.imgdata.sizes.raw_height;
+  const int rawPitch = rawProcessor.imgdata.sizes.raw_pitch > 0
+                           ? rawProcessor.imgdata.sizes.raw_pitch / static_cast<int>(sizeof(ushort))
+                           : rawWidth;
+  auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
+
+  const float colScale = static_cast<float>(gainMaps[0].mapPointsH - 1) /
+                         std::max(1, rawWidth);
+  const float rowScale = static_cast<float>(gainMaps[0].mapPointsV - 1) /
+                         std::max(1, rawHeight);
+
+  const DngGainMap *mapByParity[2][2] = {};
+  for (const auto &gainMap : gainMaps) {
+    mapByParity[gainMap.top & 1u][gainMap.left & 1u] = &gainMap;
+  }
+
+  for (int y = 0; y < rawHeight; ++y) {
+    const float ys = static_cast<float>(y) * rowScale;
+    const float rowBlack[2] = {blackLevels[rawProcessor.FC(y, 0)], blackLevels[rawProcessor.FC(y, 1)]};
+    float xs = 0.0f;
+    for (int x = 0; x < rawWidth; ++x, xs += colScale) {
+      const DngGainMap *gainMap = mapByParity[y & 1][x & 1];
+      if (!gainMap) {
+        continue;
+      }
+      const float gain = sampleDngGainMapBilinear(*gainMap, xs, ys);
+      const float black = rowBlack[x & 1];
+      float corrected = (static_cast<float>(rawImage[y * rawPitch + x]) - black) * gain + black;
+      corrected = std::max(corrected, 0.0f);
+      rawImage[y * rawPitch + x] = static_cast<ushort>(std::min(corrected, 65535.0f));
+    }
+  }
+
+  LOGI("dng gain map: applied 4 maps size=%ux%u grid=%ux%u",
+       rawWidth, rawHeight, gainMaps[0].mapPointsH, gainMaps[0].mapPointsV);
+  return true;
+}
+
+struct DngWhiteBalanceInfo {
+  bool valid = false;
+  std::array<float, 2> whiteXy = {0.3457f, 0.3585f};
+  float whiteTemperature = 5000.0f;
+  float mix = 1.0f;
+  Matrix3x3 mixedColorMatrix = Matrix3x3::identity();
+};
+
+static DngWhiteBalanceInfo resolveDngWhiteBalanceInfo(
+    const Vec3 &neutral, int preferredIlluminant, const libraw_dng_color_t *dngColors) {
+  DngWhiteBalanceInfo info;
+
+  const Matrix3x3 colorMatrix1 = loadDngMatrix(dngColors[0], false);
+  const Matrix3x3 colorMatrix2 = loadDngMatrix(dngColors[1], false);
+  const bool hasColorMatrix1 = hasAnyMatrix(colorMatrix1);
+  const bool hasColorMatrix2 = hasAnyMatrix(colorMatrix2);
+  if (!hasColorMatrix1 && !hasColorMatrix2) {
+    return info;
+  }
+
+  info.valid = true;
+  info.whiteXy = neutralToXy(neutral, preferredIlluminant, dngColors);
+  info.whiteTemperature = xyCoordToTemperature(info.whiteXy);
+
+  const float temperature1 = illuminantToTemp(dngColors[0].illuminant);
+  const float temperature2 = illuminantToTemp(dngColors[1].illuminant);
+
+  float mix = 1.0f;
+  if (hasColorMatrix1 && hasColorMatrix2 && temperature1 > 0.0f && temperature2 > 0.0f &&
+      temperature1 != temperature2) {
+    if (info.whiteTemperature <= temperature1) {
+      mix = 1.0f;
+    } else if (info.whiteTemperature >= temperature2) {
+      mix = 0.0f;
+    } else {
+      const float inverseTemp = 1.0f / info.whiteTemperature;
+      mix = (inverseTemp - (1.0f / temperature2)) /
+            ((1.0f / temperature1) - (1.0f / temperature2));
+    }
+  } else if (preferredIlluminant == 2 && hasColorMatrix2) {
+    mix = 0.0f;
+  }
+
+  info.mix = std::clamp(mix, 0.0f, 1.0f);
+  info.mixedColorMatrix = hasColorMatrix1 ? colorMatrix1 : colorMatrix2;
+  if (hasColorMatrix1 && hasColorMatrix2) {
+    info.mixedColorMatrix = mixMatrix3x3(colorMatrix1, info.mix, colorMatrix2, 1.0f - info.mix);
+  }
+
+  return info;
+}
+
+static void sanitizeRgbgMultipliers(float multipliers[4]) {
+  for (int i = 0; i < 4; ++i) {
+    if (!std::isfinite(multipliers[i]) || multipliers[i] <= 0.0f) {
+      multipliers[i] = (i == 3 && multipliers[1] > 0.0f) ? multipliers[1] : 1.0f;
+    }
+  }
+  if (multipliers[3] <= 0.0f) {
+    multipliers[3] = multipliers[1];
+  }
+}
+
+static void normalizeByMax(float multipliers[4]) {
+  sanitizeRgbgMultipliers(multipliers);
+  float maxValue = 0.0f;
+  for (int i = 0; i < 4; ++i) {
+    maxValue = std::max(maxValue, multipliers[i]);
+  }
+  maxValue = std::max(maxValue, 1e-6f);
+  for (int i = 0; i < 4; ++i) {
+    multipliers[i] /= maxValue;
+  }
+}
+
+static void normalizeByGreen(float multipliers[4]) {
+  sanitizeRgbgMultipliers(multipliers);
+  const float green = multipliers[1] > 0.0f ? multipliers[1]
+                                            : (multipliers[3] > 0.0f ? multipliers[3] : 1.0f);
+  const float safeGreen = std::max(green, 1e-6f);
+  for (int i = 0; i < 4; ++i) {
+    multipliers[i] /= safeGreen;
+  }
+}
+
+static void clipRtTemperatureAndGreen(float &temperature, float &green) {
+  temperature = std::clamp(temperature, 1500.0f, 60000.0f);
+  green = std::clamp(green, 0.02f, 10.0f);
+}
+
+static void rtTempToXyz(float temperature, float &Xxyz, float &Zxyz) {
+  temperature = std::clamp(temperature, 1500.0f, 60000.0f);
+
+  double xD;
+  if (temperature <= 4000.0f) {
+    xD = -0.2661239e9 / (temperature * temperature * temperature) -
+         0.2343589e6 / (temperature * temperature) +
+         0.8776956e3 / temperature + 0.179910;
+  } else if (temperature <= 7000.0f) {
+    xD = -4.6070e9 / (temperature * temperature * temperature) +
+         2.9678e6 / (temperature * temperature) + 0.09911e3 / temperature + 0.244063;
+  } else {
+    xD = -2.0064e9 / (temperature * temperature * temperature) +
+         1.9018e6 / (temperature * temperature) + 0.24748e3 / temperature + 0.237040;
+    if (temperature > 25000.0f) {
+      xD -= ((temperature - 25000.0f) / 25000.0f) * 0.025f;
+    }
+  }
+
+  double yD;
+  if (temperature <= 4000.0f) {
+    yD = -1.1063814 * xD * xD * xD - 1.34811020 * xD * xD + 2.18555832 * xD - 0.20219683;
+  } else {
+    yD = -3.0 * xD * xD + 2.87 * xD - 0.275;
+  }
+
+  Xxyz = static_cast<float>(xD / yD);
+  Zxyz = static_cast<float>((1.0 - xD - yD) / yD);
+}
+
+static Vec3 rtTempToSrgbMultipliers(float temperature, float green) {
+  clipRtTemperatureAndGreen(temperature, green);
+
+  float Xwb;
+  float Zwb;
+  rtTempToXyz(temperature, Xwb, Zwb);
+
+  static const float kSRGBD65_XYZ[9] = {
+      3.2404542f, -1.5371385f, -0.4985314f,
+     -0.9692660f,  1.8760108f,  0.0415560f,
+      0.0556434f, -0.2040259f,  1.0572252f,
+  };
+  const Matrix3x3 srgbD65FromXyz = makeMatrix3x3(kSRGBD65_XYZ);
+  Vec3 multipliers = multiplyMatrixVec3(srgbD65FromXyz, {Xwb, 1.0f, Zwb});
+  multipliers[1] /= green;
+
+  const float maxValue = std::max({multipliers[0], multipliers[1], multipliers[2], 1e-6f});
+  for (int i = 0; i < 3; ++i) {
+    multipliers[i] /= maxValue;
+  }
+  return multipliers;
+}
+
+static void rtMulToTempAndGreen(const Vec3 &multipliers, float &temperature, float &green) {
+  float low = 1500.0f;
+  float high = 60000.0f;
+  temperature = 0.5f * (low + high);
+
+  for (int i = 0; i < 24; ++i) {
+    const Vec3 probe = rtTempToSrgbMultipliers(temperature, 1.0f);
+    if ((probe[2] / std::max(probe[0], 1e-6f)) >
+        (multipliers[2] / std::max(multipliers[0], 1e-6f))) {
+      high = temperature;
+    } else {
+      low = temperature;
+    }
+    temperature = 0.5f * (low + high);
+  }
+
+  const Vec3 probe = rtTempToSrgbMultipliers(temperature, 1.0f);
+  green = (probe[1] / std::max(probe[0], 1e-6f)) /
+          (multipliers[1] / std::max(multipliers[0], 1e-6f));
+  clipRtTemperatureAndGreen(temperature, green);
+}
+
+static void reorderRgbgToRggb(const float rgbg[4], float rggb[4]) {
+  rggb[0] = rgbg[0];
+  rggb[1] = rgbg[1];
+  rggb[2] = rgbg[3] > 0.0f ? rgbg[3] : rgbg[1];
+  rggb[3] = rgbg[2];
+}
+
+static Vec3 buildNeutralFromMetadata(const float asShotNeutral[4], const float whiteBalance[4]) {
+  Vec3 neutral = {};
+  const bool hasAsShotNeutral = asShotNeutral[0] > 0.0f && asShotNeutral[1] > 0.0f &&
+                                asShotNeutral[2] > 0.0f;
+  if (hasAsShotNeutral) {
+    neutral[0] = asShotNeutral[0];
+    neutral[1] = asShotNeutral[1];
+    neutral[2] = asShotNeutral[2];
+  } else {
+    neutral[0] = 1.0f / std::max(whiteBalance[0], 1e-6f);
+    neutral[1] = 1.0f / std::max(whiteBalance[1], 1e-6f);
+    neutral[2] = 1.0f / std::max(whiteBalance[3], 1e-6f);
+  }
+
+  const float maxEntry = std::max({neutral[0], neutral[1], neutral[2], 1e-6f});
+  for (int i = 0; i < 3; ++i) {
+    neutral[i] /= maxEntry;
+  }
+  return neutral;
+}
+
+static bool loadLibRawRgbCam(const libraw_colordata_t &colorData, Matrix3x3 &rgbCam) {
+  bool hasRgbCam = false;
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      rgbCam.m[row * 3 + col] = colorData.rgb_cam[row][col];
+      if (std::abs(rgbCam.m[row * 3 + col]) > 1e-5f) {
+        hasRgbCam = true;
+      }
+    }
+  }
+  return hasRgbCam;
+}
+
+static bool buildRtProcessingWbRgbg(const float asShotNeutral[4], const float preMul[4],
+                                    const float camMul[4], const libraw_colordata_t &colorData,
+                                    float userMul[4], float &temperature, float &green) {
+  Matrix3x3 rgbCam;
+  if (!loadLibRawRgbCam(colorData, rgbCam)) {
+    return false;
+  }
+  const Matrix3x3 camRgb = rgbCam.invert();
+
+  float initialMul[4];
+  const bool hasAsShotNeutral = asShotNeutral[0] > 0.0f && asShotNeutral[1] > 0.0f &&
+                                asShotNeutral[2] > 0.0f;
+  if (hasAsShotNeutral) {
+    initialMul[0] = 1.0f / asShotNeutral[0];
+    initialMul[1] = 1.0f / asShotNeutral[1];
+    initialMul[2] = 1.0f / asShotNeutral[2];
+    initialMul[3] = initialMul[1];
+  } else {
+    std::memcpy(initialMul, camMul, 4 * sizeof(float));
+  }
+  normalizeByGreen(initialMul);
+
+  Vec3 cameraMultipliers = {std::max(preMul[0], 1e-6f) / std::max(initialMul[0], 1e-6f),
+                            std::max(preMul[1], 1e-6f) / std::max(initialMul[1], 1e-6f),
+                            std::max(preMul[2], 1e-6f) / std::max(initialMul[2], 1e-6f)};
+  Vec3 cameraWb = multiplyMatrixVec3(rgbCam, cameraMultipliers);
+  const float minCameraWb = std::min({cameraWb[0], cameraWb[1], cameraWb[2]});
+  if (!std::isfinite(minCameraWb) || minCameraWb <= 0.0f) {
+    return false;
+  }
+  cameraWb[0] /= cameraWb[1];
+  cameraWb[2] /= cameraWb[1];
+  cameraWb[1] = 1.0f;
+
+  rtMulToTempAndGreen(cameraWb, temperature, green);
+
+  const Vec3 rtSrgbMultipliers = rtTempToSrgbMultipliers(temperature, green);
+  const Vec3 rtCameraWhite = multiplyMatrixVec3(camRgb, rtSrgbMultipliers);
+  const float minCameraWhite = std::min({rtCameraWhite[0], rtCameraWhite[1], rtCameraWhite[2]});
+  if (!std::isfinite(minCameraWhite) || minCameraWhite <= 0.0f) {
+    return false;
+  }
+
+  userMul[0] = std::max(preMul[0], 1e-6f) / rtCameraWhite[0];
+  userMul[1] = std::max(preMul[1], 1e-6f) / rtCameraWhite[1];
+  userMul[2] = std::max(preMul[2], 1e-6f) / rtCameraWhite[2];
+  userMul[3] = userMul[1];
+  normalizeByGreen(userMul);
+  return true;
+}
+
+static void buildProcessingWbRgbg(const float asShotNeutral[4], const float preMul[4],
+                                  const float camMul[4], const libraw_colordata_t &colorData,
+                                  float userMul[4], float &temperature, float &green,
+                                  bool &usedRtModel) {
+  usedRtModel = buildRtProcessingWbRgbg(asShotNeutral, preMul, camMul, colorData, userMul,
+                                        temperature, green);
+  if (usedRtModel) {
+    return;
+  }
+
+  temperature = 0.0f;
+  green = 1.0f;
+  const bool hasAsShotNeutral = asShotNeutral[0] > 0.0f && asShotNeutral[1] > 0.0f &&
+                                asShotNeutral[2] > 0.0f;
+  if (hasAsShotNeutral) {
+    userMul[0] = 1.0f / asShotNeutral[0];
+    userMul[1] = 1.0f / asShotNeutral[1];
+    userMul[2] = 1.0f / asShotNeutral[2];
+    userMul[3] = userMul[1];
+  } else {
+    std::memcpy(userMul, camMul, 4 * sizeof(float));
+  }
+  normalizeByGreen(userMul);
+}
+
 static float illuminantToTemp(int illuminant) {
   switch (illuminant) {
   case 1:
     return 5500.0f;
   case 2:
-    return 4000.0f;
+    return 4150.0f;
   case 3:
-    return 3200.0f;
+    return 2850.0f;
   case 4:
-    return 3400.0f;
+    return 5500.0f;
   case 9:
-    return 6500.0f;
+    return 5500.0f;
   case 10:
-    return 7500.0f;
+    return 6500.0f;
   case 11:
-    return 8000.0f;
+    return 7500.0f;
+  case 12:
+    return 6400.0f;
+  case 13:
+    return 5050.0f;
+  case 14:
+    return 4150.0f;
+  case 15:
+    return 3525.0f;
+  case 16:
+    return 2925.0f;
   case 17:
-    return 2856.0f;
+    return 2850.0f;
+  case 18:
+    return 5500.0f;
+  case 19:
+    return 6500.0f;
+  case 20:
+    return 5500.0f;
   case 21:
-    return 6504.0f;
+    return 6500.0f;
+  case 22:
+    return 7500.0f;
   case 23:
     return 5000.0f;
+  case 24:
+    return 3200.0f;
   default:
-    return 5000.0f;
+    return 0.0f;
   }
 }
 
@@ -1609,17 +2376,44 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
          libraw_strerror(ret));
   }
 
+  float dngBlackLevels[4] = {};
+  for (int i = 0; i < 4; ++i) {
+    dngBlackLevels[i] = static_cast<float>(RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i]);
+  }
+  const bool appliedDngGainMap = applySupportedDngGainMaps(RawProcessor, dngBlackLevels);
+  LOGI("dng gain map: opcode2_len=%u applied=%d", RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
+       appliedDngGainMap ? 1 : 0);
+
   // 配置处理参数
+  float rawPreMul[4];
+  float rawCamMul[4];
+  float asShotNeutral[4];
+  float processingMul[4];
+  float rtTemperature = 0.0f;
+  float rtGreen = 1.0f;
+  bool usedRtModel = false;
+  for (int i = 0; i < 4; ++i) {
+    rawPreMul[i] = RawProcessor.imgdata.color.pre_mul[i];
+    rawCamMul[i] = RawProcessor.imgdata.color.cam_mul[i];
+    asShotNeutral[i] = RawProcessor.imgdata.color.dng_levels.asshotneutral[i];
+  }
+  buildProcessingWbRgbg(asShotNeutral, rawPreMul, rawCamMul, RawProcessor.imgdata.color,
+                        processingMul, rtTemperature, rtGreen, usedRtModel);
+
   RawProcessor.imgdata.params.output_bps = 16;
   RawProcessor.imgdata.params.gamm[0] = 1.0; // Linear
   RawProcessor.imgdata.params.gamm[1] = 1.0;
   RawProcessor.imgdata.params.no_auto_bright = 1;
-  RawProcessor.imgdata.params.use_camera_wb = 1;
+  RawProcessor.imgdata.params.use_camera_wb = 0;
+  RawProcessor.imgdata.params.use_auto_wb = 0;
   RawProcessor.imgdata.params.output_color = 0; // Raw color space
   RawProcessor.imgdata.params.user_qual = 14;
   RawProcessor.imgdata.params.fbdd_noiserd = 0;
   RawProcessor.imgdata.params.threshold = 0;
   RawProcessor.imgdata.params.med_passes = 0;
+  for (int i = 0; i < 4; ++i) {
+    RawProcessor.imgdata.params.user_mul[i] = processingMul[i];
+  }
 
   ret = RawProcessor.dcraw_process();
   if (ret != LIBRAW_SUCCESS) {
@@ -1650,165 +2444,79 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
-    // 注意偏移量是 6
-    float val = RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i];
+    float val = dngBlackLevels[i];
     env->SetFloatArrayRegion(blackLevelArray, i, 1, &val);
   }
 
   jfloatArray preMulArray = env->NewFloatArray(4);
-  float preMul[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-  for (int i = 0; i < 4; i++) {
-    const float val = RawProcessor.imgdata.color.pre_mul[i];
-    preMul[i] = val > 0.0f ? val : 1.0f;
-  }
-  env->SetFloatArrayRegion(preMulArray, 0, 4, preMul);
+  float preMul[4] = {rawPreMul[0], rawPreMul[1], rawPreMul[2], rawPreMul[3]};
+  normalizeByMax(preMul);
+  float preMulRggb[4];
+  reorderRgbgToRggb(preMul, preMulRggb);
+  env->SetFloatArrayRegion(preMulArray, 0, 4, preMulRggb);
 
   // 白平衡
   jfloatArray wbArray = env->NewFloatArray(4);
-  float wb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float wb[4] = {processingMul[0], processingMul[1], processingMul[2], processingMul[3]};
+  float wbRggb[4];
+  reorderRgbgToRggb(wb, wbRggb);
+  env->SetFloatArrayRegion(wbArray, 0, 4, wbRggb);
+  LOGI("rt wb metadata model=%s temp=%f green=%f userMul_rgbg=(%f, %f, %f, %f) rggb=(%f, %f, %f, %f) premul_rggb=(%f, %f, %f, %f) camMul=(%f, %f, %f, %f) asn=(%f, %f, %f, %f)",
+       usedRtModel ? "rt" : "fallback", rtTemperature, rtGreen,
+       wb[0], wb[1], wb[2], wb[3],
+       wbRggb[0], wbRggb[1], wbRggb[2], wbRggb[3],
+       preMulRggb[0], preMulRggb[1], preMulRggb[2], preMulRggb[3],
+       rawCamMul[0], rawCamMul[1], rawCamMul[2], rawCamMul[3],
+       asShotNeutral[0], asShotNeutral[1], asShotNeutral[2], asShotNeutral[3]);
 
-  for (int i = 0; i < 4; i++)
-    wb[i] = RawProcessor.imgdata.color.cam_mul[i];
-  float base = wb[1];
-  for (int i = 0; i < 4; i++) {
-    wb[i] = wb[i] / base;
-  }
-  LOGI("wb: %f, %f, %f, %f", wb[0], wb[1], wb[2], wb[3]); // RGB0 or RGBG
-  LOGI("cam_xyz: %f", RawProcessor.imgdata.color.cam_xyz[0][0]);
-  LOGI("ccm: %f", RawProcessor.imgdata.color.ccm[0][0]);
-  LOGI("cmatrix: %f", RawProcessor.imgdata.color.cmatrix[0][0]);
-  LOGI("rgb_cam: %f", RawProcessor.imgdata.color.rgb_cam[0][0]);
-
-  env->SetFloatArrayRegion(wbArray, 0, 1, &wb[0]);
-  env->SetFloatArrayRegion(wbArray, 1, 1, &wb[1]);
-  if (wb[3] > 0.0f) {
-    env->SetFloatArrayRegion(wbArray, 2, 1, &wb[3]);
-  } else {
-    env->SetFloatArrayRegion(wbArray, 2, 1, &wb[1]);
-  }
-  env->SetFloatArrayRegion(wbArray, 3, 1, &wb[2]);
-
-  // CCM (从 DNG ForwardMatrix 转换为目标色域)
+  // CCM (按照 RawTherapee/DNG 参考流程: neutral -> xy -> dual illuminant mix)
   Matrix3x3 targetTransform =
       computeXYZD50ToGamut(xr, yr, xg, yg, xb, yb, xw, yw);
-  Matrix3x3 m1 = Matrix3x3::identity();
-  Matrix3x3 m2 = Matrix3x3::identity();
-  bool hasM1 = false, hasM2 = false;
-
-  auto getMatrix = [&](int index, Matrix3x3 &m) {
-    float sumFM = 0.0f;
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        m.m[i * 3 + j] =
-            RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
-        sumFM += std::abs(m.m[i * 3 + j]);
-      }
-    }
-    if (sumFM > 0.01f)
-      return true;
-
-    float sumCM = 0.0f;
-    Matrix3x3 xyzToCam;
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        xyzToCam.m[i * 3 + j] =
-            RawProcessor.imgdata.color.dng_color[index].colormatrix[i][j];
-        sumCM += std::abs(xyzToCam.m[i * 3 + j]);
-      }
-    }
-    if (sumCM > 0.01f) {
-      // 1. 确定参考光源的 XYZ 白点 (根据 DNG 规范)
-      float lx, ly, lz;
-      int ill = RawProcessor.imgdata.color.dng_color[index].illuminant;
-
-      if (ill == 17) { // Standard Light A
-        lx = 1.0985f;
-        ly = 1.0000f;
-        lz = 0.3558f;
-      } else { // Assume D65
-        lx = 0.9504f;
-        ly = 1.0000f;
-        lz = 1.0888f;
-      }
-
-      // 2. 计算相机对该光源的响应 (Camera Neutral / White Balance)
-      // 这是 ColorMatrix 作用于光源 XYZ 的结果
-      float cameraNeutral[3];
-      for (int i = 0; i < 3; i++) {
-        cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
-                           xyzToCam.m[i * 3 + 1] * ly +
-                           xyzToCam.m[i * 3 + 2] * lz;
-      }
-
-      // 3. 构造中间矩阵：ColorMatrix * ReferenceDiagonal
-      // 在 DNG 逻辑中，我们需要对 ColorMatrix 的每一列乘以对应的 CameraNeutral
-      // 分量 这样做的目的是为了让矩阵在处理该光源下的“白点”时，输出为 [1, 1, 1]
-      Matrix3x3 referenceMatrix = xyzToCam;
-      for (int col = 0; col < 3; col++) {
-        // 这一步非常关键：为了求逆后能还原，这里其实是预补偿白平衡
-        referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
-        referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
-        referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
-      }
-
-      // 4. 求逆：从 Camera 空间转回该光源下的 XYZ 空间
-      // 现在 m 是从 Camera (White Balanced) -> XYZ (Illuminant Relative)
-      m = referenceMatrix.invert();
-
-      // 5. 应用色度适应 (Chromatic Adaptation) 映射到 D50
-      // ForwardMatrix 必须映射到 D50 空间
-      Matrix3x3 adapt;
-      if (ill == 17) { // A to D50 (Bradford Transform)
-        float a2d50[9] = {0.8924f,  -0.0157f, 0.0529f,  -0.1111f, 1.0505f,
-                          -0.0151f, 0.0522f,  -0.0077f, 2.2396f};
-        memcpy(adapt.m, a2d50, 9 * sizeof(float));
-      } else { // D65 to D50 (Bradford Transform)
-        float d652d50[9] = {1.0478f,  0.0229f,  -0.0501f, 0.0295f, 0.9905f,
-                            -0.0170f, -0.0092f, 0.0150f,  0.7521f};
-        memcpy(adapt.m, d652d50, 9 * sizeof(float));
-      }
-      m = adapt.multiply(m);
-      return true;
-    }
-    return false;
-  };
-
-  hasM1 = getMatrix(0, m1);
-  hasM2 = getMatrix(1, m2);
-
-  LOGI("hasM1 = %d hasM2 = %d", hasM1, hasM2);
-
-  float weight = 0.5f;
-  if (hasM1 && hasM2) {
-    float t1 =
-        illuminantToTemp(RawProcessor.imgdata.color.dng_color[0].illuminant);
-    float t2 =
-        illuminantToTemp(RawProcessor.imgdata.color.dng_color[1].illuminant);
-    float currentRatio = wb[0] / wb[2]; // R/B
-    float rWarm = 0.5f, rCool = 1.6f;
-    auto getTargetRatio = [&](float temp) {
-      if (temp <= 2856.0f)
-        return rWarm;
-      if (temp >= 6504.0f)
-        return rCool;
-      return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
-    };
-    float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
-    if (std::abs(r1 - r2) > 0.01f) {
-      weight = (currentRatio - r2) / (r1 - r2);
-      weight = std::max(0.0f, std::min(1.0f, weight));
-    }
-  }
-
   Matrix3x3 camToXYZ;
-  if (hasM1 && hasM2) {
-    for (int i = 0; i < 9; i++)
-      camToXYZ.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
-  } else if (hasM1)
-    camToXYZ = m1;
-  else if (hasM2)
-    camToXYZ = m2;
-  else {
+  const libraw_dng_color_t *dngColors = RawProcessor.imgdata.color.dng_color;
+  const Matrix3x3 colorMatrix1 = loadDngMatrix(dngColors[0], false);
+  const Matrix3x3 colorMatrix2 = loadDngMatrix(dngColors[1], false);
+  const Matrix3x3 forwardMatrix1 = loadDngMatrix(dngColors[0], true);
+  const Matrix3x3 forwardMatrix2 = loadDngMatrix(dngColors[1], true);
+  const bool hasColorMatrix1 = hasAnyMatrix(colorMatrix1);
+  const bool hasColorMatrix2 = hasAnyMatrix(colorMatrix2);
+  const bool hasForwardMatrix1 = hasAnyMatrix(forwardMatrix1);
+  const bool hasForwardMatrix2 = hasAnyMatrix(forwardMatrix2);
+
+  if (hasColorMatrix1 || hasColorMatrix2 || hasForwardMatrix1 || hasForwardMatrix2) {
+    const Vec3 neutral = buildNeutralFromMetadata(asShotNeutral, wb);
+    const DngWhiteBalanceInfo wbInfo = resolveDngWhiteBalanceInfo(neutral, 0, dngColors);
+    const std::array<float, 2> whiteXy = wbInfo.valid ? wbInfo.whiteXy
+                                                      : std::array<float, 2>{0.3457f, 0.3585f};
+    const Vec3 whiteXyz = xyToXyz(whiteXy);
+    constexpr Vec3 kD50White = {0.3457f / 0.3585f, 1.0f, (1.0f - 0.3457f - 0.3585f) / 0.3585f};
+
+    float mix = wbInfo.valid ? wbInfo.mix : 1.0f;
+    if (!hasColorMatrix1 && hasColorMatrix2) {
+      mix = 0.0f;
+    } else if (!hasForwardMatrix1 && hasForwardMatrix2) {
+      mix = 0.0f;
+    }
+
+    Matrix3x3 mixedColorMatrix =
+        wbInfo.valid ? wbInfo.mixedColorMatrix : (hasColorMatrix1 ? colorMatrix1 : colorMatrix2);
+
+    if (hasForwardMatrix1 || hasForwardMatrix2) {
+      Matrix3x3 mixedForwardMatrix = hasForwardMatrix1 ? forwardMatrix1 : forwardMatrix2;
+      if (hasForwardMatrix1 && hasForwardMatrix2) {
+        mixedForwardMatrix = mixMatrix3x3(forwardMatrix1, mix, forwardMatrix2, 1.0f - mix);
+      }
+      camToXYZ = mixedForwardMatrix;
+    } else {
+      const Matrix3x3 xyzToCam =
+          mixedColorMatrix.multiply(mapWhiteMatrix(kD50White, whiteXyz));
+      camToXYZ = xyzToCam.invert();
+    }
+
+    LOGI("rt dng wb xy=(%f, %f) temp=%f mix=%f ill=(%d, %d)",
+         whiteXy[0], whiteXy[1], xyCoordToTemperature(whiteXy), mix,
+         dngColors[0].illuminant, dngColors[1].illuminant);
+  } else {
     // 没有任何 DNG ForwardMatrix。
     // Bradford 变换 (D65 to D50)
     float d652d50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
