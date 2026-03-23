@@ -1492,7 +1492,7 @@ object PhotoManager {
                     metadata.cropRegion,
                     rotation,
                     sharpeningValue = 0.4f,
-                    denoiseValue = 0f,
+                    denoiseValue = 0.2f,
                     chromaDenoiseValue = 0.2f
                 )
 

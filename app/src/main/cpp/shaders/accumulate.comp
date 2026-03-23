@@ -78,6 +78,10 @@ vec4 sampleBicubic(sampler2D s, vec2 uv, vec2 size) {
     return (abs(weightSum) > 1e-6) ? (accum / weightSum) : accum;
 }
 
+float luminance(vec3 color) {
+    return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
 // Compute Anisotropic Gaussian Weight
 float computeKernelWeight(vec2 diffVec, vec4 kp) {
     // kp = (k1, k2, cos2theta, sin2theta)
@@ -206,47 +210,35 @@ void main() {
     if (pc.isFirstFrame == 0 && currentW > 0.001) {
         vec3 refRGB = accumulator.data[outIndex].rgb / currentW;
         vec3 centerColor = sampleBicubic(rgbSampler, finalUV, nativeSize).rgb;
-        vec3 diffVec = abs(centerColor - refRGB);
-        float diff = max(diffVec.r, max(diffVec.g, diffVec.b));
-        float luma = refRGB.g;
+        float diff = abs(luminance(centerColor) - luminance(refRGB));
+        float luma = luminance(refRGB);
         // Note: noiseAlpha and noiseBeta are given as Variances in the new model.
         // We must translate this variance back to Standard Deviation (sqrt) to 
         // compare linearly against the absolute difference `diff`.
         float expectedVar = pc.noiseAlpha * luma + pc.noiseBeta;
         float expectedSigma = sqrt(max(expectedVar, 1e-7));
-        expectedSigma = max(expectedSigma, 0.015);
+        expectedSigma = max(expectedSigma, 0.025);
         
         float ratio = diff / expectedSigma;
-        float T1 = 2.0; float T2 = 8.0;
+        float T1 = 3.0; float T2 = 12.0;
         if (ratio <= T1) centerRobustness = 1.0;
         else if (ratio >= T2) centerRobustness = 0.0;
         else centerRobustness = (T2 - ratio) / (T2 - T1);
         
         if (isnan(centerRobustness) || isinf(centerRobustness)) centerRobustness = 0.0;
         
-        float kernelDetail = max(kp.x, kp.y);
-        float detailSignal = smoothstep(4.0, 18.0, kernelDetail);
-        float motionPenalty = mix(0.008, 0.028, detailSignal);
+        float motionPenalty = 0.010;
         centerRobustness *= (1.0 / (1.0 + motionError * motionPenalty));
         if (isnan(centerRobustness)) centerRobustness = 0.0;
     }
     float localTileWeight = sampleLocalTileWeight(finalUV);
-    float detailStrength = smoothstep(4.0, 18.0, max(kp.x, kp.y));
-    float detailSuppression = (pc.isFirstFrame == 0)
-        ? (1.0 - detailStrength)
-        : 1.0;
     float fusionMask = localTileWeight;
-    int supportRadius = 2;
+    int supportRadius = 0;
 
     if (pc.isFirstFrame == 0) {
-        fusionMask *= (0.06 + 0.94 * detailSuppression * detailSuppression);
-        if (detailStrength > 0.55) {
-            supportRadius = 0;
-        } else if (detailStrength > 0.20) {
-            supportRadius = 1;
-        }
-    } else if (detailStrength > 0.45) {
-        supportRadius = 1;
+        supportRadius = 2;
+        float tilePenalty = 1.0 - smoothstep(0.10, 0.55, localTileWeight);
+        fusionMask *= mix(0.90, 0.55, tilePenalty);
     }
 
     // Accumulate neighbors
@@ -277,9 +269,24 @@ void main() {
             // the squared distance (u*u, v*v) grows exactly 4 times faster.
             // We multiply the inverse variances by 0.25 to normalize the spatial spread.
             float w = exp(-0.5 * (u*u * kp.x * 0.25 + v*v * kp.y * 0.25));
-            
+
+            if (pc.isFirstFrame == 0) {
+                vec3 refRGB = accumulator.data[outIndex].rgb / max(accumulator.data[outIndex].a, 1e-6);
+                float sampleDiff = abs(luminance(sampleColor) - luminance(refRGB));
+                float refLuma = luminance(refRGB);
+                float expectedVar = pc.noiseAlpha * refLuma + pc.noiseBeta;
+                float expectedSigma = max(sqrt(max(expectedVar, 1e-7)), 0.025);
+                float diffRatio = sampleDiff / expectedSigma;
+                float sampleRobustness = 1.0 - smoothstep(4.0, 10.0, diffRatio);
+                float largeDiffPenalty = smoothstep(5.5, 9.5, diffRatio);
+                fusionMask *= mix(1.0, 0.70, largeDiffPenalty);
+                robustness *= sampleRobustness;
+                robustness = max(robustness, 0.25 * localTileWeight);
+            }
+
             float combinedWeight = w * robustness * pc.frameWeight * fusionMask;
             if (isnan(combinedWeight) || isinf(combinedWeight)) combinedWeight = 0.0;
+            if (combinedWeight <= 1e-6) continue;
             
             vec4 increment = vec4(sampleColor * combinedWeight, combinedWeight);
             if (!any(isnan(increment)) && !any(isinf(increment))) {

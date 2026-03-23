@@ -103,6 +103,22 @@ int getBayerIndex(int cfaPattern, ivec2 samplePos) {
     }
 }
 
+ivec2 getBayerOffset(int cfaPattern, int planeIndex) {
+    if (cfaPattern == 0) {
+        const ivec2 map[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        return map[planeIndex];
+    } else if (cfaPattern == 1) {
+        const ivec2 map[4] = ivec2[4](ivec2(1, 0), ivec2(0, 0), ivec2(1, 1), ivec2(0, 1));
+        return map[planeIndex];
+    } else if (cfaPattern == 2) {
+        const ivec2 map[4] = ivec2[4](ivec2(0, 1), ivec2(1, 1), ivec2(0, 0), ivec2(1, 0));
+        return map[planeIndex];
+    } else {
+        const ivec2 map[4] = ivec2[4](ivec2(1, 1), ivec2(0, 1), ivec2(1, 0), ivec2(0, 0));
+        return map[planeIndex];
+    }
+}
+
 int getGreenFamily(int cfaPattern, ivec2 samplePos, out int lscIdx) {
     int phase = (samplePos.y & 1) * 2 + (samplePos.x & 1);
     lscIdx = -1;
@@ -124,10 +140,16 @@ int getGreenFamily(int cfaPattern, ivec2 samplePos, out int lscIdx) {
 
 void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val,
                  float pInlier, float flowVar) {
-    vec2 kernelPlanePos = clamp(refPos * 0.5, vec2(0.0), vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
+    vec2 kernelPlanePos = clamp(refPos, vec2(0.0), vec2(float(pc.planeWidth - 1u), float(pc.planeHeight - 1u)));
     ivec2 planeIdx = ivec2(round(kernelPlanePos));
     vec4 kParams = kernelParams.data[planeIdx.y * int(pc.planeWidth) + planeIdx.x];
     vec3 OmegaInv = getKernelMatrix(kParams);
+    float detailRetention = 1.0;
+    if (pc.isFirstFrame == 0u) {
+        float anisotropy = abs(kParams.x - kParams.y) / max(kParams.x + kParams.y, 1e-5);
+        float edgeSuppression = smoothstep(0.20, 0.65, anisotropy);
+        detailRetention = 1.0 - 0.85 * edgeSuppression;
+    }
 
     ivec2 base = ivec2(floor(outCenter));
     for (int oy = -1; oy <= 2; ++oy) {
@@ -136,8 +158,7 @@ void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val,
             if (outPos.x < int(pc.tileX) || outPos.y < int(pc.tileY) ||
                 outPos.x >= int(pc.tileX + pc.tileW) ||
                 outPos.y >= int(pc.tileY + pc.tileH) ||
-                outPos.x < 0 || outPos.y < 0 ||
-                outPos.x >= int(pc.width) || outPos.y >= int(pc.height)) {
+                outPos.x < 0 || outPos.y < 0) {
                 continue;
             }
 
@@ -145,8 +166,7 @@ void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val,
             float reconWeight = cubicWeight(d_hr.x) * cubicWeight(d_hr.y);
             if (reconWeight <= 0.0) continue;
 
-            vec2 d_raw = (vec2(outPos) / pc.scale) - refPos;
-            vec2 d = d_raw * 0.5;
+            vec2 d = (vec2(outPos) / pc.scale) - refPos;
             float mahalanobis = OmegaInv.x * d.x * d.x +
                                 (OmegaInv.y * d.x * d.y) * 2.0 +
                                 OmegaInv.z * d.y * d.y;
@@ -155,6 +175,7 @@ void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val,
             float w = inlierWeight *
                       exp(-0.5 * max(mahalanobis, 0.0) / effectiveSigma2) *
                       reconWeight * (0.45 + 0.55 * pc.frameWeight);
+            w *= detailRetention;
             if (w <= 0.0) continue;
 
             uint weightFixed = max(1u, uint(clamp(w * kAccumScale, 0.0, 4294967040.0)));
@@ -174,22 +195,29 @@ void splatSample(int phaseIndex, vec2 outCenter, vec2 refPos, float val,
     }
 }
 
-void main() {
-    uint x = gl_GlobalInvocationID.x;
-    uint y = gl_GlobalInvocationID.y;
-    if (x >= pc.sensorWidth || y >= pc.sensorHeight) return;
+void processGreenPlane(ivec2 samplePlane, int planeIndex) {
+    ivec2 sampleOffset = getBayerOffset(int(pc.cfaPattern), planeIndex);
+    if (samplePlane.x < 0 || samplePlane.y < 0 ||
+        samplePlane.x >= int(pc.planeWidth) || samplePlane.y >= int(pc.planeHeight)) {
+        return;
+    }
 
-    ivec2 samplePos = ivec2(x, y);
+    ivec2 samplePos = sampleOffset + samplePlane * 2;
+    if (samplePos.x < 0 || samplePos.y < 0 ||
+        samplePos.x >= int(pc.sensorWidth) || samplePos.y >= int(pc.sensorHeight)) {
+        return;
+    }
+
     int lscIdx = -1;
     int family = getGreenFamily(int(pc.cfaPattern), samplePos, lscIdx);
-    if (family < 0) return;
+    if (family < 0 || family + 1 != planeIndex) return;
 
-    vec2 planePos = vec2(samplePos) * 0.5;
+    vec2 planePos = vec2(samplePlane);
     vec2 flow = vec2(0.0);
     if (pc.isFirstFrame == 0u) {
         flow = sampleFlow(planePos);
     }
-    vec2 refPos = vec2(samplePos) - flow * 2.0;
+    vec2 refPos = planePos - flow;
     vec2 outCenter = refPos * pc.scale;
 
     float raw = texelFetch(inputRawSampler, samplePos, 0).r;
@@ -213,4 +241,14 @@ void main() {
     }
     splatSample(family, outCenter, refPos, val, pInlier * highlightSuppression,
                 flowVar);
+}
+
+void main() {
+    uint localX = gl_GlobalInvocationID.x;
+    uint localY = gl_GlobalInvocationID.y;
+    if (localX >= pc.tileW || localY >= pc.tileH) return;
+
+    ivec2 samplePlane = ivec2(int(pc.tileX + localX), int(pc.tileY + localY));
+    processGreenPlane(samplePlane, 1);
+    processGreenPlane(samplePlane, 2);
 }

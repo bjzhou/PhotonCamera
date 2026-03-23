@@ -110,8 +110,12 @@ void samplePrior(int bayerIndex, vec2 sourcePos,
 }
 
 void main() {
-    uint x = gl_GlobalInvocationID.x;
-    uint y = gl_GlobalInvocationID.y;
+    uint tx = gl_GlobalInvocationID.x;
+    uint ty = gl_GlobalInvocationID.y;
+    if (tx >= pc.tileW || ty >= pc.tileH) return;
+
+    uint x = pc.tileX + tx;
+    uint y = pc.tileY + ty;
     if (x >= pc.width || y >= pc.height) return;
 
     uint outIndex = y * pc.width + x;

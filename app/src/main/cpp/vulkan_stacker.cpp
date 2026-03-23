@@ -120,25 +120,29 @@ LocalReliabilityMap buildLocalReliabilityMap(const GrayImage &reference,
   for (size_t idx = 0; idx < errorMap.size() && idx < detailScores.size(); ++idx) {
     float detail = detailScores[idx];
     float err = errorMap[idx];
+    float errRms = std::sqrt(std::max(err, 0.0f));
     float detailPenalty = smoothstepf(flatThreshold, detailThreshold, detail);
     float flatness = 1.0f - detailPenalty;
-    float errorWeight = clamp01(1.0f - std::max(0.0f, err - 8.0f) / 18.0f);
+    float errorWeight = clamp01(1.0f - std::max(0.0f, errRms - 2.0f) / 4.5f);
     float tileWeight =
-        clamp01(errorWeight * (0.04f + 0.96f * flatness * flatness));
+        clamp01(errorWeight * (0.18f + 0.82f * flatness * flatness));
 
     if (detailPenalty > 0.60f) {
-      tileWeight *= 0.10f;
       ++detailCount;
     } else if (detailPenalty > 0.30f) {
-      tileWeight *= 0.35f;
+      tileWeight *= 0.72f;
     } else {
       ++flatCount;
-      if (err < 12.0f)
+      if (errRms < 4.0f)
         ++flatGood;
     }
 
-    if (err > 20.0f) {
-      tileWeight *= 0.35f;
+    if (errRms > 5.5f) {
+      tileWeight *= 0.60f;
+    }
+
+    if (detailPenalty > 0.78f && errRms > 7.5f) {
+      tileWeight = 0.0f;
     }
 
     result.tileWeights[idx] = clamp01(tileWeight);
@@ -157,17 +161,18 @@ float computeFrameFusionWeight(const std::vector<float> &errorMap,
                                float sharpnessRatio,
                                const LocalReliabilityMap &localMap) {
   if (errorMap.empty())
-    return clamp01(0.18f + 0.22f * sharpnessRatio);
+    return clamp01(0.70f + 0.25f * sharpnessRatio);
 
   ScalarStats errStats = computeScalarStats(errorMap);
+  float errP90Rms = std::sqrt(std::max(errStats.p90, 0.0f));
   float errorWeight =
-      clamp01(1.0f - std::max(0.0f, errStats.p90 - 10.0f) / 12.0f);
-  float sharpnessGuard = clamp01(0.80f + 0.20f * sharpnessRatio);
-  float flatCoverage = clamp01(0.10f + 0.90f * localMap.flatAreaFraction);
-  float flatReliability = clamp01(0.15f + 0.85f * localMap.flatGoodFraction);
-  float detailPenalty = clamp01(1.0f - 0.55f * localMap.detailAreaFraction);
+      clamp01(1.0f - std::max(0.0f, errP90Rms - 2.5f) / 5.0f);
+  float sharpnessGuard = clamp01(0.88f + 0.12f * sharpnessRatio);
+  float flatCoverage = clamp01(0.35f + 0.65f * localMap.flatAreaFraction);
+  float flatReliability = clamp01(0.40f + 0.60f * localMap.flatGoodFraction);
+  float detailPenalty = clamp01(1.0f - 0.35f * localMap.detailAreaFraction);
   float baseWeight =
-      0.06f + 0.44f * errorWeight * flatCoverage * flatReliability * detailPenalty;
+      0.42f + 0.40f * errorWeight * flatCoverage * flatReliability * detailPenalty;
   return clamp01(baseWeight * sharpnessGuard);
 }
 
@@ -930,6 +935,11 @@ bool VulkanImageStacker::processFrame(AHardwareBuffer *buffer, float frameScore)
                                  : 1.0f;
       frameWeight = computeFrameFusionWeight(alignmentErrorMap, sharpnessRatio,
                                              localMap);
+      float p90Err = computeScalarStats(alignmentErrorMap).p90;
+      LOGI("YUV fusion: sharpnessRatio=%.3f frameWeight=%.3f flatGood=%.3f flatArea=%.3f detailArea=%.3f p90Err=%.3f p90ErrRms=%.3f",
+           sharpnessRatio, frameWeight, localMap.flatGoodFraction,
+           localMap.flatAreaFraction, localMap.detailAreaFraction,
+           p90Err, std::sqrt(std::max(p90Err, 0.0f)));
     }
   }
   TIME_END(cpuAlignment);

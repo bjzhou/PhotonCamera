@@ -59,6 +59,22 @@ layout(push_constant, scalar) uniform PushConstants {
     float frameWeight;
 } pc;
 
+ivec2 getBayerOffset(uint cfaPattern, uint planeIndex) {
+    if (cfaPattern == 0u) {
+        const ivec2 map[4] = ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        return map[planeIndex];
+    } else if (cfaPattern == 1u) {
+        const ivec2 map[4] = ivec2[4](ivec2(1, 0), ivec2(0, 0), ivec2(1, 1), ivec2(0, 1));
+        return map[planeIndex];
+    } else if (cfaPattern == 2u) {
+        const ivec2 map[4] = ivec2[4](ivec2(0, 1), ivec2(1, 1), ivec2(0, 0), ivec2(1, 0));
+        return map[planeIndex];
+    } else {
+        const ivec2 map[4] = ivec2[4](ivec2(1, 1), ivec2(0, 1), ivec2(1, 0), ivec2(0, 0));
+        return map[planeIndex];
+    }
+}
+
 float accumMean(uvec2 accum) {
     if (accum.y == 0u) return 0.0;
     return float(accum.x) / max(float(accum.y), 1.0) / 65535.0;
@@ -123,17 +139,16 @@ bool getGreenSite(uint cfaPattern, uvec2 pos, out int familyIndex, out int bayer
 void main() {
     uint tx = gl_GlobalInvocationID.x;
     uint ty = gl_GlobalInvocationID.y;
-
-    uint globalX = pc.tileX + tx;
-    uint globalY = pc.tileY + ty;
     if (tx >= pc.tileW || ty >= pc.tileH) return;
-    if (globalX >= pc.width || globalY >= pc.height) return;
+    uint planeX = pc.tileX + tx;
+    uint planeY = pc.tileY + ty;
 
-    int familyIndex = -1;
-    int bayerIndex = -1;
-    if (!getGreenSite(pc.cfaPattern, uvec2(globalX, globalY), familyIndex, bayerIndex)) {
-        return;
-    }
+    int familyIndex = int(pc.planeIndex) - 1;
+    int bayerIndex = int(pc.planeIndex);
+    ivec2 offset = getBayerOffset(pc.cfaPattern, pc.planeIndex);
+    uint globalX = uint(offset.x) + planeX * 2u;
+    uint globalY = uint(offset.y) + planeY * 2u;
+    if (globalX >= pc.width || globalY >= pc.height) return;
 
     uint idx = ty * pc.bufferStride + tx;
     uvec2 primary = (familyIndex == 0) ? greenPhase0.data[idx] : greenPhase1.data[idx];
@@ -147,7 +162,7 @@ void main() {
     gatherGreenNeighborhood(1 - familyIndex, int(tx), int(ty),
                             secondaryNeighborVal, secondaryNeighborSupport);
 
-    uint outIndex = ty * pc.width + globalX;
+    uint outIndex = globalY * pc.width + globalX;
     float priorNorm = float(priorBuffer.data[outIndex]) / 65535.0;
     float priorSupport = float(priorWeightBuffer.data[outIndex]) / 65535.0;
 
