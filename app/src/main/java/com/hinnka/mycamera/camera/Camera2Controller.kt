@@ -2303,6 +2303,7 @@ class Camera2Controller(private val context: Context) {
     private fun shouldUseHlgCapture(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 _state.value.useP010 &&
+                _state.value.useHlg10 &&
                 !_state.value.useRaw &&
                 isP010Supported &&
                 isHlg10Supported
@@ -2451,6 +2452,13 @@ class Camera2Controller(private val context: Context) {
 
     fun setUseP010(enabled: Boolean) {
         _state.value = _state.value.copy(useP010 = enabled)
+    }
+
+    fun setUseHlg10(enabled: Boolean) {
+        _state.value = _state.value.copy(
+            useHlg10 = enabled,
+            currentDynamicRangeProfile = if (!enabled) "STANDARD" else _state.value.currentDynamicRangeProfile
+        )
     }
 
     fun setUseP3ColorSpace(enabled: Boolean) {

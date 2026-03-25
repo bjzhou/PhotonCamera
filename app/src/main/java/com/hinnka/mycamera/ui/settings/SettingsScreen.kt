@@ -141,9 +141,9 @@ fun SettingsScreen(
     val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
     val rawProfile by viewModel.rawProfile.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
+    val useHlg10 by viewModel.useHlg10.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
-    val autoEnableHdrForHdrCapture by viewModel.autoEnableHdrForHdrCapture.collectAsState()
-    val autoEnableHdrForSdrPhotos by viewModel.autoEnableHdrForSdrPhotos.collectAsState()
+    val autoEnableHdr by viewModel.autoEnableHdr.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
     val phantomButtonHidden by viewModel.phantomButtonHidden.collectAsState()
@@ -838,6 +838,21 @@ fun SettingsScreen(
                         }
 
                         if (isHdrSettingsSupported) {
+
+                            if (state.isHlg10Supported) {
+                                HorizontalDivider(
+                                    color = Color.White.copy(alpha = 0.1f),
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+
+                                SwitchSettingItem(
+                                    title = stringResource(R.string.settings_use_hlg10),
+                                    description = stringResource(R.string.settings_use_hlg10_description),
+                                    checked = useHlg10,
+                                    onCheckedChange = { viewModel.setUseHlg10(it) }
+                                )
+                            }
+
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.1f),
                                 modifier = Modifier.padding(vertical = 12.dp)
@@ -846,20 +861,8 @@ fun SettingsScreen(
                             SwitchSettingItem(
                                 title = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture),
                                 description = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture_description),
-                                checked = autoEnableHdrForHdrCapture,
+                                checked = autoEnableHdr,
                                 onCheckedChange = { viewModel.setAutoEnableHdrForHdrCapture(it) }
-                            )
-
-                            HorizontalDivider(
-                                color = Color.White.copy(alpha = 0.1f),
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-
-                            SwitchSettingItem(
-                                title = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos),
-                                description = stringResource(R.string.settings_auto_enable_hdr_for_sdr_photos_description),
-                                checked = autoEnableHdrForSdrPhotos,
-                                onCheckedChange = { viewModel.setAutoEnableHdrForSdrPhotos(it) }
                             )
                         }
                     }

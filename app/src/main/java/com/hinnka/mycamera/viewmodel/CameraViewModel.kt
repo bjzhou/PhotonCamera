@@ -221,14 +221,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP010 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val useHlg10: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useHlg10 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP3ColorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val autoEnableHdrForHdrCapture: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.autoEnableHdrForHdrCapture }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val autoEnableHdrForSdrPhotos: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.autoEnableHdrForSdrPhotos }
+    val autoEnableHdr: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.autoEnableHdr }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val phantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -379,6 +379,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 RawDemosaicProcessor.getInstance().setRawLut(application, currentRawLut)
                 // 同步 P010 设置到相机控制器
                 cameraController.setUseP010(it.useP010)
+                // 同步 HLG10 设置到相机控制器
+                cameraController.setUseHlg10(it.useHlg10)
                 // 同步 P3 色域设置到相机控制器
                 cameraController.setUseP3ColorSpace(it.useP3ColorSpace)
             }
@@ -583,8 +585,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
 
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
-            dynamicRangeProfile = state.value.currentDynamicRangeProfile,
-            hasRawSource = userPrefs?.useRaw == true,
             hasEmbeddedGainmap = false,
             userPrefs = userPrefs
         )
@@ -625,17 +625,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun defaultHdrEffectEnabled(
-        dynamicRangeProfile: String?,
-        hasRawSource: Boolean,
         hasEmbeddedGainmap: Boolean,
         userPrefs: com.hinnka.mycamera.data.UserPreferences?
     ): Boolean {
         if (hasEmbeddedGainmap) return true
-        return if (dynamicRangeProfile == "HLG10" || hasRawSource) {
-            userPrefs?.autoEnableHdrForHdrCapture ?: false
-        } else {
-            userPrefs?.autoEnableHdrForSdrPhotos ?: false
-        }
+        return userPrefs?.autoEnableHdr ?: false
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {
@@ -1310,6 +1304,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setUseHlg10(enabled: Boolean) {
+        cameraController.setUseHlg10(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseHlg10(enabled)
+        }
+        reopenCamera()
+    }
+
     fun setUseP3ColorSpace(enabled: Boolean) {
         cameraController.setUseP3ColorSpace(enabled)
         viewModelScope.launch {
@@ -1321,12 +1323,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setAutoEnableHdrForHdrCapture(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveAutoEnableHdrForHdrCapture(enabled)
-        }
-    }
-
-    fun setAutoEnableHdrForSdrPhotos(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveAutoEnableHdrForSdrPhotos(enabled)
         }
     }
 
@@ -1959,10 +1955,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
-                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
-                hasRawSource = image.format == android.graphics.ImageFormat.RAW_SENSOR ||
-                    image.format == android.graphics.ImageFormat.RAW10 ||
-                    image.format == android.graphics.ImageFormat.RAW12,
                 hasEmbeddedGainmap = false,
                 userPrefs = userPrefs
             )
@@ -2099,10 +2091,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
             val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
-                dynamicRangeProfile = state.value.currentDynamicRangeProfile,
-                hasRawSource = images.firstOrNull()?.format == android.graphics.ImageFormat.RAW_SENSOR ||
-                    images.firstOrNull()?.format == android.graphics.ImageFormat.RAW10 ||
-                    images.firstOrNull()?.format == android.graphics.ImageFormat.RAW12,
                 hasEmbeddedGainmap = false,
                 userPrefs = userPrefs
             )
@@ -2226,8 +2214,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
         val defaultHdrEffectEnabled = defaultHdrEffectEnabled(
-            dynamicRangeProfile = state.value.currentDynamicRangeProfile,
-            hasRawSource = false,
             hasEmbeddedGainmap = false,
             userPrefs = userPrefs
         )

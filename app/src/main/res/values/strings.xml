@@ -418,10 +418,12 @@
     <string name="settings_raw_nlm_noise_factor">RAW Denoise</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Enable 10-bit YUV output for better image data precision. Effective on supported devices when RAW is disabled.</string>
+    <string name="settings_use_hlg10">HLG10 HDR</string>
+    <string name="settings_use_hlg10_description">Enable HLG10 dynamic range capture on supported devices. Requires P010 and RAW to be off.</string>
     <string name="settings_use_p3_color_space">P3 Color Space</string>
     <string name="settings_use_p3_color_space_description">Enable Display P3 output on supported devices. Default is off.</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">Enable HDR by default for P010/RAW</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">Enable HDR display by default in the detail page for P010/HLG and RAW captures.</string>
+    <string name="settings_auto_enable_hdr_for_hdr_capture">Enable HDR by default</string>
+    <string name="settings_auto_enable_hdr_for_hdr_capture_description">Enable HDR display by default.</string>
     <string name="settings_auto_enable_hdr_for_sdr_photos">Generate HDR by default for standard JPG</string>
     <string name="settings_auto_enable_hdr_for_sdr_photos_description">Generate and enable estimated HDR by default in the detail page for standard JPG captures and imports.</string>
     <string name="hdr_label">HDR</string>

@@ -2240,7 +2240,7 @@ object PhotoManager {
                             width = processedBitmap.width,
                             height = processedBitmap.height,
                             rotation = 0,
-                            manualHdrEffectEnabled = userPrefs?.autoEnableHdrForHdrCapture ?: false,
+                            manualHdrEffectEnabled = userPrefs?.autoEnableHdr ?: false,
                         )
                         metadataFile.writeText(updatedMetadata.toJson())
                         if (updatedMetadata.computationalAperture != null) {
@@ -2264,7 +2264,7 @@ object PhotoManager {
                         manualHdrEffectEnabled = if (hasEmbeddedGainmap) {
                             true
                         } else {
-                            userPrefs?.autoEnableHdrForSdrPhotos ?: false
+                            userPrefs?.autoEnableHdr ?: false
                         }
                     )
                     saveMetadata(context, photoId, updatedMetadata)

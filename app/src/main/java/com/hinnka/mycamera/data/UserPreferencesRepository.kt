@@ -78,9 +78,9 @@ data class UserPreferences(
     val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
     val rawLuts: Map<String, String> = mapOf(LogCurve.FLOG2.name to RawProfile.FUJI_PROVIA.rawLut),
     val useP010: Boolean = false,
+    val useHlg10: Boolean = false,
     val useP3ColorSpace: Boolean = false,
-    val autoEnableHdrForHdrCapture: Boolean = false,
-    val autoEnableHdrForSdrPhotos: Boolean = false,
+    val autoEnableHdr: Boolean = false,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
@@ -150,9 +150,9 @@ class UserPreferencesRepository(private val context: Context) {
         private val COLOR_SPACE = stringPreferencesKey("color_space")
         private val LOG_CURVE = stringPreferencesKey("log_curve")
         private val USE_P010 = booleanPreferencesKey("use_p010")
+        private val USE_HLG10 = booleanPreferencesKey("use_hlg10")
         private val USE_P3_COLOR_SPACE = booleanPreferencesKey("use_p3_color_space")
         private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
-        private val AUTO_ENABLE_HDR_FOR_SDR_PHOTOS = booleanPreferencesKey("auto_enable_hdr_for_sdr_photos")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
@@ -216,9 +216,9 @@ class UserPreferencesRepository(private val context: Context) {
                 logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
+                useHlg10 = preferences[USE_HLG10] ?: false,
                 useP3ColorSpace = preferences[USE_P3_COLOR_SPACE] ?: false,
-                autoEnableHdrForHdrCapture = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
-                autoEnableHdrForSdrPhotos = preferences[AUTO_ENABLE_HDR_FOR_SDR_PHOTOS] ?: false,
+                autoEnableHdr = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
@@ -656,6 +656,12 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveUseHlg10(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_HLG10] = enabled
+        }
+    }
+
     /**
      * 保存是否启用 P3 色域
      */
@@ -668,12 +674,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveAutoEnableHdrForHdrCapture(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] = enabled
-        }
-    }
-
-    suspend fun saveAutoEnableHdrForSdrPhotos(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[AUTO_ENABLE_HDR_FOR_SDR_PHOTOS] = enabled
         }
     }
 

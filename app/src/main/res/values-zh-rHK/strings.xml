@@ -400,6 +400,8 @@
     <string name="settings_raw_nlm_noise_factor">RAW 降噪</string>
     <string name="settings_use_p010">P010 (10 位 YUV)</string>
     <string name="settings_use_p010_description">啟用 10 位 YUV 輸出以獲得更好的影像資料精度。僅在支援的裝置上且 RAW 關閉時生效。</string>
+    <string name="settings_use_hlg10">HLG10 HDR</string>
+    <string name="settings_use_hlg10_description">在支援的裝置上啟用 HLG10 動態範圍拍攝。需同時開啟 P010 且關閉 RAW。</string>
     <string name="refresh">重新整理</string>
     <string name="refresh_success">預覽已重新整理</string>
     <string name="settings_background">背景設定</string>
@@ -498,10 +500,8 @@
     <string name="settings_develop_animation">显影动画</string>
     <string name="settings_use_p3_color_space">P3 色域</string>
     <string name="settings_use_p3_color_space_description">在支持的设备上启用 Display P3 输出。默认关闭。</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">P010/RAW 默认开启 HDR</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">P010/HLG 与 RAW 拍摄的照片在详情页默认开启 HDR
-        显示。
-    </string>
+    <string name="settings_auto_enable_hdr_for_hdr_capture">默认开启 HDR</string>
+    <string name="settings_auto_enable_hdr_for_hdr_capture_description">默认开启 HDR显示。</string>
     <string name="settings_auto_enable_hdr_for_sdr_photos">普通 JPG 默认生成 HDR</string>
     <string name="settings_auto_enable_hdr_for_sdr_photos_description">普通 JPG 拍摄和导入后，默认在详情页生成并开启 HDR
         效果。
