@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
@@ -2010,7 +2011,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId =
-                PhotoManager.preparePhoto(context, metadata, captureResult, previewThumbnail, useLivePhoto.value, 1.0f)
+                PhotoManager.preparePhoto(
+                    context,
+                    metadata,
+                    captureResult,
+                    previewThumbnail,
+                    useLivePhoto.value,
+                    1.0f,
+                    includeCropRegionInOutputSize = shouldIncludeCropRegionInOutputSize(image.format)
+                )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save image")
                 return
@@ -2148,8 +2157,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             characteristics ?: return
             val photoId = PhotoManager.preparePhoto(
-                context, metadata, captureResult, previewThumbnail,
-                useLivePhoto.value, superResScale
+                context,
+                metadata,
+                captureResult,
+                previewThumbnail,
+                useLivePhoto.value,
+                superResScale,
+                includeCropRegionInOutputSize = images.firstOrNull()?.let {
+                    shouldIncludeCropRegionInOutputSize(it.format)
+                } ?: false
             )
             if (photoId == null) {
                 PLog.e(TAG, "Failed to save burst image")
@@ -2258,8 +2274,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         PhotoManager.preparePhoto(
-            context, metadata, null, previewThumbnail,
-            false, 1.0f, photoId
+            context,
+            metadata,
+            null,
+            previewThumbnail,
+            false,
+            1.0f,
+            photoId = photoId
         )
     }
 
@@ -2494,5 +2515,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         floatBuffer.get(floatArray)
 
         LutGenerator.exportToCubeString(floatArray, lutConfig.size, lutInfo.getName())
+    }
+}
+
+private fun shouldIncludeCropRegionInOutputSize(imageFormat: Int): Boolean {
+    return when (imageFormat) {
+        ImageFormat.RAW_SENSOR,
+        ImageFormat.RAW10,
+        ImageFormat.RAW12 -> true
+
+        else -> false
     }
 }

@@ -686,6 +686,7 @@ object PhotoManager {
         thumbnail: Bitmap?,
         useLivePhoto: Boolean,
         superResolutionScale: Float,
+        includeCropRegionInOutputSize: Boolean = true,
         photoId: String? = null,
     ) = withContext(Dispatchers.IO) {
         try {
@@ -705,13 +706,17 @@ object PhotoManager {
                     (cropRegion.bottom * superResolutionScale).roundToInt()
                 )
             }
+            if (cropRegion != null && !includeCropRegionInOutputSize) {
+                PLog.d(TAG, "Ignoring SCALER_CROP_REGION for output sizing: $cropRegion")
+            }
+            val effectiveCropRegion = cropRegion?.takeIf { includeCropRegionInOutputSize }
 
             val dimensions =
                 BitmapUtils.calculateProcessedRect(
                     metadata.width,
                     metadata.height,
                     metadata.ratio,
-                    cropRegion,
+                    effectiveCropRegion,
                     metadata.rotation
                 )
             val finalWidth = dimensions.width()
@@ -720,7 +725,7 @@ object PhotoManager {
             val metadataWithInfo = metadata.copy(
                 width = finalWidth,
                 height = finalHeight,
-                cropRegion = cropRegion,
+                cropRegion = effectiveCropRegion,
             )
             metadataFile.writeText(metadataWithInfo.toJson())
 

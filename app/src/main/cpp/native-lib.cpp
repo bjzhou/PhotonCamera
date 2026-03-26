@@ -1192,6 +1192,8 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
     return JNI_FALSE;
   }
   auto *ptr8 = static_cast<uint32_t *>(bitmapPixels);
+  AndroidBitmapInfo info;
+  AndroidBitmap_getInfo(env, outBitmap8, &info);
 
   // 获取 buffer 指针
   auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
@@ -1232,6 +1234,12 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
   }
   finalWidth = std::min(finalWidth, (rotatedWidth / 2) * 2);
   finalHeight = std::min(finalHeight, (rotatedHeight / 2) * 2);
+  if (finalWidth > (int)info.width || finalHeight > (int)info.height) {
+    LOGI("processAndSaveYuv clamping output from %dx%d to bitmap bounds %ux%u",
+         finalWidth, finalHeight, info.width, info.height);
+  }
+  finalWidth = std::min(finalWidth, (int)info.width);
+  finalHeight = std::min(finalHeight, (int)info.height);
 
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
