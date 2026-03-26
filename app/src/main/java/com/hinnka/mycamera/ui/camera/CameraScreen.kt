@@ -72,6 +72,7 @@ import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.launch
@@ -111,6 +112,7 @@ fun CameraScreen(
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
+    val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
     var previewRecipeParamsOverride by remember(currentLutId) { mutableStateOf<ColorRecipeParams?>(null) }
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -170,6 +172,9 @@ fun CameraScreen(
                 isGhostPermissionFlowActive = false
                 if (!phantomMode) {
                     viewModel.togglePhantomMode()
+                    if (phantomPipPreview) {
+                        PhantomPipPreviewCoordinator.requestStart(context)
+                    }
                 }
             } else {
                 // If overlay is still missing after returning, user might have cancelled
@@ -301,6 +306,9 @@ fun CameraScreen(
                         } else {
                             isGhostPermissionFlowActive = false
                             viewModel.togglePhantomMode()
+                            if (phantomPipPreview) {
+                                PhantomPipPreviewCoordinator.requestStart(context)
+                            }
                         }
                     }
                 ) {
@@ -767,6 +775,11 @@ fun CameraScreen(
                     showGhostPermissionDialog = true
                 } else {
                     viewModel.togglePhantomMode()
+                    if (it && phantomPipPreview) {
+                        PhantomPipPreviewCoordinator.requestStart(context)
+                    } else if (!it) {
+                        PhantomPipPreviewCoordinator.requestStop(context)
+                    }
                 }
             },
             onMoreSettingsClick = {

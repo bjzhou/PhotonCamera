@@ -12,6 +12,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
 
 /**
@@ -242,6 +243,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * 获取 SurfaceTexture
      */
     fun getSurfaceTexture(): SurfaceTexture? = renderer.getSurfaceTexture()
+
+    fun getRenderSurface(): Surface? = currentSurface
+
+    fun setSourceCrop(crop: PhantomPipCrop) {
+        queueEvent {
+            renderer.setSourceCrop(crop)
+            requestRender()
+        }
+    }
 
     /**
      * 捕获预览帧

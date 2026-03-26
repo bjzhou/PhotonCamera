@@ -14,6 +14,7 @@ import android.widget.RemoteViews
 import com.hinnka.mycamera.MainActivity
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.gallery.PhotoData
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -81,6 +82,9 @@ class PhantomWidgetProvider : AppWidgetProvider() {
 
                         if (newMode) {
                             val prefs = userPreferencesRepository.userPreferences.first()
+                            if (prefs.phantomPipPreview) {
+                                PhantomPipPreviewCoordinator.requestStart(context)
+                            }
                             if (prefs.launchCameraOnPhantomMode) {
                                 try {
                                     val cameraIntent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
@@ -90,6 +94,8 @@ class PhantomWidgetProvider : AppWidgetProvider() {
                                 } catch (e: Exception) {
                                 }
                             }
+                        } else {
+                            PhantomPipPreviewCoordinator.requestStop(context)
                         }
                     }
                 }

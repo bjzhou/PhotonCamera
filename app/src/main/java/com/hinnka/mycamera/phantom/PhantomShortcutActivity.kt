@@ -8,6 +8,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import com.hinnka.mycamera.MainActivity
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -31,6 +32,9 @@ class PhantomShortcutActivity : Activity() {
                 userPreferencesRepository.savePhantomMode(newMode)
                 if (newMode) {
                     val prefs = userPreferencesRepository.userPreferences.first()
+                    if (prefs.phantomPipPreview) {
+                        PhantomPipPreviewCoordinator.requestStart(this@PhantomShortcutActivity)
+                    }
                     if (prefs.launchCameraOnPhantomMode) {
                         try {
                             val cameraIntent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
@@ -40,6 +44,8 @@ class PhantomShortcutActivity : Activity() {
                         } catch (e: Exception) {
                         }
                     }
+                } else {
+                    PhantomPipPreviewCoordinator.requestStop(this@PhantomShortcutActivity)
                 }
             }
         }

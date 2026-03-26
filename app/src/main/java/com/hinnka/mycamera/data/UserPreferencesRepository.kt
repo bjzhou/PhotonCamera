@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.hinnka.mycamera.utils.DeviceUtil
@@ -84,6 +85,8 @@ data class UserPreferences(
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
+    val phantomPipPreview: Boolean = false,
+    val phantomPipCrop: PhantomPipCrop = PhantomPipCrop(),
     val mirrorFrontCamera: Boolean = true,
     val widgetTheme: WidgetTheme = WidgetTheme.FOLLOW_SYSTEM,
     val saveLocation: Boolean = false,
@@ -156,6 +159,11 @@ class UserPreferencesRepository(private val context: Context) {
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
+        private val PHANTOM_PIP_PREVIEW = booleanPreferencesKey("phantom_pip_preview")
+        private val PHANTOM_PIP_CROP_LEFT = floatPreferencesKey("phantom_pip_crop_left")
+        private val PHANTOM_PIP_CROP_TOP = floatPreferencesKey("phantom_pip_crop_top")
+        private val PHANTOM_PIP_CROP_RIGHT = floatPreferencesKey("phantom_pip_crop_right")
+        private val PHANTOM_PIP_CROP_BOTTOM = floatPreferencesKey("phantom_pip_crop_bottom")
         private val MIRROR_FRONT_CAMERA = booleanPreferencesKey("mirror_front_camera")
         private val WIDGET_THEME = stringPreferencesKey("widget_theme")
         private val SAVE_LOCATION = booleanPreferencesKey("save_location")
@@ -222,6 +230,13 @@ class UserPreferencesRepository(private val context: Context) {
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
+                phantomPipPreview = preferences[PHANTOM_PIP_PREVIEW] ?: false,
+                phantomPipCrop = PhantomPipCrop(
+                    left = preferences[PHANTOM_PIP_CROP_LEFT] ?: 0f,
+                    top = preferences[PHANTOM_PIP_CROP_TOP] ?: 0f,
+                    right = preferences[PHANTOM_PIP_CROP_RIGHT] ?: 1f,
+                    bottom = preferences[PHANTOM_PIP_CROP_BOTTOM] ?: 1f
+                ).normalized(),
                 mirrorFrontCamera = preferences[MIRROR_FRONT_CAMERA] ?: true,
                 widgetTheme = WidgetTheme.valueOf(preferences[WIDGET_THEME] ?: WidgetTheme.FOLLOW_SYSTEM.name),
                 saveLocation = preferences[SAVE_LOCATION] ?: false,
@@ -701,6 +716,22 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveLaunchCameraOnPhantomMode(launch: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] = launch
+        }
+    }
+
+    suspend fun savePhantomPipPreview(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PHANTOM_PIP_PREVIEW] = enabled
+        }
+    }
+
+    suspend fun savePhantomPipCrop(crop: PhantomPipCrop) {
+        val normalized = crop.normalized()
+        context.dataStore.edit { preferences ->
+            preferences[PHANTOM_PIP_CROP_LEFT] = normalized.left
+            preferences[PHANTOM_PIP_CROP_TOP] = normalized.top
+            preferences[PHANTOM_PIP_CROP_RIGHT] = normalized.right
+            preferences[PHANTOM_PIP_CROP_BOTTOM] = normalized.bottom
         }
     }
 

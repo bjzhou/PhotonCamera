@@ -5,6 +5,7 @@ import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -56,6 +57,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var passthroughProgramId: Int = 0
     private var uPassMVPMatrixLocation: Int = 0
     private var uPassSTMatrixLocation: Int = 0
+    private var uPassCropRectLocation: Int = 0
     private var uPassCameraTextureLocation: Int = 0
     private var aPassPositionLocation: Int = 0
     private var aPassTexCoordLocation: Int = 0
@@ -78,6 +80,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uCopyTextureLoc: Int = 0
     private var uCopyMVPMatrixLoc: Int = 0
     private var uCopySTMatrixLoc: Int = 0
+    private var uCopyCropRectLoc: Int = 0
     private var aCopyPositionLoc: Int = 0
     private var aCopyTexCoordLoc: Int = 0
 
@@ -118,6 +121,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uLchChromaAdjustmentsLocation: Int = 0
     private var uLchLightnessAdjustmentsLocation: Int = 0
     private var uSTMatrixFragLocation: Int = 0
+    private var uCropRectLocation: Int = 0
     private var uApertureLocation: Int = 0
     private var uFocusPointLocation: Int = 0
 
@@ -193,6 +197,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var aperture: Float = 0f
+    private val cropRect = floatArrayOf(0f, 0f, 1f, 1f)
 
     @Volatile
     var meteringEnabled: Boolean = true
@@ -558,6 +563,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
         // stMatrix 也设为 Identity，因为 FBO 纹理坐标是标准的
         GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, identity, 0)
+        GLES30.glUniform4f(uCopyCropRectLoc, 0f, 0f, 1f, 1f)
 
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(aCopyPositionLoc)
@@ -619,6 +625,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         // 设置其他 Uniforms
         GLES30.glUniformMatrix4fv(uSTMatrixLocation, 1, false, stMatrix, 0)
         GLES30.glUniformMatrix4fv(uSTMatrixFragLocation, 1, false, stMatrix, 0)
+        GLES30.glUniform4f(uCropRectLocation, cropRect[0], cropRect[1], cropRect[2], cropRect[3])
         GLES30.glUniform1f(uLutSizeLocation, lutSize)
         GLES30.glUniform1f(uLutIntensityLocation, lutIntensity)
         GLES30.glUniform1i(uLutEnabledLocation, if (lutEnabled && lutTextureId != 0) 1 else 0)
@@ -772,6 +779,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         uLchChromaAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchChromaAdjustments")
         uLchLightnessAdjustmentsLocation = GLES30.glGetUniformLocation(programId, "uLchLightnessAdjustments")
         uSTMatrixFragLocation = GLES30.glGetUniformLocation(programId, "uSTMatrix")
+        uCropRectLocation = GLES30.glGetUniformLocation(programId, "uCropRect")
         uApertureLocation = GLES30.glGetUniformLocation(programId, "uAperture")
         uFocusPointLocation = GLES30.glGetUniformLocation(programId, "uFocusPoint")
 
@@ -790,6 +798,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             if (passthroughProgramId != 0) {
                 uPassMVPMatrixLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uMVPMatrix")
                 uPassSTMatrixLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uSTMatrix")
+                uPassCropRectLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uCropRect")
                 uPassCameraTextureLocation = GLES30.glGetUniformLocation(passthroughProgramId, "uCameraTexture")
                 aPassPositionLocation = GLES30.glGetAttribLocation(passthroughProgramId, "aPosition")
                 aPassTexCoordLocation = GLES30.glGetAttribLocation(passthroughProgramId, "aTexCoord")
@@ -809,6 +818,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             uCopyTextureLoc = GLES30.glGetUniformLocation(copyProgramId, "uCameraTexture")
             uCopyMVPMatrixLoc = GLES30.glGetUniformLocation(copyProgramId, "uMVPMatrix")
             uCopySTMatrixLoc = GLES30.glGetUniformLocation(copyProgramId, "uSTMatrix")
+            uCopyCropRectLoc = GLES30.glGetUniformLocation(copyProgramId, "uCropRect")
             aCopyPositionLoc = GLES30.glGetAttribLocation(copyProgramId, "aPosition")
             aCopyTexCoordLoc = GLES30.glGetAttribLocation(copyProgramId, "aTexCoord")
         }
@@ -1176,6 +1186,15 @@ class LutRenderer : GLSurfaceView.Renderer {
         updateCaptureSize()
     }
 
+    fun setSourceCrop(crop: PhantomPipCrop) {
+        val normalized = crop.normalized()
+        cropRect[0] = normalized.left
+        cropRect[1] = normalized.top
+        cropRect[2] = normalized.right
+        cropRect[3] = normalized.bottom
+        updateMVPMatrix()
+    }
+
     /**
      * 设置传感器方向 (硬件属性)
      */
@@ -1264,10 +1283,12 @@ class LutRenderer : GLSurfaceView.Renderer {
         // stMatrix 通常已经将画面旋转到了 0 度（竖屏向上）
         // 我们只需要再应用用户的 calibrationOffset 进行微调
         val isSwapped = (sensorOrientation + calibrationOffset) % 180 != 0
+        val cropWidth = (cropRect[2] - cropRect[0]).coerceAtLeast(0.05f)
+        val cropHeight = (cropRect[3] - cropRect[1]).coerceAtLeast(0.05f)
         val previewAspect = if (isSwapped) {
-            previewHeight.toFloat() / previewWidth.toFloat()
+            (previewHeight.toFloat() * cropHeight) / (previewWidth.toFloat() * cropWidth)
         } else {
-            previewWidth.toFloat() / previewHeight.toFloat()
+            (previewWidth.toFloat() * cropWidth) / (previewHeight.toFloat() * cropHeight)
         }
         val viewAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
 
@@ -1360,6 +1381,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
             GLES30.glUniform1i(uPassCameraTextureLocation, 0)
             GLES30.glUniformMatrix4fv(uPassSTMatrixLocation, 1, false, stMatrix, 0)
+            GLES30.glUniform4f(uPassCropRectLocation, 0f, 0f, 1f, 1f)
 
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
             GLES30.glEnableVertexAttribArray(aPassPositionLocation)
@@ -1446,6 +1468,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
         GLES30.glUniform1i(uPassCameraTextureLocation, 0)
         GLES30.glUniformMatrix4fv(uPassSTMatrixLocation, 1, false, stMatrix, 0)
+        GLES30.glUniform4f(uPassCropRectLocation, 0f, 0f, 1f, 1f)
 
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(aPassPositionLocation)
@@ -1520,6 +1543,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         
         GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, flipMatrix, 0)
         GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, captureMatrix, 0) 
+        GLES30.glUniform4f(uCopyCropRectLoc, 0f, 0f, 1f, 1f)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
@@ -1934,6 +1958,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         
         GLES30.glUniformMatrix4fv(uCopyMVPMatrixLoc, 1, false, flipMatrix, 0)
         GLES30.glUniformMatrix4fv(uCopySTMatrixLoc, 1, false, captureMatrix, 0)
+        GLES30.glUniform4f(uCopyCropRectLoc, 0f, 0f, 1f, 1f)
 
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
         GLES30.glEnableVertexAttribArray(aCopyPositionLoc)

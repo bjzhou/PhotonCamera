@@ -87,6 +87,7 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.ExifWriter
 import com.hinnka.mycamera.gallery.PhotoManager
@@ -857,6 +858,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             IconButton(onClick = {
                                 scope.launch {
                                     userPreferencesRepository.savePhantomMode(false)
+                                    PhantomPipPreviewCoordinator.requestStop(context)
                                 }
                             }) {
                                 Icon(

@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -53,6 +55,25 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+        <activity
+                android:name=".screencapture.ScreenCapturePipActivity"
+                android:exported="false"
+                android:supportsPictureInPicture="true"
+                android:resizeableActivity="true"
+                android:excludeFromRecents="true"
+                android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+                android:theme="@style/Theme.MyCamera" />
+        <activity
+                android:name=".screencapture.ScreenCapturePermissionActivity"
+                android:exported="false"
+                android:excludeFromRecents="true"
+                android:finishOnTaskLaunch="true"
+                android:taskAffinity=":screencapture"
+                android:theme="@style/Theme.MyCamera.Transparent" />
+        <service
+                android:name=".screencapture.ScreenCaptureForegroundService"
+                android:exported="false"
+                android:foregroundServiceType="mediaProjection" />
         <provider
                 android:name="androidx.core.content.FileProvider"
                 android:authorities="${applicationId}.fileprovider"

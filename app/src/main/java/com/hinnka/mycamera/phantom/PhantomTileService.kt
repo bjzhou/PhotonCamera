@@ -9,6 +9,7 @@ import androidx.core.service.quicksettings.PendingIntentActivityWrapper
 import androidx.core.service.quicksettings.TileServiceCompat
 import com.hinnka.mycamera.MainActivity
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,6 +57,18 @@ class PhantomTileService : TileService() {
             updateTileState(newMode)
             if (newMode) {
                 val prefs = userPreferencesRepository.userPreferences.first()
+                if (prefs.phantomPipPreview) {
+                    TileServiceCompat.startActivityAndCollapse(
+                        this@PhantomTileService,
+                        PendingIntentActivityWrapper(
+                            this@PhantomTileService,
+                            1,
+                            PhantomPipPreviewCoordinator.createStartIntent(this@PhantomTileService),
+                            PendingIntent.FLAG_UPDATE_CURRENT,
+                            false
+                        )
+                    )
+                }
                 if (prefs.launchCameraOnPhantomMode) {
                     try {
                         val cameraIntent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
@@ -73,6 +86,8 @@ class PhantomTileService : TileService() {
                     } catch (e: Exception) {
                     }
                 }
+            } else {
+                PhantomPipPreviewCoordinator.requestStop(this@PhantomTileService)
             }
         }
     }

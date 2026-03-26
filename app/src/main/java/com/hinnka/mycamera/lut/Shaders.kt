@@ -31,13 +31,18 @@ object Shaders {
 
         // SurfaceTexture 变换矩阵
         uniform mat4 uSTMatrix;
+        uniform vec4 uCropRect;
 
         void main() {
             // 应用 MVP 矩阵进行顶点变换（center crop）
             gl_Position = uMVPMatrix * aPosition;
+            vec2 croppedCoord = vec2(
+                mix(uCropRect.x, uCropRect.z, aTexCoord.x),
+                mix(uCropRect.y, uCropRect.w, aTexCoord.y)
+            );
             // 应用 SurfaceTexture 变换矩阵
-            vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
-            vRawCoord = aTexCoord;
+            vTexCoord = (uSTMatrix * vec4(croppedCoord, 0.0, 1.0)).xy;
+            vRawCoord = croppedCoord;
         }
     """.trimIndent()
 

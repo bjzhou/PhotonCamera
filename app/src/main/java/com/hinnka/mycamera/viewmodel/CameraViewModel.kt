@@ -31,6 +31,7 @@ import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.LogCurve
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.raw.rawFolder
 import com.hinnka.mycamera.ui.camera.CameraGLSurfaceView
 import com.hinnka.mycamera.utils.*
@@ -242,6 +243,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val launchCameraOnPhantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.launchCameraOnPhantomMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val phantomPipPreview: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.phantomPipPreview }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val phantomPipCrop: StateFlow<PhantomPipCrop> = userPreferencesRepository.userPreferences
+        .map { it.phantomPipCrop }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, PhantomPipCrop())
     val phantomSaveAsNew: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.phantomSaveAsNew }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -2413,6 +2420,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setLaunchCameraOnPhantomMode(launch: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
+        }
+    }
+
+    fun setPhantomPipPreview(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhantomPipPreview(enabled)
+        }
+    }
+
+    fun setPhantomPipCrop(crop: PhantomPipCrop) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhantomPipCrop(crop)
         }
     }
 

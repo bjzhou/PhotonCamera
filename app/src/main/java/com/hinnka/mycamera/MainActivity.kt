@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -52,6 +53,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
+import com.hinnka.mycamera.ui.settings.PhantomPipCropScreen
 import com.hinnka.mycamera.ui.camera.CameraScreen
 import com.hinnka.mycamera.ui.gallery.BurstDetailScreen
 import com.hinnka.mycamera.ui.gallery.GalleryScreen
@@ -83,6 +86,7 @@ object Routes {
     const val FILTER_MANAGEMENT = "filter_management"
     const val FRAME_MANAGEMENT = "frame_management"
     const val LUT_CREATOR = "lut_creator"
+    const val PHANTOM_PIP_CROP = "phantom_pip_crop"
 
     fun photoDetail(tab: GalleryTab = GalleryTab.PHOTON, index: Int = 0, photoId: String? = null) =
         "photo_detail/$tab/$index" + (if (photoId != null) "?photoId=$photoId" else "")
@@ -141,24 +145,34 @@ class MainActivity : ComponentActivity() {
 
 
         setContent {
+            val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
+            val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
+            ScreenCaptureRenderConfigStore.save(
+                lutConfig = cameraViewModel.currentLutConfig,
+                colorRecipeParams = currentRecipeParams,
+                crop = phantomPipCrop
+            )
+
             PhotonCameraTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = Color.Black
                 ) {
-                    if (hasPermissions) {
-                        NavigationHost(
-                            cameraViewModel = cameraViewModel,
-                            galleryViewModel = galleryViewModel,
-                            pendingRoute = pendingRoute,
-                            onRouteHandled = { pendingRoute = null }
-                        )
-                    } else {
-                        PermissionScreen(
-                            onRequestPermission = {
-                                permissionLauncher.launch(permissions)
-                            }
-                        )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (hasPermissions) {
+                            NavigationHost(
+                                cameraViewModel = cameraViewModel,
+                                galleryViewModel = galleryViewModel,
+                                pendingRoute = pendingRoute,
+                                onRouteHandled = { pendingRoute = null }
+                            )
+                        } else {
+                            PermissionScreen(
+                                onRequestPermission = {
+                                    permissionLauncher.launch(permissions)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -415,6 +429,21 @@ fun NavigationHost(
                     },
                     onFrameManagementClick = {
                         navController.navigate(Routes.FRAME_MANAGEMENT)
+                    },
+                    onPhantomPipCropClick = {
+                        navController.navigate(Routes.PHANTOM_PIP_CROP)
+                    }
+                )
+            }
+
+            composable(Routes.PHANTOM_PIP_CROP) {
+                val crop by cameraViewModel.phantomPipCrop.collectAsState()
+                PhantomPipCropScreen(
+                    initialCrop = crop,
+                    onBack = { navController.popBackStack() },
+                    onSave = {
+                        cameraViewModel.setPhantomPipCrop(it)
+                        navController.popBackStack()
                     }
                 )
             }

@@ -91,6 +91,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.raw.RawProfile
+import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
@@ -114,6 +115,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onFilterManagementClick: () -> Unit,
     onFrameManagementClick: () -> Unit,
+    onPhantomPipCropClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.state.collectAsState()
@@ -148,6 +150,7 @@ fun SettingsScreen(
     val phantomMode by viewModel.phantomMode.collectAsState()
     val phantomButtonHidden by viewModel.phantomButtonHidden.collectAsState()
     val launchCameraOnPhantomMode by viewModel.launchCameraOnPhantomMode.collectAsState()
+    val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
     val widgetTheme by viewModel.widgetTheme.collectAsState()
     val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
@@ -163,6 +166,11 @@ fun SettingsScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
+    val launchPhantomPipPreview = remember(context) {
+        {
+            PhantomPipPreviewCoordinator.requestStart(context)
+        }
+    }
 
     val backupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -235,6 +243,9 @@ fun SettingsScreen(
                 isGhostPermissionFlowActive = false
                 if (!phantomMode) {
                     viewModel.togglePhantomMode()
+                    if (phantomPipPreview) {
+                        launchPhantomPipPreview()
+                    }
                 }
             } else {
                 // If overlay is still missing after returning, user might have cancelled
@@ -318,6 +329,9 @@ fun SettingsScreen(
                         } else {
                             isGhostPermissionFlowActive = false
                             viewModel.togglePhantomMode()
+                            if (phantomPipPreview) {
+                                launchPhantomPipPreview()
+                            }
                         }
                     }
                 ) {
@@ -955,6 +969,11 @@ fun SettingsScreen(
                                         showGhostPermissionDialog = true
                                     } else {
                                         viewModel.togglePhantomMode()
+                                        if (it && phantomPipPreview) {
+                                            launchPhantomPipPreview()
+                                        } else if (!it) {
+                                            PhantomPipPreviewCoordinator.requestStop(context)
+                                        }
                                     }
                                 }
                             )
@@ -981,6 +1000,29 @@ fun SettingsScreen(
                                 description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
                                 checked = launchCameraOnPhantomMode,
                                 onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_phantom_pip_preview),
+                                description = stringResource(R.string.settings_phantom_pip_preview_description),
+                                checked = phantomPipPreview,
+                                onCheckedChange = { viewModel.setPhantomPipPreview(it) }
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            NavigationSettingItem(
+                                title = stringResource(R.string.settings_phantom_pip_crop),
+                                description = stringResource(R.string.settings_phantom_pip_crop_description),
+                                onClick = onPhantomPipCropClick
                             )
 
                             HorizontalDivider(
