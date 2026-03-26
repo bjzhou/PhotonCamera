@@ -152,15 +152,10 @@ void main() {
 
     uint idx = ty * pc.bufferStride + tx;
     uvec2 primary = (familyIndex == 0) ? greenPhase0.data[idx] : greenPhase1.data[idx];
-    uvec2 secondary = (familyIndex == 0) ? greenPhase1.data[idx] : greenPhase0.data[idx];
     float primaryNeighborVal = 0.0;
     float primaryNeighborSupport = 0.0;
-    float secondaryNeighborVal = 0.0;
-    float secondaryNeighborSupport = 0.0;
     gatherGreenNeighborhood(familyIndex, int(tx), int(ty),
                             primaryNeighborVal, primaryNeighborSupport);
-    gatherGreenNeighborhood(1 - familyIndex, int(tx), int(ty),
-                            secondaryNeighborVal, secondaryNeighborSupport);
 
     uint outIndex = globalY * pc.width + globalX;
     float priorNorm = float(priorBuffer.data[outIndex]) / 65535.0;
@@ -169,45 +164,14 @@ void main() {
     float observationNorm = 0.0;
     float observationSupport = 0.0;
     float normalizedRaw = 0.0;
-    if (primary.y > 0u || secondary.y > 0u ||
-        primaryNeighborSupport > 0.0 || secondaryNeighborSupport > 0.0) {
+    if (primary.y > 0u || primaryNeighborSupport > 0.0) {
         float primaryVal = accumMean(primary);
-        float secondaryVal = accumMean(secondary);
         float primaryConfidence = clamp(float(primary.y) / 768.0, 0.0, 1.0);
-        float secondaryConfidence = clamp(float(secondary.y) / 768.0, 0.0, 1.0);
-        observationSupport = max(primaryConfidence, 0.70 * secondaryConfidence);
-        observationSupport = max(observationSupport, 0.28 * primaryNeighborSupport);
-        observationSupport = max(observationSupport, 0.20 * secondaryNeighborSupport);
-        float val = (primary.y > 0u) ? primaryVal :
-                    (secondary.y > 0u ? secondaryVal :
-                     (primaryNeighborSupport >= secondaryNeighborSupport
-                          ? primaryNeighborVal
-                          : secondaryNeighborVal));
-
-        if (primary.y > 0u && secondary.y > 0u) {
-            float phaseDiff = abs(primaryVal - secondaryVal);
-            float crossPhaseBlend = 1.0 - smoothstep(0.020, 0.080, phaseDiff);
-            val = mix(secondaryVal, primaryVal, max(primaryConfidence, 0.25));
-            val = mix(val, 0.5 * (primaryVal + secondaryVal), 0.25 * crossPhaseBlend);
-        } else if (primary.y == 0u && secondary.y == 0u) {
-            if (primaryNeighborSupport > 0.0 && secondaryNeighborSupport > 0.0) {
-                float blend = primaryNeighborSupport /
-                              max(primaryNeighborSupport + secondaryNeighborSupport, 1e-5);
-                val = mix(secondaryNeighborVal, primaryNeighborVal, blend);
-            } else if (primaryNeighborSupport > 0.0) {
-                val = primaryNeighborVal;
-            } else {
-                val = secondaryNeighborVal;
-            }
-            observationSupport = max(0.22 * primaryNeighborSupport,
-                                     0.18 * secondaryNeighborSupport);
-        }
+        observationSupport = max(primaryConfidence, 0.28 * primaryNeighborSupport);
+        float val = (primary.y > 0u) ? primaryVal : primaryNeighborVal;
 
         if (primaryNeighborSupport > 0.0 && primaryConfidence < 0.999) {
             val = mix(primaryNeighborVal, val, primaryConfidence);
-        }
-        if (primary.y == 0u && secondaryNeighborSupport > 0.0 && secondaryConfidence < 0.999) {
-            val = mix(secondaryNeighborVal, val, max(secondaryConfidence, 0.35));
         }
 
         float whiteRange = max(pc.whiteLevel - pc.blackLevel[bayerIndex], 1.0);

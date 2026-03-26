@@ -128,10 +128,10 @@ object RawProcessor {
                 else -> ExifInterface.ORIENTATION_NORMAL
             }
             dngCreator.setOrientation(orientation)
-            buildDngThumbnail(thumbnail)?.let {
-                dngCreator.setThumbnail(it)
-                PLog.d(TAG, "Embedded DNG thumbnail written: ${it.width}x${it.height}")
-            }
+//            buildDngThumbnail(thumbnail)?.let {
+//                dngCreator.setThumbnail(it)
+//                PLog.d(TAG, "Embedded DNG thumbnail written: ${it.width}x${it.height}")
+//            }
             dngCreator.writeImage(outputStream, image.image)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to save DNG", e)
@@ -163,10 +163,10 @@ object RawProcessor {
                 else -> ExifInterface.ORIENTATION_NORMAL
             }
             dngCreator.setOrientation(orientation)
-            buildDngThumbnail(thumbnail)?.let {
-                dngCreator.setThumbnail(it)
-                PLog.d(TAG, "Embedded stacked DNG thumbnail written: ${it.width}x${it.height}")
-            }
+//            buildDngThumbnail(thumbnail)?.let {
+//                dngCreator.setThumbnail(it)
+//                PLog.d(TAG, "Embedded stacked DNG thumbnail written: ${it.width}x${it.height}")
+//            }
 
             val dngInputBuffer = rawBuffer.duplicate().order(ByteOrder.nativeOrder())
             if (valueDomain == RawBufferValueDomain.NORMALIZED_SENSOR_RANGE) {

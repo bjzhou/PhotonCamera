@@ -73,18 +73,16 @@ object HistogramMatching {
         val targetRatio = targetWidth.toFloat() / max(targetHeight, 1)
         val ratioDiff = abs(sourceRatio - targetRatio)
 
-        val cropped = if (ratioDiff > 0.01f) {
-            cropToAspect(bitmap, targetRatio)
-        } else {
-            bitmap
+        if (ratioDiff > 0.01f) {
+            return null
         }
 
         val scaledWidth = targetWidth.coerceAtLeast(1)
         val scaledHeight = targetHeight.coerceAtLeast(1)
-        return if (cropped.width != scaledWidth || cropped.height != scaledHeight) {
-            Bitmap.createScaledBitmap(cropped, scaledWidth, scaledHeight, false)
+        return if (bitmap.width != scaledWidth || bitmap.height != scaledHeight) {
+            Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, false)
         } else {
-            cropped
+            bitmap
         }
     }
 
