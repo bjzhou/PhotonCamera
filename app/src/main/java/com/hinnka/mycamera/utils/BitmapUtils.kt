@@ -160,6 +160,25 @@ object BitmapUtils {
         return flipped
     }
 
+    /**
+     * 旋转 Bitmap。
+     *
+     * 旋转角度为 0 时直接返回原图，避免额外创建 Bitmap。
+     */
+    fun rotate(bitmap: Bitmap, rotationDegrees: Float): Bitmap {
+        val normalizedDegrees = ((rotationDegrees % 360) + 360) % 360
+        if (normalizedDegrees == 0f) {
+            return bitmap
+        }
+
+        val matrix = Matrix().apply { postRotate(normalizedDegrees) }
+        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (rotated != bitmap) {
+            bitmap.recycle()
+        }
+        return rotated
+    }
+
     fun Bitmap.toByteArray(): ByteArray {
         val stream = ByteArrayOutputStream()
         this.compress(Bitmap.CompressFormat.JPEG, 100, stream)

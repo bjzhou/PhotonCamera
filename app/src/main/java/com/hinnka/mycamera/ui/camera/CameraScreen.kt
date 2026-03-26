@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import android.R.attr.orientation
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -73,6 +74,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
+import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.launch
@@ -204,8 +206,12 @@ fun CameraScreen(
                     return
                 }
                 scope.launch {
+                    var bitmap = viewModel.applyLut(bitmap)
+                    if (OrientationObserver.isLandscape) {
+                        bitmap = BitmapUtils.rotate(bitmap, -OrientationObserver.rotationDegrees)
+                    }
                     captureAnimationSnapshot = CaptureAnimationSnapshot(
-                        bitmap = viewModel.applyLut(bitmap).asImageBitmap(),
+                        bitmap = bitmap.asImageBitmap(),
                         sourceBounds = sourceBounds,
                         targetBounds = targetBounds
                     )
