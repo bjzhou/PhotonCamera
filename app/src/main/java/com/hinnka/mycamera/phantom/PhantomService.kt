@@ -1011,19 +1011,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     }
 
     private suspend fun syncScreenCaptureRenderConfig(lutId: String?) {
-        val preferences = userPreferencesRepository.userPreferences.firstOrNull()
-        val lutManager = ContentRepository.getInstance(context).lutManager
-        val lutConfig = lutId?.let { id ->
-            withContext(Dispatchers.IO) { lutManager.loadLut(id) }
-        }
-        val colorRecipeParams = lutId?.let { id ->
-            lutManager.getColorRecipeParams(id).first()
-        } ?: ColorRecipeParams.DEFAULT
-
-        ScreenCaptureRenderConfigStore.save(
-            lutConfig = lutConfig,
-            colorRecipeParams = colorRecipeParams,
-            crop = preferences?.phantomPipCrop ?: ScreenCaptureRenderConfigStore.config.value.crop
+        ScreenCaptureRenderConfigStore.syncFromPreferences(
+            context = context,
+            lutIdOverride = lutId,
         )
     }
 

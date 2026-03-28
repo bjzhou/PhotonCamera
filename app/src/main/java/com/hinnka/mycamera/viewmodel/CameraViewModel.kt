@@ -1168,18 +1168,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // LUT 已禁用，通知相机控制器
             cameraController.setLutEnabled(false)
         } else {
+            val hadActiveLut = currentLutConfig != null
+            if (!hadActiveLut) {
+                // 首次启动时先保持“未启用”状态，避免 Live Photo 在 LUT 文件尚未加载完成前录入原始画面。
+                cameraController.setLutEnabled(false)
+            }
             viewModelScope.launch {
-                currentLutConfig = withContext(Dispatchers.IO) {
+                val loadedLut = withContext(Dispatchers.IO) {
                     contentRepository.lutManager.loadLut(lutId)
                 }
+                currentLutConfig = loadedLut
                 currentRecipeParams = contentRepository.lutManager.getColorRecipeParams(lutId).stateIn(
                     viewModelScope,
                     started = SharingStarted.Lazily,
                     initialValue = ColorRecipeParams.DEFAULT,
                 )
+                cameraController.setLutEnabled(loadedLut != null)
             }
-            // LUT 已启用，通知相机控制器
-            cameraController.setLutEnabled(true)
+            if (hadActiveLut) {
+                cameraController.setLutEnabled(true)
+            }
         }
 
         // 保存到用户偏好设置

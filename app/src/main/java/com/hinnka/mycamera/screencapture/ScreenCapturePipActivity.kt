@@ -98,22 +98,26 @@ class ScreenCapturePipActivity : ComponentActivity() {
             return
         }
 
-        setContent {
-            PhotonCameraTheme {
-                ComposeSurface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = Color.Black
-                ) {
-                    ScreenCapturePipContent(
-                        controller = controller,
-                        isInPiPMode = isInPiPMode,
-                        onRequestPip = { enterPipIfPossible() }
-                    )
+        lifecycleScope.launch {
+            ScreenCaptureRenderConfigStore.syncFromPreferences(this@ScreenCapturePipActivity)
+
+            setContent {
+                PhotonCameraTheme {
+                    ComposeSurface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color.Black
+                    ) {
+                        ScreenCapturePipContent(
+                            controller = controller,
+                            isInPiPMode = isInPiPMode,
+                            onRequestPip = { enterPipIfPossible() }
+                        )
+                    }
                 }
             }
-        }
 
-        controller.startCapture(grant.resultCode, grant.data)
+            controller.startCapture(grant.resultCode, grant.data)
+        }
     }
 
     override fun onUserLeaveHint() {
