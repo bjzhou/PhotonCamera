@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Time Lapse ылдамдыгы: %d</item>
+        <item quantity="other">Time Lapse ылдамдыгы: %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Бир объекттен көбүрөөк.</item>
+        <item quantity="other">%1$d объекттен көбүрөөк.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d секунддук видео түзүү үчүн %2$d мүнөт жаздыруу талап кылынат</item>
+        <item quantity="other">%1$d секунддук видео түзүү үчүн %2$d мүнөт жаздыруу талап кылынат</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d секунддук видео түзүү үчүн %2$d мүнөт жаздыруу талап кылынат</item>
+        <item quantity="other">%1$d секунддук видео түзүү үчүн %2$d мүнөт жаздыруу талап кылынат</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Бири кесилди.</item>
+        <item quantity="other">%d кесилди.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s сүрөт жөнүндө маалымат</item>
+        <item quantity="other">%s сүрөт жөнүндө маалымат</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d колдонмо тандалды)</item>
+        <item quantity="other">(%1$d колдонмо тандалды)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Сүрөттөр менен видеолоруңузду коомдук тармактарга Камерадан бөлүшөсүз. %1$d колдонмого чейин тандаңыз. Жеке папкадагы сүрөттөр жана видеолорду бөлүшө албайсыз.</item>
+        <item quantity="other">Сүрөттөр менен видеолоруңузду коомдук тармактарга Камерадан бөлүшөсүз. %1$d колдонмого чейин тандасаңыз болот. Жеке папкадагы сүрөттөр жана видеолорду бөлүшө албайсыз.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d колдонмо тандасаңыз болот</item>
+        <item quantity="other">%1$d колдонмого чейин тандасаңыз болот</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">Видеолордун %s мүнөтү калды</item>
+        <item quantity="other">Видеолордун %s мүнөтү калды</item>
+    </plurals>
+</resources>

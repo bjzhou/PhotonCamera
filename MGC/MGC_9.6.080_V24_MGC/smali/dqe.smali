@@ -1,0 +1,64 @@
+.class abstract Ldqe;
+.super Ljava/lang/Object;
+.source "PG"
+
+
+# direct methods
+.method public constructor <init>()V
+    .locals 0
+
+    goto/32 :goto_0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    goto/32 :goto_1
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1
+    return-void
+
+    nop
+
+    nop
+.end method
+
+
+# virtual methods
+.method public abstract a(Ldqm;Ldqm;)V
+.end method
+
+.method public abstract b(Ldqm;Ljava/lang/Thread;)V
+.end method
+
+.method public abstract c(Ldqn;Ldqi;Ldqi;)Z
+.end method
+
+.method public abstract d(Ldqn;Ljava/lang/Object;Ljava/lang/Object;)Z
+.end method
+
+.method public abstract e(Ldqn;Ldqm;Ldqm;)Z
+.end method

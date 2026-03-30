@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">කාලය ගෙවීයාම %d කාල වේගය</item>
+        <item quantity="other">කාලය ගෙවීයාම %d කාල වේගය</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">වස්තූන් %1$dකට වඩා.</item>
+        <item quantity="other">වස්තූන් %1$dකට වඩා.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">තත්පර %1$dක වීඩියෝවකට මිනිත්තු %2$dක පටිගත කිරීමක් අවශ්‍ය වේ</item>
+        <item quantity="other">තත්පර %1$dක වීඩියෝවකට මිනිත්තු %2$dක පටිගත කිරීමක් අවශ්‍ය වේ</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">තත්පර %1$dක වීඩියෝවකට මිනිත්තු %2$dක පටිගත කිරීමක් අවශ්‍ය වේ</item>
+        <item quantity="other">තත්පර %1$dක වීඩියෝවකට මිනිත්තු %2$dක පටිගත කිරීමක් අවශ්‍ය වේ</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d කප්පාදු කරන ලදි.</item>
+        <item quantity="other">%d කප්පාදු කරන ලදි.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ඡායාරූප %sක් පමණ</item>
+        <item quantity="other">ඡායාරූප %sක් පමණ</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(යෙදුම් %1$dක් තෝරන ලදි)</item>
+        <item quantity="other">(යෙදුම් %1$dක් තෝරන ලදි)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">කැමරාවේ සිට සමාජ යෙදුම්වල ඡායාරූප සහ වීඩියෝ ඉක්මනින් බෙදා ගන්න. යෙදුම් %1$dක් දක්වා තෝරන්න. අගුලු දැමූ ෆෝල්ඩරයට සුරකින ලද ඡායාරූප සහ වීඩියෝ බෙදා ගත නොහැකිය.</item>
+        <item quantity="other">කැමරාවේ සිට සමාජ යෙදුම්වල ඡායාරූප සහ වීඩියෝ ඉක්මනින් බෙදා ගන්න. යෙදුම් %1$dක් දක්වා තෝරන්න. අගුලු දැමූ ෆෝල්ඩරයට සුරකින ලද ඡායාරූප සහ වීඩියෝ බෙදා ගත නොහැකිය.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">යෙදුම් %1$dක් දක්වා තෝරන්න</item>
+        <item quantity="other">යෙදුම් %1$dක් දක්වා තෝරන්න</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">මිනිත්තු %sක වීඩියෝ</item>
+        <item quantity="other">මිනිත්තු %sක වීඩියෝ</item>
+    </plurals>
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/filmstrip_center_item_background" />
+            <size android:height="@dimen/filmstrip_bottom_control_button_size" android:width="@dimen/filmstrip_bottom_control_button_size" />
+        </shape>
+    </item>
+    <item android:gravity="center" android:drawable="@drawable/ic_play_arrow" />
+</layer-list>

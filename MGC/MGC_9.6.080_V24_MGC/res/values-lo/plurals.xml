@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ຄວາມໄວ %d ສຳລັບທາມແລບ</item>
+        <item quantity="other">ຄວາມໄວ %d ສຳລັບທາມແລບ</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ຫຼາຍກວ່າໜຶ່ງວັດຖຸ.</item>
+        <item quantity="other">ຫຼາຍກວ່າ %1$d ວັດຖຸ.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">ວິດີໂອ %1$d ວິ ຈະຕ້ອງບັນທຶກ %2$d ນາທີ</item>
+        <item quantity="other">ວິດີໂອ %1$d ວິ ຈະຕ້ອງບັນທຶກ %2$d ນາທີ</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">ວິດີໂອ %1$d ວິ ຈະຕ້ອງບັນທຶກ %2$d ນາທີ</item>
+        <item quantity="other">ວິດີໂອ %1$d ວິ ຈະຕ້ອງບັນທຶກ %2$d ນາທີ</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ໜຶ່ງຖືກຕັດແລ້ວ.</item>
+        <item quantity="other">%d ຖືກຕັດແລ້ວ.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ປະມານ %s ຮູບ</item>
+        <item quantity="other">ປະມານ %s ຮູບ</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(ເລືອກ %1$d ແອັບແລ້ວ)</item>
+        <item quantity="other">(ເລືອກ %1$d ແອັບແລ້ວ)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">ແບ່ງປັນຮູບພາບ ແລະ ວິດີໂອຢູ່ແອັບສັງຄົມໄດ້ຢ່າງວ່ອງໄວຈາກກ້ອງຖ່າຍຮູບ. ເລືອກ %1$d ແອັບ. ຮູບພາບ ແລະ ວິດີໂອທີ່ຖືກບັນທຶກໄປໃສ່ໂຟນເດີທີ່ລັອກໄວ້ແມ່ນບໍ່ສາມາດແບ່ງປັນໄດ້.</item>
+        <item quantity="other">ແບ່ງປັນຮູບພາບ ແລະ ວິດີໂອຢູ່ແອັບສັງຄົມໄດ້ຢ່າງວ່ອງໄວຈາກກ້ອງຖ່າຍຮູບ. ເລືອກໄດ້ສູງສຸດ %1$d ແອັບ. ຮູບພາບ ແລະ ວິດີໂອທີ່ຖືກບັນທຶກໄປໃສ່ໂຟນເດີທີ່ລັອກໄວ້ແມ່ນບໍ່ສາມາດແບ່ງປັນໄດ້.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">ເລືອກ %1$d ແອັບ</item>
+        <item quantity="other">ເລືອກໄດ້ສູງສຸດ %1$d ແອັບ</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">ວິດີໂອ %s ນາທີ</item>
+        <item quantity="other">ວິດີໂອ %s ນາທີ</item>
+    </plurals>
+</resources>

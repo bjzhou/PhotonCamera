@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:orientation="vertical" android:id="@id/nsv_about_tab" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginHorizontal="24.0dp">
+        <TextView android:textAppearance="?textAppearanceBodyMedium" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/nsv_btm_sheet_description" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="16.0dp" android:maxWidth="364.0dp" android:text="@string/nsv_btm_sheet_desc" />
+        <androidx.constraintlayout.widget.ConstraintLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <com.google.android.apps.camera.ui.compositevideoview.CompositeVideoTextureView android:id="@id/nsv_video_view" android:layout_width="370.0dp" android:layout_height="270.0dp" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent" />
+            <View android:id="@id/video_view_center" android:visibility="invisible" android:layout_width="1.0dp" android:layout_height="1.0dp" app:layout_constraintEnd_toEndOf="@id/nsv_video_view" app:layout_constraintStart_toStartOf="@id/nsv_video_view" app:layout_constraintTop_toBottomOf="@id/nsv_video_view" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:id="@id/nsv_edu_caption_initial" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8.0dp" android:text="@string/nsv_caption_initial" app:layout_constraintEnd_toEndOf="@id/video_view_center" app:layout_constraintStart_toStartOf="@id/nsv_video_view" app:layout_constraintTop_toBottomOf="@id/nsv_video_view" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:id="@id/nsv_edu_caption_boosted" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8.0dp" android:text="@string/nsv_caption_boosted" app:layout_constraintEnd_toEndOf="@id/nsv_video_view" app:layout_constraintStart_toStartOf="@id/video_view_center" app:layout_constraintTop_toBottomOf="@id/nsv_video_view" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
+        <TextView android:textAppearance="?textAppearanceBodySmall" android:id="@id/nsv_edu_learn_more_textview" android:padding="12.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" android:layout_marginBottom="24.0dp" android:text="@string/nsv_photos_backup_desc" android:drawableLeft="@drawable/gs_videocam_auto_vd_theme_24" android:drawablePadding="16.0dp" />
+    </LinearLayout>
+</merge>

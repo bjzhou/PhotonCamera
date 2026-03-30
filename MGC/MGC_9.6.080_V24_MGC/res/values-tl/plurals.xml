@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Time Lapse na %d beses ang bilis</item>
+        <item quantity="other">Time Lapse na %d na beses ang bilis</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Mahigit %1$d bagay.</item>
+        <item quantity="other">Mahigit %1$d na bagay.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Kailangan ng %2$d minutong recording para sa %1$d segudong video</item>
+        <item quantity="other">Kailangan ng %2$d na minutong recording para sa %1$d segudong video</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Kailangan ng %2$d minutong recording para sa %1$d segudong video</item>
+        <item quantity="other">Kailangan ng %2$d na minutong recording para sa %1$d segudong video</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d ang na-crop.</item>
+        <item quantity="other">%d ang na-crop.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Humigit-kumulang %s larawan</item>
+        <item quantity="other">Humigit-kumulang %s na larawan</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app ang napili)</item>
+        <item quantity="other">(%1$d na app ang napili)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Mabilis na magbahagi ng mga larawan at video sa mga social app mula sa Camera. Pumili ng hanggang %1$d app. Hindi maibabahagi ang mga larawan at video na naka-save sa Naka-lock na Folder.</item>
+        <item quantity="other">Mabilis na magbahagi ng mga larawan at video sa mga social app mula sa Camera. Pumili ng hanggang %1$d na app. Hindi maibabahagi ang mga larawan at video na naka-save sa Naka-lock na Folder.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Pumili ng hanggang %1$d app</item>
+        <item quantity="other">Pumili ng hanggang %1$d na app</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuto ng mga video</item>
+        <item quantity="other">%s na minuto ng mga video</item>
+    </plurals>
+</resources>

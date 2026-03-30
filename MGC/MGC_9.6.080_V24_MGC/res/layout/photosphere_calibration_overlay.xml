@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.legacy.lightcycle.ui.PhotoSphereMessageOverlay android:id="@id/photosphere_calibration_overlay" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:id="@id/short_info_message" android:visibility="invisible" android:layout_width="@dimen/photosphere_overlay_message_short_layout_width" android:layout_height="@dimen/photosphere_overlay_message_short_layout_height" android:layout_marginTop="@dimen/photosphere_overlay_message_short_layout_marginTop" android:text="@string/hit_target_to_start" style="@style/photosphere_overlay_message_short" />
+    <TextView android:id="@id/long_message_overlay" android:visibility="invisible" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/photosphere_calibration_step_one" style="@style/photosphere_overlay_message_long" />
+    <ImageView android:id="@id/rotate_device_icon" android:visibility="invisible" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/ic_pano_rotate_error_cw" style="@style/photosphere_overlay_icon" />
+</com.google.android.apps.camera.legacy.lightcycle.ui.PhotoSphereMessageOverlay>

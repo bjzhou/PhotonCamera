@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:layout_gravity="center" android:orientation="vertical" android:layout_width="wrap_content" android:layout_height="match_parent" android:layout_marginTop="24.0dp">
+        <ImageView android:layout_gravity="center" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/locked_folder_dark" android:layout_marginHorizontal="24.0dp" />
+        <TextView android:textAppearance="?textAppearanceHeadline4" android:textColor="?colorOnBackground" android:gravity="center_horizontal" android:layout_gravity="center" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24.0dp" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/about_mars_title" android:layout_marginHorizontal="24.0dp" />
+        <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:layout_gravity="center_horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24.0dp" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/about_mars_desc" android:drawablePadding="24.0dp" android:drawableStart="@drawable/quantum_gm_ic_lock_vd_theme_24" android:drawableTint="?colorOnSurface" android:layout_marginHorizontal="24.0dp" />
+        <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:layout_gravity="center" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24.0dp" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/about_mars_desc_2" android:drawablePadding="24.0dp" android:drawableStart="@drawable/gs_photos_vd_theme_24" android:drawableTint="?colorOnSurface" android:layout_marginHorizontal="24.0dp" />
+        <com.google.android.material.button.MaterialButton android:id="@id/learn_more_button" android:text="@string/mars_learn_more" style="@style/MaterialButtonOutlinedStyle.AllRoundedCorner12dp" />
+    </LinearLayout>
+</merge>

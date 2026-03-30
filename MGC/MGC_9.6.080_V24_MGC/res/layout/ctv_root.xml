@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <FrameLayout android:background="@color/composite_video_background" android:layout_width="wrap_content" android:layout_height="wrap_content">
+        <TextureView android:id="@id/ctv_texture_view" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </FrameLayout>
+    <ImageView android:layout_gravity="center" android:id="@id/ctv_control_symbol" android:background="@drawable/cvv_control_background" android:layout_width="@dimen/cvv_control_size" android:layout_height="@dimen/cvv_control_size" android:scaleType="center" android:tint="?colorOnBackground" />
+    <com.google.android.material.progressindicator.CircularProgressIndicator android:layout_gravity="center" android:id="@id/ctv_progressbar" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:indeterminate="true" app:indicatorSize="@dimen/cvv_control_size" app:trackThickness="2.0dp" style="@style/Widget.GoogleMaterial3.CircularProgressIndicator" />
+</merge>

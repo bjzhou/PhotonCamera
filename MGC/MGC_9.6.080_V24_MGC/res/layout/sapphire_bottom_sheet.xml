@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:paddingTop="@dimen/sapphire_edu_padding_top" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <include android:layout_width="match_parent" android:layout_height="wrap_content" layout="@layout/sapphire_edu_options_bar" />
+    <include android:layout_width="match_parent" android:layout_height="match_parent" layout="@layout/sapphire_edu_about_tab" />
+    <include android:layout_width="match_parent" android:layout_height="match_parent" layout="@layout/sapphire_edu_more_info_tab" />
+    <com.google.android.material.button.MaterialButton android:id="@id/sapphire_btm_sheet_button" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" android:layout_marginBottom="24.0dp" android:maxHeight="90.0dp" android:minHeight="56.0dp" android:text="@string/turn_on_sapphire_btm_sheet" android:layout_marginHorizontal="24.0dp" style="@style/MaterialButtonFilledStyle.AllRoundedCorner12dp" />
+</LinearLayout>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="action_button_size">48.0dp</dimen>
+    <dimen name="bottom_bar_content_size_small">86.0dp</dimen>
+    <dimen name="mode_chip_inset_horizontal">4.0dp</dimen>
+    <dimen name="zoom_lock_view_width">194.0dp</dimen>
+</resources>

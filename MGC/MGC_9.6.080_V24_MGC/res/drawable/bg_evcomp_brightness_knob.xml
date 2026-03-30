@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="oval"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/google_grey100" />
+    <size android:height="@dimen/evcomp_slider_icon_size" android:width="@dimen/evcomp_slider_icon_size" />
+    <stroke android:width="2.0dp" android:color="@color/google_grey100" />
+</shape>

@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<inset android:drawable="@drawable/gs_night_sight_auto_off_vd_theme_24" android:insetLeft="@dimen/icon_inset" android:insetRight="@dimen/icon_inset" android:insetTop="@dimen/icon_inset" android:insetBottom="@dimen/icon_inset"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

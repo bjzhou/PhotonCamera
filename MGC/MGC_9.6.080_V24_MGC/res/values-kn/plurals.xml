@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ಟೈಮ್ ಲ್ಯಾಪ್ಸ್ %d ಪಟ್ಟು ವೇಗ</item>
+        <item quantity="other">ಟೈಮ್ ಲ್ಯಾಪ್ಸ್ %d ಪಟ್ಟು ವೇಗ</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">%1$d ಕ್ಕಿಂತ ಹೆಚ್ಚು ವಸ್ತುಗಳು.</item>
+        <item quantity="other">%1$d ಕ್ಕಿಂತ ಹೆಚ್ಚು ವಸ್ತುಗಳು.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d ಸೆಕೆಂಡ್ ವೀಡಿಯೊಗೆ %2$d ನಿಮಿಷಗಳ ರೆಕಾರ್ಡಿಂಗ್‌ನ ಅಗತ್ಯವಿದೆ</item>
+        <item quantity="other">%1$d ಸೆಕೆಂಡ್ ವೀಡಿಯೊಗೆ %2$d ನಿಮಿಷಗಳ ರೆಕಾರ್ಡಿಂಗ್‌ನ ಅಗತ್ಯವಿದೆ</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d ಸೆಕೆಂಡ್ ವೀಡಿಯೊಗೆ %2$d ನಿಮಿಷಗಳ ರೆಕಾರ್ಡಿಂಗ್‌ನ ಅಗತ್ಯವಿದೆ</item>
+        <item quantity="other">%1$d ಸೆಕೆಂಡ್ ವೀಡಿಯೊಗೆ %2$d ನಿಮಿಷಗಳ ರೆಕಾರ್ಡಿಂಗ್‌ನ ಅಗತ್ಯವಿದೆ</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d ಮುಖಗಳನ್ನು ಕ್ರಾಪ್ ಮಾಡಲಾಗಿದೆ.</item>
+        <item quantity="other">%d ಮುಖಗಳನ್ನು ಕ್ರಾಪ್ ಮಾಡಲಾಗಿದೆ.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s ಫೋಟೋಗಳ ಬಗ್ಗೆ</item>
+        <item quantity="other">%s ಫೋಟೋಗಳ ಬಗ್ಗೆ</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ಆ್ಯಪ್‌ಗಳನ್ನು ಆಯ್ಕೆ ಮಾಡಲಾಗಿದೆ)</item>
+        <item quantity="other">(%1$d ಆ್ಯಪ್‌ಗಳನ್ನು ಆಯ್ಕೆ ಮಾಡಲಾಗಿದೆ)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">ಕ್ಯಾಮರಾದಿಂದ ಸಾಮಾಜಿಕ ಆ್ಯಪ್‌ಗಳಲ್ಲಿ ತ್ವರಿತವಾಗಿ ಫೋಟೋಗಳು ಮತ್ತು ವೀಡಿಯೊಗಳನ್ನು ಹಂಚಿಕೊಳ್ಳಿ. %1$d ಆ್ಯಪ್‌ಗಳವರೆಗೆ ಆಯ್ಕೆಮಾಡಿ. ಲಾಕ್ ಮಾಡಿದ ಫೋಲ್ಡರ್‌ನಲ್ಲಿ ಉಳಿಸಲಾದ ಫೋಟೋಗಳು ಮತ್ತು ವೀಡಿಯೊಗಳನ್ನು ಹಂಚಿಕೊಳ್ಳಲಾಗುವುದಿಲ್ಲ.</item>
+        <item quantity="other">ಕ್ಯಾಮರಾದಿಂದ ಸಾಮಾಜಿಕ ಆ್ಯಪ್‌ಗಳಲ್ಲಿ ತ್ವರಿತವಾಗಿ ಫೋಟೋಗಳು ಮತ್ತು ವೀಡಿಯೊಗಳನ್ನು ಹಂಚಿಕೊಳ್ಳಿ. %1$d ಆ್ಯಪ್‌ಗಳವರೆಗೆ ಆಯ್ಕೆಮಾಡಿ. ಲಾಕ್ ಮಾಡಿದ ಫೋಲ್ಡರ್‌ನಲ್ಲಿ ಉಳಿಸಲಾದ ಫೋಟೋಗಳು ಮತ್ತು ವೀಡಿಯೊಗಳನ್ನು ಹಂಚಿಕೊಳ್ಳಲಾಗುವುದಿಲ್ಲ.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d ಆ್ಯಪ್‌ಗಳವರೆಗೆ ಆಯ್ಕೆಮಾಡಿ</item>
+        <item quantity="other">%1$d ಆ್ಯಪ್‌ಗಳವರೆಗೆ ಆಯ್ಕೆಮಾಡಿ</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s ನಿಮಿಷಗಳ ವೀಡಿಯೊಗಳು</item>
+        <item quantity="other">%s ನಿಮಿಷಗಳ ವೀಡಿಯೊಗಳು</item>
+    </plurals>
+</resources>

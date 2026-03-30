@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/smarts_notification_chip_lens_suggestion_background_color" />
+    <corners android:radius="@dimen/smarts_notification_lens_suggestion_drawable_corner_radius" />
+</shape>

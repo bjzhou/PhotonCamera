@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="rectangle"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="@dimen/record_speed_slider_bg_radius" />
+    <solid android:color="@color/record_speed_slider_knob_bg_color" />
+</shape>

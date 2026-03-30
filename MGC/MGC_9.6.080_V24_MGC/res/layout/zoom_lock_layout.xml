@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:id="@id/zoom_lock_bg" android:background="@drawable/zoom_lock_shape" android:visibility="gone" android:layout_width="@dimen/zoom_lock_width" android:layout_height="@dimen/zoom_lock_height" android:layout_marginRight="@dimen/zoom_lock_offset" android:layout_toLeftOf="@id/lock_click_button" android:layout_centerVertical="true" android:elevation="1.0dp" />
+    <ImageView android:id="@id/zoom_lock_icon" android:visibility="gone" android:layout_width="@dimen/zoom_lock_icon_size" android:layout_height="@dimen/zoom_lock_icon_size" android:layout_marginRight="@dimen/zoom_lock_icon_offset" android:src="@drawable/ic_lock_24dp" android:layout_toLeftOf="@id/lock_click_button" android:layout_centerVertical="true" android:elevation="2.0dp" />
+    <ImageView android:id="@id/lock_click_button" android:background="@drawable/zoom_lock_button" android:layout_width="@dimen/zoom_lock_height" android:layout_height="@dimen/zoom_lock_height" android:layout_centerHorizontal="true" android:layout_centerVertical="true" android:elevation="2.0dp" />
+    <ImageView android:id="@id/lock_click_ring" android:background="@drawable/zoom_lock_ring" android:visibility="gone" android:layout_width="@dimen/zoom_lock_ring_width" android:layout_height="@dimen/zoom_lock_ring_width" android:layout_centerHorizontal="true" android:layout_centerVertical="true" android:contentDescription="@null" android:importantForAccessibility="no" android:elevation="2.0dp" />
+</merge>

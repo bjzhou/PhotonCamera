@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:paddingTop="24.0dp" android:paddingBottom="24.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:baselineAligned="false" android:importantForAccessibility="no" android:paddingStart="24.0dp" android:paddingEnd="36.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginTop="3.0dp" android:src="@drawable/quantum_gm_ic_phone_android_vd_theme_24" android:scaleType="center" android:tint="?colorSecondary" />
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="12.0dp">
+        <TextView android:textAppearance="?textAppearanceHeadline5" android:id="@id/storage_used" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="8.0dp" />
+        <ProgressBar android:id="@id/storage_progressbar" android:layout_width="match_parent" android:layout_height="8.0dp" android:layout_marginBottom="6.0dp" android:progress="0" android:secondaryProgress="0" android:indeterminateOnly="false" android:progressDrawable="@drawable/storage_progress" style="@android:style/Widget.ProgressBar.Horizontal" />
+        <TextView android:textAppearance="?textAppearanceBody2" android:id="@id/storage_remaining" android:layout_width="match_parent" android:layout_height="wrap_content" android:elegantTextHeight="true" />
+    </LinearLayout>
+</LinearLayout>

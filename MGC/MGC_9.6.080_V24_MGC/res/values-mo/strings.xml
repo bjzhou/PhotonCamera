@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="__arcore_cancel">Anulați</string>
+    <string name="__arcore_continue">Continuați</string>
+    <string name="__arcore_install_app">Aplicația necesită cea mai recentă versiune de Servicii Google Play pentru realitate augmentată.</string>
+    <string name="__arcore_install_feature">Funcția necesită cea mai recentă versiune de Servicii Google Play pentru realitate augmentată.</string>
+    <string name="__arcore_installing">Se instalează Servicii Google Play pentru realitate augmentată…</string>
+</resources>

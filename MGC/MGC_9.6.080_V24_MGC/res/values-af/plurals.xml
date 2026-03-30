@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Tydsverloop teen %d keer die spoed</item>
+        <item quantity="other">Tydsverloop teen %d keer die spoed</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Meer as een voorwerp.</item>
+        <item quantity="other">Meer as %1$d voorwerpe.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Video van %1$d sek. vereis ’n opname van %2$d min.</item>
+        <item quantity="other">Video van %1$d sek. vereis ’n opname van %2$d min.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Video van %1$d sek. vereis ’n opname van %2$d min.</item>
+        <item quantity="other">Video van %1$d sek. vereis ’n opname van %2$d min.</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Een is gesnoei.</item>
+        <item quantity="other">%d is gesnoei.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Meer oor %s foto</item>
+        <item quantity="other">"Meer oor %s foto's"</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app gekies)</item>
+        <item quantity="other">(%1$d apps gekies)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Deel foto's en video's vinnig in sosiale programme van Kamera af. Kies %1$d program. Foto's en video's wat in Geslote Vouer gestoor is, kan nie gedeel word nie."</item>
+        <item quantity="other">"Deel foto's en video's vinnig in sosiale programme van Kamera af. Kies tot %1$d programme. Foto's en video's wat in Geslote Vouer gestoor is, kan nie gedeel word nie."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Kies %1$d program</item>
+        <item quantity="other">Kies tot %1$d programme</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">"Video's van %s minuut"</item>
+        <item quantity="other">"Video's van %s minute"</item>
+    </plurals>
+</resources>

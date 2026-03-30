@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <objectAnimator android:duration="@integer/autotimer_tutorial_text_anim_duration" android:valueFrom="150f" android:valueTo="0f" android:propertyName="translationY" />
+    <objectAnimator android:duration="@integer/autotimer_tutorial_text_anim_duration" android:valueFrom="0f" android:valueTo="1f" android:propertyName="alpha" />
+</set>

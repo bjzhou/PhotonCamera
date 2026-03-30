@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">टाइम लैप्स मोड में वीडियो रिकॉर्ड करने की रफ़्तार: %dx</item>
+        <item quantity="other">टाइम लैप्स मोड में वीडियो रिकॉर्ड करने की रफ़्तार: %dx</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">%1$d से ज़्यादा ऑब्जेक्ट हैं.</item>
+        <item quantity="other">%1$d से ज़्यादा ऑब्जेक्ट हैं.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d सेकंड के वीडियो के लिए, %2$d मिनट की रिकॉर्डिंग होनी चाहिए</item>
+        <item quantity="other">%1$d सेकंड के वीडियो के लिए, %2$d मिनट की रिकॉर्डिंग होनी चाहिए</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d सेकंड के वीडियो के लिए, %2$d मिनट की रिकॉर्डिंग होनी चाहिए</item>
+        <item quantity="other">%1$d सेकंड के वीडियो के लिए, %2$d मिनट की रिकॉर्डिंग होनी चाहिए</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d को क्रॉप किया गया.</item>
+        <item quantity="other">%d को क्रॉप किया गया.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">करीब और %s फ़ोटो कैप्चर की जा सकती है</item>
+        <item quantity="other">करीब और %s फ़ोटो कैप्चर की जा सकती हैं</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ऐप्लिकेशन चुना गया)</item>
+        <item quantity="other">(%1$d ऐप्लिकेशन चुने गए)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Camera से फ़ोटो खींचकर या वीडियो रिकॉर्ड करके, सोशल मीडिया ऐप्लिकेशन पर तेज़ी से शेयर करें. ज़्यादा से ज़्यादा %1$d ऐप्लिकेशन चुनें. लॉक किए हुए फ़ोल्डर मेंं सेव किए गए फ़ोटो और वीडियो शेयर नहीं किए जा सकते.</item>
+        <item quantity="other">Camera से फ़ोटो खींचकर या वीडियो रिकॉर्ड करके, सोशल मीडिया ऐप्लिकेशन पर तेज़ी से शेयर करें. ज़्यादा से ज़्यादा %1$d ऐप्लिकेशन चुनें. लॉक किए हुए फ़ोल्डर मेंं सेव किए गए फ़ोटो और वीडियो शेयर नहीं किए जा सकते.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">ज़्यादा से ज़्यादा %1$d ऐप्लिकेशन चुनें</item>
+        <item quantity="other">ज़्यादा से ज़्यादा %1$d ऐप्लिकेशन चुनें</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">वीडियो को और %s मिनट तक रिकॉर्ड किया जा सकता है</item>
+        <item quantity="other">वीडियो को और %s मिनट तक रिकॉर्ड किया जा सकता है</item>
+    </plurals>
+</resources>

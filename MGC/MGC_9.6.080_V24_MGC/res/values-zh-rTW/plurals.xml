@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">縮時錄影速度：%d 倍</item>
+        <item quantity="other">縮時錄影速度：%d 倍</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">偵測到多個物體。</item>
+        <item quantity="other">偵測到超過 %1$d 個物體。</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">如要拍出 %1$d 秒鐘影片，至少需要錄製 %2$d 分鐘</item>
+        <item quantity="other">如要拍出 %1$d 秒鐘影片，至少需要錄製 %2$d 分鐘</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">如要拍出 %1$d 秒鐘影片，至少需要錄製 %2$d 分鐘</item>
+        <item quantity="other">如要拍出 %1$d 秒鐘影片，至少需要錄製 %2$d 分鐘</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">其中有 1 張臉孔未完整入鏡。</item>
+        <item quantity="other">其中有 %d 張臉孔未完整入鏡。</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">還可拍大約 %s 張相片</item>
+        <item quantity="other">還可拍大約 %s 張相片</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(已選取 %1$d 個應用程式)</item>
+        <item quantity="other">(已選取 %1$d 個應用程式)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">在相機中將相片和影片快速分享到社群應用程式。請選擇 %1$d 個應用程式。提醒你，你無法分享儲存在已上鎖資料夾中的相片和影片。</item>
+        <item quantity="other">在相機中將相片和影片快速分享到社群應用程式。最多可以選擇 %1$d 個應用程式。請注意，你無法分享儲存在已上鎖資料夾中的相片和影片。</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">選擇 %1$d 個應用程式</item>
+        <item quantity="other">最多可以選擇 %1$d 個應用程式</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">還可錄製 %s 分鐘的影片</item>
+        <item quantity="other">還可錄製 %s 分鐘的影片</item>
+    </plurals>
+</resources>

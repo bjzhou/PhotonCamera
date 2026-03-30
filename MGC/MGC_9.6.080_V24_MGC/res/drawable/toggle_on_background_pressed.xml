@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:gravity="center" android:drawable="@drawable/toggle_outer_circle" />
+    <item android:gravity="center" android:drawable="@drawable/toggle_inner_circle_pressed" />
+</layer-list>

@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView android:textAppearance="?textAppearanceHeadline4" android:textColor="?colorOnBackground" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/sheet_title" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Mpito wa Muda: kasi mara %d</item>
+        <item quantity="other">Mpito wa Muda: kasi mara %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Zaidi ya kitu kimoja.</item>
+        <item quantity="other">Zaidi ya vitu %1$d.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Video ya sekunde %1$d inahitaji kurekodiwa kwa dakika %2$d</item>
+        <item quantity="other">Video ya sekunde %1$d inahitaji kurekodiwa kwa dakika %2$d</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Video ya sekunde %1$d inahitaji kurekodiwa kwa dakika %2$d</item>
+        <item quantity="other">Video ya sekunde %1$d inahitaji kurekodiwa kwa dakika %2$d</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Uso mmoja umepunguzwa.</item>
+        <item quantity="other">Nyuso %d zimepunguzwa.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Kuhusu picha %s</item>
+        <item quantity="other">Kuhusu picha %s</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(Programu %1$d imechaguliwa)</item>
+        <item quantity="other">(Programu %1$d zimechaguliwa)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Shiriki picha na video kwa haraka kwenye programu za kijamii moja kwa moja kutoka kwenye Kamera. Chagua hadi programu %1$d. Huwezi kushiriki picha na video iliyohifadhiwa kwenye Folda Iliyofungwa.</item>
+        <item quantity="other">Shiriki picha na video kwa haraka kwenye programu za kijamii moja kwa moja kutoka kwenye Kamera. Chagua hadi programu %1$d. Huwezi kushiriki picha na video zilizohifadhiwa kwenye Folda iliyofungwa.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Chagua programu %1$d</item>
+        <item quantity="other">Chagua hadi programu %1$d</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">Dakika %sya video</item>
+        <item quantity="other">Dakika %s za video</item>
+    </plurals>
+</resources>

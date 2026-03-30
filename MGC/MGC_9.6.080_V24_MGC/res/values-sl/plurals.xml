@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">%d-kratna hitrost pospešene reprodukcije</item>
+        <item quantity="two">%d-kratna hitrost pospešene reprodukcije</item>
+        <item quantity="few">%d-kratna hitrost pospešene reprodukcije</item>
+        <item quantity="other">%d-kratna hitrost pospešene reprodukcije</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Več kot %1$d predmet.</item>
+        <item quantity="two">Več kot %1$d predmeta.</item>
+        <item quantity="few">Več kot %1$d predmeti.</item>
+        <item quantity="other">Več kot %1$d predmetov.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d-sekundni videoposnetek zahteva %2$d minuto snemanja</item>
+        <item quantity="two">%1$d-sekundni videoposnetek zahteva %2$d minuti snemanja</item>
+        <item quantity="few">%1$d-sekundni videoposnetek zahteva %2$d minute snemanja</item>
+        <item quantity="other">%1$d-sekundni videoposnetek zahteva %2$d minut snemanja</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d-sekundni videoposnetek zahteva %2$d minuto snemanja</item>
+        <item quantity="two">%1$d-sekundni videoposnetek zahteva %2$d minuti snemanja</item>
+        <item quantity="few">%1$d-sekundni videoposnetek zahteva %2$d minute snemanja</item>
+        <item quantity="other">%1$d-sekundni videoposnetek zahteva %2$d minut snemanja</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d obrezan.</item>
+        <item quantity="two">%d obrezana.</item>
+        <item quantity="few">%d obrezani.</item>
+        <item quantity="other">%d obrezanih.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Približno %s fotografija</item>
+        <item quantity="two">Približno %s fotografiji</item>
+        <item quantity="few">Približno %s fotografije</item>
+        <item quantity="other">Približno %s fotografij</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(Izbrana je %1$d aplikacija)</item>
+        <item quantity="two">(Izbrani sta %1$d aplikaciji)</item>
+        <item quantity="few">(Izbrane so %1$d aplikacije)</item>
+        <item quantity="other">(Izbranih je %1$d aplikacij)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Hitro deljenje fotografij in videoposnetkov v družbenih aplikacijah iz Fotoaparata. Izberete lahko največ %1$d aplikacijo. Fotografij in videoposnetkov, shranjenih v Zaklenjeno mapo, ni mogoče deliti z drugimi.</item>
+        <item quantity="two">Hitro deljenje fotografij in videoposnetkov v družbenih aplikacijah iz Fotoaparata. Izberete lahko največ %1$d aplikaciji. Fotografij in videoposnetkov, shranjenih v Zaklenjeno mapo, ni mogoče deliti z drugimi.</item>
+        <item quantity="few">Hitro deljenje fotografij in videoposnetkov v družbenih aplikacijah iz Fotoaparata. Izberete lahko največ %1$d aplikacije. Fotografij in videoposnetkov, shranjenih v Zaklenjeno mapo, ni mogoče deliti z drugimi.</item>
+        <item quantity="other">Hitro deljenje fotografij in videoposnetkov v družbenih aplikacijah iz Fotoaparata. Izberete lahko največ %1$d aplikacij. Fotografij in videoposnetkov, shranjenih v Zaklenjeno mapo, ni mogoče deliti z drugimi.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Izberete lahko največ %1$d aplikacijo</item>
+        <item quantity="two">Izberete lahko največ %1$d aplikaciji</item>
+        <item quantity="few">Izberete lahko največ %1$d aplikacije</item>
+        <item quantity="other">Izberete lahko največ %1$d aplikacij</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuta videoposnetkov</item>
+        <item quantity="two">%s minuti videoposnetkov</item>
+        <item quantity="few">%s minute videoposnetkov</item>
+        <item quantity="other">%s minut videoposnetkov</item>
+    </plurals>
+</resources>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Տեսագրության %d անգամ արագացում</item>
+        <item quantity="other">Տեսագրության %d անգամ արագացում</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Ավելի քան %1$d օբյեկտ։</item>
+        <item quantity="other">Ավելի քան %1$d օբյեկտ։</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d վրկ տևողությամբ տեսանյութ ստանալու համար տեսագրման ժամանակը պետք է լինի %2$d րոպե</item>
+        <item quantity="other">%1$d վրկ տևողությամբ տեսանյութ ստանալու համար տեսագրման ժամանակը պետք է լինի %2$d րոպե</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d վրկ տևողությամբ տեսանյութ ստանալու համար տեսագրման ժամանակը պետք է լինի %2$d րոպե</item>
+        <item quantity="other">%1$d վրկ տևողությամբ տեսանյութ ստանալու համար տեսագրման ժամանակը պետք է լինի %2$d րոպե</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d-ը եզրատվեց։</item>
+        <item quantity="other">%d-ը եզրատվեց։</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Մոտ %s լուսանկար</item>
+        <item quantity="other">Մոտ %s լուսանկար</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(ընտրվել է %1$d հավելված)</item>
+        <item quantity="other">(ընտրվել է %1$d հավելված)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Տեսախցիկից արագ կիսվեք լուսանկարներով և տեսանյութերով սոցիալական հավելվածներում։ Ընտրեք մինչև %1$d հավելված։ Կողպված պանակում պահված լուսանկարներով ու տեսանյութերով հնարավոր չէ կիսվել։</item>
+        <item quantity="other">Տեսախցիկից արագ կիսվեք լուսանկարներով և տեսանյութերով սոցիալական հավելվածներում։ Ընտրեք մինչև %1$d հավելված։ Կողպված պանակում պահված լուսանկարներով ու տեսանյութերով հնարավոր չէ կիսվել։</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Ընտրեք մինչև %1$d հավելված</item>
+        <item quantity="other">Ընտրեք մինչև %1$d հավելված</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s րոպե տեսագրում</item>
+        <item quantity="other">%s րոպե տեսագրում</item>
+    </plurals>
+</resources>

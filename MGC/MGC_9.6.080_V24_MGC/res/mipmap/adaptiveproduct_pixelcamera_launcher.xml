@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <background>
+        <bitmap android:src="@mipmap/adaptiveproduct_pixelcamera_background_color_108" />
+    </background>
+    <foreground>
+        <bitmap android:src="@mipmap/adaptiveproduct_pixelcamera_foreground_color_108" />
+    </foreground>
+</adaptive-icon>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="16.0dp">
+        <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/retouching_desc" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/retouching_edu_desc" android:layout_marginHorizontal="24.0dp" />
+        <FrameLayout android:id="@id/content_level_selector" android:layout_width="match_parent" android:layout_height="36.0dp" android:layout_marginTop="16.0dp" android:layout_marginHorizontal="24.0dp" />
+        <HorizontalScrollView android:scrollbars="none" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24.0dp">
+            <FrameLayout android:id="@id/example_images_view" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        </HorizontalScrollView>
+        <com.google.android.material.button.MaterialButton android:id="@id/apply_button" android:text="@string/retouching_edu_apply" android:layout_marginHorizontal="24.0dp" android:layout_marginVertical="24.0dp" style="@style/MaterialButtonFilledStyle.AllRoundedCorner12dp" />
+    </LinearLayout>
+</merge>

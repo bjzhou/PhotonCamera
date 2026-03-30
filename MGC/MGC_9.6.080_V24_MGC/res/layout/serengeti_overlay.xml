@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:gravity="center" android:id="@id/serengeti_overlay" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <View android:id="@id/serengeti_overlay_background" android:background="#db000000" android:clickable="true" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" />
+    <TextView android:textSize="32.0sp" android:gravity="center" android:layout_gravity="center" android:id="@id/serengeti_overlay_text" android:fitsSystemWindows="true" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_margin="24.0dp" android:text="@string/panorama_rotation_change_vertical" android:drawableTop="@drawable/gs_screen_rotation_alt_vd_theme_48" android:drawablePadding="24.0dp" />
+</FrameLayout>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">"'ਟਾਈਮ ਲੈਪਸ' ਮੋਡ ਦੀ %d ਗੁਣਾ ਗਤੀ"</item>
+        <item quantity="other">"'ਟਾਈਮ ਲੈਪਸ' ਮੋਡ ਦੀ %d ਗੁਣਾ ਗਤੀ"</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">%1$d ਤੋਂ ਵੱਧ ਵਸਤੂ।</item>
+        <item quantity="other">%1$d ਤੋਂ ਵੱਧ ਵਸਤੂਆਂ।</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d ਸਕਿੰਟ ਦੇ ਵੀਡੀਓ ਲਈ %2$d ਮਿੰਟ ਦੀ ਰਿਕਾਰਡਿੰਗ ਦੀ ਲੋੜ ਹੁੰਦੀ ਹੈ</item>
+        <item quantity="other">%1$d ਸਕਿੰਟ ਦੇ ਵੀਡੀਓ ਲਈ %2$d ਮਿੰਟਾਂ ਦੀ ਰਿਕਾਰਡਿੰਗ ਦੀ ਲੋੜ ਹੁੰਦੀ ਹੈ</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d ਸਕਿੰਟ ਦੇ ਵੀਡੀਓ ਲਈ %2$d ਮਿੰਟ ਦੀ ਰਿਕਾਰਡਿੰਗ ਦੀ ਲੋੜ ਹੁੰਦੀ ਹੈ</item>
+        <item quantity="other">%1$d ਸਕਿੰਟ ਦੇ ਵੀਡੀਓ ਲਈ %2$d ਮਿੰਟਾਂ ਦੀ ਰਿਕਾਰਡਿੰਗ ਦੀ ਲੋੜ ਹੁੰਦੀ ਹੈ</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d ਚਿਹਰੇ ਦੀ ਕਾਂਟ-ਛਾਂਟ ਕੀਤੀ ਗਈ।</item>
+        <item quantity="other">%d ਚਿਹਰਿਆਂ ਦੀ ਕਾਂਟ-ਛਾਂਟ ਕੀਤੀ ਗਈ।</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s ਫ਼ੋਟੋ ਬਾਰੇ</item>
+        <item quantity="other">%s ਫ਼ੋਟੋਆਂ ਬਾਰੇ</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ਐਪ ਨੂੰ ਚੁਣਿਆ ਗਿਆ)</item>
+        <item quantity="other">(%1$d ਐਪਾਂ ਨੂੰ ਚੁਣਿਆ ਗਿਆ)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Camera ਤੋਂ ਤੇਜ਼ੀ ਨਾਲ ਫ਼ੋਟੋਆਂ ਅਤੇ ਵੀਡੀਓ ਨੂੰ ਸੋਸ਼ਲ ਐਪਾਂ 'ਤੇ ਸਾਂਝਾ ਕਰੋ। %1$d ਤੱਕ ਐਪ ਚੁਣੋ। ਲਾਕ ਕੀਤੇ ਫੋਲਡਰ ਵਿੱਚ ਰੱਖਿਅਤ ਕੀਤੀਆਂ ਫ਼ੋਟੋਆਂ ਅਤੇ ਵੀਡੀਓ ਨੂੰ ਸਾਂਝਾ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਦਾ।"</item>
+        <item quantity="other">"Camera ਤੋਂ ਤੇਜ਼ੀ ਨਾਲ ਫ਼ੋਟੋਆਂ ਅਤੇ ਵੀਡੀਓ ਨੂੰ ਸੋਸ਼ਲ ਐਪਾਂ 'ਤੇ ਸਾਂਝਾ ਕਰੋ। %1$d ਤੱਕ ਐਪਾਂ ਚੁਣੋ। ਲਾਕ ਕੀਤੇ ਫੋਲਡਰ ਵਿੱਚ ਰੱਖਿਅਤ ਕੀਤੀਆਂ ਫ਼ੋਟੋਆਂ ਅਤੇ ਵੀਡੀਓ ਨੂੰ ਸਾਂਝਾ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਦਾ।"</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d ਤੱਕ ਐਪ ਚੁਣੋ</item>
+        <item quantity="other">%1$d ਤੱਕ ਐਪਾਂ ਚੁਣੋ</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s ਮਿੰਟ ਦੇ ਵੀਡੀਓ</item>
+        <item quantity="other">%s ਮਿੰਟ ਦੇ ਵੀਡੀਓ</item>
+    </plurals>
+</resources>

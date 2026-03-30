@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Ubrzani videozapis: brzina %d</item>
+        <item quantity="few">Ubrzani videozapis: brzina %d</item>
+        <item quantity="other">Ubrzani videozapis: brzina %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Više od %1$d predmeta.</item>
+        <item quantity="few">Više od %1$d predmeta.</item>
+        <item quantity="other">Više od %1$d predmeta.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Videozapis od %1$d s zahtijeva %2$d min snimanja</item>
+        <item quantity="few">Videozapis od %1$d s zahtijeva %2$d min snimanja</item>
+        <item quantity="other">Videozapis od %1$d s zahtijeva %2$d min snimanja</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Videozapis od %1$d s zahtijeva %2$d min snimanja</item>
+        <item quantity="few">Videozapis od %1$d s zahtijeva %2$d min snimanja</item>
+        <item quantity="other">Videozapis od %1$d s zahtijeva %2$d min snimanja</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Izrezivanje %d lica.</item>
+        <item quantity="few">Izrezivanje %d lica.</item>
+        <item quantity="other">Izrezivanje %d lica.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Oko %s fotografija</item>
+        <item quantity="few">Oko %s fotografije</item>
+        <item quantity="other">Oko %s fotografija</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(odabrana je %1$d aplikacija)</item>
+        <item quantity="few">(odabrane su %1$d aplikacije)</item>
+        <item quantity="other">(odabrano je %1$d aplikacija)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Brzo dijelite fotografije i videozapise na društvenim aplikacijama iz Kamere. Odaberite najviše %1$d aplikaciju. Nije moguće dijeliti fotografije i videozapise sačuvane u zaključanom folderu.</item>
+        <item quantity="few">Brzo dijelite fotografije i videozapise na društvenim aplikacijama iz Kamere. Odaberite najviše %1$d aplikacije. Nije moguće dijeliti fotografije i videozapise sačuvane u zaključanom folderu.</item>
+        <item quantity="other">Brzo dijelite fotografije i videozapise na društvenim aplikacijama iz Kamere. Odaberite najviše %1$d aplikacija. Nije moguće dijeliti fotografije i videozapise sačuvane u zaključanom folderu.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Odaberite najviše %1$d aplikaciju</item>
+        <item quantity="few">Odaberite najviše %1$d aplikacije</item>
+        <item quantity="other">Odaberite najviše %1$d aplikacija</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minut videozapisa</item>
+        <item quantity="few">%s minuta videozapisa</item>
+        <item quantity="other">%s minuta videozapisa</item>
+    </plurals>
+</resources>

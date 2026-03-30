@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.toast.ToastView android:id="@id/toast_view_layout" android:layout_width="match_parent" android:layout_height="match_parent" android:alpha="0.0" custom:gca_box="uncoveredPreview"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:custom="http://schemas.android.com/apk/res-auto">
+    <FrameLayout android:gravity="fill" android:layout_gravity="center|bottom" android:id="@id/toast_inner_layout" android:background="@drawable/toast_background" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginHorizontal="16.0dp" android:paddingHorizontal="12.0dp" android:paddingVertical="10.0dp">
+        <LinearLayout android:layout_gravity="start" android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:textDirection="locale" android:layoutDirection="locale">
+            <ImageView android:layout_gravity="center_vertical" android:id="@id/toast_icon" android:visibility="gone" android:layout_width="20.0dp" android:layout_height="20.0dp" android:scaleType="centerInside" android:layout_marginEnd="8.0dp" />
+            <Space android:id="@id/toast_icon_space" android:layout_width="8.0dp" android:layout_height="match_parent" />
+            <TextView android:textSize="14.0sp" android:textColor="@color/toast_text_color" android:gravity="start" android:layout_gravity="start|center" android:id="@id/toast_text_view" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_weight="1.0" android:fontFamily="@font/google_sans_medium_compat" />
+            <TextView android:textSize="14.0sp" android:textColor="@color/toast_learn_more_text_color" android:gravity="end" android:layout_gravity="end|center" android:id="@id/toast_learn_more_text_view" android:layout_width="wrap_content" android:layout_height="wrap_content" android:singleLine="true" android:fontFamily="@font/google_sans_medium_compat" android:layout_marginEnd="4.0dp" />
+        </LinearLayout>
+    </FrameLayout>
+</com.google.android.apps.camera.toast.ToastView>

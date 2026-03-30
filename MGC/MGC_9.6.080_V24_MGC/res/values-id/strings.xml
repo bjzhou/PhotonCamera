@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="__arcore_cancel">Batal</string>
+    <string name="__arcore_continue">Lanjutkan</string>
+    <string name="__arcore_install_app">Aplikasi ini memerlukan versi terbaru Layanan Google Play untuk AR.</string>
+    <string name="__arcore_install_feature">Fitur ini memerlukan versi terbaru Layanan Google Play untuk AR.</string>
+    <string name="__arcore_installing">Menginstal Layanan Google Play untuk AR…</string>
+    <string name="cancel_button">Batal</string>
+    <string name="dialog_title_warning">Peringatan</string>
+    <string name="dialog_vr_core_not_enabled">Aplikasi ini mungkin tidak bekerja dengan benar tanpa mengaktifkan Layanan Google VR. Aktifkan Layanan Google VR di Setelan ponsel sebelum melanjutkan.</string>
+    <string name="dialog_vr_core_not_installed">Aplikasi ini mungkin tidak bekerja dengan benar tanpa Layanan Google VR. Instal Layanan Google VR dari Play Store sebelum melanjutkan.</string>
+    <string name="go_to_playstore_button">Buka Play Store</string>
+    <string name="go_to_vr_listeners_settings_button">Buka Setelan</string>
+    <string name="mdd_foreground_service_notification_title">Mendownload</string>
+    <string name="preferences_license_title">Pemberitahuan Pihak Ketiga</string>
+</resources>

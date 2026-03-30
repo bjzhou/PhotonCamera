@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:paddingTop="16.0dp" android:paddingBottom="24.0dp" android:layout_width="match_parent" android:layout_height="match_parent" android:paddingStart="@dimen/speech_btmsheet_horizontal_margin" android:paddingEnd="@dimen/speech_btmsheet_horizontal_margin"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textAppearance="?textAppearanceBody2" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/speech_btmsheet_diabled_description" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="@dimen/bottom_sheet_text_max_width" />
+    <com.google.android.material.button.MaterialButton android:id="@id/learn_more_about_speech_enhance" android:text="@string/speech_btmsheet_learn_more" style="@style/MaterialButtonOutlinedStyle.AllRoundedCorner12dp" />
+</LinearLayout>

@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ViewStub android:id="@id/cottage_step_by_step_edu_stub" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

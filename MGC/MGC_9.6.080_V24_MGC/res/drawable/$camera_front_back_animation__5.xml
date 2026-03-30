@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set android:ordering="together"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <objectAnimator android:interpolator="@drawable/$$camera_front_back_animation__5__0" android:duration="183" android:startOffset="0" android:valueFrom="M42 42 C29.42,42 17.54,47.89 17.54,52.11 C17.54,52.11 17.54,59.56 17.54,59.56 C17.54,59.56 42,59.56 42,59.56 C42,59.56 66.46,59.56 66.46,59.56 C66.46,59.56 66.46,52.11 66.46,52.11 C66.46,47.89 54.58,42 42,42c " android:valueTo="M49 27.25 C42.06,35.81 39.25,39.25 32.67,47.11 C32.67,47.11 22.35,59.59 22.35,59.59 C22.35,59.59 47.88,59.59 47.88,59.59 C47.88,59.59 73.47,59.55 73.47,59.55 C73.47,59.55 73.4,59.45 73.4,59.45 C64.95,48.3 60.28,42.2 49,27.25c " android:valueType="pathType" android:propertyName="pathData" />
+</set>

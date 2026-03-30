@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">%d път скоростта на цайтрафера</item>
+        <item quantity="other">%d пъти скоростта на цайтрафера</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Повече от един обект.</item>
+        <item quantity="other">Повече от %1$d обекта.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">За %1$d-секунден видеоклип е необходим %2$d-минутен запис</item>
+        <item quantity="other">За %1$d-секунден видеоклип е необходим %2$d-минутен запис</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">За %1$d-секунден видеоклип е необходим %2$d-минутен запис</item>
+        <item quantity="other">За %1$d-секунден видеоклип е необходим %2$d-минутен запис</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Подрязано е едно.</item>
+        <item quantity="other">Подрязани са %d.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Около %s снимка</item>
+        <item quantity="other">Около %s снимка</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(избрано е %1$d приложение)</item>
+        <item quantity="other">(избрани са %1$d приложения)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Бързо споделяйте в социалните приложения снимки и видеоклипове от Камера. Изберете %1$d приложение. Не могат да се споделят снимки и видеоклипове, запазени в заключена папка.</item>
+        <item quantity="other">Бързо споделяйте в социалните приложения снимки и видеоклипове от Камера. Изберете до %1$d приложения. Не могат да се споделят снимки и видеоклипове, запазени в заключена папка.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Изберете %1$d приложение</item>
+        <item quantity="other">Изберете до %1$d приложения</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">Видеоклипове с продължителност%s минута</item>
+        <item quantity="other">Видеоклипове с продължителност %s минути</item>
+    </plurals>
+</resources>

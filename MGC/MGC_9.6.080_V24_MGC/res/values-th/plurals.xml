@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ความเร็ว %d สำหรับไทม์แลปส์</item>
+        <item quantity="other">ความเร็ว %d สำหรับไทม์แลปส์</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ออบเจ็กต์มากกว่า 1 รายการ</item>
+        <item quantity="other">ออบเจ็กต์มากกว่า %1$d รายการ</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">วิดีโอ %1$d วินาทีจะต้องบันทึก %2$d นาที</item>
+        <item quantity="other">วิดีโอ %1$d วินาทีจะต้องบันทึก %2$d นาที</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">วิดีโอ %1$d วินาทีจะต้องบันทึก %2$d นาที</item>
+        <item quantity="other">วิดีโอ %1$d วินาทีจะต้องบันทึก %2$d นาที</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ครอบตัดแล้ว 1 ใบหน้า</item>
+        <item quantity="other">ครอบตัดแล้ว %d ใบหน้า</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ประมาณ %s รูป</item>
+        <item quantity="other">ประมาณ %s รูป</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(เลือกไว้ %1$d แอป)</item>
+        <item quantity="other">(เลือกไว้ %1$d แอป)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">แชร์รูปภาพและวิดีโอจากกล้องกับแอปโซเชียลได้อย่างรวดเร็ว โดยเลือกได้ %1$d แอป ไม่สามารถแชร์รูปภาพและวิดีโอที่บันทึกไว้ในโฟลเดอร์ที่ล็อก</item>
+        <item quantity="other">แชร์รูปภาพและวิดีโอจากกล้องกับแอปโซเชียลได้อย่างรวดเร็ว โดยเลือกได้ถึง %1$d แอป ไม่สามารถแชร์รูปภาพและวิดีโอที่บันทึกไว้ในโฟลเดอร์ที่ล็อก</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">เลือก %1$d แอป</item>
+        <item quantity="other">เลือกได้สูงสุด %1$d แอป</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s นาทีของวิดีโอ</item>
+        <item quantity="other">%s นาทีของวิดีโอ</item>
+    </plurals>
+</resources>

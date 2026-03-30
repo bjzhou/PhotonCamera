@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textSize="11.0sp" android:textColor="?colorOnSurface" android:gravity="center" android:layout_gravity="center" android:id="@id/beta_label" android:background="@drawable/border_beta" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/first_time_preview_label" android:fontFamily="@font/google_sans_text" android:paddingHorizontal="8.0dp" android:paddingVertical="2.0dp" android:textFontWeight="500" />
+</merge>

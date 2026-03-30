@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout android:id="@id/social_share_layout" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <FrameLayout android:id="@id/social_share_menu_container" android:layout_width="wrap_content" android:layout_height="wrap_content" app:layout_constraintBottom_toBottomOf="@id/thumbnail_button_for_align" app:layout_constraintLeft_toLeftOf="@id/thumbnail_button_for_align" app:layout_constraintRight_toRightOf="@id/thumbnail_button_for_align" />
+    <View android:id="@id/thumbnail_button_for_align" android:visibility="invisible" android:layout_width="@dimen/thumbnail_button_size" android:layout_height="@dimen/thumbnail_button_size" app:layout_constraintLeft_toLeftOf="parent" app:layout_constraintTop_toTopOf="parent" />
+</androidx.constraintlayout.widget.ConstraintLayout>

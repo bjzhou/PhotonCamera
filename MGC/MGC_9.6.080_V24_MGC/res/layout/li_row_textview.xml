@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:padding="10.0dp" android:descendantFocusability="beforeDescendants" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textSize="16.0sp" android:ellipsize="marquee" android:id="@id/text1" android:paddingLeft="8.0dp" android:paddingRight="8.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Choose" android:layout_toRightOf="@id/icon" android:layout_alignParentLeft="false" android:layout_centerVertical="false" />
+    <TextView android:textSize="13.0sp" android:id="@id/txt_size" android:paddingLeft="8.0dp" android:paddingRight="8.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Choose" android:layout_toLeftOf="@id/txt_date" android:layout_below="@id/text1" android:layout_alignLeft="@id/text1" />
+    <TextView android:textSize="13.0sp" android:id="@id/txt_date" android:paddingLeft="8.0dp" android:paddingRight="8.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Choose" android:layout_below="@id/text1" android:layout_alignRight="@id/text1" />
+    <ImageView android:id="@id/icon" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="12.0dp" android:layout_marginRight="6.0dp" android:src="@drawable/quantum_gm_ic_sd_storage_black_24" android:layout_alignParentLeft="true" android:contentDescription="Choose" />
+</RelativeLayout>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Tidsforløbets hastighed: %d</item>
+        <item quantity="other">Tidsforløbets hastighed: %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Mere end %1$d objekt.</item>
+        <item quantity="other">Mere end %1$d objekter.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">En video på %1$d sek. kræver %2$d min. optagelse</item>
+        <item quantity="other">En video på %1$d sek. kræver %2$d min. optagelse</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">En video på %1$d sek. kræver %2$d min. optagelse</item>
+        <item quantity="other">En video på %1$d sek. kræver %2$d min. optagelse</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d er beskåret.</item>
+        <item quantity="other">%d er beskåret.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Cirka %s billede</item>
+        <item quantity="other">Cirka %s billeder</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app er valgt)</item>
+        <item quantity="other">(%1$d apps er valgt)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Del hurtigt billeder og videoer i sociale apps fra Kamera. Vælg maks. %1$d app. Billeder og videoer, der er gemt i Låst mappe, kan ikke deles.</item>
+        <item quantity="other">Del hurtigt billeder og videoer i sociale apps fra Kamera. Vælg maks. %1$d apps. Billeder og videoer, der er gemt i Låst mappe, kan ikke deles.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Vælg op til %1$d app</item>
+        <item quantity="other">Vælg op til %1$d apps</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuts videooptagelse</item>
+        <item quantity="other">%s minutters videooptagelse</item>
+    </plurals>
+</resources>

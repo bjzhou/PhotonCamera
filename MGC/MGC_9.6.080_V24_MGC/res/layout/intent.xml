@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:id="@id/intent_layout" android:visibility="visible" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:custom="http://schemas.android.com/apk/res-auto">
+    <com.google.android.apps.camera.ui.widget.ReviewImageView android:id="@id/intent_review_imageview" android:background="@android:color/black" android:visibility="gone" android:clickable="true" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitCenter" android:contentDescription="@string/review_photo_description" android:importantForAccessibility="no" />
+    <com.google.android.apps.camera.progressoverlay.ProgressOverlay android:id="@id/intent_progress_bar" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_centerInParent="true" />
+    <com.google.android.apps.camera.ui.views.CaptureAnimationOverlay android:id="@id/intent_capture_animation_overlay" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="match_parent" />
+</FrameLayout>

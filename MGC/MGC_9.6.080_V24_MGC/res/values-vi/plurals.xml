@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Tua nhanh thời gian: tốc độ %d lần</item>
+        <item quantity="other">Tua nhanh thời gian: tốc độ %d lần</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Hơn một đối tượng.</item>
+        <item quantity="other">Hơn %1$d đối tượng.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Video có thời lượng %1$d giây yêu cầu thời gian quay là %2$d phút</item>
+        <item quantity="other">Video có thời lượng %1$d giây yêu cầu thời gian quay là %2$d phút</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Video có thời lượng %1$d giây yêu cầu thời gian quay là %2$d phút</item>
+        <item quantity="other">Video có thời lượng %1$d giây yêu cầu thời gian quay là %2$d phút</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Một khuôn mặt đã bị cắt bớt.</item>
+        <item quantity="other">%d khuôn mặt đã bị cắt bớt.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Khoảng %s ảnh</item>
+        <item quantity="other">Khoảng %s ảnh</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(Đã chọn %1$d ứng dụng)</item>
+        <item quantity="other">(Đã chọn %1$d ứng dụng)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Chia sẻ nhanh ảnh và video trên các ứng dụng mạng xã hội ngay từ Máy ảnh. Chọn %1$d ứng dụng. Bạn không thể chia sẻ ảnh và video đã lưu vào Thư mục bị khoá.</item>
+        <item quantity="other">Chia sẻ nhanh ảnh và video trên các ứng dụng mạng xã hội ngay từ Máy ảnh. Chọn tối đa %1$d ứng dụng. Bạn không thể chia sẻ ảnh và video đã lưu vào Thư mục bị khoá.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Bạn có thể chọn %1$d ứng dụng</item>
+        <item quantity="other">Bạn có thể chọn tối đa %1$d ứng dụng</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s phút video</item>
+        <item quantity="other">%s phút video</item>
+    </plurals>
+</resources>

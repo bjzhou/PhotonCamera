@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="16.0dp">
+        <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/selfie_angle_bottom_sheet_description" android:layout_marginHorizontal="25.0dp" />
+        <com.google.android.material.button.MaterialButton android:id="@id/selfie_angle_bottom_sheet_turn_off_button" android:layout_marginTop="24.0dp" android:text="@string/selfie_angle_bottom_sheet_turn_off_button" android:layout_marginHorizontal="24.0dp" style="@style/MaterialButtonOutlinedStyle.TopRoundedCorner12dp.BottomRoundedCorner4dp" />
+        <com.google.android.material.button.MaterialButton android:id="@id/selfie_angle_bottom_sheet_setting_button" android:layout_marginTop="0.0dp" android:layout_marginBottom="24.0dp" android:text="@string/selfie_angle_bottom_sheet_setting_button" android:layout_marginHorizontal="24.0dp" style="@style/MaterialButtonFilledStyle.TopRoundedCorner4dp.BottomRoundedCorner12dp" />
+    </LinearLayout>
+</merge>

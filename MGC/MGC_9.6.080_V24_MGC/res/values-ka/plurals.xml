@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ინტერვალური გადაღება %d დროის სიჩქარე</item>
+        <item quantity="other">ინტერვალური გადაღება %d დროის სიჩქარე</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ერთზე მეტი ობიექტი.</item>
+        <item quantity="other">%1$d-ზე მეტი ობიექტი.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d წამიანი ვიდეო მოითხოვს %2$d წუთიან ჩაწერას</item>
+        <item quantity="other">%1$d წამიანი ვიდეო მოითხოვს %2$d წუთიან ჩაწერას</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d წამიანი ვიდეო მოითხოვს %2$d წუთიან ჩაწერას</item>
+        <item quantity="other">%1$d წამიანი ვიდეო მოითხოვს %2$d წუთიან ჩაწერას</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ერთი მოჭრილი.</item>
+        <item quantity="other">%d ჩამოიჭრა.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">დაახლოებით %s ფოტო</item>
+        <item quantity="other">დაახლოებით %s ფოტო</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(არჩეულია %1$d აპი)</item>
+        <item quantity="other">(არჩეულია %1$d აპი)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">სწრაფად გააზიარეთ ფოტოები და ვიდეოები სოციალურ აპებში კამერიდან. აირჩიეთ %1$d აპი. ჩაკეტილ საქაღალდეში შენახული ფოტოები და ვიდეოები არ გაზიარდება.</item>
+        <item quantity="other">სწრაფად გააზიარეთ ფოტოები და ვიდეოები სოციალურ აპებში კამერიდან. აირჩიეთ %1$d-მდე აპი. ჩაკეტილ საქაღალდეში შენახული ფოტოები და ვიდეოები არ გაზიარდება.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">აირჩიეთ მაქსიმუმ %1$d აპი</item>
+        <item quantity="other">აირჩიეთ %1$d-მდე აპი</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">ვიდეოს %s წუთი</item>
+        <item quantity="other">ვიდეოს %s წუთი</item>
+    </plurals>
+</resources>

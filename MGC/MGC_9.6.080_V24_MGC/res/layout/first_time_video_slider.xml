@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="horizontal" android:id="@id/first_time_video_slider" android:descendantFocusability="blocksDescendants" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginHorizontal="@dimen/first_time_video_end_margin"
+      xmlns:app="http://schemas.android.com/apk/res-auto">
+        <LinearLayout android:orientation="vertical" android:id="@id/first_time_edu_page_1" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginRight="@dimen/first_time_video_one_right_margin">
+            <androidx.cardview.widget.CardView android:id="@id/first_time_video_container_1" android:layout_width="@dimen/first_time_video_width" android:layout_height="@dimen/first_time_video_height" android:layout_marginBottom="16.0dp" app:cardCornerRadius="30.0dp">
+                <com.google.android.apps.camera.ui.eduimageview.EduImageView android:layout_gravity="center" android:id="@id/first_time_video_1" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" />
+            </androidx.cardview.widget.CardView>
+            <LinearLayout android:gravity="center" android:layout_gravity="center_horizontal" android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="@dimen/first_time_demo_image_height" android:layout_marginTop="27.0dp" android:layout_marginBottom="29.0dp">
+                <androidx.cardview.widget.CardView android:layout_gravity="center" android:layout_width="@dimen/first_time_demo_image_width" android:layout_height="@dimen/first_time_demo_image_height" android:layout_marginRight="8.0dp" app:cardCornerRadius="12.0dp" app:cardElevation="0.0dp">
+                    <com.google.android.apps.camera.ui.eduimageview.EduImageView android:id="@id/first_time_first_photo" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" />
+                </androidx.cardview.widget.CardView>
+                <ImageView android:layout_width="@dimen/first_time_demo_image_width" android:layout_height="@dimen/first_time_demo_image_height" android:layout_marginRight="8.0dp" android:src="@drawable/plus_sign_icon" android:scaleType="center" android:contentDescription="@string/plus_sign_description" app:cornerRadius="12.0dp" />
+                <androidx.cardview.widget.CardView android:layout_gravity="center" android:layout_width="@dimen/first_time_demo_image_width" android:layout_height="@dimen/first_time_demo_image_height" android:layout_marginRight="8.0dp" app:cardCornerRadius="12.0dp" app:cardElevation="0.0dp">
+                    <com.google.android.apps.camera.ui.eduimageview.EduImageView android:id="@id/first_time_second_photo" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" />
+                </androidx.cardview.widget.CardView>
+                <ImageView android:layout_width="@dimen/first_time_demo_image_width" android:layout_height="@dimen/first_time_demo_image_height" android:layout_marginRight="8.0dp" android:src="@drawable/equal_sign_icon" android:scaleType="center" android:contentDescription="@string/equal_sign_description" app:cornerRadius="12.0dp" />
+                <com.google.android.material.card.MaterialCardView android:layout_gravity="center" android:id="@id/first_time_third_photo_container" android:layout_width="@dimen/first_time_demo_image_width" android:layout_height="@dimen/first_time_demo_image_height" app:cardCornerRadius="12.0dp" app:cardElevation="0.0dp" app:strokeColor="#ffffffff" app:strokeWidth="2.0dp" style="@style/Widget.GoogleMaterial3.CardView.Outlined">
+                    <com.google.android.apps.camera.ui.eduimageview.EduImageView android:id="@id/first_time_third_photo" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" />
+                </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:id="@id/first_time_edu_page_2" android:paddingRight="@dimen/first_time_video_end_margin" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginRight="@dimen/first_time_video_end_margin">
+            <androidx.cardview.widget.CardView android:id="@id/first_time_video_container_2" android:layout_width="@dimen/first_time_video_width" android:layout_height="@dimen/first_time_video_height" android:layout_marginBottom="16.0dp" app:cardCornerRadius="30.0dp">
+                <com.google.android.apps.camera.ui.eduimageview.EduImageView android:layout_gravity="center" android:id="@id/first_time_video_2" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" />
+            </androidx.cardview.widget.CardView>
+            <TextView android:textSize="14.0sp" android:textColor="#ffffffff" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="16.0dp" android:text="@string/first_time_video_2_label" android:fontFamily="@font/google_sans" android:lineHeight="20.0sp" android:textFontWeight="700" />
+            <TextView android:textAppearance="?textAppearanceBodyMedium" android:textColor="?colorOnSurface" android:gravity="left" android:layout_gravity="left" android:id="@id/first_time_tips_bullet_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/first_time_video_2_bullet_1" />
+            <TextView android:textAppearance="?textAppearanceBodyMedium" android:textColor="?colorOnSurface" android:gravity="left" android:layout_gravity="left" android:id="@id/first_time_tips_bullet_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/first_time_video_2_bullet_2" />
+        </LinearLayout>
+    </LinearLayout>
+</merge>

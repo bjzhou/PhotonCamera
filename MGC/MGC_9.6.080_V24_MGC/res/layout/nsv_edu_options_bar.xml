@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:background="@drawable/nsv_edu_option_bar" android:layout_width="match_parent" android:layout_height="36.0dp" android:layout_marginBottom="24.0dp" android:layout_marginHorizontal="24.0dp">
+        <LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:id="@id/nsv_options_bar_about" android:background="@drawable/nsv_edu_option_selected" android:layout_width="0.0dp" android:layout_height="36.0dp" android:layout_weight="1.0">
+            <com.google.android.apps.camera.util.ui.GcaTextView android:textAppearance="?textAppearanceSubtitle2" android:textColor="?colorOnSecondaryContainer" android:id="@id/nsv_options_bar_about_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/nsv_edu_about_options_bar" />
+        </LinearLayout>
+        <LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:id="@id/nsv_options_bar_more_info" android:background="@drawable/nsv_edu_option_unselected" android:layout_width="0.0dp" android:layout_height="36.0dp" android:layout_weight="1.0">
+            <com.google.android.apps.camera.util.ui.GcaTextView android:textAppearance="?textAppearanceSubtitle2" android:textColor="?colorOnSurfaceVariant" android:id="@id/nsv_options_bar_more_info_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/nsv_edu_more_info_options_bar" />
+        </LinearLayout>
+    </LinearLayout>
+</merge>

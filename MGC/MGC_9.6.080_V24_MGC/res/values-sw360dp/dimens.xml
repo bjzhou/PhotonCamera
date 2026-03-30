@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="action_button_size">45.0dp</dimen>
+    <dimen name="bottom_bar_content_size">102.0dp</dimen>
+    <dimen name="mode_chip_inset_horizontal">3.0dp</dimen>
+    <dimen name="options_menu_label_margin_left">12.0dp</dimen>
+    <dimen name="options_scroll_view_margin">10.0dp</dimen>
+    <dimen name="optionsbar_category_height">44.0dp</dimen>
+    <dimen name="optionsbar_category_width">44.0dp</dimen>
+    <dimen name="zoom_dot_trans_adjust">0.0dp</dimen>
+    <dimen name="zoom_lock_icon_offset">-24.0dp</dimen>
+    <dimen name="zoom_lock_offset">-48.0dp</dimen>
+    <dimen name="zoom_lock_translation">-56.0dp</dimen>
+    <dimen name="zoom_lock_view_width">184.0dp</dimen>
+    <dimen name="zoom_lock_width">60.0dp</dimen>
+</resources>

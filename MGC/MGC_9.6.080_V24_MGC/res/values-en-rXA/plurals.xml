@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">[Ţîmé Ļåþšé ᐅ%dᐊ ţîmé šþééð one two three four five six]</item>
+        <item quantity="other">[Ţîmé Ļåþšé ᐅ%dᐊ ţîméš šþééð one two three four five six]</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">[Möŕé ţĥåñ öñé öбĵéçţ. one two three four five]</item>
+        <item quantity="other">[Möŕé ţĥåñ ᐅ%1$dᐊ öбĵéçţš. one two three four five]</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">[ᐅ%1$dᐊ šéç vîðéö ŕéqûîŕéš ᐅ%2$dᐊ mîñ öƒ ŕéçöŕðîñĝ one two three four five six seven eight nine]</item>
+        <item quantity="other">[ᐅ%1$dᐊ šéç vîðéö ŕéqûîŕéš ᐅ%2$dᐊ mîñš öƒ ŕéçöŕðîñĝ one two three four five six seven eight nine]</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">[ᐅ%1$dᐊ šéç vîðéö ŕéqûîŕéš ᐅ%2$dᐊ mîñ öƒ ŕéçöŕðîñĝ one two three four five six seven eight nine]</item>
+        <item quantity="other">[ᐅ%1$dᐊ šéç vîðéö ŕéqûîŕéš ᐅ%2$dᐊ mîñš öƒ ŕéçöŕðîñĝ one two three four five six seven eight nine]</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">[Öñé çŕöþþéð. one two]</item>
+        <item quantity="other">[ᐅ%dᐊ çŕöþþéð. one two three]</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">[Åбöûţ ᐅ%sᐊ þĥöţö one two three four]</item>
+        <item quantity="other">[Åбöûţ ᐅ%sᐊ þĥöţöš one two three four]</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">[(ᐅ%1$dᐊ åþþ šéļéçţéð) one two three four]</item>
+        <item quantity="other">[(ᐅ%1$dᐊ åþþš šéļéçţéð) one two three four]</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"[Qûîçķļý šĥåŕé þĥöţöš åñð vîðéöš öñ šöçîåļ åþþš ƒŕöm Çåméŕå. Çĥööšé ᐅ%1$dᐊ åþþ. Þĥöţöš åñð vîðéöš šåvéð ţö Ļöçķéð Föļðéŕ çåñ'ţ бé šĥåŕéð. one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone]"</item>
+        <item quantity="other">"[Qûîçķļý šĥåŕé þĥöţöš åñð vîðéöš öñ šöçîåļ åþþš ƒŕöm Çåméŕå. Çĥööšé ûþ ţö ᐅ%1$dᐊ åþþš. Þĥöţöš åñð vîðéöš šåvéð ţö Ļöçķéð Föļðéŕ çåñ'ţ бé šĥåŕéð. one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone]"</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">[Çĥööšé ᐅ%1$dᐊ åþþ one two three]</item>
+        <item quantity="other">[Çĥööšé ûþ ţö ᐅ%1$dᐊ åþþš one two three four five]</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">[ᐅ%sᐊ mîñûţé öƒ vîðéöš one two three four five]</item>
+        <item quantity="other">[ᐅ%sᐊ mîñûţéš öƒ vîðéöš one two three four five]</item>
+    </plurals>
+</resources>

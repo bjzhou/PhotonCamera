@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="oval"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <size android:height="@dimen/notification_dot_shadow_size" android:width="@dimen/notification_dot_shadow_size" />
+    <gradient android:startColor="#99777777" android:endColor="#00555555" android:type="radial" android:gradientRadius="50.0%p" />
+</shape>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="mode_chip_inset_horizontal">1.0dp</dimen>
+    <dimen name="options_menu_label_margin_left">6.0dp</dimen>
+    <dimen name="options_scroll_view_margin">6.0dp</dimen>
+</resources>

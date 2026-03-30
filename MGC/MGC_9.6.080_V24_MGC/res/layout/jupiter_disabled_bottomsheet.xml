@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/description" android:padding="0.0px" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" android:layout_marginBottom="16.0dp" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/rear_camera_selfie_unavailable_description" android:layout_marginHorizontal="24.0dp" />
+</merge>

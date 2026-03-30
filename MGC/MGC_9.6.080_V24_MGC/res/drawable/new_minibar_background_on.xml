@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="18.0dp" />
+    <size android:height="@dimen/minibar_height" android:width="@dimen/minibar_height" />
+    <solid android:color="@color/minibar_background" />
+</shape>

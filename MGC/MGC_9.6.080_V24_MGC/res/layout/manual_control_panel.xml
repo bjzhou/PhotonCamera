@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout android:id="@id/manual_panel_container" android:layout_width="match_parent" android:layout_height="0.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <FrameLayout android:gravity="center_horizontal" android:orientation="vertical" android:id="@id/manual_panel" android:background="@drawable/manual_control_panel_background" android:visibility="invisible" android:clickable="true" android:layout_width="match_parent" android:layout_height="match_parent" app:layout_behavior="com.google.android.material.bottomsheet.BottomSheetBehavior" style="?bottomSheetStyle">
+        <android.support.v7.widget.RecyclerView android:layout_gravity="center" android:id="@id/manual_control_panel_items" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="@dimen/control_panel_height" android:overScrollMode="never" android:nestedScrollingEnabled="false" />
+        <View android:layout_gravity="center|top" android:id="@id/manual_control_panel_handle" android:background="@drawable/manual_control_panel_handle" android:layout_width="@dimen/control_panel_handle_width" android:layout_height="@dimen/control_panel_handle_height" android:layout_marginTop="@dimen/control_panel_handle_top_margin" android:layout_marginBottom="@dimen/control_panel_handle_bottom_margin" />
+    </FrameLayout>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

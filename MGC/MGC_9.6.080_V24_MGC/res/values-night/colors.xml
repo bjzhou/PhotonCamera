@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="settingslib_materialColorOnPrimary">@*android:color/background_floating_device_default_light</color>
+    <color name="settingslib_materialColorOnPrimaryContainer">@*android:color/background_device_default_light</color>
+    <color name="settingslib_materialColorOutline">@*android:color/btn_colored_text_material</color>
+    <color name="settingslib_materialColorPrimary">@*android:color/background_floating_device_default_dark</color>
+    <color name="settingslib_materialColorPrimaryContainer">@*android:color/background_device_default_dark</color>
+    <color name="settingslib_materialColorSurfaceContainerHighest">@*android:color/bright_foreground_light</color>
+</resources>

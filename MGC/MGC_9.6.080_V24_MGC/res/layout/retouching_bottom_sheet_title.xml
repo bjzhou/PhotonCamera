@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textAppearance="?textAppearanceHeadline4" android:textColor="?colorOnBackground" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/retouching_sheet_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/retouching_edu_title" />
+    <FrameLayout android:gravity="center" android:id="@id/title_level_selector" android:layout_width="match_parent" android:layout_height="wrap_content" />
+</FrameLayout>

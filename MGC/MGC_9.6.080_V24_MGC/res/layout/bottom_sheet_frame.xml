@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:id="@id/bottomsheet_container" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:layout_gravity="center_horizontal" android:id="@id/bottomsheet_handle_bar_container" android:visibility="invisible" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" />
+    <FrameLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24.0dp" android:layout_marginStart="24.0dp" android:layout_marginEnd="24.0dp">
+        <FrameLayout android:id="@id/sheet_title_frame" android:layout_width="match_parent" android:layout_height="wrap_content" />
+        <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+            <ImageView android:layout_gravity="right" android:id="@id/bottomsheet_close_cross" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/quantum_gm_ic_close_white_24" />
+        </FrameLayout>
+    </FrameLayout>
+    <androidx.core.widget.NestedScrollView android:id="@id/sheet_content" android:layout_width="match_parent" android:layout_height="match_parent" />
+</LinearLayout>

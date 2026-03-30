@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false" android:color="?colorOnSurface" android:alpha="0.38" />
+    <item android:state_checked="true" android:state_pressed="true" android:color="?colorPrimaryStateContentGoogle" />
+    <item android:state_focused="true" android:state_checked="true" android:color="?colorPrimaryStateContentGoogle" />
+    <item android:state_checked="true" android:color="?colorPrimaryStateContentGoogle" android:state_hovered="true" />
+    <item android:state_checked="true" android:color="?colorPrimaryGoogle" />
+    <item android:state_checked="false" android:state_pressed="true" android:color="?colorOnSurfaceStateContent" />
+    <item android:state_focused="true" android:state_checked="false" android:color="?colorOnSurfaceStateContent" />
+    <item android:state_checked="false" android:color="?colorOnSurfaceStateContent" android:state_hovered="true" />
+    <item android:state_checked="false" android:color="?colorOnSurfaceVariant" />
+</selector>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:orientation="horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:layout_gravity="right|center" android:orientation="horizontal" android:background="@drawable/toggle_view_background" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="12.0dp" android:paddingVertical="2.0dp">
+        <FrameLayout android:gravity="center" android:layout_gravity="center" android:id="@id/beta_content" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="@dimen/minibar_height" android:layout_marginEnd="8.0dp">
+            <include layout="@layout/beta" />
+        </FrameLayout>
+        <FrameLayout android:layout_gravity="right|center" android:id="@id/toggle_container" android:background="@drawable/toggle_ui_background" android:clipChildren="false" android:clipToPadding="false" android:layout_width="wrap_content" android:layout_height="match_parent">
+            <ImageView android:id="@id/toggle_background" android:layout_width="@dimen/minibar_height" android:layout_height="@dimen/minibar_height" android:scaleType="center" />
+            <view android:layout_gravity="center" android:id="@id/toggle_button" android:background="@android:color/transparent" android:paddingLeft="6.0dp" android:paddingRight="6.0dp" android:layout_width="@dimen/minibar_height" android:layout_height="@dimen/minibar_height" android:scaleType="center" android:importantForAccessibility="no" class="com.google.android.apps.camera.ui.views.ToggleUi$ToggleButton" />
+            <TextView android:textColor="?colorOnPrimary" android:gravity="center" android:layout_gravity="center" android:id="@id/toggle_text" android:visibility="gone" android:layout_width="@dimen/minibar_height" android:layout_height="@dimen/minibar_height" android:scaleType="center" android:importantForAccessibility="no" android:fontFamily="@font/google_sans_text_medium" android:textAlignment="center" />
+        </FrameLayout>
+    </LinearLayout>
+</merge>

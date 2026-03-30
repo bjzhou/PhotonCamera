@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_margin="@dimen/video_res_bottomsheet_content_margin" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/video_resolution_bottomsheet_content" />
+</merge>

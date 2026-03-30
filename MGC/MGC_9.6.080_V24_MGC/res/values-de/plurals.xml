@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Zeitraffer: %d-fache Geschwindigkeit</item>
+        <item quantity="other">Zeitraffer: %d-fache Geschwindigkeit</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Mehr als ein Objekt.</item>
+        <item quantity="other">Mehr als %1$d Objekte.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Für ein Video von %1$d Sekunde ist eine Aufnahme von %2$d Minute erforderlich</item>
+        <item quantity="other">Für ein Video von %1$d Sekunden ist eine Aufnahme von %2$d Minuten erforderlich</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Für ein Video von %1$d Sekunde ist eine Aufnahme von %2$d Minute erforderlich</item>
+        <item quantity="other">Für ein Video von %1$d Sekunden ist eine Aufnahme von %2$d Minuten erforderlich</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Eins zugeschnitten.</item>
+        <item quantity="other">%d zugeschnitten.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Etwa %s Foto</item>
+        <item quantity="other">Etwa %s Fotos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d App ausgewählt)</item>
+        <item quantity="other">(%1$d Apps ausgewählt)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Fotos und Videos lassen sich direkt über die Kamera App in Social Apps teilen. Du kannst %1$d App auswählen. Fotos und Videos, die im gesperrten Ordner gespeichert sind, können nicht geteilt werden.</item>
+        <item quantity="other">Fotos und Videos lassen sich direkt über die Kamera App in Social Apps teilen. Du kannst bis zu %1$d Apps auswählen. Fotos und Videos, die im gesperrten Ordner gespeichert sind, können nicht geteilt werden.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Du kannst %1$d App auswählen</item>
+        <item quantity="other">Du kannst bis zu %1$d Apps auswählen</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s Minute Videomaterial</item>
+        <item quantity="other">%s Minuten Videomaterial</item>
+    </plurals>
+</resources>

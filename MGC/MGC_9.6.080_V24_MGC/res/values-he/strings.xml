@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="__arcore_cancel">ביטול</string>
+    <string name="__arcore_continue">המשך</string>
+    <string name="__arcore_install_app">האפליקציה הזו מחייבת את הגרסה האחרונה של שירותי Google Play למציאות רבודה.</string>
+    <string name="__arcore_install_feature">התכונה הזו מחייבת את הגרסה האחרונה של שירותי Google Play למציאות רבודה.</string>
+    <string name="__arcore_installing">מתבצעת התקנה של שירותי Google Play למציאות רבודה…</string>
+</resources>

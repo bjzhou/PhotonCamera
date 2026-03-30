@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="16.0dp">
+        <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/not_available_description" android:padding="0.0px" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:layout_marginHorizontal="24.0dp" />
+        <com.google.android.material.button.MaterialButton android:id="@id/learn_more_button" android:text="@string/nightlapse_learn_more_desc" style="@style/MaterialButtonOutlinedStyle.AllRoundedCorner12dp" />
+    </LinearLayout>
+</merge>

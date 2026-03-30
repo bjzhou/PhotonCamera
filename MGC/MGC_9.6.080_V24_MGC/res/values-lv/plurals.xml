@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="zero">Intervāla fotografēšana paātrinājumā %d</item>
+        <item quantity="one">Intervāla fotografēšana paātrinājumā %d</item>
+        <item quantity="other">Intervāla fotografēšana paātrinājumā %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="zero">Vairāk nekā %1$d objektu.</item>
+        <item quantity="one">Vairāk nekā %1$d objekts.</item>
+        <item quantity="other">Vairāk nekā %1$d objekti.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="zero">Lai uzņemtu %1$d s videoklipu, ierakstīšanai jāilgst %2$d minūtes.</item>
+        <item quantity="one">Lai uzņemtu %1$d s videoklipu, ierakstīšanai jāilgst %2$d minūti.</item>
+        <item quantity="other">Lai uzņemtu %1$d s videoklipu, ierakstīšanai jāilgst %2$d minūtes.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="zero">Lai uzņemtu %1$d s videoklipu, ierakstīšanai jāilgst %2$d minūtes.</item>
+        <item quantity="one">Lai uzņemtu %1$d s videoklipu, ierakstīšanai jāilgst %2$d minūti.</item>
+        <item quantity="other">Lai uzņemtu %1$d s videoklipu, ierakstīšanai jāilgst %2$d minūtes.</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="zero">Apgrieztas %d sejas.</item>
+        <item quantity="one">Apgriezta %d seja.</item>
+        <item quantity="other">Apgrieztas %d sejas.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="zero">Aptuveni %s fotoattēlu</item>
+        <item quantity="one">Aptuveni %s fotoattēls</item>
+        <item quantity="other">Aptuveni %s fotoattēli</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="zero">(atlasītas %1$d lietotnes)</item>
+        <item quantity="one">(atlasīta %1$d lietotne)</item>
+        <item quantity="other">(atlasītas %1$d lietotnes)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="zero">Ātri kopīgojiet fotoattēlus un videoklipus sociālajās lietotnēs no lietotnes Kamera. Izvēlieties ne vairāk kā %1$d lietotnes. Bloķētajā mapē saglabātos fotoattēlus un videoklipus nevar kopīgot.</item>
+        <item quantity="one">Ātri kopīgojiet fotoattēlus un videoklipus sociālajās lietotnēs no lietotnes Kamera. Izvēlieties ne vairāk kā %1$d lietotni. Bloķētajā mapē saglabātos fotoattēlus un videoklipus nevar kopīgot.</item>
+        <item quantity="other">Ātri kopīgojiet fotoattēlus un videoklipus sociālajās lietotnēs no lietotnes Kamera. Izvēlieties ne vairāk kā %1$d lietotnes. Bloķētajā mapē saglabātos fotoattēlus un videoklipus nevar kopīgot.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="zero">Izvēlieties ne vairāk kā %1$d lietotnes</item>
+        <item quantity="one">Izvēlieties ne vairāk kā %1$d lietotni</item>
+        <item quantity="other">Izvēlieties ne vairāk kā %1$d lietotnes</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="zero">%s minūšu ilgs videoklips</item>
+        <item quantity="one">%s minūti ilgs videoklips</item>
+        <item quantity="other">%s minūtes ilgs videoklips</item>
+    </plurals>
+</resources>

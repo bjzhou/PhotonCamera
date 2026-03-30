@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Časozber, %d rýchlosť</item>
+        <item quantity="few">Časozber, %d rýchlosť</item>
+        <item quantity="many">Časozber, %d rýchlosť</item>
+        <item quantity="other">Časozber, %d rýchlosť</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Viac ako jeden objekt.</item>
+        <item quantity="few">Viac ako %1$d objekty.</item>
+        <item quantity="many">More than %1$d objects.</item>
+        <item quantity="other">Viac ako %1$d objektov.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+        <item quantity="few">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+        <item quantity="many">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+        <item quantity="other">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+        <item quantity="few">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+        <item quantity="many">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+        <item quantity="other">%1$d‑sekundové video vyžaduje %2$d‑minútovú nahrávku</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Jedna orezaná.</item>
+        <item quantity="few">%d orezané.</item>
+        <item quantity="many">%d cropped.</item>
+        <item quantity="other">%d orezaných.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Približne %s fotka</item>
+        <item quantity="few">Približne %s fotky</item>
+        <item quantity="many">About %s photos</item>
+        <item quantity="other">Približne %s fotiek</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d vybraná aplikácia)</item>
+        <item quantity="few">(%1$d vybrané aplikácie)</item>
+        <item quantity="many">(%1$d apps selected)</item>
+        <item quantity="other">(%1$d vybraných aplikácií)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Rýchlo zdieľajte fotky a videá v spoločenských aplikáciách priamo z Fotoaparátu. Vyberte %1$d aplikáciu. Fotky a videá uložené v uzamknutom priečinku sa nedajú zdieľať.</item>
+        <item quantity="few">Rýchlo zdieľajte fotky a videá v spoločenských aplikáciách priamo z Fotoaparátu. Vyberte až %1$d aplikácie. Fotky a videá uložené v uzamknutom priečinku sa nedajú zdieľať.</item>
+        <item quantity="many">"Quickly share photos and videos on social apps from Camera. Choose up to %1$d apps. Photos and videos saved to Locked Folder can't be shared."</item>
+        <item quantity="other">Rýchlo zdieľajte fotky a videá v spoločenských aplikáciách priamo z Fotoaparátu. Vyberte až %1$d aplikácií. Fotky a videá uložené v uzamknutom priečinku sa nedajú zdieľať.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Vyberte %1$d aplikáciu</item>
+        <item quantity="few">Môžete vybrať maximálne %1$d aplikácie</item>
+        <item quantity="many">Choose up to %1$d apps</item>
+        <item quantity="other">Môžete vybrať maximálne %1$d aplikácií</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minúta videí</item>
+        <item quantity="few">%s minúty videí</item>
+        <item quantity="many">%s minúty videí</item>
+        <item quantity="other">%s minút videí</item>
+    </plurals>
+</resources>

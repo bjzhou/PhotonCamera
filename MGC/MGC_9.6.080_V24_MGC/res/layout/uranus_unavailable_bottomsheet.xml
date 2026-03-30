@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="16.0dp" android:layout_marginBottom="16.0dp" android:layout_marginHorizontal="24.0dp">
+        <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/description" android:padding="0.0px" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="@dimen/bottom_sheet_text_max_width" />
+        <com.google.android.material.button.MaterialButton android:id="@id/turn_battery_saver_off_button" android:layout_marginTop="32.0dp" android:text="@string/uranus_edu_turn_off_battery_saver_button" style="@style/MaterialButtonFilledStyle.TopRoundedCorner12dp.BottomRoundedCorner4dp" />
+        <com.google.android.material.button.MaterialButton android:id="@id/close_button" android:layout_marginBottom="32.0dp" android:text="@string/uranus_edu_close_button" style="@style/MaterialButtonOutlinedStyle.TopRoundedCorner4dp.BottomRoundedCorner12dp" />
+    </LinearLayout>
+</merge>

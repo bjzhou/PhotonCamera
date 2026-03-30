@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Kamera lasterra %d aldiz bizkorragoa da</item>
+        <item quantity="other">Kamera lasterra %d aldiz bizkorragoa da</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Objektu bat baino gehiago.</item>
+        <item quantity="other">%1$d objektu baino gehiago.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d segundoko bideo bat sortzeko %2$d minutuz grabatu behar da</item>
+        <item quantity="other">%1$d segundoko bideo bat sortzeko %2$d minutuz grabatu behar da</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d segundoko bideo bat sortzeko %2$d minutuz grabatu behar da</item>
+        <item quantity="other">%1$d segundoko bideo bat sortzeko %2$d minutuz grabatu behar da</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Bat ebakita dago.</item>
+        <item quantity="other">%d ebakita daude.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s argazki inguru</item>
+        <item quantity="other">%s argazki inguru</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d aplikazio hautatu da)</item>
+        <item quantity="other">(%1$d aplikazio hautatu dira)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Partekatu argazkiak eta bideoak aplikazio sozialetan kameratik zuzenean. Aukeratu %1$d aplikazio. Ezingo dituzu partekatu karpeta blokeatuan gordetako argazkiak eta bideoak.</item>
+        <item quantity="other">Partekatu argazkiak eta bideoak aplikazio sozialetan kameratik zuzenean. Aukeratu gehienez %1$d aplikazio. Ezingo dituzu partekatu karpeta blokeatuan gordetako argazkiak eta bideoak.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Aukeratu %1$d aplikazio</item>
+        <item quantity="other">Aukeratu %1$d aplikazio</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minutu bideoentzat</item>
+        <item quantity="other">%s minutu bideoentzat</item>
+    </plurals>
+</resources>

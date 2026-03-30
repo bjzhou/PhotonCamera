@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.pro.feature.lens.LensFeatureControlsView android:layout_gravity="center|bottom" android:orientation="vertical" android:id="@id/lens_controls" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:layout_gravity="center|bottom" android:orientation="horizontal" android:id="@id/lens_toggle_controls" android:background="@drawable/lens_controls_background" android:padding="2.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content">
+        <FrameLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <View android:layout_gravity="center" android:id="@id/lens_toggle_ultrawide_background" android:background="@drawable/lens_toggle_unselected_background" android:layout_width="@dimen/lens_toggle_unselected_button_size" android:layout_height="@dimen/lens_toggle_unselected_button_size" android:importantForAccessibility="no" />
+            <TextView android:textSize="@dimen/lens_toggle_button_text_size" android:gravity="center" android:layout_gravity="center" android:id="@id/lens_toggle_ultrawide_text" android:paddingTop="1.0dp" android:paddingRight="1.0dp" android:layout_width="@dimen/lens_toggle_unselected_button_size" android:layout_height="@dimen/lens_toggle_unselected_button_size" android:text="@string/lens_toggle_ultrawide_label" android:contentDescription="@string/lens_toggle_ultrawide_content_desc" android:textAlignment="center" />
+        </FrameLayout>
+        <Space android:id="@id/toast_icon_space1" android:layout_width="8.0dp" android:layout_height="match_parent" />
+        <FrameLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <View android:layout_gravity="center" android:id="@id/lens_toggle_wide_background" android:background="@drawable/lens_toggle_unselected_background" android:layout_width="@dimen/lens_toggle_unselected_button_size" android:layout_height="@dimen/lens_toggle_unselected_button_size" android:importantForAccessibility="no" />
+            <TextView android:textSize="@dimen/lens_toggle_button_text_size" android:gravity="center" android:layout_gravity="center" android:id="@id/lens_toggle_wide_text" android:paddingTop="1.0dp" android:paddingRight="1.0dp" android:layout_width="@dimen/lens_toggle_unselected_button_size" android:layout_height="@dimen/lens_toggle_unselected_button_size" android:text="@string/lens_toggle_wide_label" android:contentDescription="@string/lens_toggle_wide_content_desc" android:textAlignment="center" />
+        </FrameLayout>
+        <Space android:id="@id/toast_icon_space2" android:layout_width="8.0dp" android:layout_height="match_parent" />
+        <FrameLayout android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <View android:layout_gravity="center" android:id="@id/lens_toggle_tele_background" android:background="@drawable/lens_toggle_unselected_background" android:layout_width="@dimen/lens_toggle_unselected_button_size" android:layout_height="@dimen/lens_toggle_unselected_button_size" android:importantForAccessibility="no" />
+            <TextView android:textSize="@dimen/lens_toggle_button_text_size" android:gravity="center" android:layout_gravity="center" android:id="@id/lens_toggle_tele_text" android:paddingTop="1.0dp" android:paddingRight="1.0dp" android:layout_width="@dimen/lens_toggle_unselected_button_size" android:layout_height="@dimen/lens_toggle_unselected_button_size" android:text="@string/lens_toggle_tele_label" android:contentDescription="@string/lens_toggle_tele_content_desc" android:textAlignment="center" />
+        </FrameLayout>
+    </LinearLayout>
+    <FrameLayout android:id="@id/lens_slider_container" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="wrap_content" android:alpha="0.0">
+        <androidx.compose.ui.platform.ComposeView android:layout_gravity="center|bottom" android:id="@id/uw_lens_slider" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <androidx.compose.ui.platform.ComposeView android:layout_gravity="center|bottom" android:id="@id/w_lens_slider" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <androidx.compose.ui.platform.ComposeView android:layout_gravity="center|bottom" android:id="@id/tele_lens_slider" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    </FrameLayout>
+</com.google.android.apps.camera.pro.feature.lens.LensFeatureControlsView>

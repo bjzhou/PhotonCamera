@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ടൈം ലാപ്‍സ് വേഗത %d മടങ്ങ്</item>
+        <item quantity="other">ടൈം ലാപ്‍സ് വേഗത %d മടങ്ങ്</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ഒന്നിൽ കൂടുതൽ ഒബ്‌ജക്റ്റ്.</item>
+        <item quantity="other">%1$d-ൽ കൂടുതൽ ഒബ്‌ജക്റ്റുകൾ.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d സെക്കൻഡ് വീഡിയോ സൃഷ്ടിക്കുന്നതിന് %2$d മിനിറ്റ് റെക്കോർഡിംഗ്</item>
+        <item quantity="other">%1$d സെക്കൻഡ് വീഡിയോ സൃഷ്ടിക്കുന്നതിന് %2$d മിനിറ്റ് റെക്കോർഡിംഗ്</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d സെക്കൻഡ് വീഡിയോ സൃഷ്ടിക്കുന്നതിന് %2$d മിനിറ്റ് റെക്കോർഡിംഗ്</item>
+        <item quantity="other">%1$d സെക്കൻഡ് വീഡിയോ സൃഷ്ടിക്കുന്നതിന് %2$d മിനിറ്റ് റെക്കോർഡിംഗ്</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ഒരു മുഖം ഭാഗികം.</item>
+        <item quantity="other">%d മുഖം ഭാഗികം.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ഏകദേശം %s ഫോട്ടോ</item>
+        <item quantity="other">ഏകദേശം %s ഫോട്ടോകൾ</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ആപ്പ് തിരഞ്ഞെടുത്തു)</item>
+        <item quantity="other">(%1$d ആപ്പുകൾ തിരഞ്ഞെടുത്തു)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">ഫോട്ടോകളും വീഡിയോകളും ക്യാമറയിൽ നിന്ന് സോഷ്യൽ ആപ്പുകളിലേക്ക് വേഗത്തിൽ പങ്കിടുക. %1$d ആപ്പ് തിരഞ്ഞെടുക്കുക. ലോക്ക് ചെയ്ത ഫോൾഡറിൽ സംരക്ഷിച്ചിരിക്കുന്ന ഫോട്ടോകളും വീഡിയോകളും പങ്കിടാനാകില്ല.</item>
+        <item quantity="other">ഫോട്ടോകളും വീഡിയോകളും ക്യാമറയിൽ നിന്ന് സോഷ്യൽ ആപ്പുകളിലേക്ക് വേഗത്തിൽ പങ്കിടുക. %1$d ആപ്പുകൾ വരെ തിരഞ്ഞെടുക്കുക. ലോക്ക് ചെയ്ത ഫോൾഡറിൽ സംരക്ഷിച്ചിരിക്കുന്ന ഫോട്ടോകളും വീഡിയോകളും പങ്കിടാനാകില്ല.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d ആപ്പ് തിരഞ്ഞെടുക്കുക</item>
+        <item quantity="other">%1$d ആപ്പുകൾ വരെ തിരഞ്ഞെടുക്കുക</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">വീഡിയോകളുടെ %s മിനിറ്റ്</item>
+        <item quantity="other">വീഡിയോകളുടെ %s മിനിറ്റ്</item>
+    </plurals>
+</resources>

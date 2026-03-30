@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="oval"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <size android:height="@dimen/jupiter_button_diameter" android:width="@dimen/jupiter_button_diameter" />
+    <stroke android:width="2.0dp" android:color="#ffffffff" />
+</shape>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">టైమ్ లాప్స్ %d టైమ్ స్పీడ్</item>
+        <item quantity="other">టైమ్ లాప్స్ %d టైమ్స్ స్పీడ్</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ఒకటి కంటే ఎక్కువ ఆబ్జెక్ట్‌లు గుర్తించబడ్డాయి.</item>
+        <item quantity="other">%1$d కంటే ఎక్కువ ఆబ్జెక్ట్‌లు గుర్తించబడ్డాయి.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d సెకన్ల వీడియోకు %2$d నిమిషం రికార్డింగ్ అవసరం</item>
+        <item quantity="other">%1$d సెకన్ల వీడియోకు %2$d నిమిషాల రికార్డింగ్ అవసరం</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d సెకన్ల వీడియోకు %2$d నిమిషం రికార్డింగ్ అవసరం</item>
+        <item quantity="other">%1$d సెకన్ల వీడియోకు %2$d నిమిషాల రికార్డింగ్ అవసరం</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ఒకటి కత్తిరించబడింది.</item>
+        <item quantity="other">%d కత్తిరించబడ్డాయి.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s ఫోటో గురించి</item>
+        <item quantity="other">%s ఫోటోల గురించి</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d యాప్ ఎంచుకోబడింది)</item>
+        <item quantity="other">(%1$d యాప్‌లు ఎంచుకోబడ్డాయి)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">కెమెరా నుండి ఫోటోలు, వీడియోలను సోషల్ యాప్‌లలో త్వరగా షేర్ చేయండి. %1$d యాప్‌ను ఎంచుకోండి. లాక్ చేసిన ఫోల్డర్‌లో సేవ్ చేసిన ఫోటోలు, వీడియోలను షేర్ చేయడం సాధ్యం కాదు.</item>
+        <item quantity="other">కెమెరా నుండి ఫోటోలు, వీడియోలను సోషల్ యాప్‌లలో త్వరగా షేర్ చేయండి. గరిష్ఠంగా %1$d యాప్ వరకు ఎంచుకోండి. లాక్ చేసిన ఫోల్డర్‌లో సేవ్ చేసిన ఫోటోలు, వీడియోలను షేర్ చేయడం సాధ్యం కాదు.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d యాప్‌ను ఎంచుకోండి</item>
+        <item quantity="other">%1$d యాప్‌ల వరకు ఎంచుకోండి</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s నిమిషం వీడియోలు</item>
+        <item quantity="other">%s నిమిషాల వీడియోలు</item>
+    </plurals>
+</resources>

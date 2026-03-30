@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Ubrzani videozapis: brzina %d</item>
+        <item quantity="few">Ubrzani videozapis: brzina %d</item>
+        <item quantity="other">Ubrzani videozapis: brzina %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Više od %1$d objekta.</item>
+        <item quantity="few">Više od %1$d objekta.</item>
+        <item quantity="other">Više od %1$d objekata.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Za videozapis u trajanju od %1$d s potrebno je %2$d min snimanja</item>
+        <item quantity="few">Za videozapis u trajanju od %1$d s potrebno je %2$d min snimanja</item>
+        <item quantity="other">Za videozapis u trajanju od %1$d s potrebno je %2$d min snimanja</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Za videozapis u trajanju od %1$d s potrebno je %2$d min snimanja</item>
+        <item quantity="few">Za videozapis u trajanju od %1$d s potrebno je %2$d min snimanja</item>
+        <item quantity="other">Za videozapis u trajanju od %1$d s potrebno je %2$d min snimanja</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d je obrezano.</item>
+        <item quantity="few">%d su obrezana.</item>
+        <item quantity="other">%d je obrezano.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Otprilike %s fotografija</item>
+        <item quantity="few">Otprilike %s fotografije</item>
+        <item quantity="other">Otprilike %s fotografija</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d odabrana aplikacija)</item>
+        <item quantity="few">(%1$d odabrane aplikacije)</item>
+        <item quantity="other">(%1$d odabranih aplikacija)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Brzo dijelite fotografije i videozapise u društvenim aplikacijama iz Fotoaparata. Odaberite najviše %1$d aplikaciju. Fotografije i videozapisi spremljeni u zaključanu mapu ne mogu se dijeliti.</item>
+        <item quantity="few">Brzo dijelite fotografije i videozapise u društvenim aplikacijama iz Fotoaparata. Odaberite najviše %1$d aplikacije. Fotografije i videozapisi spremljeni u zaključanu mapu ne mogu se dijeliti.</item>
+        <item quantity="other">Brzo dijelite fotografije i videozapise u društvenim aplikacijama iz Fotoaparata. Odaberite najviše %1$d aplikacija. Fotografije i videozapisi spremljeni u zaključanu mapu ne mogu se dijeliti.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Odaberite do %1$d aplikaciju</item>
+        <item quantity="few">Odaberite do %1$d aplikacije</item>
+        <item quantity="other">Odaberite do %1$d aplikacija</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuta videozapisa</item>
+        <item quantity="few">%s minute videozapisa</item>
+        <item quantity="other">%s minuta videozapisa</item>
+    </plurals>
+</resources>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ଟାଇମ ଲେପ୍ସ %d ଟାଇମ ସ୍ପିଡ</item>
+        <item quantity="other">ଟାଇମ ଲେପ୍ସ %d ଟାଇମ ସ୍ପିଡ</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ଗୋଟିଏରୁ ଅଧିକ ଅବଜେକ୍ଟ।</item>
+        <item quantity="other">%1$dଟିରୁ ଅଧିକ ଅବଜେକ୍ଟ।</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d ସେକେଣ୍ଡର ଭିଡିଓ ପାଇଁ %2$d ମିନିଟର ରେକର୍ଡିଂ ଆବଶ୍ୟକ</item>
+        <item quantity="other">%1$d ସେକେଣ୍ଡର ଭିଡିଓ ପାଇଁ %2$d ମିନିଟର ରେକର୍ଡିଂ ଆବଶ୍ୟକ</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d ସେକେଣ୍ଡର ଭିଡିଓ ପାଇଁ %2$d ମିନିଟର ରେକର୍ଡିଂ ଆବଶ୍ୟକ</item>
+        <item quantity="other">%1$d ସେକେଣ୍ଡର ଭିଡିଓ ପାଇଁ %2$d ମିନିଟର ରେକର୍ଡିଂ ଆବଶ୍ୟକ</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ଗୋଟିଏ କ୍ରପ କରାଯାଇଛି।</item>
+        <item quantity="other">%dଟି କ୍ରପ କରାଯାଇଛି।</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%sଟି ଫଟୋ ବିଷୟରେ</item>
+        <item quantity="other">%sଟି ଫଟୋ ବିଷୟରେ</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$dଟି ଆପ୍ ଚୟନ କରାଯାଇଛି)</item>
+        <item quantity="other">(%1$dଟି ଆପ୍ ଚୟନ କରାଯାଇଛି)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Cameraରୁ ସୋସିଆଲ ଆପ୍ସରେ ଫଟୋ ଏବଂ ଭିଡିଓଗୁଡ଼ିକୁ ଶୀଘ୍ର ସେୟାର କରନ୍ତୁ। %1$dଟି ଆପ ବାଛନ୍ତୁ। ଲକ କରାଯାଇଥିବା ଫୋଲ୍ଡରରେ ସେଭ ହୋଇଥିବା ଫଟୋ ଏବଂ ଭିଡିଓଗୁଡ଼ିକୁ ସେୟାର କରାଯାଇପାରିବ ନାହିଁ।</item>
+        <item quantity="other">Cameraରୁ ସୋସିଆଲ ଆପ୍ସରେ ଫଟୋ ଏବଂ ଭିଡିଓଗୁଡ଼ିକୁ ଶୀଘ୍ର ସେୟାର କରନ୍ତୁ। %1$dଟି ପର୍ଯ୍ୟନ୍ତ ଆପ ବାଛନ୍ତୁ। ଲକ କରାଯାଇଥିବା ଫୋଲ୍ଡରରେ ସେଭ ହୋଇଥିବା ଫଟୋ ଏବଂ ଭିଡିଓଗୁଡ଼ିକୁ ସେୟାର କରାଯାଇପାରିବ ନାହିଁ।</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$dଟି ଆପ୍ ବାଛନ୍ତୁ</item>
+        <item quantity="other">%1$dଟି ପର୍ଯ୍ୟନ୍ତ ଆପ୍ ବାଛନ୍ତୁ</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s ମିନିଟର ଭିଡିଓଗୁଡ଼ିକ</item>
+        <item quantity="other">%s ମିନିଟର ଭିଡିଓଗୁଡ଼ିକ</item>
+    </plurals>
+</resources>

@@ -1,0 +1,262 @@
+.class public final Lbji;
+.super Ljava/lang/Object;
+.source "PG"
+
+
+# static fields
+.field public static final a:Lbhf;
+
+
+# direct methods
+.method static constructor <clinit>()V
+    .locals 4
+
+    goto/32 :goto_6
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_0
+    goto/32 :goto_c
+
+    nop
+
+    :goto_1
+    goto/32 :goto_a
+
+    nop
+
+    nop
+
+    :goto_2
+    const v2, 0x3dcccccd    # 0.1f
+
+    nop
+
+    goto/32 :goto_3
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_3
+    const v3, 0x3e23d70a    # 0.16f
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_9
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_4
+    sput-object v0, Lbji;->a:Lbhf;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_b
+
+    nop
+
+    nop
+
+    :goto_5
+    add-int v0, v0, v1
+
+    nop
+
+    nop
+
+    goto/32 :goto_7
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_6
+    const v0, 0x1b
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_e
+
+    nop
+
+    nop
+
+    :goto_7
+    rem-int v0, v0, v1
+
+    nop
+
+    nop
+
+    goto/32 :goto_8
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_8
+    if-lez v0, :cond_0
+
+    nop
+
+    goto/32 :goto_1
+
+    nop
+
+    nop
+
+    nop
+
+    :cond_0
+    goto/32 :goto_0
+
+    nop
+
+    :goto_9
+    invoke-direct {v0, v3, v2, v1, v2}, Lbhf;-><init>(FFFF)V
+
+    goto/32 :goto_4
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_a
+    new-instance v0, Lbhf;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_f
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_b
+    return-void
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_c
+    goto/32 :goto_d
+
+    nop
+
+    nop
+
+    :goto_d
+    goto/32 :goto_1
+
+    nop
+
+    :goto_e
+    const v1, 0x17
+
+    nop
+
+    goto/32 :goto_5
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_f
+    const v1, 0x3da3d70a    # 0.08f
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_2
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+.end method

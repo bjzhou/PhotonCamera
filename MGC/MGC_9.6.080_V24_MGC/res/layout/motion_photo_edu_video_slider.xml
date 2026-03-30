@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="horizontal" android:descendantFocusability="blocksDescendants" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginHorizontal="24.0dp"
+      xmlns:app="http://schemas.android.com/apk/res-auto">
+        <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginRight="16.0dp">
+            <androidx.cardview.widget.CardView android:id="@id/motion_photo_edu_video_container_1" android:layout_width="364.0dp" android:layout_height="256.0dp" android:layout_marginBottom="16.0dp" app:cardCornerRadius="36.0dp">
+                <com.google.android.apps.camera.ui.eduimageview.EduImageView android:id="@id/motion_photo_edu_video_1" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:importantForAccessibility="no" />
+            </androidx.cardview.widget.CardView>
+            <TextView android:textAppearance="?textAppearanceBodySmall" android:layout_gravity="center_horizontal" android:id="@id/motion_photo_edu_video_label_1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/reprocessing_video_label_1" />
+            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24.0dp">
+                <ImageView android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginRight="24.0dp" android:src="@drawable/photo_prints_icon_v2" android:scaleType="center" android:contentDescription="@string/motion_photo_bullet_text_1" />
+                <TextView android:textAppearance="?textAppearanceBodyMedium" android:textColor="?colorOnSurface" android:layout_width="match_parent" android:layout_height="68.0dp" android:text="@string/motion_photo_bullet_text_1" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:paddingRight="24.0dp" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginEnd="24.0dp">
+            <androidx.cardview.widget.CardView android:id="@id/motion_photo_edu_video_container_2" android:layout_width="364.0dp" android:layout_height="256.0dp" android:layout_marginBottom="16.0dp" app:cardCornerRadius="36.0dp">
+                <com.google.android.apps.camera.ui.eduimageview.EduImageView android:id="@id/motion_photo_edu_video_2" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:importantForAccessibility="no" />
+            </androidx.cardview.widget.CardView>
+            <TextView android:textAppearance="?textAppearanceBodySmall" android:layout_gravity="center_horizontal" android:id="@id/motion_photo_edu_video_label_2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/reprocessing_video_label_3" />
+            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24.0dp">
+                <ImageView android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginRight="24.0dp" android:src="@drawable/motion_icon_v2" android:scaleType="center" android:contentDescription="@string/motion_photo_bullet_text_2" />
+                <TextView android:textAppearance="?textAppearanceBodyMedium" android:textColor="?colorOnSurface" android:layout_width="match_parent" android:layout_height="68.0dp" android:text="@string/motion_photo_bullet_text_2" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</merge>

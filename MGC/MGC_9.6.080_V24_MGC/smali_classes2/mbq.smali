@@ -1,0 +1,20 @@
+.class public interface abstract Lmbq;
+.super Ljava/lang/Object;
+.source "PG"
+
+
+# virtual methods
+.method public abstract a()F
+.end method
+
+.method public abstract b()F
+.end method
+
+.method public abstract c()Z
+.end method
+
+.method public abstract d()Z
+.end method
+
+.method public abstract e(Lpin;Lrss;Loeq;)V
+.end method

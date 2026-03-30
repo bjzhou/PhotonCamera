@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center_horizontal" android:orientation="vertical" android:id="@id/allin_notification_chip_layout" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <Space android:layout_width="match_parent" android:layout_height="0.0dp" android:layout_weight="1.0" />
+    <ImageView android:id="@id/arrow" android:layout_width="48.0dp" android:layout_height="48.0dp" android:importantForAccessibility="no" />
+    <Space android:layout_width="0.0dp" android:layout_height="28.0dp" />
+    <TextView android:textSize="14.0sp" android:textColor="@color/notification_chip_text" android:id="@id/notification_text" android:background="@drawable/notification_text_background" android:paddingTop="10.0dp" android:paddingBottom="10.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textIsSelectable="false" android:fontFamily="@font/google_sans_text_medium" android:textAlignment="center" android:paddingStart="16.0dp" android:paddingEnd="16.0dp" android:lineHeight="20.0sp" />
+    <Space android:layout_width="0.0dp" android:layout_height="24.0dp" />
+</LinearLayout>

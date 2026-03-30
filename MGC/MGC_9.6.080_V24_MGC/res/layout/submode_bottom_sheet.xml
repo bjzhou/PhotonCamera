@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginStart="24.0dp" android:layout_marginEnd="24.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <com.google.android.material.tabs.TabLayout android:layout_gravity="center_horizontal" android:id="@id/tablayout" android:background="@drawable/tab_layout_background" android:paddingBottom="10.0dp" android:layout_width="wrap_content" android:layout_height="36.0dp" app:tabBackground="@drawable/tab_layout_selector" app:tabIndicatorHeight="0.0dp" app:tabMinWidth="@dimen/tab_min_width" app:tabMode="scrollable" app:tabRippleColor="@color/transparent" app:tabSelectedTextColor="?colorOnPrimaryContainer" app:tabTextAppearance="?textAppearanceSubtitle2" app:tabTextColor="?colorOnSurfaceVariant" />
+    <androidx.viewpager2.widget.ViewPager2 android:orientation="horizontal" android:id="@id/viewpager2" android:layout_width="match_parent" android:layout_height="0.0dp" android:layout_weight="1.0" />
+</LinearLayout>

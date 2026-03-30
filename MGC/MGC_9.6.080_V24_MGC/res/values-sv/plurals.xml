@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">%d gång hastigheten för timelapse</item>
+        <item quantity="other">%d gånger hastigheten för timelapse</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Fler än ett föremål.</item>
+        <item quantity="other">Fler än %1$d föremål.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d sekunders video kräver %2$d minuts inspelning</item>
+        <item quantity="other">%1$d sekunders video kräver %2$d minuters inspelning</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d sekunders video kräver %2$d minuts inspelning</item>
+        <item quantity="other">%1$d sekunders video kräver %2$d minuters inspelning</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Ett beskuret.</item>
+        <item quantity="other">%d beskurna.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Cirka %s foto</item>
+        <item quantity="other">Cirka %s foton</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app har valts)</item>
+        <item quantity="other">(%1$d appar har valts)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Dela snabbt foton och videor i sociala appar med Kamera. Välj %1$d app. Det går inte att dela foton och videor som har sparats i Låst mapp.</item>
+        <item quantity="other">Dela snabbt foton och videor i sociala appar med Kamera. Välj upp till %1$d appar. Det går inte att dela foton och videor som har sparats i Låst mapp.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Välj %1$d app</item>
+        <item quantity="other">Välj upp till %1$d appar</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuter med video</item>
+        <item quantity="other">%s minuter med videor</item>
+    </plurals>
+</resources>

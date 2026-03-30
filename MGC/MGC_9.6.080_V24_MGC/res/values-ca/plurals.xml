@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">La velocitat de la filmació a intervals és de %d</item>
+        <item quantity="other">La velocitat de la filmació a intervals és de %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">"Més d'un objecte."</item>
+        <item quantity="other">Més de %1$d objectes.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Un vídeo de %1$d s requereix %2$d min de gravació</item>
+        <item quantity="other">Un vídeo de %1$d s requereix %2$d min de gravació</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Un vídeo de %1$d s requereix %2$d min de gravació</item>
+        <item quantity="other">Un vídeo de %1$d s requereix %2$d min de gravació</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">"S'ha retallat un."</item>
+        <item quantity="other">"%d s'han retallat."</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Aproximadament %s foto</item>
+        <item quantity="other">Aproximadament %s fotos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d aplicació seleccionada)</item>
+        <item quantity="other">(%1$d aplicacions seleccionades)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Comparteix ràpidament fotos i vídeos en aplicacions socials des de Càmera. Tria %1$d aplicació. Les fotos i els vídeos desats a Carpeta bloquejada no es poden compartir.</item>
+        <item quantity="other">Comparteix ràpidament fotos i vídeos en aplicacions socials des de Càmera. Tria fins a %1$d aplicacions. Les fotos i els vídeos desats a Carpeta bloquejada no es poden compartir.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Tria %1$d aplicació</item>
+        <item quantity="other">Tria fins a %1$d aplicacions</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minut de vídeo</item>
+        <item quantity="other">%s minuts de vídeo</item>
+    </plurals>
+</resources>

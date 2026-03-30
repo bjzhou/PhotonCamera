@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.toast.EducationToastView android:id="@id/edu_toast_layout" android:layout_width="match_parent" android:layout_height="match_parent" android:alpha="0.0" custom:gca_box="uncoveredPreview"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:custom="http://schemas.android.com/apk/res-auto">
+    <FrameLayout android:gravity="fill" android:layout_gravity="center" android:id="@id/toast_inner_layout" android:background="@drawable/education_toast_background" android:paddingTop="32.0dp" android:paddingBottom="8.0dp" android:layout_width="199.0dp" android:layout_height="180.0dp" android:layout_marginTop="32.0dp" android:layout_marginBottom="32.0dp">
+        <LinearLayout android:layout_gravity="center" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent">
+            <ImageView android:layout_gravity="center_horizontal" android:id="@id/edu_toast_icon" android:visibility="gone" android:layout_width="80.0dp" android:layout_height="80.0dp" android:src="@drawable/ic_swipe_down_option" android:scaleType="fitCenter" />
+            <Space android:id="@id/edu_toast_icon_space" android:layout_width="match_parent" android:layout_height="16.0dp" />
+            <TextView android:textSize="16.0sp" android:textColor="@color/toast_text_color" android:gravity="center" android:layout_gravity="center" android:id="@id/toast_text_view" android:paddingTop="16.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/education_swipe_toast_message" android:fontFamily="@font/google_sans_medium_compat" />
+        </LinearLayout>
+    </FrameLayout>
+</com.google.android.apps.camera.toast.EducationToastView>

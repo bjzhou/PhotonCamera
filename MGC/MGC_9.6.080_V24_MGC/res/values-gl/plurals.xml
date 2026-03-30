@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Velocidade de secuencia acelerada: %dx</item>
+        <item quantity="other">Velocidade de secuencia acelerada: %dx</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Máis dun obxecto.</item>
+        <item quantity="other">Máis de %1$d obxectos.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Un vídeo de %1$d segundos necesita %2$d minuto de gravación</item>
+        <item quantity="other">Un vídeo de %1$d segundos necesita %2$d minutos de gravación</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Un vídeo de %1$d segundos necesita %2$d minuto de gravación</item>
+        <item quantity="other">Un vídeo de %1$d segundos necesita %2$d minutos de gravación</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Unha recortada.</item>
+        <item quantity="other">%d recortadas.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Arredor de %s foto</item>
+        <item quantity="other">Arredor de %s fotos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d aplicación seleccionada)</item>
+        <item quantity="other">(%1$d aplicacións seleccionadas)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Comparte fotos e vídeos nas aplicacións sociais de forma rápida desde a Cámara. Escolle %1$d aplicación. Non se poden compartir as fotos nin os vídeos gardados no cartafol protexido.</item>
+        <item quantity="other">Comparte fotos e vídeos nas aplicacións sociais de forma rápida desde a Cámara. Escolle %1$d aplicacións como máximo. Non se poden compartir as fotos nin os vídeos gardados no cartafol protexido.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Escolle %1$d aplicación</item>
+        <item quantity="other">Escolle %1$d aplicacións como máximo</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuto de vídeo</item>
+        <item quantity="other">%s minutos de vídeo</item>
+    </plurals>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="abc_action_bar_default_height_material">48.0dp</dimen>
+    <dimen name="mtrl_calendar_header_height_fullscreen">96.0dp</dimen>
+    <dimen name="photosphere_overlay_message_short_layout_height">113.0dp</dimen>
+    <dimen name="photosphere_overlay_message_short_layout_marginTop">0.0dp</dimen>
+    <dimen name="photosphere_overlay_message_short_layout_width">246.0dp</dimen>
+</resources>

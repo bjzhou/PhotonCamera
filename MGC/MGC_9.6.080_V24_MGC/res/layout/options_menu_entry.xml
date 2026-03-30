@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:id="@id/options_entry_button_container" android:paddingLeft="@dimen/options_button_left_margin" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:layout_gravity="left|center" android:id="@id/options_entry_button" android:background="@drawable/options_button_background" android:padding="@dimen/options_button_padding" android:layout_width="wrap_content" android:layout_height="wrap_content">
+        <ImageView android:id="@id/options_entry_button_icon" android:layout_width="@dimen/options_button_size" android:layout_height="@dimen/options_button_size" android:src="@drawable/quantum_gm_ic_settings_white_24" android:scaleType="fitCenter" android:tint="?colorOnSurface" android:contentDescription="@string/options_menu_gear_desc" />
+    </FrameLayout>
+</FrameLayout>

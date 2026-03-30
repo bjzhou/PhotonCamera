@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.evcomp.EvCompView android:id="@id/evcomp" android:clipChildren="false" android:layout_width="match_parent" android:layout_height="match_parent" android:alpha="0.0" custom:gca_box="previewWidgets"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:custom="http://schemas.android.com/apk/res-auto">
+    <ImageButton android:layout_gravity="center_vertical" android:id="@id/evcomp_reset_button" android:background="@null" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/ic_reset_outlines_inset" android:contentDescription="@string/ev_reset_button_accessibility_description" android:scaleX="-1.0" />
+    <CheckBox android:enabled="false" android:id="@id/lock_button" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:button="@drawable/ic_lock_checkable_inset" />
+    <com.google.android.apps.camera.evcomp.EvCompSlider android:layout_gravity="center" android:id="@id/evcomp_brightness_slider" android:focusable="true" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    <com.google.android.apps.camera.evcomp.EvCompSlider android:layout_gravity="center" android:id="@id/evcomp_shadow_slider" android:focusable="true" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    <androidx.compose.ui.platform.ComposeView android:layout_gravity="center" android:id="@id/evcomp_brightness_compose_view" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    <androidx.compose.ui.platform.ComposeView android:layout_gravity="center" android:id="@id/evcomp_shadow_compose_view" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+</com.google.android.apps.camera.evcomp.EvCompView>

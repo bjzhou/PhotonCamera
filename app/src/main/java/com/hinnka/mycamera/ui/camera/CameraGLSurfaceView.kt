@@ -38,6 +38,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
+    var onFirstPreviewFrame: (() -> Unit)? = null
     private var currentSurface: Surface? = null
 
     init {
@@ -73,6 +74,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         renderer.onMeteringUpdated = { totalWeight, weightedSumLuminance ->
             onMeteringUpdated?.invoke(totalWeight, weightedSumLuminance)
+        }
+
+        renderer.onFirstFrameRendered = {
+            post { onFirstPreviewFrame?.invoke() }
         }
 
         renderer.onDepthInputAvailable = { bitmap ->

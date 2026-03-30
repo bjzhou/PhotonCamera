@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_gravity="center" android:id="@id/large_progress_circular" android:background="#99000000" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/processing_indicator_animation" android:scaleType="center" android:contentDescription="@string/processing_content_description" />
+    <TextView android:textSize="16.0sp" android:textColor="@android:color/white" android:gravity="center" android:layout_width="match_parent" android:layout_height="match_parent" android:text="@string/processing" android:fontFamily="@font/google_sans_medium_compat" />
+</RelativeLayout>

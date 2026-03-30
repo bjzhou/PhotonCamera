@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="rectangle"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <size android:height="@dimen/bottom_bar_side_button_diameter" android:width="@dimen/bottom_bar_side_button_diameter" />
+    <solid android:color="#52000000" />
+    <corners android:radius="@dimen/bottom_bar_side_button_container_radius" />
+    <stroke android:width="2.0dp" android:color="#ffffffff" />
+</shape>

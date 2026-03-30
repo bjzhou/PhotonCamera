@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">အမြန်ပြကွက်မုဒ် %d ဆ မြန်နှုန်း</item>
+        <item quantity="other">အမြန်ပြကွက်မုဒ် %d ဆ မြန်နှုန်း</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">အရာတစ်ခုထက်ပိုသည်။</item>
+        <item quantity="other">အရာ %1$d ခုထက်ပိုသည်။</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d စက္ကန့် ဗီဒီယိုအတွက် %2$d မိနစ်ကြာ ရိုက်ကူးရန် လိုအပ်သည်</item>
+        <item quantity="other">%1$d စက္ကန့် ဗီဒီယိုအတွက် %2$d မိနစ်ကြာ ရိုက်ကူးရန် လိုအပ်သည်</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d စက္ကန့် ဗီဒီယိုအတွက် %2$d မိနစ်ကြာ ရိုက်ကူးရန် လိုအပ်သည်</item>
+        <item quantity="other">%1$d စက္ကန့် ဗီဒီယိုအတွက် %2$d မိနစ်ကြာ ရိုက်ကူးရန် လိုအပ်သည်</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">တစ်ခု ဖြတ်ညှိထားသည်။</item>
+        <item quantity="other">%d ခု ဖြတ်ညှိထားသည်။</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ဓာတ်ပုံ %s ပုံ ခန့်</item>
+        <item quantity="other">ဓာတ်ပုံ %s ပုံ ခန့်</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(အက်ပ် %1$d ခုရွေးထားသည်)</item>
+        <item quantity="other">(အက်ပ် %1$d ခုရွေးထားသည်)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">‘ကင်မရာ’ မှနေ၍ လူမှုအက်ပ်များသို့ ဓာတ်ပုံနှင့် ဗီဒီယိုများ အမြန်မျှဝေပါ။ အက်ပ် %1$d ခု ရွေးပါ။ ‘လော့ခ်ချထားသော ဖိုင်တွဲ’ တွင် သိမ်းထားသည့် ဓာတ်ပုံနှင့် ဗီဒီယိုများကို မျှဝေ၍မရပါ။</item>
+        <item quantity="other">‘ကင်မရာ’ မှနေ၍ လူမှုအက်ပ်များသို့ ဓာတ်ပုံနှင့် ဗီဒီယိုများ အမြန်မျှဝေပါ။ အက်ပ် %1$d ခုအထိ ရွေးပါ။ ‘လော့ခ်ချထားသော ဖိုင်တွဲ’ တွင် သိမ်းထားသည့် ဓာတ်ပုံနှင့် ဗီဒီယိုများကို မျှဝေ၍မရပါ။</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">အက်ပ် %1$d ခု ရွေးပါ</item>
+        <item quantity="other">အက်ပ် %1$d ခုအထိ ရွေးပါ</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">ဗီဒီယိုရိုက်ကူးရန်ကျန်ရှိချိန် %s မိနစ်</item>
+        <item quantity="other">ဗီဒီယိုရိုက်ကူးရန်ကျန်ရှိချိန် %s မိနစ်</item>
+    </plurals>
+</resources>

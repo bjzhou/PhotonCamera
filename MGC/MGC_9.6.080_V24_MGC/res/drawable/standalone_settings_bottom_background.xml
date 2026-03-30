@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple android:color="?android:colorAccent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape>
+            <corners android:radius="28.0dp" />
+            <size android:height="@dimen/bottom_panel_settings_button_height" android:width="140.0dp" />
+            <stroke android:width="1.0dp" android:color="?colorPrimary" />
+        </shape>
+    </item>
+</ripple>

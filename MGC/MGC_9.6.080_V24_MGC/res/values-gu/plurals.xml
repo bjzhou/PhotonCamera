@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ટાઇમ લૅપ્સ મોડમાં રેકોર્ડ કરવાની ગતિ %d ગણી</item>
+        <item quantity="other">ટાઇમ લૅપ્સ મોડમાં રેકોર્ડ કરવાની ગતિ %d ગણી</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">%1$dથી વધુ ઑબ્જેક્ટ.</item>
+        <item quantity="other">%1$dથી વધુ ઑબ્જેક્ટ.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d સેકન્ડના વીડિયો માટે %2$d મિનિટના રેકોર્ડિંગની જરૂર છે</item>
+        <item quantity="other">%1$d સેકન્ડના વીડિયો માટે %2$d મિનિટના રેકોર્ડિંગની જરૂર છે</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d સેકન્ડના વીડિયો માટે %2$d મિનિટના રેકોર્ડિંગની જરૂર છે</item>
+        <item quantity="other">%1$d સેકન્ડના વીડિયો માટે %2$d મિનિટના રેકોર્ડિંગની જરૂર છે</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d ચહેરો કપાયો.</item>
+        <item quantity="other">%d ચહેરા કપાયા.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">લગભગ %s ફોટો</item>
+        <item quantity="other">લગભગ %s ફોટા</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ઍપ પસંદ કરી)</item>
+        <item quantity="other">(%1$d ઍપ પસંદ કરી)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Cameraમાંથી સોશિયલ ઍપ પર ફોટા અને વીડિયો ઝડપથી શેર કરો. વધુમાં વધુ %1$d ઍપ પસંદ કરો. લૉક કરેલા ફોલ્ડરમાં સાચવવામાં આવેલા ફોટા અને વીડિયો શેર કરી શકાતા નથી.</item>
+        <item quantity="other">Cameraમાંથી સોશિયલ ઍપ પર ફોટા અને વીડિયો ઝડપથી શેર કરો. વધુમાં વધુ %1$d ઍપ પસંદ કરો. લૉક કરેલા ફોલ્ડરમાં સાચવવામાં આવેલા ફોટા અને વીડિયો શેર કરી શકાતા નથી.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d ઍપ સુધી પસંદ કરો</item>
+        <item quantity="other">%1$d ઍપ સુધી પસંદ કરો</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s મિનિટનો વીડિયો</item>
+        <item quantity="other">%s મિનિટનો વીડિયો</item>
+    </plurals>
+</resources>

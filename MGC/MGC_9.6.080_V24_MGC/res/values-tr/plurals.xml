@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">%d hızda zaman atlama</item>
+        <item quantity="other">%d hızda zaman atlama</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Birden fazla nesne algılandı.</item>
+        <item quantity="other">%1$d üzeri nesne algılandı.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d saniyelik video için %2$d dakikalık kayıt gerekir</item>
+        <item quantity="other">%1$d saniyelik video için %2$d dakikalık kayıt gerekir</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d saniyelik video için %2$d dakikalık kayıt gerekir</item>
+        <item quantity="other">%1$d saniyelik video için %2$d dakikalık kayıt gerekir</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Bir tanesi kırpıldı.</item>
+        <item quantity="other">%d tanesi kırpıldı.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Yaklaşık %s fotoğraf</item>
+        <item quantity="other">Yaklaşık %s fotoğraf</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d uygulama seçildi)</item>
+        <item quantity="other">(%1$d uygulama seçildi)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Fotoğrafları ve videoları Kamera'dan sosyal uygulamalarda kolayca paylaşın. %1$d uygulama seçin. Kilitli Klasör'e kaydedilen fotoğraf ve videolar paylaşılamaz."</item>
+        <item quantity="other">"Fotoğrafları ve videoları Kamera'dan sosyal uygulamalarda kolayca paylaşın. En fazla %1$d uygulama seçebilirsiniz. Kilitli Klasör'e kaydedilen fotoğraf ve videolar paylaşılamaz."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d uygulama seçin</item>
+        <item quantity="other">En fazla %1$d uygulama seçebilirsiniz</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s dakikalık video</item>
+        <item quantity="other">%s dakikalık video</item>
+    </plurals>
+</resources>

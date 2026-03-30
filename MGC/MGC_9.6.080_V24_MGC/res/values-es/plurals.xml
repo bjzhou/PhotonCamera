@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Velocidad de secuencia acelerada: %d vez</item>
+        <item quantity="other">Velocidad de secuencia acelerada: %d veces</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Más de un objeto.</item>
+        <item quantity="other">Más de %1$d objetos.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d s de vídeo requiere %2$d min de grabación</item>
+        <item quantity="other">%1$d s de vídeo requieren %2$d min de grabación</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d s de vídeo requiere %2$d min de grabación</item>
+        <item quantity="other">%1$d s de vídeo requieren %2$d min de grabación</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Una recortada.</item>
+        <item quantity="other">%d recortadas.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Aproximadamente %s foto</item>
+        <item quantity="other">Aproximadamente %s fotos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d aplicación seleccionada)</item>
+        <item quantity="other">(%1$d aplicaciones seleccionadas)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Comparte rápidamente fotos y vídeos en aplicaciones sociales desde Cámara. Elige %1$d aplicación. Las fotos y los vídeos guardados en Carpeta privada no se pueden compartir.</item>
+        <item quantity="other">Comparte rápidamente fotos y vídeos en aplicaciones sociales desde Cámara. Elige hasta %1$d aplicaciones. Las fotos y los vídeos guardados en Carpeta privada no se pueden compartir.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Puedes elegir %1$d aplicación</item>
+        <item quantity="other">Puedes elegir hasta %1$d aplicaciones</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">Aproximadamente %s minuto de vídeo</item>
+        <item quantity="other">Aproximadamente %s minutos de vídeo</item>
+    </plurals>
+</resources>

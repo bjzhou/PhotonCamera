@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<inset android:drawable="@drawable/ic_reset_outlines" android:insetLeft="@dimen/evcomp_lock_icon_padding" android:insetRight="@dimen/evcomp_lock_icon_padding" android:insetTop="@dimen/evcomp_lock_icon_padding" android:insetBottom="@dimen/evcomp_lock_icon_padding"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

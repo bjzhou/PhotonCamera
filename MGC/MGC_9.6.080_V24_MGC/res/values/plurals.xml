@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Time Lapse %d time speed</item>
+        <item quantity="other">Time Lapse %d times speed</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">More than one object.</item>
+        <item quantity="other">More than %1$d objects.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d sec video requires %2$d min of recording</item>
+        <item quantity="other">%1$d sec video requires %2$d mins of recording</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d sec video requires %2$d min of recording</item>
+        <item quantity="other">%1$d sec video requires %2$d mins of recording</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">One cropped.</item>
+        <item quantity="other">%d cropped.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">About %s photo</item>
+        <item quantity="other">About %s photos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="zero">(%1$d apps selected)</item>
+        <item quantity="one">(%1$d app selected)</item>
+        <item quantity="other">(%1$d apps selected)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Quickly share photos and videos on social apps from Camera. Choose %1$d app. Photos and videos saved to Locked Folder can't be shared."</item>
+        <item quantity="other">"Quickly share photos and videos on social apps from Camera. Choose up to %1$d apps. Photos and videos saved to Locked Folder can't be shared."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Choose %1$d app</item>
+        <item quantity="other">Choose up to %1$d apps</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minute of videos</item>
+        <item quantity="other">%s minutes of videos</item>
+    </plurals>
+</resources>

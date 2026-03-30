@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:paddingTop="@dimen/astro_edu_padding_top" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <include android:layout_width="match_parent" android:layout_height="wrap_content" layout="@layout/astro_edu_options_bar" />
+    <include android:layout_width="match_parent" android:layout_height="match_parent" layout="@layout/astro_edu_about_tab" />
+    <include android:layout_width="match_parent" android:layout_height="match_parent" layout="@layout/astro_edu_manual_tab" />
+    <include android:layout_width="match_parent" android:layout_height="match_parent" layout="@layout/astro_edu_auto_tab" />
+</LinearLayout>

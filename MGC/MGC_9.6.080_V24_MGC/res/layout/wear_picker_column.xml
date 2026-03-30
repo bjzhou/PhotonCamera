@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <TextView android:layout_gravity="center_horizontal" android:id="@id/wear_picker_column_label" android:focusable="false" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:lines="1" android:importantForAccessibility="no" style="?wearColumnLabelStyle" />
+    <com.google.android.clockwork.common.wearable.wearmaterial.picker.CenteredRecyclerView android:layout_gravity="center" android:orientation="vertical" android:id="@id/wear_picker_column_expanded" android:scrollbars="none" android:layout_width="wrap_content" android:layout_height="wrap_content" android:importantForAccessibility="no" app:scrollDecelerationFactor="1.3" app:scrollSpeedFactor="0.6" app:vignette="@drawable/wear_picker_blended_vignette" />
+</merge>

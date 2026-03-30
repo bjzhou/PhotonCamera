@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="rectangle"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="@dimen/tablet_record_speed_slider_bg_radius" />
+    <size android:width="@dimen/tablet_record_speed_slider_width" />
+    <solid android:color="@color/record_speed_slider_bg_color" />
+</shape>

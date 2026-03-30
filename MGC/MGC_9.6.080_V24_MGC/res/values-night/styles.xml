@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AppCompat.DayNight" parent="@style/Theme.AppCompat" />
+    <style name="Theme.AppCompat.DayNight.NoActionBar" parent="@style/Theme.AppCompat.NoActionBar" />
+    <style name="Theme.GoogleMaterial3.DayNight.BottomSheetDialog" parent="@style/Theme.GoogleMaterial3.Dark.BottomSheetDialog" />
+    <style name="Theme.GoogleMaterial3.DayNight.NoActionBar" parent="@style/Theme.GoogleMaterial3.Dark.NoActionBar" />
+</resources>

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Timelapse la viteza %d</item>
+        <item quantity="few">Timelapse la viteza %d</item>
+        <item quantity="other">Timelapse la viteza %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Mai multe obiecte.</item>
+        <item quantity="few">Peste %1$d obiecte.</item>
+        <item quantity="other">Peste %1$d de obiecte.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Pentru un videoclip de %1$d sec. este necesară o înregistrare de %2$d min.</item>
+        <item quantity="few">Pentru un videoclip de %1$d sec. este necesară o înregistrare de %2$d min.</item>
+        <item quantity="other">Pentru un videoclip de %1$d sec. este necesară o înregistrare de %2$d min.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Pentru un videoclip de %1$d sec. este necesară o înregistrare de %2$d min.</item>
+        <item quantity="few">Pentru un videoclip de %1$d sec. este necesară o înregistrare de %2$d min.</item>
+        <item quantity="other">Pentru un videoclip de %1$d sec. este necesară o înregistrare de %2$d min.</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Unul decupat.</item>
+        <item quantity="few">%d decupate.</item>
+        <item quantity="other">%d decupate.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Aproximativ %s fotografie</item>
+        <item quantity="few">Aproximativ %s fotografii</item>
+        <item quantity="other">Aproximativ %s de fotografii</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d aplicație selectată)</item>
+        <item quantity="few">(%1$d aplicații selectate)</item>
+        <item quantity="other">(%1$d de aplicații selectate)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Trimite rapid fotografii și videoclipuri în aplicațiile sociale din Camera foto. Alege %1$d aplicație. Fotografiile și videoclipurile salvate în Dosarul blocat nu pot fi distribuite.</item>
+        <item quantity="few">Trimite rapid fotografii și videoclipuri în aplicațiile sociale din Camera foto. Alege maximum %1$d aplicații. Fotografiile și videoclipurile salvate în Dosarul blocat nu pot fi distribuite.</item>
+        <item quantity="other">Trimite rapid fotografii și videoclipuri în aplicațiile sociale din Camera foto. Alege până la %1$d de aplicații. Fotografiile și videoclipurile salvate în Dosarul blocat nu pot fi distribuite.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Alege %1$d aplicație</item>
+        <item quantity="few">Alege maximum %1$d aplicații</item>
+        <item quantity="other">Alege maximum %1$d de aplicații</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minut din videoclipuri</item>
+        <item quantity="few">%s minute din videoclipuri</item>
+        <item quantity="other">%s de minute din videoclipuri</item>
+    </plurals>
+</resources>

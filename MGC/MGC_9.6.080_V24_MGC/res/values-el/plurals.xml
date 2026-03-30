@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Ταχύτητα Time Lapse %dx</item>
+        <item quantity="other">Ταχύτητα Time Lapse %dx</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Περισσότερα από ένα αντικείμενα.</item>
+        <item quantity="other">Περισσότερα από %1$d αντικείμενα.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Ένα βίντεο %1$d δ. απαιτεί %2$d λ. εγγραφής</item>
+        <item quantity="other">Ένα βίντεο %1$d δ. απαιτεί %2$d λ. εγγραφής</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Ένα βίντεο %1$d δ. απαιτεί %2$d λ. εγγραφής</item>
+        <item quantity="other">Ένα βίντεο %1$d δ. απαιτεί %2$d λ. εγγραφής</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Ένα περικόπηκε.</item>
+        <item quantity="other">%d περικόπηκαν.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Περίπου %s φωτογραφία</item>
+        <item quantity="other">Περίπου %s φωτογραφίες</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(επιλέχθηκε %1$d εφαρμογή)</item>
+        <item quantity="other">(επιλέχθηκαν %1$d εφαρμογές)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Κοινοποιήστε γρήγορα φωτογραφίες και βίντεο σε κοινωνικές εφαρμογές από την Κάμερα. Επιλέξτε %1$d εφαρμογή. Οι φωτογραφίες και τα βίντεο που είναι αποθηκευμένα στον Κλειδωμένο φάκελο δεν μπορούν να κοινοποιηθούν.</item>
+        <item quantity="other">Κοινοποιήστε γρήγορα φωτογραφίες και βίντεο σε κοινωνικές εφαρμογές από την Κάμερα. Επιλέξτε έως %1$d εφαρμογές. Οι φωτογραφίες και τα βίντεο που είναι αποθηκευμένα στον Κλειδωμένο φάκελο δεν μπορούν να κοινοποιηθούν.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Επιλέξτε %1$d εφαρμογή</item>
+        <item quantity="other">Επιλέξτε έως και %1$d εφαρμογές</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s λεπτό βίντεο</item>
+        <item quantity="other">%s λεπτά βίντεο</item>
+    </plurals>
+</resources>

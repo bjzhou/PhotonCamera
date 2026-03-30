@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:gravity="center_vertical" android:orientation="horizontal" android:id="@id/cottage_step_by_step_edu" android:background="@drawable/edu_background" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <include android:layout_width="match_parent" android:layout_height="match_parent" layout="@layout/step_by_step_bottom_sheet" />
+</FrameLayout>

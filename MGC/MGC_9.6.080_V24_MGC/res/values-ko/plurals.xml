@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">타임랩스 속도 비율 %d</item>
+        <item quantity="other">타임랩스 속도 비율 %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">1개 초과.</item>
+        <item quantity="other">%1$d개 초과.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d초 길이의 동영상을 제작하려면 %2$d분 길이의 녹화 파일이 필요합니다.</item>
+        <item quantity="other">%1$d초 길이의 동영상을 제작하려면 %2$d분 길이의 녹화 파일이 필요합니다.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d초 길이의 동영상을 제작하려면 %2$d분 길이의 녹화 파일이 필요합니다.</item>
+        <item quantity="other">%1$d초 길이의 동영상을 제작하려면 %2$d분 길이의 녹화 파일이 필요합니다.</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">1개 잘림.</item>
+        <item quantity="other">%d개 잘림.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">사진 약 %s장</item>
+        <item quantity="other">사진 약 %s장</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(앱 %1$d개 선택됨)</item>
+        <item quantity="other">(앱 %1$d개 선택됨)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">카메라에서 소셜 앱으로 사진 및 동영상을 빠르게 공유합니다. 최대 %1$d개의 앱을 선택하세요. 잠긴 폴더에 저장된 사진과 동영상은 공유할 수 없습니다.</item>
+        <item quantity="other">카메라에서 소셜 앱으로 사진 및 동영상을 빠르게 공유합니다. 최대 %1$d개의 앱을 선택하세요. 잠긴 폴더에 저장된 사진과 동영상은 공유할 수 없습니다.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d개의 앱을 선택하세요.</item>
+        <item quantity="other">최대 %1$d개의 앱을 선택하세요.</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">동영상 %s분</item>
+        <item quantity="other">동영상 %s분</item>
+    </plurals>
+</resources>

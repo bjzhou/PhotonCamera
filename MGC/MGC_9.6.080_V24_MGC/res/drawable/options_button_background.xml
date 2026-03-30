@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="22.0dp" />
+    <size android:height="44.0dp" android:width="44.0dp" />
+    <solid android:color="@color/camera_protection_background_opaque" />
+</shape>

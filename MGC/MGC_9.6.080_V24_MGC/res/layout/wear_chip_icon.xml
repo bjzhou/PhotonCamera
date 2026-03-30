@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_gravity="center" android:id="@id/wear_chip_end_icon" android:clickable="false" android:layout_width="@dimen/wear_chip_button_icon_size" android:layout_height="@dimen/wear_chip_button_icon_size" android:importantForAccessibility="no" />
+</merge>

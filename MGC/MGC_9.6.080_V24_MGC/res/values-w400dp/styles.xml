@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="MaterialButtonFilledStyle" parent="@style/Widget.GoogleMaterial3.Button">
+        <item name="android:textAppearance">?textAppearanceButton</item>
+        <item name="android:textColor">?colorOnPrimary</item>
+        <item name="android:layout_gravity">center_horizontal</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">@dimen/bottom_sheet_button_height</item>
+        <item name="android:minWidth">@dimen/bottom_sheet_button_width</item>
+        <item name="backgroundTint">?colorPrimary</item>
+    </style>
+    <style name="MaterialButtonOutlinedStyle" parent="@style/Widget.GoogleMaterial3.Button.OutlinedButton">
+        <item name="android:textAppearance">?textAppearanceButton</item>
+        <item name="android:textColor">?colorPrimary</item>
+        <item name="android:layout_gravity">center_horizontal</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">@dimen/bottom_sheet_button_height</item>
+        <item name="android:minWidth">@dimen/bottom_sheet_button_width</item>
+        <item name="strokeColor">?colorPrimary</item>
+    </style>
+</resources>

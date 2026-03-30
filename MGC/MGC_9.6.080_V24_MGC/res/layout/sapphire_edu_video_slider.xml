@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="horizontal" android:descendantFocusability="blocksDescendants" android:layout_width="match_parent" android:layout_height="match_parent" android:paddingHorizontal="@dimen/sapphire_edu_padding_horizontal">
+        <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginEnd="@dimen/sapphire_edu_card_margin_end">
+            <com.google.android.apps.camera.ui.compositevideoview.CompositeVideoTextureView android:id="@id/p11_edu_video_hdr" android:layout_width="@dimen/sapphire_video_width" android:layout_height="@dimen/sapphire_video_height" android:layout_marginBottom="@dimen/sapphire_edu_card_margin_bottom" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:layout_gravity="center_horizontal" android:id="@id/p11_edu_caption_hdr" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/sapphire_caption_one" />
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:id="@id/p11_edu_srz_layout" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginEnd="@dimen/sapphire_edu_card_margin_end">
+            <com.google.android.apps.camera.ui.compositevideoview.CompositeVideoTextureView android:id="@id/p11_edu_srz" android:layout_width="@dimen/sapphire_video_width" android:layout_height="@dimen/sapphire_video_height" android:layout_marginBottom="@dimen/sapphire_edu_card_margin_bottom" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:layout_gravity="center_horizontal" android:id="@id/p11_edu_caption_srz" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/sapphire_caption_two" />
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginEnd="@dimen/sapphire_edu_card_margin_end">
+            <com.google.android.apps.camera.ui.compositevideoview.CompositeVideoTextureView android:id="@id/p11_edu_stab" android:layout_width="@dimen/sapphire_video_width" android:layout_height="@dimen/sapphire_video_height" android:layout_marginBottom="@dimen/sapphire_edu_card_margin_bottom" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:layout_gravity="center_horizontal" android:id="@id/p11_edu_caption_stab" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/sapphire_caption_three" />
+        </LinearLayout>
+        <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent">
+            <com.google.android.apps.camera.ui.compositevideoview.CompositeVideoTextureView android:id="@id/p11_edu_video_unblur" android:layout_width="@dimen/sapphire_video_width" android:layout_height="@dimen/sapphire_video_height" android:layout_marginBottom="@dimen/sapphire_edu_card_margin_bottom" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:layout_gravity="center_horizontal" android:id="@id/p11_edu_caption_unblur" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/sapphire_caption_four" />
+        </LinearLayout>
+    </LinearLayout>
+</merge>

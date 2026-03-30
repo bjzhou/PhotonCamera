@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="arc_rectangle_width_ratio">0.124</dimen>
+    <dimen name="icon_button_height">39.0dp</dimen>
+    <dimen name="icon_button_width">24.0dp</dimen>
+    <dimen name="icon_offset_y_ratio">0.031</dimen>
+    <dimen name="icon_size">12.0dp</dimen>
+    <dimen name="license_text_padding_vertical">50.0dp</dimen>
+    <dimen name="start_angle">148.5</dimen>
+    <dimen name="sweep_angle">31.5</dimen>
+</resources>

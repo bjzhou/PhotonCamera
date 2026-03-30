@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:id="@id/autobahn_controls" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <include layout="@layout/brightness_controls" />
+    <include layout="@layout/shadows_controls" />
+    <include layout="@layout/whitebalance_controls" />
+    <include layout="@layout/exposure_controls" />
+</FrameLayout>

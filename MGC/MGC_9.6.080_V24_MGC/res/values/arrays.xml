@@ -1,0 +1,886 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="android_wear_capabilities">
+        <item>snapshot_from_wear</item>
+    </string-array>
+    <array name="circular_progress_layout_color_scheme_colors">
+        <item>@color/circular_progress_layout_red</item>
+        <item>@color/circular_progress_layout_yellow</item>
+        <item>@color/circular_progress_layout_green</item>
+        <item>@color/circular_progress_layout_blue</item>
+    </array>
+    <array name="com_google_android_gms_fonts_certs">
+        <item>@array/com_google_android_gms_fonts_certs_dev</item>
+        <item>@array/com_google_android_gms_fonts_certs_prod</item>
+    </array>
+    <string-array name="com_google_android_gms_fonts_certs_dev">
+        <item>MIIEqDCCA5CgAwIBAgIJANWFuGx90071MA0GCSqGSIb3DQEBBAUAMIGUMQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEWMBQGA1UEBxMNTW91bnRhaW4gVmlldzEQMA4GA1UEChMHQW5kcm9pZDEQMA4GA1UECxMHQW5kcm9pZDEQMA4GA1UEAxMHQW5kcm9pZDEiMCAGCSqGSIb3DQEJARYTYW5kcm9pZEBhbmRyb2lkLmNvbTAeFw0wODA0MTUyMzM2NTZaFw0zNTA5MDEyMzM2NTZaMIGUMQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEWMBQGA1UEBxMNTW91bnRhaW4gVmlldzEQMA4GA1UEChMHQW5kcm9pZDEQMA4GA1UECxMHQW5kcm9pZDEQMA4GA1UEAxMHQW5kcm9pZDEiMCAGCSqGSIb3DQEJARYTYW5kcm9pZEBhbmRyb2lkLmNvbTCCASAwDQYJKoZIhvcNAQEBBQADggENADCCAQgCggEBANbOLggKv+IxTdGNs8/TGFy0PTP6DHThvbbR24kT9ixcOd9W+EaBPWW+wPPKQmsHxajtWjmQwWfna8mZuSeJS48LIgAZlKkpFeVyxW0qMBujb8X8ETrWy550NaFtI6t9+u7hZeTfHwqNvacKhp1RbE6dBRGWynwMVX8XW8N1+UjFaq6GCJukT4qmpN2afb8sCjUigq0GuMwYXrFVee74bQgLHWGJwPmvmLHC69EH6kWr22ijx4OKXlSIx2xT1AsSHee70w5iDBiK4aph27yH3TxkXy9V89TDdexAcKk/cVHYNnDBapcavl7y0RiQ4biu8ymM8Ga/nmzhRKya6G0cGw8CAQOjgfwwgfkwHQYDVR0OBBYEFI0cxb6VTEM8YYY6FbBMvAPyT+CyMIHJBgNVHSMEgcEwgb6AFI0cxb6VTEM8YYY6FbBMvAPyT+CyoYGapIGXMIGUMQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEWMBQGA1UEBxMNTW91bnRhaW4gVmlldzEQMA4GA1UEChMHQW5kcm9pZDEQMA4GA1UECxMHQW5kcm9pZDEQMA4GA1UEAxMHQW5kcm9pZDEiMCAGCSqGSIb3DQEJARYTYW5kcm9pZEBhbmRyb2lkLmNvbYIJANWFuGx90071MAwGA1UdEwQFMAMBAf8wDQYJKoZIhvcNAQEEBQADggEBABnTDPEF+3iSP0wNfdIjIz1AlnrPzgAIHVvXxunW7SBrDhEglQZBbKJEk5kT0mtKoOD1JMrSu1xuTKEBahWRbqHsXclaXjoBADb0kkjVEJu/Lh5hgYZnOjvlba8Ld7HCKePCVePoTJBdI4fvugnL8TsgK05aIskyY0hKI9L8KfqfGTl1lzOv2KoWD0KWwtAWPoGChZxmQ+nBli+gwYMzM1vAkP+aayLe0a1EQimlOalO762r0GXO0ks+UeXde2Z4e+8S/pf7pITEI/tP+MxJTALw9QUWEv9lKTk+jkbqxbsh8nfBUapfKqYn0eidpwq2AzVp3juYl7//fKnaPhJD9gs=</item>
+    </string-array>
+    <string-array name="com_google_android_gms_fonts_certs_prod">
+        <item>MIIEQzCCAyugAwIBAgIJAMLgh0ZkSjCNMA0GCSqGSIb3DQEBBAUAMHQxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpDYWxpZm9ybmlhMRYwFAYDVQQHEw1Nb3VudGFpbiBWaWV3MRQwEgYDVQQKEwtHb29nbGUgSW5jLjEQMA4GA1UECxMHQW5kcm9pZDEQMA4GA1UEAxMHQW5kcm9pZDAeFw0wODA4MjEyMzEzMzRaFw0zNjAxMDcyMzEzMzRaMHQxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpDYWxpZm9ybmlhMRYwFAYDVQQHEw1Nb3VudGFpbiBWaWV3MRQwEgYDVQQKEwtHb29nbGUgSW5jLjEQMA4GA1UECxMHQW5kcm9pZDEQMA4GA1UEAxMHQW5kcm9pZDCCASAwDQYJKoZIhvcNAQEBBQADggENADCCAQgCggEBAKtWLgDYO6IIrgqWbxJOKdoR8qtW0I9Y4sypEwPpt1TTcvZApxsdyxMJZ2JORland2qSGT2y5b+3JKkedxiLDmpHpDsz2WCbdxgxRczfey5YZnTJ4VZbH0xqWVW/8lGmPav5xVwnIiJS6HXk+BVKZF+JcWjAsb/GEuq/eFdpuzSqeYTcfi6idkyugwfYwXFU1+5fZKUaRKYCwkkFQVfcAs1fXA5V+++FGfvjJ/CxURaSxaBvGdGDhfXE28LWuT9ozCl5xw4Yq5OGazvV24mZVSoOO0yZ31j7kYvtwYK6NeADwbSxDdJEqO4k//0zOHKrUiGYXtqw/A0LFFtqoZKFjnkCAQOjgdkwgdYwHQYDVR0OBBYEFMd9jMIhF1Ylmn/Tgt9r45jk14alMIGmBgNVHSMEgZ4wgZuAFMd9jMIhF1Ylmn/Tgt9r45jk14aloXikdjB0MQswCQYDVQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEWMBQGA1UEBxMNTW91bnRhaW4gVmlldzEUMBIGA1UEChMLR29vZ2xlIEluYy4xEDAOBgNVBAsTB0FuZHJvaWQxEDAOBgNVBAMTB0FuZHJvaWSCCQDC4IdGZEowjTAMBgNVHRMEBTADAQH/MA0GCSqGSIb3DQEBBAUAA4IBAQBt0lLO74UwLDYKqs6Tm8/yzKkEu116FmH4rkaymUIE0P9KaMftGlMexFlaYjzmB2OxZyl6euNXEsQH8gjwyxCUKRJNexBiGcCEyj6z+a1fuHHvkiaai+KL8W1EyNmgjmyy8AW7P+LLlkR+ho5zEHatRbM/YAnqGcFh5iZBqpknHf1SKMXFh4dd239FJ1jWYfbMDMy3NS5CTMQ2XFI1MvcyUTdZPErjQfTbQe3aDQsQcafEQPD+nqActifKZ0Np0IS9L9kR/wbNvyz6ENwPiTrjV2KRkEjH78ZMcUQXg0L3BYHJ3lc69Vs5Ddf9uUGGMYldX3WfMBEmh/9iFBDAaTCK</item>
+    </string-array>
+    <string-array name="antibanding_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>50HZ</item>
+        <item>60HZ</item>
+        <item>Auto</item>
+    </string-array>
+    <string-array name="antibanding_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="b_p_p_entries">
+        <item>@string/b_p_p_AUTO</item>
+        <item>RGB_565</item>
+        <item>YV12</item>
+        <item>NV16</item>
+        <item>NV21</item>
+        <item>YUY2</item>
+        <item>JPEG</item>
+        <item>DEPTH_JPEG</item>
+        <item>YUV_420_888</item>
+        <item>YUV_422_888</item>
+        <item>YUV_444_888</item>
+        <item>FLEX_RGB_888</item>
+        <item>FLEX_RGBA_8888</item>
+        <item>RAW_SENSOR</item>
+        <item>RAW_PRIVATE</item>
+        <item>RAW10</item>
+        <item>RAW12</item>
+        <item>DEPTH16</item>
+        <item>DEPTH_POINT_CLOUD</item>
+        <item>PRIVATE</item>
+        <item>HEIC</item>
+    </string-array>
+    <string-array name="b_p_p_entryvalues">
+        <item>0</item>
+        <item>4</item>
+        <item>842094169</item>
+        <item>16</item>
+        <item>17</item>
+        <item>20</item>
+        <item>256</item>
+        <item>1768253795</item>
+        <item>35</item>
+        <item>39</item>
+        <item>40</item>
+        <item>41</item>
+        <item>42</item>
+        <item>32</item>
+        <item>36</item>
+        <item>37</item>
+        <item>38</item>
+        <item>1144402265</item>
+        <item>257</item>
+        <item>34</item>
+        <item>1212500294</item>
+    </string-array>
+    <string-array name="bl_entries">
+        <item>@string/bl_auto</item>
+        <item>@string/bl_dynamic</item>
+        <item>@string/bl_0</item>
+        <item>@string/bl_16</item>
+        <item>@string/bl_64</item>
+        <item>@string/bl_100</item>
+        <item>@string/bl_63_9</item>
+        <item>@string/bl_user</item>
+    </string-array>
+    <string-array name="pref_camera_picturesize_entries">
+        <item>@string/pref_camera_picturesize_max</item>
+        <item>@string/pref_camera_picturesize_default</item>
+        <item>@string/pref_camera_picturesize_medium</item>
+    </string-array>
+    <string-array name="pref_camera_picturesize_entryvalues">
+        <item>max</item>
+        <item>full</item>
+        <item>medium</item>
+    </string-array>
+    <string-array name="pref_catcher_entryvalues">
+        <item>1</item>
+        <item>0</item>
+    </string-array>
+    <string-array name="pref_catcher_type_entries">
+        <item>@string/pref_catcher_type_always_on</item>
+        <item>@string/pref_catcher_type_timer</item>
+    </string-array>
+    <string-array name="pref_codec_format_entries">
+        <item>@string/pref_codec_format_hevc</item>
+        <item>@string/pref_codec_format_avc</item>
+        <item>@string/pref_codec_format_jellybean</item>
+    </string-array>
+    <string-array name="pref_codec_format_entryvalues">
+        <item>@string/pref_codec_format_hevc_entry_value</item>
+        <item>@string/pref_codec_format_avc_entry_value</item>
+        <item>@string/pref_codec_format_jellybean_entry_value</item>
+    </string-array>
+    <string-array name="pref_double_tap_action_entries">
+        <item>@string/double_tap_zoom</item>
+        <item>@string/double_tap_switch_camera</item>
+        <item>@string/setting_off</item>
+    </string-array>
+    <string-array name="pref_double_tap_entryvalues">
+        <item>@string/preference_double_tap_zoom</item>
+        <item>@string/preference_double_tap_switch_camera</item>
+        <item>@string/preference_double_tap_none</item>
+    </string-array>
+    <string-array name="pref_grid_mode_entries">
+        <item>@string/grid_mode_off</item>
+        <item>@string/grid_mode_three_by_three</item>
+        <item>@string/grid_mode_four_by_four</item>
+        <item>@string/grid_mode_golden_ratio</item>
+    </string-array>
+    <string-array name="pref_grid_mode_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="bl_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>5</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>6</item>
+        <item>7</item>
+    </string-array>
+    <string-array name="c_c_a_m_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+    </string-array>
+    <string-array name="c_c_a_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="c_c_i_quality_entries">
+        <item>Default</item>
+        <item>Custom</item>
+        <item>Preview</item>
+        <item>Still capture</item>
+        <item>Video records</item>
+        <item>Video snapahot</item>
+        <item>Zero shutter lag</item>
+        <item>Manual</item>
+        <item>Motion tracking</item>
+    </string-array>
+    <string-array name="pref_unfold_preference_entries">
+        <item>@string/unfold_preference_standard_camera</item>
+        <item>@string/jupiter_title</item>
+        <item>@string/saturn_title</item>
+        <item>@string/uranus_title</item>
+    </string-array>
+    <string-array name="pref_unfold_preference_entryvalues">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="pref_volume_action_entries">
+        <item>@string/volume_key_shutter</item>
+        <item>@string/volume_key_zoom</item>
+        <item>@string/volume_key_volume</item>
+        <item>@string/volume_key_off</item>
+    </string-array>
+    <string-array name="pref_volume_action_entryvalues">
+        <item>@string/preference_volume_key_shutter</item>
+        <item>@string/preference_volume_key_zoom</item>
+        <item>@string/preference_volume_key_volume</item>
+        <item>@string/preference_volume_key_off</item>
+    </string-array>
+    <string-array name="c_c_i_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+    </string-array>
+    <string-array name="c_c_m_quality_entries">
+        <item>Default</item>
+        <item>Transform Matrix</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+    </string-array>
+    <string-array name="storage_saver_settings_changed">
+        <item>@string/storage_saver_settings_changed_1</item>
+        <item>@string/storage_saver_settings_changed_2</item>
+        <item>@string/storage_saver_settings_changed_3</item>
+        <item>@string/storage_saver_settings_changed_4</item>
+        <item>@string/storage_saver_settings_changed_5</item>
+        <item>@string/storage_saver_settings_changed_6</item>
+        <item>@string/storage_saver_settings_changed_7</item>
+    </string-array>
+    <string-array name="storage_saver_settings_changed_detail">
+        <item>@string/storage_saver_settings_changed_detail_1</item>
+        <item>@string/storage_saver_settings_changed_detail_2</item>
+        <item>@string/storage_saver_settings_changed_detail_3</item>
+        <item>@string/storage_saver_settings_changed_detail_4</item>
+        <item>@string/storage_saver_settings_changed_detail_5</item>
+        <item>@string/storage_saver_settings_changed_detail_6</item>
+        <item>@string/storage_saver_settings_changed_detail_7</item>
+    </string-array>
+    <string-array name="storage_saver_settings_changed_detail_default_res">
+        <item>@string/storage_saver_settings_changed_detail_1</item>
+        <item>@string/storage_saver_settings_changed_detail_2</item>
+        <item>@string/storage_saver_settings_changed_detail_3</item>
+        <item>@string/storage_saver_settings_changed_detail_4_default_res</item>
+        <item>@string/storage_saver_settings_changed_detail_5</item>
+        <item>@string/storage_saver_settings_changed_detail_6</item>
+        <item>@string/storage_saver_settings_changed_detail_7</item>
+    </string-array>
+    <string-array name="trusted_certificates">
+        <item>4BA713DFECE93D47572DC5E845A7A82C4A891F2F</item>
+        <item>24BB24C05E47E0AEFA68A58A766179D9B613A600</item>
+    </string-array>
+    <string-array name="c_c_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="c_e_z_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>On</item>
+    </string-array>
+    <string-array name="c_e_z_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="c_f_a_entries">
+        <item>@string/c_f_a_auto</item>
+        <item>RGGB</item>
+        <item>GRBG</item>
+        <item>GBRG</item>
+        <item>BGGR</item>
+    </string-array>
+    <string-array name="c_f_a_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="cr_hdrp_e_quality_entries">
+        <item>Default</item>
+        <item>Fast</item>
+        <item>High quality</item>
+    </string-array>
+    <string-array name="cr_hdrp_e_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="d_c_m_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+    </string-array>
+    <string-array name="d_c_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="device_entries">
+        <item>@string/sailfish</item>
+        <item>@string/marlin</item>
+        <item>@string/walleye</item>
+        <item>@string/taimen</item>
+        <item>@string/muskie</item>
+        <item>@string/blueline</item>
+        <item>@string/crosshatch</item>
+        <item>@string/sargo</item>
+        <item>@string/bonito</item>
+        <item>@string/flame</item>
+        <item>@string/coral</item>
+        <item>@string/sunfish</item>
+        <item>@string/needlefish</item>
+        <item>@string/bramble</item>
+        <item>@string/redfin</item>
+        <item>@string/barbet</item>
+        <item>@string/oriole</item>
+        <item>@string/raven</item>
+        <item>@string/bluejay</item>
+        <item>@string/panther</item>
+        <item>@string/cheetah</item>
+        <item>@string/lynx</item>
+        <item>@string/felix</item>
+        <item>@string/pipit</item>
+        <item>@string/tangor</item>
+        <item>@string/tangorpro</item>
+        <item>@string/husky</item>
+        <item>@string/akita</item>
+        <item>@string/shiba</item>
+        <item>@string/tokay</item>
+        <item>@string/caiman</item>
+        <item>@string/komodo</item>
+        <item>@string/comet</item>
+    </string-array>
+    <string-array name="device_entryvalues">
+        <item>sailfish</item>
+        <item>marlin</item>
+        <item>walleye</item>
+        <item>taimen</item>
+        <item>muskie</item>
+        <item>blueline</item>
+        <item>crosshatch</item>
+        <item>sargo</item>
+        <item>bonito</item>
+        <item>flame</item>
+        <item>coral</item>
+        <item>sunfish</item>
+        <item>needlefish</item>
+        <item>bramble</item>
+        <item>redfin</item>
+        <item>barbet</item>
+        <item>oriole</item>
+        <item>raven</item>
+        <item>bluejay</item>
+        <item>panther</item>
+        <item>cheetah</item>
+        <item>lynx</item>
+        <item>felix</item>
+        <item>pipit</item>
+        <item>tangor</item>
+        <item>tangorpro</item>
+        <item>husky</item>
+        <item>akita</item>
+        <item>shiba</item>
+        <item>tokay</item>
+        <item>caiman</item>
+        <item>komodo</item>
+        <item>comet</item>
+    </string-array>
+    <string-array name="device_entryvalues_hdrplus">
+        <item>sailfish</item>
+        <item>marlin</item>
+        <item>walleye</item>
+        <item>taimen</item>
+        <item>muskie</item>
+        <item>blueline</item>
+        <item>crosshatch</item>
+        <item>sargo</item>
+        <item>bonito</item>
+        <item>flame</item>
+        <item>coral</item>
+        <item>sunfish</item>
+        <item>needlefish</item>
+        <item>bramble</item>
+        <item>redfin</item>
+        <item>barbet</item>
+        <item>oriole</item>
+        <item>raven</item>
+        <item>bluejay</item>
+        <item>panther</item>
+        <item>cheetah</item>
+        <item>lynx</item>
+        <item>felix</item>
+        <item>pipit</item>
+        <item>tangor</item>
+        <item>tangorpro</item>
+        <item>husky</item>
+        <item>akita</item>
+        <item>shiba</item>
+        <item>tokay</item>
+        <item>caiman</item>
+        <item>komodo</item>
+        <item>comet</item>
+    </string-array>
+    <string-array name="dotfix_entries">
+        <item>@string/dotfix_off</item>
+        <item>@string/dotfix_1</item>
+        <item>@string/dotfix_3</item>
+        <item>@string/dotfix_5</item>
+        <item>@string/dotfix_7</item>
+        <item>@string/dotfix_9</item>
+    </string-array>
+    <string-array name="dotfix_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>3</item>
+        <item>5</item>
+        <item>7</item>
+        <item>9</item>
+    </string-array>
+    <string-array name="e_m_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+        <item>Zero Shutter Lag</item>
+    </string-array>
+    <string-array name="e_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="execute_finish_on_entries">
+        <item>@string/execute_finish_on_def</item>
+        <item>@string/execute_finish_on_cpu</item>
+        <item>@string/execute_finish_on_hexagon</item>
+        <item>@string/execute_finish_on_gxp</item>
+    </string-array>
+    <string-array name="execute_finish_on_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="expcomp_entries">
+        <item>@string/expcomp_p5</item>
+        <item>@string/expcomp_p4</item>
+        <item>@string/expcomp_p3</item>
+        <item>@string/expcomp_p2</item>
+        <item>@string/expcomp_p1</item>
+        <item>@string/expcomp_0</item>
+        <item>@string/expcomp_m1</item>
+        <item>@string/expcomp_m2</item>
+        <item>@string/expcomp_m3</item>
+        <item>@string/expcomp_m4</item>
+        <item>@string/expcomp_m5</item>
+    </string-array>
+    <string-array name="expcomp_entryvalues">
+        <item>5</item>
+        <item>4</item>
+        <item>3</item>
+        <item>2</item>
+        <item>1</item>
+        <item>0</item>
+        <item>-1</item>
+        <item>-2</item>
+        <item>-3</item>
+        <item>-4</item>
+        <item>-5</item>
+    </string-array>
+    <string-array name="face_detect_entries">
+        <item>Auto</item>
+        <item>SIMPLE</item>
+        <item>FULL</item>
+        <item>EXTENDED</item>
+        <item>NONE</item>
+    </string-array>
+    <string-array name="face_detect_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+    <string-array name="flash_mode_entries">
+        <item>@string/flash_mode_AUTO</item>
+        <item>SINGLE</item>
+        <item>TORCH</item>
+    </string-array>
+    <string-array name="flash_mode_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="gallery_entries">
+        <item>Default</item>
+    </string-array>
+    <string-array name="gallery_entryvalues">
+        <item></item>
+    </string-array>
+    <string-array name="google_cvp_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>On</item>
+    </string-array>
+    <string-array name="google_cvp_entryvalues">
+        <item>-1</item>
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+    <string-array name="h_p_m_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+    </string-array>
+    <string-array name="h_p_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="hex_editor_libs_entries">
+        <item>None(HEX editor off)</item>
+        <item>Libgcastartup.so</item>
+        <item>Libpairipcore.so</item>
+        <item>Libbrotli.so</item>
+        <item>Libsmartcapture_native.so</item>
+    </string-array>
+    <string-array name="hex_editor_libs_entryvalues">
+        <item></item>
+        <item>gcastartup</item>
+        <item>pairipcore</item>
+        <item>brotli</item>
+        <item>smartcapture_native</item>
+    </string-array>
+    <string-array name="hwlevel_entries">
+        <item>@string/hwlevel_auto</item>
+        <item>@string/hwlevel_full</item>
+        <item>@string/hwlevel_level</item>
+        <item>@string/hwlevel_level_plus</item>
+    </string-array>
+    <string-array name="hwlevel_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>4</item>
+        <item>6</item>
+    </string-array>
+    <string-array name="idle_focus_entries">
+        <item>Auto</item>
+        <item>Off</item>
+        <item>On</item>
+    </string-array>
+    <string-array name="idle_focus_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="merge_entries">
+        <item>@string/merge_def</item>
+        <item>@string/merge_0</item>
+        <item>@string/merge_1</item>
+        <item>@string/merge_2</item>
+        <item>@string/merge_3</item>
+        <item>@string/merge_auto</item>
+    </string-array>
+    <string-array name="merge_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+    </string-array>
+    <string-array name="merge_processor_entries">
+        <item>@string/merge_processor_auto</item>
+        <item>@string/merge_processor_def</item>
+        <item>@string/merge_processor_1</item>
+        <item>@string/merge_processor_2</item>
+    </string-array>
+    <string-array name="merge_processor_entryvalues">
+        <item>-1</item>
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="n_r_m_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+        <item>Minimal</item>
+        <item>Zero Shutter Lag</item>
+    </string-array>
+    <string-array name="n_r_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+    </string-array>
+    <string-array name="preview_entries">
+        <item>@string/preview_auto</item>
+        <item>@string/preview_jpg</item>
+        <item>@string/preview_yuv</item>
+        <item>@string/preview_priv</item>
+    </string-array>
+    <string-array name="preview_entryvalues">
+        <item>0</item>
+        <item>256</item>
+        <item>35</item>
+        <item>34</item>
+    </string-array>
+    <string-array name="process_primary_format_entries">
+        <item>Auto</item>
+        <item>YUV</item>
+        <item>RGB</item>
+        <item>RGB_HW</item>
+        <item>MERGED_DNG</item>
+        <item>MERGED_RAW</item>
+        <item>MERGED_PD</item>
+        <item>MUTABLE_MERGED_RAW</item>
+        <item>ABSENT</item>
+    </string-array>
+    <string-array name="process_primary_format_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+    </string-array>
+    <string-array name="quality_corrector_entries">
+        <item>@string/max_exp</item>
+        <item>@string/x8_exp</item>
+        <item>@string/x6_exp</item>
+        <item>@string/x4_exp</item>
+        <item>@string/x2_exp</item>
+        <item>@string/exp_default</item>
+        <item>@string/x2_iso</item>
+        <item>@string/x4_iso</item>
+        <item>@string/x6_iso</item>
+        <item>@string/x8_iso</item>
+        <item>@string/max_iso</item>
+    </string-array>
+    <string-array name="quality_corrector_entryvalues">
+        <item>5</item>
+        <item>4</item>
+        <item>3</item>
+        <item>2</item>
+        <item>1</item>
+        <item>0</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+        <item>9</item>
+        <item>10</item>
+    </string-array>
+    <string-array name="raw_entries">
+        <item>@string/preview_raw_auto</item>
+        <item>@string/preview_raw</item>
+        <item>@string/preview_raw_sensor</item>
+        <item>@string/preview_raw_private</item>
+    </string-array>
+    <string-array name="raw_entryvalues">
+        <item>0</item>
+        <item>37</item>
+        <item>32</item>
+        <item>36</item>
+    </string-array>
+    <string-array name="raw_res_entries">
+        <item>auto</item>
+    </string-array>
+    <string-array name="raw_res_entryvalues">
+        <item></item>
+    </string-array>
+    <string-array name="reset_focus_entries">
+        <item>Auto</item>
+        <item>Off</item>
+        <item>On</item>
+    </string-array>
+    <string-array name="reset_focus_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="s_m_quality_entries">
+        <item>Default</item>
+        <item>Off</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+    </string-array>
+    <string-array name="s_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="save_storage_entries">
+        <item>INTERNAL</item>
+        <item>EXTERNAL</item>
+    </string-array>
+    <string-array name="save_storage_entryvalues">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+    <string-array name="scene_mode_entries">
+        <item>Default</item>
+        <item>DISABLED</item>
+        <item>FACE_PRIORITY</item>
+        <item>ACTION</item>
+        <item>PORTRAIT</item>
+        <item>LANDSCAPE</item>
+        <item>NIGHT</item>
+        <item>NIGHT_PORTRAIT</item>
+        <item>THEATRE</item>
+        <item>BEACH</item>
+        <item>SNOW</item>
+        <item>SUNSET</item>
+        <item>STEADYPHOTO</item>
+        <item>FIREWORKS</item>
+        <item>SPORTS</item>
+        <item>PARTY</item>
+        <item>CANDLELIGHT</item>
+        <item>BARCODE</item>
+        <item>HIGH_SPEED_VIDEO</item>
+        <item>HDR</item>
+    </string-array>
+    <string-array name="scene_mode_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+        <item>9</item>
+        <item>10</item>
+        <item>11</item>
+        <item>12</item>
+        <item>13</item>
+        <item>14</item>
+        <item>15</item>
+        <item>16</item>
+        <item>17</item>
+        <item>18</item>
+        <item>19</item>
+    </string-array>
+    <string-array name="sdk_ver_entries">
+        <item>Default</item>
+        <item>SDK_21</item>
+        <item>SDK_22</item>
+        <item>SDK_23</item>
+        <item>SDK_24</item>
+        <item>SDK_25</item>
+        <item>SDK_26</item>
+        <item>SDK_27</item>
+        <item>SDK_28</item>
+        <item>SDK_29</item>
+        <item>SDK_30</item>
+        <item>SDK_31</item>
+        <item>MASTER V1</item>
+        <item>MASTER V2</item>
+    </string-array>
+    <string-array name="sdk_ver_entryvalues">
+        <item>0</item>
+        <item>21</item>
+        <item>22</item>
+        <item>23</item>
+        <item>24</item>
+        <item>25</item>
+        <item>26</item>
+        <item>27</item>
+        <item>28</item>
+        <item>29</item>
+        <item>30</item>
+        <item>31</item>
+        <item>32</item>
+        <item>33</item>
+    </string-array>
+    <string-array name="shasta_entries">
+        <item>@string/shasta_def</item>
+        <item>@string/shasta_off</item>
+        <item>@string/shasta_on</item>
+        <item>@string/shasta_sys</item>
+    </string-array>
+    <string-array name="shasta_entryvalues">
+        <item>0</item>
+        <item>-1</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="surfase_list_entries">
+        <item>Auto</item>
+        <item>from HW FULL</item>
+        <item>from HW L3</item>
+        <item>from HW L3+</item>
+    </string-array>
+    <string-array name="surfase_list_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+    <string-array name="t_m_curve_quality_entries">
+        <item>Default</item>
+        <item>SRGB</item>
+        <item>REC709</item>
+    </string-array>
+    <string-array name="t_m_curve_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="t_m_quality_entries">
+        <item>Default</item>
+        <item>Contrast Curve</item>
+        <item>Fast</item>
+        <item>High Quality</item>
+        <item>Gamma Value</item>
+        <item>Preset Curve</item>
+    </string-array>
+    <string-array name="t_m_quality_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+    </string-array>
+    <string-array name="top_shot_entries">
+        <item>@string/top_shot_AUTO</item>
+        <item>Super small</item>
+        <item>Very small</item>
+        <item>Small</item>
+        <item>Medium</item>
+        <item>High</item>
+        <item>Very high</item>
+        <item>Super high(4/3)</item>
+        <item>Super high(16/9)</item>
+    </string-array>
+    <string-array name="top_shot_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+    </string-array>
+    <string-array name="walnut_entries">
+        <item>Auto</item>
+        <item>Heuristic</item>
+        <item>Ml</item>
+    </string-array>
+    <string-array name="walnut_entryvalues">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="wl_entries">
+        <item>@string/wl_auto</item>
+        <item>@string/wl_255</item>
+        <item>@string/wl_1023</item>
+        <item>@string/wl_4095</item>
+        <item>@string/wl_16383</item>
+        <item>@string/wl_65535</item>
+    </string-array>
+    <string-array name="wl_entryvalues">
+        <item>0</item>
+        <item>255</item>
+        <item>1023</item>
+        <item>4095</item>
+        <item>16383</item>
+        <item>65535</item>
+    </string-array>
+</resources>

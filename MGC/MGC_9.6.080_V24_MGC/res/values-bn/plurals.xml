@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">টাইম ল্যাপ্স %d গুণ স্পিড</item>
+        <item quantity="other">টাইম ল্যাপ্স %d গুণ স্পিড</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">%1$dটির বেশি অবজেক্ট।</item>
+        <item quantity="other">%1$dটির বেশি অবজেক্ট।</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d সেকেন্ডের ভিডিওর জন্য %2$d মিনিটের রেকর্ডিং করতে হবে</item>
+        <item quantity="other">%1$d সেকেন্ডের ভিডিওর জন্য %2$d মিনিটের রেকর্ডিং করতে হবে</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d সেকেন্ডের ভিডিওর জন্য %2$d মিনিটের রেকর্ডিং করতে হবে</item>
+        <item quantity="other">%1$d সেকেন্ডের ভিডিওর জন্য %2$d মিনিটের রেকর্ডিং করতে হবে</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%dটি ক্রপ করা হয়েছে।</item>
+        <item quantity="other">%dটি ক্রপ করা হয়েছে।</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">প্রায় %sটি ফটো তোলা যাবে</item>
+        <item quantity="other">প্রায় %sটি ফটো তোলা যাবে</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$dটি অ্যাপ বেছে নেওয়া হয়েছে)</item>
+        <item quantity="other">(%1$dটি অ্যাপ বেছে নেওয়া হয়েছে)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"ক্যামেরা থেকে সামাজিক অ্যাপে ফটো ও ভিডিও ঝটপট শেয়ার করুন। সর্বাধিক %1$dটি অ্যাপ বেছে নিন। 'লক করা ফোল্ডারে' সেভ থাকা ফটো ও ভিডিও শেয়ার করা যাবে না।"</item>
+        <item quantity="other">"ক্যামেরা থেকে সামাজিক অ্যাপে ফটো ও ভিডিও ঝটপট শেয়ার করুন। সর্বাধিক %1$dটি অ্যাপ বেছে নিন। 'লক করা ফোল্ডারে' সেভ থাকা ফটো ও ভিডিও শেয়ার করা যাবে না।"</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">সর্বাধিক %1$dটি অ্যাপ বেছে নিন</item>
+        <item quantity="other">সর্বাধিক %1$dটি অ্যাপ বেছে নিন</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s মিনিটের ভিডিও ক্যাপচার করা যাবে</item>
+        <item quantity="other">%s মিনিটের ভিডিও ক্যাপচার করা যাবে</item>
+    </plurals>
+</resources>

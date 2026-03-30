@@ -1,0 +1,962 @@
+.class final Lsdd;
+.super Lsdr;
+.source "PG"
+
+
+# direct methods
+.method public constructor <init>(Ljava/lang/Class;)V
+    .locals 2
+
+    goto/32 :goto_7
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_0
+    goto/32 :goto_9
+
+    nop
+
+    :goto_1
+    const/4 v1, 0x0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_2
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_2
+    invoke-direct {p0, v0, p1, v1}, Lsdr;-><init>(Ljava/lang/String;Ljava/lang/Class;Z)V
+
+    goto/32 :goto_5
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_3
+    rem-int v0, v0, v1
+
+    nop
+
+    nop
+
+    goto/32 :goto_4
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_4
+    if-lez v0, :cond_0
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_9
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :cond_0
+    goto/32 :goto_8
+
+    nop
+
+    :goto_5
+    return-void
+
+    nop
+
+    nop
+
+    :goto_6
+    goto/32 :goto_0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_7
+    const v0, 0x1
+
+    nop
+
+    goto/32 :goto_b
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_8
+    goto/32 :goto_6
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_9
+    goto/32 :goto_c
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_a
+    add-int v0, v0, v1
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_3
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_b
+    const v1, 0xe
+
+    nop
+
+    goto/32 :goto_a
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_c
+    const-string v0, "tags"
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1
+
+    nop
+
+    nop
+
+    nop
+.end method
+
+
+# virtual methods
+.method public final bridge synthetic b(Ljava/lang/Object;Lsdq;)V
+    .locals 3
+
+    goto/32 :goto_7
+
+    nop
+
+    nop
+
+    :goto_0
+    if-nez p0, :cond_0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_5
+
+    nop
+
+    nop
+
+    :cond_0
+    goto/32 :goto_14
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1
+    check-cast v0, Ljava/util/Set;
+
+    nop
+
+    nop
+
+    goto/32 :goto_16
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_2
+    check-cast p1, Lsgq;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1b
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_3
+    invoke-interface {p0}, Ljava/util/Map$Entry;->getValue()Ljava/lang/Object;
+
+    move-result-object v0
+
+    nop
+
+    nop
+
+    goto/32 :goto_1
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_4
+    goto/16 :goto_19
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_5
+    goto/32 :goto_b
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_6
+    if-nez v1, :cond_1
+
+    nop
+
+    nop
+
+    goto/32 :goto_19
+
+    nop
+
+    nop
+
+    nop
+
+    :cond_1
+    goto/32 :goto_10
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_7
+    const v0, 0x12
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1c
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_8
+    invoke-interface {p0}, Ljava/util/Map$Entry;->getKey()Ljava/lang/Object;
+
+    move-result-object p0
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_11
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_9
+    goto/16 :goto_24
+
+    nop
+
+    :goto_a
+    goto/32 :goto_8
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_b
+    return-void
+
+    nop
+
+    nop
+
+    :goto_c
+    goto/32 :goto_21
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_d
+    if-lez v0, :cond_2
+
+    nop
+
+    nop
+
+    goto/32 :goto_29
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :cond_2
+    goto/32 :goto_28
+
+    nop
+
+    :goto_e
+    check-cast p0, Ljava/util/Map$Entry;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_3
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_f
+    invoke-interface {p0}, Ljava/util/Map$Entry;->getValue()Ljava/lang/Object;
+
+    move-result-object v0
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_2a
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_10
+    invoke-interface {v0}, Ljava/util/Iterator;->next()Ljava/lang/Object;
+
+    move-result-object v1
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1f
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_11
+    check-cast p0, Ljava/lang/String;
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_13
+
+    nop
+
+    nop
+
+    :goto_12
+    check-cast v2, Ljava/lang/String;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_26
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_13
+    const/4 v0, 0x0
+
+    nop
+
+    goto/32 :goto_17
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_14
+    invoke-interface {p1}, Ljava/util/Iterator;->next()Ljava/lang/Object;
+
+    move-result-object p0
+
+    nop
+
+    nop
+
+    goto/32 :goto_e
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_15
+    invoke-interface {p1}, Ljava/util/Iterator;->hasNext()Z
+
+    move-result p0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_16
+    invoke-interface {v0}, Ljava/util/Set;->isEmpty()Z
+
+    move-result v0
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1d
+
+    nop
+
+    nop
+
+    :goto_17
+    invoke-interface {p2, p0, v0}, Lsdq;->a(Ljava/lang/String;Ljava/lang/Object;)V
+
+    goto/32 :goto_4
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_18
+    invoke-direct {p1, p0}, Lsgm;-><init>(Lsgn;)V
+
+    :goto_19
+    goto/32 :goto_15
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1a
+    new-instance p1, Lsgm;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1e
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1b
+    iget-object p0, p1, Lsgq;->c:Lsgo;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_20
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1c
+    const v1, 0x3
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_22
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1d
+    if-eqz v0, :cond_3
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_a
+
+    nop
+
+    :cond_3
+    goto/32 :goto_f
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1e
+    check-cast p0, Lsgn;
+
+    nop
+
+    goto/32 :goto_18
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_1f
+    invoke-interface {p0}, Ljava/util/Map$Entry;->getKey()Ljava/lang/Object;
+
+    move-result-object v2
+
+    nop
+
+    nop
+
+    goto/32 :goto_12
+
+    nop
+
+    nop
+
+    :goto_20
+    iget-object p0, p0, Lsgo;->d:Ljava/util/Set;
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_1a
+
+    nop
+
+    nop
+
+    :goto_21
+    goto/32 :goto_29
+
+    nop
+
+    :goto_22
+    add-int v0, v0, v1
+
+    nop
+
+    nop
+
+    goto/32 :goto_27
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_23
+    invoke-interface {v0}, Ljava/util/Set;->iterator()Ljava/util/Iterator;
+
+    move-result-object v0
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_24
+    goto/32 :goto_25
+
+    nop
+
+    nop
+
+    :goto_25
+    invoke-interface {v0}, Ljava/util/Iterator;->hasNext()Z
+
+    move-result v1
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_6
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_26
+    invoke-interface {p2, v2, v1}, Lsdq;->a(Ljava/lang/String;Ljava/lang/Object;)V
+
+    goto/32 :goto_9
+
+    nop
+
+    nop
+
+    :goto_27
+    rem-int v0, v0, v1
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    goto/32 :goto_d
+
+    nop
+
+    nop
+
+    :goto_28
+    goto/32 :goto_c
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_29
+    goto/32 :goto_2
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+
+    :goto_2a
+    check-cast v0, Ljava/util/Set;
+
+    nop
+
+    nop
+
+    goto/32 :goto_23
+
+    nop
+
+    nop
+
+    nop
+
+    nop
+.end method

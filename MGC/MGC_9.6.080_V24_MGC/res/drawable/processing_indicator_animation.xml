@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector android:drawable="@drawable/processing_indicator"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <target android:name="path_2" android:animation="@anim/processing_indicator_path_2_animation" />
+</animated-vector>

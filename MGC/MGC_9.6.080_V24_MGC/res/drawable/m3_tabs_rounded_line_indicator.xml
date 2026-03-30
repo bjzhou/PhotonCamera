@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:left="2.0dp" android:right="2.0dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/white" />
+            <corners android:topLeftRadius="3.0dp" android:topRightRadius="3.0dp" android:bottomLeftRadius="0.0dp" android:bottomRightRadius="0.0dp" />
+            <size android:height="@dimen/m3_comp_primary_navigation_tab_active_indicator_height" />
+        </shape>
+    </item>
+</layer-list>

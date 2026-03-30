@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Скорость записи в режиме ускорения: %d</item>
+        <item quantity="few">Скорость записи в режиме ускорения: %d</item>
+        <item quantity="many">Скорость записи в режиме ускорения: %d</item>
+        <item quantity="other">Скорость записи в режиме ускорения: %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Более %1$d объекта.</item>
+        <item quantity="few">Более %1$d объектов.</item>
+        <item quantity="many">Более %1$d объектов.</item>
+        <item quantity="other">Более %1$d объекта.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Для %1$d-секундного видео нужно записывать %2$d минуту.</item>
+        <item quantity="few">Для %1$d-секундного видео нужно записывать %2$d минуты.</item>
+        <item quantity="many">Для %1$d-секундного видео нужно записывать %2$d минут.</item>
+        <item quantity="other">Для %1$d-секундного видео нужно записывать %2$d минуты.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Для %1$d-секундного видео нужно записывать %2$d минуту.</item>
+        <item quantity="few">Для %1$d-секундного видео нужно записывать %2$d минуты.</item>
+        <item quantity="many">Для %1$d-секундного видео нужно записывать %2$d минут.</item>
+        <item quantity="other">Для %1$d-секундного видео нужно записывать %2$d минуты.</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d лицо частично в кадре.</item>
+        <item quantity="few">%d лица частично в кадре.</item>
+        <item quantity="many">%d лиц частично в кадре.</item>
+        <item quantity="other">%d лица частично в кадре.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Примерно %s фотография</item>
+        <item quantity="few">Примерно %s фотографии</item>
+        <item quantity="many">Примерно %s фотографий</item>
+        <item quantity="other">Примерно %s фотографии</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(выбрано %1$d приложение)</item>
+        <item quantity="few">(выбрано %1$d приложения)</item>
+        <item quantity="many">(выбрано %1$d приложений)</item>
+        <item quantity="other">(выбрано %1$d приложения)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Делитесь фотографиями и видео прямо из Камеры. Выберите не более %1$d приложения. Отправлять файлы из личной папки нельзя.</item>
+        <item quantity="few">Делитесь фотографиями и видео прямо из Камеры. Выберите не более %1$d приложений. Отправлять файлы из личной папки нельзя.</item>
+        <item quantity="many">Делитесь фотографиями и видео прямо из Камеры. Выберите не более %1$d приложений. Отправлять файлы из личной папки нельзя.</item>
+        <item quantity="other">Делитесь фотографиями и видео прямо из Камеры. Выберите не более %1$d приложения. Отправлять файлы из личной папки нельзя.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Можно выбрать не более %1$d приложения.</item>
+        <item quantity="few">Можно выбрать не более %1$d приложений.</item>
+        <item quantity="many">Можно выбрать не более %1$d приложений.</item>
+        <item quantity="other">Можно выбрать не более %1$d приложения.</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s минута видео</item>
+        <item quantity="few">%s минуты видео</item>
+        <item quantity="many">%s минут видео</item>
+        <item quantity="other">%s минуты видео</item>
+    </plurals>
+</resources>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Snelheid van timelapse: %d keer</item>
+        <item quantity="other">Snelheid van timelapse: %d keer</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Meer dan één object.</item>
+        <item quantity="other">Meer dan %1$d objecten.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Een video van %1$d s vereist een opname van %2$d min</item>
+        <item quantity="other">Een video van %1$d s vereist een opname van %2$d min</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Een video van %1$d s vereist een opname van %2$d min</item>
+        <item quantity="other">Een video van %1$d s vereist een opname van %2$d min</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Eén bijgesneden.</item>
+        <item quantity="other">%d bijgesneden.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Ongeveer %s foto</item>
+        <item quantity="other">"Ongeveer %s foto's"</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app geselecteerd)</item>
+        <item quantity="other">(%1$d apps geselecteerd)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Je kunt vanuit Camera snel foto's en video's delen in sociale apps. Kies %1$d app. Foto's en video's die zijn opgeslagen in de Vergrendelde map, kunnen niet worden gedeeld."</item>
+        <item quantity="other">"Je kunt vanuit Camera snel foto's en video's delen in sociale apps. Kies maximaal %1$d apps. Foto's en video's die zijn opgeslagen in de Vergrendelde map, kunnen niet worden gedeeld."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Kies %1$d app</item>
+        <item quantity="other">Kies maximaal %1$d apps</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">"%s minuut aan video's"</item>
+        <item quantity="other">"%s minuten aan video's"</item>
+    </plurals>
+</resources>

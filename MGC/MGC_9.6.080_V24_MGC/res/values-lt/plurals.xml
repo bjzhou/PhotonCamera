@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Pagreitinto vaizdo įrašo sparta: %d k.</item>
+        <item quantity="few">Pagreitinto vaizdo įrašo sparta: %d k.</item>
+        <item quantity="many">Pagreitinto vaizdo įrašo sparta: %d k.</item>
+        <item quantity="other">Pagreitinto vaizdo įrašo sparta: %d k.</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Daugiau nei %1$d objektas.</item>
+        <item quantity="few">Daugiau nei %1$d objektai.</item>
+        <item quantity="many">Daugiau nei %1$d objekto.</item>
+        <item quantity="other">Daugiau nei %1$d objektų.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d sek. vaizdo įrašui reikalingas %2$d minutės trukmės įrašas</item>
+        <item quantity="few">%1$d sek. vaizdo įrašui reikalingas %2$d minučių trukmės įrašas</item>
+        <item quantity="many">%1$d sek. vaizdo įrašui reikalingas %2$d minutės trukmės įrašas</item>
+        <item quantity="other">%1$d sek. vaizdo įrašui reikalingas %2$d minučių trukmės įrašas</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d sek. vaizdo įrašui reikalingas %2$d minutės trukmės įrašas</item>
+        <item quantity="few">%1$d sek. vaizdo įrašui reikalingas %2$d minučių trukmės įrašas</item>
+        <item quantity="many">%1$d sek. vaizdo įrašui reikalingas %2$d minutės trukmės įrašas</item>
+        <item quantity="other">%1$d sek. vaizdo įrašui reikalingas %2$d minučių trukmės įrašas</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d apkarpytas.</item>
+        <item quantity="few">%d apkarpyti.</item>
+        <item quantity="many">%d apkarpyta.</item>
+        <item quantity="other">%d apkarpytų.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Maždaug %s nuotrauka</item>
+        <item quantity="few">Maždaug %s nuotraukos</item>
+        <item quantity="many">Maždaug %s nuotraukos</item>
+        <item quantity="other">Maždaug %s nuotraukų</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(pasirinkta %1$d programa)</item>
+        <item quantity="few">(pasirinktos %1$d programos)</item>
+        <item quantity="many">(pasirinkta %1$d programos)</item>
+        <item quantity="other">(pasirinkta %1$d programų)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Sparčiai bendrinkite nuotraukas ir vaizdo įrašus socialinėse programose iš Fotoaparato programos. Pasirinkite iki %1$d programos. Užrakintame aplanke išsaugotų nuotraukų ir vaizdo įrašų bendrinti negalima.</item>
+        <item quantity="few">Sparčiai bendrinkite nuotraukas ir vaizdo įrašus socialinėse programose iš Fotoaparato programos. Pasirinkite iki %1$d programų. Užrakintame aplanke išsaugotų nuotraukų ir vaizdo įrašų bendrinti negalima.</item>
+        <item quantity="many">Sparčiai bendrinkite nuotraukas ir vaizdo įrašus socialinėse programose iš Fotoaparato programos. Pasirinkite iki %1$d programos. Užrakintame aplanke išsaugotų nuotraukų ir vaizdo įrašų bendrinti negalima.</item>
+        <item quantity="other">Sparčiai bendrinkite nuotraukas ir vaizdo įrašus socialinėse programose iš Fotoaparato programos. Pasirinkite iki %1$d programų. Užrakintame aplanke išsaugotų nuotraukų ir vaizdo įrašų bendrinti negalima.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Pasirinkite iki %1$d programos</item>
+        <item quantity="few">Pasirinkite iki %1$d programų</item>
+        <item quantity="many">Pasirinkite iki %1$d programos</item>
+        <item quantity="other">Pasirinkite iki %1$d programų</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s vaizdo įrašo minutė</item>
+        <item quantity="few">%s vaizdo įrašo minutės</item>
+        <item quantity="many">%s vaizdo įrašo minutės</item>
+        <item quantity="other">%s vaizdo įrašo minučių</item>
+    </plurals>
+</resources>

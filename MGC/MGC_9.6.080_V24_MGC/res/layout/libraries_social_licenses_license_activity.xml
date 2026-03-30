@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView android:id="@id/license_activity_scrollview" android:fitsSystemWindows="true" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:typeface="monospace" android:id="@id/license_activity_textview" android:paddingLeft="@dimen/license_text_padding_horizontal" android:paddingTop="@dimen/license_text_padding_vertical" android:paddingRight="@dimen/license_text_padding_horizontal" android:paddingBottom="@dimen/license_text_padding_vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingStart="@dimen/license_text_padding_horizontal" android:paddingEnd="@dimen/license_text_padding_horizontal" />
+</ScrollView>

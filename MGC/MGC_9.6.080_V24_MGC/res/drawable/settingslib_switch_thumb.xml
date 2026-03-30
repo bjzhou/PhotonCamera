@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:left="4.0dp" android:top="4.0dp" android:right="4.0dp" android:bottom="4.0dp">
+        <shape android:shape="oval">
+            <size android:height="20.0dp" android:width="20.0dp" />
+            <solid android:color="@color/settingslib_switch_thumb_color" />
+        </shape>
+    </item>
+</layer-list>

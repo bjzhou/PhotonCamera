@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">%d 倍速延时摄影</item>
+        <item quantity="other">%d 倍速延时摄影</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">检测到不止一个对象。</item>
+        <item quantity="other">检测到超过 %1$d 个对象。</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">若要获得 %1$d 秒的视频，您需录制 %2$d 分钟的内容</item>
+        <item quantity="other">若要获得 %1$d 秒的视频，您需录制 %2$d 分钟的内容</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">若要获得 %1$d 秒的视频，您需录制 %2$d 分钟的内容</item>
+        <item quantity="other">若要获得 %1$d 秒的视频，您需录制 %2$d 分钟的内容</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">已剪裁 1 张面孔。</item>
+        <item quantity="other">已剪裁 %d 张面孔。</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">大约 %s 张照片</item>
+        <item quantity="other">大约 %s 张照片</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">（已选择 %1$d 个应用）</item>
+        <item quantity="other">（已选择 %1$d 个应用）</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">从相机中快速将照片和视频分享到社交应用。最多可选择 %1$d 个应用。保存到“已锁定的文件夹”的照片和视频无法分享。</item>
+        <item quantity="other">从相机中快速将照片和视频分享到社交应用。最多可选择 %1$d 个应用。保存到“已锁定的文件夹”的照片和视频无法分享。</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">选择 %1$d 个应用</item>
+        <item quantity="other">最多可选择 %1$d 个应用</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s 分钟的视频</item>
+        <item quantity="other">%s 分钟的视频</item>
+    </plurals>
+</resources>

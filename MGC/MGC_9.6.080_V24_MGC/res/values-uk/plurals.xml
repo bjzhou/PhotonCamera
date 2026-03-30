@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Інтервальна зйомка з %d-кратним прискоренням</item>
+        <item quantity="few">Інтервальна зйомка з %d-кратним прискоренням</item>
+        <item quantity="many">Інтервальна зйомка з %d-кратним прискоренням</item>
+        <item quantity="other">Інтервальна зйомка з %d-кратним прискоренням</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Більше ніж %1$d об’єкт.</item>
+        <item quantity="few">Більше ніж %1$d об’єкти.</item>
+        <item quantity="many">Більше ніж %1$d об’єктів.</item>
+        <item quantity="other">Більше ніж %1$d об’єкта.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+        <item quantity="few">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+        <item quantity="many">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+        <item quantity="other">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+        <item quantity="few">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+        <item quantity="many">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+        <item quantity="other">Для відео тривалістю %1$d с час запису має становити %2$d хв</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d обрізано.</item>
+        <item quantity="few">%d обрізано.</item>
+        <item quantity="many">%d обрізано.</item>
+        <item quantity="other">%d обрізано.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Приблизно %s фотографія</item>
+        <item quantity="few">Приблизно %s фотографії</item>
+        <item quantity="many">Приблизно %s фотографій</item>
+        <item quantity="other">Приблизно %s фотографії</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(вибрано %1$d додаток)</item>
+        <item quantity="few">(вибрано %1$d додатки)</item>
+        <item quantity="many">(вибрано %1$d додатків)</item>
+        <item quantity="other">(вибрано %1$d додатка)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Швидко діліться в соціальних мережах фотографіями й відео з Камери. Виберіть щонайбільше %1$d додаток. Файлами з особистої папки ділитися не можна.</item>
+        <item quantity="few">Швидко діліться в соціальних мережах фотографіями й відео з Камери. Виберіть щонайбільше %1$d додатки. Файлами з особистої папки ділитися не можна.</item>
+        <item quantity="many">Швидко діліться в соціальних мережах фотографіями й відео з Камери. Виберіть щонайбільше %1$d додатків. Файлами з особистої папки ділитися не можна.</item>
+        <item quantity="other">Швидко діліться в соціальних мережах фотографіями й відео з Камери. Виберіть щонайбільше %1$d додатка. Файлами з особистої папки ділитися не можна.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Виберіть щонайбільше %1$d додаток</item>
+        <item quantity="few">Виберіть щонайбільше %1$d додатки</item>
+        <item quantity="many">Виберіть щонайбільше %1$d додатків</item>
+        <item quantity="other">Виберіть щонайбільше %1$d додатка</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s хвилина відео</item>
+        <item quantity="few">%s хвилини відео</item>
+        <item quantity="many">%s хвилин відео</item>
+        <item quantity="other">%s хвилини відео</item>
+    </plurals>
+</resources>

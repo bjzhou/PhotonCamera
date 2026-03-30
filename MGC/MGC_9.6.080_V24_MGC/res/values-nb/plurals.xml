@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Timelapse: %d gang hastighet</item>
+        <item quantity="other">Timelapse: %d ganger hastighet</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Mer enn én gjenstand.</item>
+        <item quantity="other">Mer enn %1$d gjenstander.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d sek video krever %2$d min opptak</item>
+        <item quantity="other">%1$d sek video krever %2$d min opptak</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d sek video krever %2$d min opptak</item>
+        <item quantity="other">%1$d sek video krever %2$d min opptak</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Ett er beskåret.</item>
+        <item quantity="other">%d er beskåret.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Om lag %s bilde</item>
+        <item quantity="other">Om lag %s bilder</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app er valgt)</item>
+        <item quantity="other">(%1$d apper er valgt)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Del bilder og videoer raskt i sosiale apper, fra Kamera. Velg %1$d-appen. Bilder og videoer som lagres i Låst mappe, kan ikke deles.</item>
+        <item quantity="other">Del bilder og videoer raskt i sosiale apper, fra Kamera. Velg opptil %1$d apper. Bilder og videoer som lagres i Låst mappe, kan ikke deles.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Velg %1$d app</item>
+        <item quantity="other">Velg opptil %1$d apper</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minutt med videoer</item>
+        <item quantity="other">%s minutter med videoer</item>
+    </plurals>
+</resources>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Nopeutettu kuva %d-kertainen nopeus</item>
+        <item quantity="other">Nopeutettu kuva %d-kertainen nopeus</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Useita kohteita.</item>
+        <item quantity="other">Yli %1$d kohdetta.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d sekunnin video edellyttää tallennusta %2$d min ajan</item>
+        <item quantity="other">%1$d sekunnin video edellyttää tallennusta %2$d min ajan</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d sekunnin video edellyttää tallennusta %2$d min ajan</item>
+        <item quantity="other">%1$d sekunnin video edellyttää tallennusta %2$d min ajan</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Yksi rajattu.</item>
+        <item quantity="other">%d rajattu.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Tietoja %s kuvasta</item>
+        <item quantity="other">Tietoja %s kuvasta</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d sovellus valittu)</item>
+        <item quantity="other">(%1$d sovellusta valittu)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Jaa kuvia ja videoita nopeasti some-sovelluksiin Kamerasta. Valitse %1$d sovellus. Lukittuun kansioon tallennettuja kuvia ja videoita ei voi jakaa.</item>
+        <item quantity="other">Jaa kuvia ja videoita nopeasti some-sovelluksiin Kamerasta. Valitse enintään %1$d sovellusta. Lukittuun kansioon tallennettuja kuvia ja videoita ei voi jakaa.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Valitse %1$d sovellus</item>
+        <item quantity="other">Valitse enintään %1$d sovellusta</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuutti videoita</item>
+        <item quantity="other">%s minuuttia videoita</item>
+    </plurals>
+</resources>

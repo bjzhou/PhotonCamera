@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Shpejtësia %d herë më e lartë e \"Regjistrimit me intervale\"</item>
+        <item quantity="other">Shpejtësia %d herë më e lartë e \"Regjistrimit me intervale\"</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Më shumë se një objekt.</item>
+        <item quantity="other">Më shumë se %1$d objekte.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Një video me %1$d sek. kërkon %2$d min. regjistrim</item>
+        <item quantity="other">Një video me %1$d sek. kërkon %2$d min. regjistrim</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Një video me %1$d sek. kërkon %2$d min. regjistrim</item>
+        <item quantity="other">Një video me %1$d sek. kërkon %2$d min. regjistrim</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Një u pre.</item>
+        <item quantity="other">%d u prenë.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Rreth %s fotografi</item>
+        <item quantity="other">Rreth %s fotografi</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(U zgjodh %1$d aplikacion)</item>
+        <item quantity="other">(U zgjodhën %1$d aplikacione)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Ndaj me shpejtësi fotografitë dhe videot në aplikacionet sociale nga \"Kamera\". Zgjidh %1$d aplikacion. Fotografitë dhe videot e ruajtura në \"Dosjen e kyçur\" nuk mund të ndahen.</item>
+        <item quantity="other">Ndaj me shpejtësi fotografitë dhe videot në aplikacionet sociale nga \"Kamera\". Zgjidh deri në %1$d aplikacione. Fotografitë dhe videot e ruajtura në \"Dosjen e kyçur\" nuk mund të ndahen.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Zgjidh %1$d aplikacion</item>
+        <item quantity="other">Zgjidh deri në %1$d aplikacione</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minutë video</item>
+        <item quantity="other">%s minuta video</item>
+    </plurals>
+</resources>

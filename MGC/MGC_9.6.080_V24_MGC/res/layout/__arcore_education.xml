@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<android.widget.LinearLayout android:gravity="top" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:id="@id/__arcore_messageText" android:padding="24.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/__arcore_install_app" />
+    <LinearLayout android:gravity="end" android:orientation="horizontal" android:padding="4.0dp" android:layout_width="match_parent" android:layout_height="match_parent">
+        <Button android:id="@id/__arcore_cancelButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/__arcore_cancel" style="@android:style/Widget.Material.Light.Button.Borderless.Colored" />
+        <Button android:id="@id/__arcore_continueButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/__arcore_continue" style="@android:style/Widget.Material.Light.Button.Borderless.Colored" />
+    </LinearLayout>
+</android.widget.LinearLayout>

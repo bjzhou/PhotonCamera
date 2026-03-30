@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:id="@id/level_selector" android:background="@drawable/retouching_edu_optionbar" android:layout_width="wrap_content" android:layout_height="36.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:id="@id/retouching_edu_off" android:background="@drawable/retouching_edu_option_unselected" android:layout_width="wrap_content" android:layout_height="32.0dp">
+        <ImageView android:id="@id/retouching_edu_off_icon" android:padding="0.0dp" android:layout_width="18.0dp" android:layout_height="18.0dp" android:src="@drawable/gs_face_retouching_off_fill1_vd_24" android:tint="?colorOnSurfaceVariant" android:layout_marginStart="8.0dp" />
+        <com.google.android.apps.camera.util.ui.GcaTextView android:textAppearance="?textAppearanceSubtitle2" android:textColor="?colorOnSurfaceVariant" android:id="@id/retouching_edu_off_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/faceretouch_off_option_desc" android:layout_marginStart="4.0dp" android:layout_marginEnd="12.0dp" />
+    </LinearLayout>
+    <LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:id="@id/retouching_edu_light" android:background="@drawable/retouching_edu_option_selected" android:layout_width="wrap_content" android:layout_height="32.0dp">
+        <ImageView android:id="@id/retouching_edu_light_icon" android:padding="0.0dp" android:layout_width="18.0dp" android:layout_height="18.0dp" android:src="@drawable/gs_face_retouch_fill1_vd_24" android:tint="?colorOnSurfaceVariant" android:layout_marginStart="8.0dp" />
+        <com.google.android.apps.camera.util.ui.GcaTextView android:textAppearance="?textAppearanceSubtitle2" android:textColor="?colorOnSurfaceVariant" android:id="@id/retouching_edu_light_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/faceretouch_on_light_option_desc" android:layout_marginStart="4.0dp" android:layout_marginEnd="12.0dp" />
+    </LinearLayout>
+    <LinearLayout android:gravity="center" android:layout_gravity="center" android:orientation="horizontal" android:id="@id/retouching_edu_strong" android:background="@drawable/retouching_edu_option_unselected" android:layout_width="wrap_content" android:layout_height="32.0dp">
+        <ImageView android:id="@id/retouching_edu_strong_icon" android:padding="0.0dp" android:layout_width="18.0dp" android:layout_height="18.0dp" android:src="@drawable/gs_face_retouch_smooth_fill1_vd_24" android:tint="?colorOnSurfaceVariant" android:layout_marginStart="8.0dp" />
+        <com.google.android.apps.camera.util.ui.GcaTextView android:textAppearance="?textAppearanceSubtitle2" android:textColor="?colorOnSurfaceVariant" android:id="@id/retouching_edu_strong_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/faceretouch_on_strong_option_desc" android:layout_marginStart="4.0dp" android:layout_marginEnd="12.0dp" />
+    </LinearLayout>
+</LinearLayout>

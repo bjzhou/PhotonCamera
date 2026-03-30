@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout android:id="@id/social_share_root_layout" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <androidx.constraintlayout.widget.Guideline android:orientation="horizontal" android:id="@id/social_preview_bottom" android:layout_width="wrap_content" android:layout_height="wrap_content" app:layout_constraintGuide_begin="700.0dp" />
+    <View android:id="@id/social_root_background" android:background="@android:color/black" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <FrameLayout android:id="@id/social_preview_container" android:layout_width="match_parent" android:layout_height="wrap_content" app:layout_constraintBottom_toTopOf="@id/social_preview_bottom">
+        <View android:layout_gravity="center" android:id="@id/social_preview_placeholder" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </FrameLayout>
+    <FrameLayout android:id="@id/social_share_menu_container" android:layout_width="wrap_content" android:layout_height="wrap_content" app:layout_constraintBottom_toBottomOf="@id/thumbnail_button_for_align" app:layout_constraintLeft_toLeftOf="@id/thumbnail_button_for_align" app:layout_constraintRight_toRightOf="@id/thumbnail_button_for_align" />
+    <View android:id="@id/thumbnail_button_for_align" android:visibility="invisible" android:layout_width="@dimen/thumbnail_button_size" android:layout_height="@dimen/thumbnail_button_size" app:layout_constraintLeft_toLeftOf="parent" app:layout_constraintTop_toTopOf="parent" />
+    <LinearLayout android:orientation="horizontal" android:id="@id/social_processing_layout" android:background="@drawable/social_processing_background" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" app:layout_constraintBottom_toBottomOf="@id/thumbnail_button_for_align" app:layout_constraintHorizontal_bias="0.12" app:layout_constraintLeft_toLeftOf="parent" app:layout_constraintRight_toRightOf="parent" app:layout_constraintTop_toTopOf="@id/thumbnail_button_for_align">
+        <ProgressBar android:layout_gravity="center_vertical" android:layout_width="@dimen/social_processing_ring_size" android:layout_height="@dimen/social_processing_ring_size" android:layout_marginRight="@dimen/social_processing_inner_margin" android:indeterminate="true" android:indeterminateTint="@color/social_control_fg_color" />
+        <TextView android:textColor="@color/social_control_fg_color" android:layout_gravity="center_vertical" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/photo_processing" android:contentDescription="@string/accessibility_processing_the_photo" />
+    </LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>

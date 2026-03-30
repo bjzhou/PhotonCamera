@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:gravity="center" android:id="@id/cottage_capture_preview_panel" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <View android:id="@id/capture_preview_top_divider" android:background="#ffffffff" android:layout_width="match_parent" android:layout_height="1.0dp" android:alpha="0.2" />
+    <LinearLayout android:gravity="center" android:layout_gravity="center_horizontal" android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="@dimen/capture_preview_image_height" android:layout_marginTop="20.0dp" android:layout_marginBottom="44.0dp" app:layout_constraintBottom_toBottomOf="parent">
+        <com.google.android.material.card.MaterialCardView android:layout_gravity="center" android:id="@id/capture_preview_first_photo_container" android:layout_width="@dimen/capture_preview_image_width" android:layout_height="@dimen/capture_preview_image_height" app:cardCornerRadius="@dimen/capture_preview_image_corner_radius" app:cardElevation="0.0dp" style="@style/Widget.GoogleMaterial3.CardView.Outlined">
+            <FrameLayout android:id="@id/capture_preview_first_photo_content" android:layout_width="match_parent" android:layout_height="match_parent">
+                <ImageView android:id="@id/capture_preview_first_photo" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" />
+            </FrameLayout>
+        </com.google.android.material.card.MaterialCardView>
+        <ImageView android:layout_width="@dimen/capture_preview_image_width" android:layout_height="@dimen/capture_preview_image_height" android:src="@drawable/cottage_capture_preview_plus_sign_icon" android:scaleType="center" android:contentDescription="@string/plus_sign_description" android:layout_marginHorizontal="4.0dp" />
+        <com.google.android.material.card.MaterialCardView android:layout_gravity="center" android:id="@id/capture_preview_second_photo_container" android:layout_width="@dimen/capture_preview_image_width" android:layout_height="@dimen/capture_preview_image_height" app:cardCornerRadius="@dimen/capture_preview_image_corner_radius" app:cardElevation="0.0dp" app:strokeColor="#ffffffff" app:strokeWidth="2.0dp">
+            <FrameLayout android:id="@id/capture_preview_second_photo_content" android:layout_width="match_parent" android:layout_height="match_parent">
+                <android.opengl.GLSurfaceView android:id="@id/capture_preview_second_photo" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/ic_notification" android:scaleType="centerCrop" />
+            </FrameLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</FrameLayout>

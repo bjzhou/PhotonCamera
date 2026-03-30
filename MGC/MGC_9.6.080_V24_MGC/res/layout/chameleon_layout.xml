@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageButton android:layout_gravity="center_vertical" android:id="@id/manual_wb_reset_button" android:background="@null" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:contentDescription="@string/wb_accessibility_content_description_reset_button" android:scaleX="-1.0" />
+    <SeekBar android:layout_gravity="center_vertical" android:id="@id/manual_wb_slider" android:background="@null" android:focusable="true" android:visibility="gone" android:clickable="true" android:layout_width="wrap_content" android:layout_height="@dimen/manual_wb_slider_touch_area" android:maxHeight="@dimen/manual_wb_slider_height" android:progressDrawable="@drawable/bg_manual_wb_gradient" android:contentDescription="@string/wb_accessibility_content_description_slider" android:rotation="0.0" android:splitTrack="false" android:thumbTint="@android:color/transparent" />
+    <com.google.android.apps.camera.whitebalance.ManualWhiteBalanceKnob android:layout_gravity="center_vertical" android:id="@id/manual_wb_knob" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/quantum_gm_ic_thermostat_vd_theme_24" android:scaleType="center" android:tint="@color/google_grey800" android:elevation="2.0dp" />
+</merge>

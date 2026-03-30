@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:id="@id/options_menu_view_frame" android:layout_width="match_parent" android:layout_height="wrap_content">
+        <LinearLayout android:orientation="vertical" android:id="@id/options_menu_view" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="wrap_content" android:layoutDirection="locale">
+            <com.google.android.apps.camera.optionsbar.view.OptionsMenuView android:scrollbarThumbVertical="@drawable/scrollbar_vertical_thumb" android:id="@id/options_menu_view_internal" android:scrollbars="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:fadeScrollbars="false" android:alpha="0.0" />
+            <android.support.v7.widget.AppCompatButton android:textAppearance="?textAppearanceSubhead2" android:textColor="?colorOnBackground" android:layout_gravity="end" android:id="@id/options_menu_standalone_settings" android:background="@drawable/standalone_settings_bottom_background" android:layout_width="wrap_content" android:layout_height="@dimen/bottom_panel_settings_button_height" android:layout_marginTop="@dimen/bottom_panel_settings_button_top_margin" android:text="@string/more_settings" android:contentDescription="@string/settings_open_desc" android:fontFamily="@font/google_sans" android:paddingStart="16.0dp" android:paddingEnd="16.0dp" />
+        </LinearLayout>
+    </FrameLayout>
+</merge>

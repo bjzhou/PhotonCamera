@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:id="@id/inline_slider_decrement" android:background="?android:selectableItemBackground" android:layout_width="@dimen/inline_slider_button_width" android:layout_height="@dimen/inline_slider_height" android:scaleType="center" android:paddingStart="@dimen/inline_slider_decrement_button_padding_start" android:paddingEnd="@dimen/inline_slider_decrement_button_padding_end" />
+    <View android:background="?colorBackground" android:layout_width="@dimen/inline_slider_increment_separator_width" android:layout_height="match_parent" />
+    <ImageView android:layout_gravity="center_vertical" android:id="@id/inline_slider_progress" android:layout_width="0.0dp" android:layout_height="@dimen/inline_slider_progress_height" android:minWidth="@dimen/inline_slider_progress_min_width" android:layout_weight="1.0" android:layout_marginStart="@dimen/inline_slider_progress_margin" android:layout_marginEnd="@dimen/inline_slider_progress_margin" />
+    <View android:background="?colorBackground" android:layout_width="@dimen/inline_slider_increment_separator_width" android:layout_height="match_parent" />
+    <ImageView android:id="@id/inline_slider_increment" android:background="?android:selectableItemBackground" android:layout_width="@dimen/inline_slider_button_width" android:layout_height="@dimen/inline_slider_height" android:scaleType="center" android:paddingStart="@dimen/inline_slider_increment_button_padding_start" android:paddingEnd="@dimen/inline_slider_increment_button_padding_end" />
+</merge>

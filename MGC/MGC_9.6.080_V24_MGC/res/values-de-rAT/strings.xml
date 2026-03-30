@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="__arcore_cancel">Abbrechen</string>
+    <string name="__arcore_continue">Weiter</string>
+    <string name="__arcore_install_app">Für diese Anwendung ist die neueste Version der Google Play-Dienste für AR erforderlich.</string>
+    <string name="__arcore_install_feature">Für diese Funktion ist die neueste Version der Google Play-Dienste für AR erforderlich.</string>
+    <string name="__arcore_installing">Google Play-Dienste für AR werden installiert…</string>
+</resources>

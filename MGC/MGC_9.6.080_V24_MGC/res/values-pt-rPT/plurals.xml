@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Velocidade do Time Lapse: %d vez</item>
+        <item quantity="other">Velocidade do Time Lapse: %d vezes</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Mais de um objeto.</item>
+        <item quantity="other">Mais de %1$d objetos.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d s de vídeo requer %2$d min de gravação</item>
+        <item quantity="other">%1$d s de vídeo requerem %2$d min de gravação</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d s de vídeo requer %2$d min de gravação</item>
+        <item quantity="other">%1$d s de vídeo requerem %2$d min de gravação</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Uma recortada.</item>
+        <item quantity="other">%d recortadas.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Acerca de %s foto</item>
+        <item quantity="other">Acerca de %s fotos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app selecionada)</item>
+        <item quantity="other">(%1$d apps selecionadas)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Partilhe rapidamente fotos e vídeos nas apps sociais a partir da Câmara. Escolha %1$d app. Não é possível partilhar as fotos e os vídeos guardados na Pasta privada.</item>
+        <item quantity="other">Partilhe rapidamente fotos e vídeos nas apps sociais a partir da Câmara. Escolha até %1$d apps. Não é possível partilhar as fotos e os vídeos guardados na Pasta privada.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Escolha %1$d aplicação.</item>
+        <item quantity="other">Escolha até %1$d aplicações.</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuto de vídeos</item>
+        <item quantity="other">%s minutos de vídeos</item>
+    </plurals>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="__arcore_cancel">Kanselahin</string>
+    <string name="__arcore_continue">Magpatuloy</string>
+    <string name="__arcore_install_app">Kailangan ng application na ito ang pinakabagong bersyon ng Google Play Services para sa AR.</string>
+    <string name="__arcore_install_feature">Kailangan ng feature na ito ang pinakabagong bersyon ng Google Play Services para sa AR.</string>
+    <string name="__arcore_installing">Ini-install ang Google Play Services para sa AR…</string>
+    <string name="mdd_foreground_service_notification_title">Nagda-download</string>
+</resources>

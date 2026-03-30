@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Vitesse du mode Accéléré : %d fois</item>
+        <item quantity="other">Vitesse du mode Accéléré : %d fois</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Plus de %1$d objet.</item>
+        <item quantity="other">Plus de %1$d objets.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">"Une vidéo de %1$d seconde nécessite %2$d minute d'enregistrement."</item>
+        <item quantity="other">"Une vidéo de %1$d secondes nécessite %2$d minutes d'enregistrement."</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">"Une vidéo de %1$d seconde nécessite %2$d minute d'enregistrement."</item>
+        <item quantity="other">"Une vidéo de %1$d secondes nécessite %2$d minutes d'enregistrement."</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d recadré.</item>
+        <item quantity="other">%d recadrés.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Environ %s photo</item>
+        <item quantity="other">Environ %s photos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d application sélectionnée)</item>
+        <item quantity="other">(%1$d applications sélectionnées)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Partagez rapidement des photos et des vidéos dans des applis de réseaux sociaux, depuis l'appli Appareil photo. Choisissez %1$d appli. Les photos et vidéos enregistrées dans le Dossier verrouillé ne peuvent pas être partagées."</item>
+        <item quantity="other">"Partagez rapidement des photos et des vidéos dans des applis de réseaux sociaux, depuis l'appli Appareil photo. Choisissez jusqu'à %1$d applis. Les photos et vidéos enregistrées dans le Dossier verrouillé ne peuvent pas être partagées."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">"Choisissez jusqu'à %1$d application"</item>
+        <item quantity="other">"Choisissez jusqu'à %1$d applications"</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minute de vidéo</item>
+        <item quantity="other">%s minutes de vidéo</item>
+    </plurals>
+</resources>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">زمان‌گریز با سرعت %d برابر</item>
+        <item quantity="other">زمان‌گریز با سرعت %d برابر</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">بیش‌از %1$d شیء وجود دارد.</item>
+        <item quantity="other">بیش‌از %1$d شیء وجود دارد.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">ویدیوی %1$d ثانیه‌ای به %2$d دقیقه ویدیوی ضبط‌شده نیاز دارد</item>
+        <item quantity="other">ویدیوی %1$d ثانیه‌ای به %2$d دقیقه ویدیوی ضبط‌شده نیاز دارد</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">ویدیوی %1$d ثانیه‌ای به %2$d دقیقه ویدیوی ضبط‌شده نیاز دارد</item>
+        <item quantity="other">ویدیوی %1$d ثانیه‌ای به %2$d دقیقه ویدیوی ضبط‌شده نیاز دارد</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d مورد برش داده شد.</item>
+        <item quantity="other">%d مورد برش داده شد.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">حدود %s عکس</item>
+        <item quantity="other">حدود %s عکس</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d برنامه انتخاب شد)</item>
+        <item quantity="other">(%1$d برنامه انتخاب شد)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">عکس‌ها و ویدیوها را به‌سرعت ازطریق «دوربین» در برنامه‌های اجتماعی هم‌رسانی کنید. حداکثر %1$d برنامه انتخاب کنید. عکس‌ها و ویدیوهای ذخیره‌شده در «پوشه محافظت‌شده» را نمی‌توان هم‌رسانی کرد.</item>
+        <item quantity="other">عکس‌ها و ویدیوها را به‌سرعت ازطریق «دوربین» در برنامه‌های اجتماعی هم‌رسانی کنید. حداکثر %1$d برنامه انتخاب کنید. عکس‌ها و ویدیوهای ذخیره‌شده در «پوشه محافظت‌شده» را نمی‌توان هم‌رسانی کرد.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">حداکثر %1$d برنامه انتخاب کنید</item>
+        <item quantity="other">حداکثر %1$d برنامه انتخاب کنید</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s دقیقه ویدیو</item>
+        <item quantity="other">%s دقیقه ویدیو</item>
+    </plurals>
+</resources>

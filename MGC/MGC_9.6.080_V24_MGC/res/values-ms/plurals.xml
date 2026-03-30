@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Selang Masa %d kelajuan masa</item>
+        <item quantity="other">Selang Masa %d kelajuan masa</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Lebih daripada satu objek.</item>
+        <item quantity="other">Lebih daripada %1$d objek.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Video %1$d saat memerlukan %2$d minit rakaman</item>
+        <item quantity="other">Video %1$d saat memerlukan %2$d minit rakaman</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Video %1$d saat memerlukan %2$d minit rakaman</item>
+        <item quantity="other">Video %1$d saat memerlukan %2$d minit rakaman</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Dipangkas serentak.</item>
+        <item quantity="other">%d dipangkas.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Kira-kira %s foto</item>
+        <item quantity="other">Kira-kira %s foto</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d apl dipilih)</item>
+        <item quantity="other">(%1$d apl dipilih)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Kongsi foto dan video pada apl sosial dengan pantas daripada Kamera. Pilih apl %1$d. Foto dan video yang disimpan pada Folder Dikunci tidak boleh dikongsi.</item>
+        <item quantity="other">Kongsi foto dan video pada apl sosial dengan pantas daripada Kamera. Pilih hingga %1$d apl. Foto dan video yang disimpan pada Folder Dikunci tidak dapat dikongsi.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Pilih %1$d apl</item>
+        <item quantity="other">Pilih sehingga %1$d apl</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minit video</item>
+        <item quantity="other">%s minit video</item>
+    </plurals>
+</resources>

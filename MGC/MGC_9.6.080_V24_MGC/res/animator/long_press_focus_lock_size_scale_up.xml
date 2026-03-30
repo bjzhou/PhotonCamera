@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animator android:interpolator="@android:interpolator/fast_out_slow_in" android:duration="@integer/square_focus_ring_animation_millis" android:startOffset="0" android:valueFrom="@dimen/square_focus_ring_size" android:valueTo="@dimen/square_focus_ring_size_scale_up" android:valueType="floatType"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

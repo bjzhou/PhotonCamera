@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<drawable android:orientation="vertical" app:vignetteColor="@android:color/black" class="com.google.android.clockwork.common.wearable.wearmaterial.picker.PickerVignetteDrawable"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" />

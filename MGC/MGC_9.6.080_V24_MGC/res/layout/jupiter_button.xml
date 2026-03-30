@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.jupiter.JupiterButton android:layout_gravity="center" android:id="@id/jupiter_button" android:layout_width="@dimen/jupiter_button_diameter" android:layout_height="@dimen/jupiter_button_diameter" android:src="@drawable/ic_jupiter_24px" android:contentDescription="@string/entry_button_accessibility_description"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

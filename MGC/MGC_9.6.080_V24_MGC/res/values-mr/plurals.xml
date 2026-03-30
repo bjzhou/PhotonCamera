@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">टाइम लॅप्स चा %d पट वेग</item>
+        <item quantity="other">टाइम लॅप्स चा %d पट वेग</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">एकापेक्षा जास्त ऑब्जेक्ट.</item>
+        <item quantity="other">%1$d पेक्षा जास्त ऑब्जेक्ट.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d सेकंदाच्या व्हिडिओसाठी %2$d मिनिटे रेकॉर्डिंग आवश्यक आहे</item>
+        <item quantity="other">%1$d सेकंदाच्या व्हिडिओसाठी %2$d मिनिटे रेकॉर्डिंग आवश्यक आहे</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d सेकंदाच्या व्हिडिओसाठी %2$d मिनिटे रेकॉर्डिंग आवश्यक आहे</item>
+        <item quantity="other">%1$d सेकंदाच्या व्हिडिओसाठी %2$d मिनिटे रेकॉर्डिंग आवश्यक आहे</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">एक क्रॉप केला आहे.</item>
+        <item quantity="other">%d क्रॉप केले आहेत.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">अंदाजे %s फोटो</item>
+        <item quantity="other">अंदाजे %s फोटो</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ॲप निवडले)</item>
+        <item quantity="other">(%1$d ॲप्‍स निवडली)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">कॅमेरा मधून सोशल ॲप्सवर फोटो आणि व्हिडिओ झटपट शेअर करा. %1$d ॲप निवडा. लॉक्ड फोल्डर मध्ये सेव्ह केलेले फोटो आणि व्हिडिओ शेअर केले जाऊ शकत नाहीत.</item>
+        <item quantity="other">कॅमेरा मधून सोशल ॲप्सवर फोटो आणि व्हिडिओ झटपट शेअर करा. कमाल %1$d ॲप्स निवडा. लॉक्ड फोल्डर मध्ये सेव्ह केलेले फोटो आणि व्हिडिओ शेअर केले जाऊ शकत नाहीत.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d अ‍ॅप निवडा</item>
+        <item quantity="other">कमाल %1$d ॲप्स निवडा</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s मिनिटाचा व्हिडिओ</item>
+        <item quantity="other">%s मिनिटांचा व्हिडिओ</item>
+    </plurals>
+</resources>

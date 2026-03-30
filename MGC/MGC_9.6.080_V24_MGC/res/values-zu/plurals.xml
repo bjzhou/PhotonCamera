@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Ukudlula kwesikhathi %d isivinini sezikhathi</item>
+        <item quantity="other">Ukudlula kwesikhathi %d isivinini sezikhathi</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Izinto ezingaphezu kuka-%1$d.</item>
+        <item quantity="other">Izinto ezingaphezu kuka-%1$d.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">ividiyo yemizuzwana engu-%1$d idinga imizuzu engu-%2$d yokurekhodwa</item>
+        <item quantity="other">ividiyo yemizuzwana engu-%1$d idinga imizuzu engu-%2$d yokurekhodwa</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">ividiyo yemizuzwana engu-%1$d idinga imizuzu engu-%2$d yokurekhodwa</item>
+        <item quantity="other">ividiyo yemizuzwana engu-%1$d idinga imizuzu engu-%2$d yokurekhodwa</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Okungu-%d kunqampuniwe.</item>
+        <item quantity="other">Okungu-%d kunqampuniwe.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Mayelana nezithombe ezingu-%s</item>
+        <item quantity="other">Mayelana nezithombe ezingu-%s</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(kukhethwe izinhlelo zokusebenza ezingu-%1$d)</item>
+        <item quantity="other">(kukhethwe izinhlelo zokusebenza ezingu-%1$d)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Yabelana ngezithombe namavidiyo ngokushesha kuzinhlelo zokusebenza zomphakathi ezivela Kukhamera. Khetha ama-app afika kwangu-%1$d. Izithombe namavidiyo okulondolozwe Kufolda Ekhiyiwe akukwazi ukwabiwa.</item>
+        <item quantity="other">Yabelana ngezithombe namavidiyo ngokushesha kuzinhlelo zokusebenza zomphakathi ezivela Kukhamera. Khetha ama-app afika kwangu-%1$d. Izithombe namavidiyo okulondolozwe Kufolda Ekhiyiwe akukwazi ukwabiwa.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Khetha izinhlelo zokusebenza kufika kwezingu-%1$d</item>
+        <item quantity="other">Khetha izinhlelo zokusebenza kufika kwezingu-%1$d</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">Amaminithi asele evidiyo angu-%s</item>
+        <item quantity="other">Amaminithi asele evidiyo angu-%s</item>
+    </plurals>
+</resources>

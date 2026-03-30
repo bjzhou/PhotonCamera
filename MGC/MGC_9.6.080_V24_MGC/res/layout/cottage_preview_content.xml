@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:gravity="center" android:id="@id/cottage_preview_content" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textSize="32.0sp" android:layout_gravity="center" android:id="@id/overlay_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/preview_overlay_rotation" android:drawableTop="@drawable/gs_screen_rotation_alt_vd_theme_48" android:drawablePadding="8.0dp" />
+</FrameLayout>

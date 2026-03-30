@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/social_control_bg_color" />
+    <padding android:left="16.0dp" android:top="8.0dp" android:right="16.0dp" android:bottom="8.0dp" />
+    <corners android:radius="20.0dp" />
+</shape>

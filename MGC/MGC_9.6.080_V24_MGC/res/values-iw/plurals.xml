@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">‏Time Lapse במהירות של %d</item>
+        <item quantity="two">‏Time Lapse במהירות של %d</item>
+        <item quantity="other">‏Time Lapse במהירות של %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">יש יותר מ-%1$d אובייקטים.</item>
+        <item quantity="two">יש יותר מ-%1$d אובייקטים.</item>
+        <item quantity="other">יש יותר מ-%1$d אובייקטים.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">לסרטון באורך של %1$d שניות נדרשת הקלטה באורך של %2$d דקות</item>
+        <item quantity="two">לסרטון באורך של %1$d שניות נדרשת הקלטה באורך של %2$d דקות</item>
+        <item quantity="other">לסרטון באורך של %1$d שניות נדרשת הקלטה באורך של %2$d דקות</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">לסרטון באורך של %1$d שניות נדרשת הקלטה באורך של %2$d דקות</item>
+        <item quantity="two">לסרטון באורך של %1$d שניות נדרשת הקלטה באורך של %2$d דקות</item>
+        <item quantity="other">לסרטון באורך של %1$d שניות נדרשת הקלטה באורך של %2$d דקות</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">פנים של %d אנשים נחתכו.</item>
+        <item quantity="two">פנים של %d אנשים נחתכו.</item>
+        <item quantity="other">פנים של %d אנשים נחתכו.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s תמונות בקירוב</item>
+        <item quantity="two">%s תמונות בקירוב</item>
+        <item quantity="other">%s תמונות בקירוב</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">נבחרו %1$d אפליקציות</item>
+        <item quantity="two">נבחרו %1$d אפליקציות</item>
+        <item quantity="other">נבחרו %1$d אפליקציות</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">אפשר לשתף במהירות תמונות וסרטונים באפליקציות חברתיות, ישירות מהמצלמה. יש לבחור עד %1$d אפליקציות. לא ניתן לשתף תמונות וסרטונים שנשמרים בתיקיית הכספת.</item>
+        <item quantity="two">אפשר לשתף במהירות תמונות וסרטונים באפליקציות חברתיות, ישירות מהמצלמה. יש לבחור עד %1$d אפליקציות. לא ניתן לשתף תמונות וסרטונים שנשמרים בתיקיית הכספת.</item>
+        <item quantity="other">אפשר לשתף במהירות תמונות וסרטונים באפליקציות חברתיות, ישירות מהמצלמה. יש לבחור עד %1$d אפליקציות. לא ניתן לשתף תמונות וסרטונים שנשמרים בתיקיית הכספת.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">יש לבחור עד %1$d אפליקציות</item>
+        <item quantity="two">יש לבחור עד %1$d אפליקציות</item>
+        <item quantity="other">יש לבחור עד %1$d אפליקציות</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s דקות להקלטת סרטונים</item>
+        <item quantity="two">%s דקות להקלטת סרטונים</item>
+        <item quantity="other">%s דקות להקלטת סרטונים</item>
+    </plurals>
+</resources>

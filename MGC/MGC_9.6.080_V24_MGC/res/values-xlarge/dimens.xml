@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="abc_dialog_min_width_major">45.000004%</dimen>
+    <dimen name="abc_dialog_min_width_minor">72.0%</dimen>
+</resources>

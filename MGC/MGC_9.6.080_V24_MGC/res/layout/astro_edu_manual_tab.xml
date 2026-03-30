@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:orientation="vertical" android:id="@id/astro_manual_tab" android:visibility="gone" android:layout_width="match_parent" android:layout_height="@dimen/astro_tab_layout_height" android:paddingHorizontal="@dimen/astro_edu_padding_horizontal">
+        <androidx.cardview.widget.CardView android:layout_gravity="center" android:layout_width="wrap_content" android:layout_height="wrap_content" app:cardCornerRadius="28.0dp" app:cardElevation="0.0dp">
+            <com.airbnb.lottie.LottieAnimationView android:layout_width="@dimen/astro_lottie_width" android:layout_height="@dimen/astro_lottie_height" android:scaleType="fitCenter" app:lottie_autoPlay="true" app:lottie_loop="true" app:lottie_rawRes="@raw/astro_manual_edu_animation" />
+        </androidx.cardview.widget.CardView>
+        <TextView android:textAppearance="?textAppearanceBodyMedium" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="@dimen/astro_textview_margin_top" android:text="@string/manual_edu_step_one_desc" android:drawableLeft="@drawable/gs_astrophotography_mode_fill1_vd_24" android:drawablePadding="@dimen/astro_textview_drawable_padding" />
+        <TextView android:textAppearance="?textAppearanceBodyMedium" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="@dimen/astro_textview_margin_top" android:text="@string/manual_edu_step_two_desc" android:drawableLeft="@drawable/gs_timer_vd_24" android:drawablePadding="@dimen/astro_textview_drawable_padding" />
+        <TextView android:textAppearance="?textAppearanceBodyMedium" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="@dimen/astro_textview_margin_top" android:text="@string/manual_edu_step_three_desc" android:drawableLeft="@drawable/gs_stabilization_vd_24" android:drawablePadding="@dimen/astro_textview_drawable_padding" />
+    </LinearLayout>
+</merge>

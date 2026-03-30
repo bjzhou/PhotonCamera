@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:paddingTop="16.0dp" android:paddingBottom="24.0dp" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textAppearance="?textAppearanceBody2" android:gravity="center_horizontal" android:layout_gravity="center_horizontal" android:id="@id/hdr_video_disable_description" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="@dimen/bottom_sheet_text_max_width" android:text="@string/hdr_video_disable_bottom_sheet_description" android:layout_marginStart="38.0dp" android:layout_marginEnd="38.0dp" />
+    <com.google.android.material.button.MaterialButton android:id="@id/learn_more_about_hdr_video" android:text="@string/hdr_video_learn_more" style="@style/MaterialButtonOutlinedStyle.AllRoundedCorner12dp" />
+</LinearLayout>

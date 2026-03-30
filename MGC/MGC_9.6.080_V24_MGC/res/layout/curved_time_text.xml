@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.wear.widget.ArcLayout android:id="@id/wear_time_container" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_margin="@dimen/wear_time_margin" app:anchorPosition="center" app:clockwise="@bool/isLeftToRightLocale"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <androidx.wear.widget.CurvedTextView android:textAppearance="@style/TextAppearanceTime" android:ellipsize="end" android:id="@id/wear_time_text_title" android:layout_width="match_parent" android:layout_height="match_parent" app:maxSweepDegrees="@integer/wear_time_text_label_max_degrees" />
+    <androidx.wear.widget.CurvedTextView android:textAppearance="@style/TextAppearanceTime" android:id="@id/wear_time_text_divider" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="@dimen/wear_time_padding_between_text" android:layout_marginEnd="@dimen/wear_time_padding_between_text" />
+    <androidx.wear.widget.CurvedTextView android:textAppearance="@style/TextAppearanceTime" android:id="@id/wear_time_text_clock" android:layout_width="match_parent" android:layout_height="match_parent" />
+</androidx.wear.widget.ArcLayout>

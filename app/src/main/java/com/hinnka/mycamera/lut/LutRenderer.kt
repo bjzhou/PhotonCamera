@@ -281,6 +281,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
+    var onFirstFrameRendered: (() -> Unit)? = null
 
     // Live Photo 录制器
     var livePhotoRecorder: LivePhotoRecorder? = null
@@ -292,6 +293,7 @@ class LutRenderer : GLSurfaceView.Renderer {
     private val maxCaptureSize = 512 // 预览图最大尺寸
     private var lastCaptureWidth = 0
     private var lastCaptureHeight = 0
+    private var firstFrameRendered = false
 
     /**
      * Surface 创建时调用
@@ -394,6 +396,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         lastCaptureHeight = 0
         viewportWidth = 0
         viewportHeight = 0
+        firstFrameRendered = false
     }
 
     /**
@@ -471,6 +474,10 @@ class LutRenderer : GLSurfaceView.Renderer {
                 surfaceTexture?.updateTexImage()
                 surfaceTexture?.getTransformMatrix(stMatrix)
                 frameAvailable = false
+                if (!firstFrameRendered) {
+                    firstFrameRendered = true
+                    onFirstFrameRendered?.invoke()
+                }
             }
         }
 

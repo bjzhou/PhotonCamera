@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ٹائم لیپس %d گنا رفتار سے</item>
+        <item quantity="other">ٹائم لیپس %d گنا رفتار سے</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ایک سے زیادہ آبجیکٹ۔</item>
+        <item quantity="other">%1$d سے زیادہ آبجیکٹس۔</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d سیکنڈ کی ویڈیو کے لیے %2$d منٹ کی ریکارڈنگ درکار ہے</item>
+        <item quantity="other">%1$d سیکنڈ کی ویڈیو کے لیے %2$d منٹ کی ریکارڈنگ درکار ہے</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d سیکنڈ کی ویڈیو کے لیے %2$d منٹ کی ریکارڈنگ درکار ہے</item>
+        <item quantity="other">%1$d سیکنڈ کی ویڈیو کے لیے %2$d منٹ کی ریکارڈنگ درکار ہے</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ایک تراشا گیا۔</item>
+        <item quantity="other">%d تراشے گئے۔</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%sتصویر کے بارے میں</item>
+        <item quantity="other">%s تصاویر کے بارے میں</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ایپ منتخب کی گئی)</item>
+        <item quantity="other">(%1$d ایپس منتخب کی گئیں)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">کیمرے سے فوری طور پر سوشل ایپس پر تصاویر اور ویڈیوز کا اشتراک کریں۔ %1$d ایپ منتخب کریں۔ مقفل فولڈر میں محفوظ کردہ تصاویر اور ویڈیوز کا اشتراک نہیں کیا جا سکتا۔</item>
+        <item quantity="other">کیمرے سے فوری طور پر سوشل ایپس پر تصاویر اور ویڈیوز کا اشتراک کریں۔ %1$d ایپس تک منتخب کریں۔ مقفل فولڈر میں محفوظ کردہ تصاویر اور ویڈیوز کا اشتراک نہیں کیا جا سکتا۔</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d ایپ منتخب کریں</item>
+        <item quantity="other">%1$d ایپس تک منتخب کریں</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">ویڈیوز کا %s منٹ</item>
+        <item quantity="other">ویڈیوز کے %s منٹس</item>
+    </plurals>
+</resources>

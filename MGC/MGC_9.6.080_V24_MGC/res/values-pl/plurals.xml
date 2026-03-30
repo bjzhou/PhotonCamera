@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Tryb poklatkowy: prędkość razy %d</item>
+        <item quantity="few">Tryb poklatkowy: prędkość razy %d</item>
+        <item quantity="many">Tryb poklatkowy: prędkość razy %d</item>
+        <item quantity="other">Tryb poklatkowy: prędkość razy %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Więcej niż 1 obiekt.</item>
+        <item quantity="few">Więcej niż %1$d obiekty.</item>
+        <item quantity="many">Więcej niż %1$d obiektów.</item>
+        <item quantity="other">Więcej niż %1$d obiektu.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+        <item quantity="few">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+        <item quantity="many">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+        <item quantity="other">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+        <item quantity="few">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+        <item quantity="many">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+        <item quantity="other">Film o długości %1$d s wymaga co najmniej %2$d min nagrania</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">1 przycięta.</item>
+        <item quantity="few">%d przycięte.</item>
+        <item quantity="many">%d przyciętych.</item>
+        <item quantity="other">%d przyciętej.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Około %s zdjęcia</item>
+        <item quantity="few">Około %s zdjęć</item>
+        <item quantity="many">Około %s zdjęć</item>
+        <item quantity="other">Około %s zdjęcia</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(wybrano %1$d aplikację)</item>
+        <item quantity="few">(wybrano %1$d aplikacje)</item>
+        <item quantity="many">(wybrano %1$d aplikacji)</item>
+        <item quantity="other">(wybrano %1$d aplikacji)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Szybko dziel się zdjęciami i filmami w aplikacjach społecznościowych – prosto z Aparatu. Wybierz %1$d aplikację. Zdjęć i filmów zapisanych w Folderze zamkniętym nie można udostępniać.</item>
+        <item quantity="few">Szybko dziel się zdjęciami i filmami w aplikacjach społecznościowych – prosto z Aparatu. Wybierz maksymalnie %1$d aplikacje. Zdjęć i filmów zapisanych w Folderze zamkniętym nie można udostępniać.</item>
+        <item quantity="many">Szybko dziel się zdjęciami i filmami w aplikacjach społecznościowych – prosto z Aparatu. Wybierz maksymalnie %1$d aplikacji. Zdjęć i filmów zapisanych w Folderze zamkniętym nie można udostępniać.</item>
+        <item quantity="other">Szybko dziel się zdjęciami i filmami w aplikacjach społecznościowych – prosto z Aparatu. Wybierz maksymalnie %1$d aplikacji. Zdjęć i filmów zapisanych w Folderze zamkniętym nie można udostępniać.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Możesz korzystać tylko z %1$d aplikacji</item>
+        <item quantity="few">Możesz korzystać maksymalnie z %1$d aplikacji</item>
+        <item quantity="many">Możesz korzystać maksymalnie z %1$d aplikacji</item>
+        <item quantity="other">Możesz korzystać maksymalnie z %1$d aplikacji</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuta filmów</item>
+        <item quantity="few">%s minuty filmów</item>
+        <item quantity="many">%s minut filmów</item>
+        <item quantity="other">%s minuty filmów</item>
+    </plurals>
+</resources>

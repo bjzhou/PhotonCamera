@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.ui.views.CameraAppRootLayout android:id="@id/camera_app_root" android:tag="uiRoot" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:custom="http://schemas.android.com/apk/res-auto">
+    <com.google.android.apps.camera.ui.widget.TracedFrameLayout android:id="@id/capture_overlay_layout" android:tag="previewUi" android:layout_width="match_parent" android:layout_height="match_parent" custom:gca_box="preview">
+        <com.google.android.apps.camera.debugui.DebugCanvasView android:id="@id/debug_viz_view" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <ViewStub android:id="@id/face_indicator_view_stub" android:layout="@layout/face_indicator_layout" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <ViewStub android:id="@id/hotshot_view_stub" android:layout="@layout/hotshotview_layout" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <ViewStub android:id="@id/face_view_ui_stub" android:layout="@layout/faceview_layout" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <ViewStub android:id="@id/catcher_ui_layout_stub" android:layout="@layout/catcher_ui_layout" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_alignParentBottom="true" />
+        <com.google.android.apps.camera.ui.gridlines.GridLinesUi android:layout_gravity="center_horizontal" android:id="@id/grid_lines" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.autotimer.ui.AutoTimerIndicatorView android:id="@id/autotimer_indicator_view" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.ui.widget.TracedFrameLayout android:id="@id/module_layout" android:tag="moduleUi" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.ui.views.CaptureAnimationOverlay android:id="@id/capture_animation_overlay" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.progressoverlay.ProgressOverlay android:id="@id/progress_overlay" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <ViewStub android:id="@id/gleam_stub" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.coach.CameraCoachHudView android:id="@id/coach_hud" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.ui.wirers.PreviewOverlay android:id="@id/preview_overlay" android:layout_width="match_parent" android:layout_height="match_parent" custom:gca_box="previewOverlay" />
+        <com.google.android.apps.camera.focusindicator.FocusIndicatorView android:id="@id/focus_indicator_view" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.ui.captureframe.CaptureFrameUi android:id="@id/capture_frame" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.google.android.apps.camera.aizoom.animation.AiZoomPreviewUserEducationView android:id="@id/boba_pearl_drag_edu_animation_view" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </com.google.android.apps.camera.ui.widget.TracedFrameLayout>
+    <FrameLayout android:id="@id/uncovered_preview_layout" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" custom:gca_box="uncoveredPreview">
+        <ImageView android:layout_gravity="center_vertical" android:id="@id/video_animation_indicator_icon" android:visibility="gone" android:layout_width="180.0dp" android:layout_height="180.0dp" android:src="@drawable/ic_burst_mode_white_36dp" />
+        <com.google.android.apps.camera.ui.elapsedtimeui.LongPressElapsedTimeView android:orientation="horizontal" android:id="@id/long_press_elapsed_timer_view" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <com.google.android.apps.camera.ui.elapsedtimeui.ElapsedTimerView android:orientation="horizontal" android:id="@id/elapsed_timer_view" android:focusable="true" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:animateLayoutChanges="true" android:layoutDirection="locale" />
+        <FrameLayout android:id="@id/frame_layout_for_notification_chip" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" android:paddingStart="@dimen/notification_chip_padding_left" android:paddingEnd="@dimen/notification_chip_padding_right">
+            <com.google.android.apps.camera.ui.notificationchip.NotificationChipView android:textSize="14.0sp" android:typeface="normal" android:textColor="@color/notification_chip_text" android:layout_gravity="center_horizontal" android:id="@id/notification_chip_view" android:background="@drawable/notification_chip_background" android:paddingTop="@dimen/notification_chip_text_padding_top" android:paddingBottom="@dimen/notification_chip_text_padding_bottom" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="@dimen/notification_chip_layout_margin_top" android:singleLine="false" android:textIsSelectable="false" android:fontFamily="@font/google_sans_text_medium" android:textAlignment="center" android:paddingStart="@dimen/notification_chip_text_padding_left" android:paddingEnd="@dimen/notification_chip_text_padding_right" android:lineHeight="20.0sp" />
+            <ViewStub android:layout_gravity="center_horizontal" android:id="@id/camera_remote_control_layout_stub" android:layout="@layout/remote_control" android:layout_width="match_parent" android:layout_height="match_parent" />
+            <include layout="@layout/cottage_chip_stub" />
+        </FrameLayout>
+        <include layout="@layout/astro_stub" />
+    </FrameLayout>
+    <com.google.android.apps.camera.ui.widget.TracedFrameLayout android:id="@id/smarts_preview_overlay" android:layout_width="match_parent" android:layout_height="match_parent" custom:gca_box="preview" />
+    <com.google.android.apps.camera.uiutils.ReplaceableView android:id="@id/fullscreen_selfie_flash" android:layout_width="match_parent" android:layout_height="match_parent" />
+</com.google.android.apps.camera.ui.views.CameraAppRootLayout>

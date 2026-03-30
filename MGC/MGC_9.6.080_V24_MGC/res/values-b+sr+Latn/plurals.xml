@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Ubrzani video sa brzinom %d</item>
+        <item quantity="few">Ubrzani video sa brzinom %d</item>
+        <item quantity="other">Ubrzani video sa brzinom %d</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">Više od %1$d subjekta.</item>
+        <item quantity="few">Više od %1$d subjekta.</item>
+        <item quantity="other">Više od %1$d subjekata.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">Za video od %1$d sek potreban je %2$d minut snimanja</item>
+        <item quantity="few">Za video od %1$d sek potrebna su %2$d minuta snimanja</item>
+        <item quantity="other">Za video od %1$d sek potrebno je %2$d minuta snimanja</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">Za video od %1$d sek potreban je %2$d minut snimanja</item>
+        <item quantity="few">Za video od %1$d sek potrebna su %2$d minuta snimanja</item>
+        <item quantity="other">Za video od %1$d sek potrebno je %2$d minuta snimanja</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d je opsečeno.</item>
+        <item quantity="few">%d su opsečena.</item>
+        <item quantity="other">%d je opsečeno.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Otprilike %s slika</item>
+        <item quantity="few">Otprilike %s slike</item>
+        <item quantity="other">Otprilike %s slika</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(izabrana je %1$d aplikacija)</item>
+        <item quantity="few">(izabrane su %1$d aplikacije)</item>
+        <item quantity="other">(izabrano je %1$d aplikacija)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Brzo delite slike i video snimke u društvenim aplikacijama iz Kamere. Odaberite maksimalno %1$d aplikaciju. Slike i videi sačuvani u zaključanom folderu ne mogu da se dele.</item>
+        <item quantity="few">Brzo delite slike i video snimke u društvenim aplikacijama iz Kamere. Odaberite maksimalno %1$d aplikacije. Slike i videi sačuvani u zaključanom folderu ne mogu da se dele.</item>
+        <item quantity="other">Brzo delite slike i video snimke u društvenim aplikacijama iz Kamere. Odaberite maksimalno %1$d aplikacija. Slike i videi sačuvani u zaključanom folderu ne mogu da se dele.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Odaberite najviše %1$d aplikaciju</item>
+        <item quantity="few">Odaberite najviše %1$d aplikacije</item>
+        <item quantity="other">Odaberite najviše %1$d aplikacija</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minut videa</item>
+        <item quantity="few">%s minuta videa</item>
+        <item quantity="other">%s minuta videa</item>
+    </plurals>
+</resources>

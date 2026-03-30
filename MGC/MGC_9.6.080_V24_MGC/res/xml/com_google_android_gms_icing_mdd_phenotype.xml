@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<phenotype-registrations>
+    <phenotype-registration>
+        <configuration-package>com.google.android.gms.icing.mdd</configuration-package>
+        <log-sources>
+            <log-source>ICING</log-source>
+        </log-sources>
+        <auto-subpackage>true</auto-subpackage>
+        <configuration-version>616991814</configuration-version>
+    </phenotype-registration>
+</phenotype-registrations>

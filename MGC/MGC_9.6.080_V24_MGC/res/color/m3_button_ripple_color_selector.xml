@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checkable="false" android:state_pressed="true" android:color="?colorOnContainer" android:alpha="@dimen/m3_ripple_pressed_alpha" />
+    <item android:state_focused="true" android:state_checkable="false" android:color="?colorOnContainer" android:alpha="@dimen/m3_ripple_focused_alpha" />
+    <item android:state_checkable="false" android:color="?colorOnContainer" android:alpha="@dimen/m3_ripple_hovered_alpha" android:state_hovered="true" />
+    <item android:state_checkable="false" android:color="?colorOnContainer" android:alpha="@dimen/m3_ripple_default_alpha" />
+    <item android:state_checked="true" android:state_pressed="true" android:color="?colorOnContainerChecked" android:alpha="@dimen/m3_ripple_pressed_alpha" />
+    <item android:state_focused="true" android:state_checked="true" android:color="?colorOnContainerChecked" android:alpha="@dimen/m3_ripple_focused_alpha" />
+    <item android:state_checked="true" android:color="?colorOnContainerChecked" android:alpha="@dimen/m3_ripple_hovered_alpha" android:state_hovered="true" />
+    <item android:state_checked="true" android:color="?colorOnContainerChecked" android:alpha="@dimen/m3_ripple_default_alpha" />
+    <item android:state_pressed="true" android:color="?colorOnContainerUnchecked" android:alpha="@dimen/m3_ripple_pressed_alpha" />
+    <item android:state_focused="true" android:color="?colorOnContainerUnchecked" android:alpha="@dimen/m3_ripple_focused_alpha" />
+    <item android:color="?colorOnContainerUnchecked" android:alpha="@dimen/m3_ripple_hovered_alpha" android:state_hovered="true" />
+    <item android:color="?colorOnContainerUnchecked" android:alpha="@dimen/m3_ripple_default_alpha" />
+</selector>

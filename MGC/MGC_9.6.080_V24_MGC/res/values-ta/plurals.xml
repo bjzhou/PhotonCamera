@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">டைம் லாப்ஸ் %d மடங்கு வேகம்</item>
+        <item quantity="other">டைம் லாப்ஸ் %d மடங்கு வேகம்</item>
+    </plurals>
+    <plurals name="more_than_max_objects_announcement">
+        <item quantity="one">ஒன்றுக்கும் மேற்பட்டவை.</item>
+        <item quantity="other">%1$dக்கும் மேற்பட்டவை.</item>
+    </plurals>
+    <plurals name="nightlapse_recording_1080p_chip">
+        <item quantity="one">%1$d வினாடி வீடியோவிற்கு %2$d நிமிட ரெக்கார்டிங் தேவை</item>
+        <item quantity="other">%1$d வினாடி வீடியோவிற்கு%2$d நிமிடங்கள் ரெக்கார்டிங் தேவை</item>
+    </plurals>
+    <plurals name="nightlapse_recording_4k_chip">
+        <item quantity="one">%1$d வினாடி வீடியோவிற்கு %2$d நிமிட ரெக்கார்டிங் தேவை</item>
+        <item quantity="other">%1$d வினாடி வீடியோவிற்கு%2$d நிமிடங்கள் ரெக்கார்டிங் தேவை</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ஒரு முகம் செதுக்கப்பட்டது.</item>
+        <item quantity="other">%d முகங்கள் செதுக்கப்பட்டன.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">சுமார் %s படம் உள்ளது</item>
+        <item quantity="other">சுமார் %s படங்கள் உள்ளன</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d ஆப்ஸ் தேர்ந்தெடுக்கப்பட்டது)</item>
+        <item quantity="other">(%1$d ஆப்ஸ் தேர்ந்தெடுக்கப்பட்டன)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">கேமராவில் இருந்தே சமூக ஆப்ஸில் படங்களையும் வீடியோக்களையும் விரைவாகப் பகிரலாம். %1$d ஆப்ஸைத் தேர்வுசெய்யலாம். பூட்டிய ஃபோல்டரில் சேமித்த படங்களையும் வீடியோக்களையும் பகிர முடியாது.</item>
+        <item quantity="other">கேமராவில் இருந்தே சமூக ஆப்ஸில் படங்களையும் வீடியோக்களையும் விரைவாகப் பகிரலாம். %1$d ஆப்ஸ் வரை தேர்வுசெய்யலாம். பூட்டிய ஃபோல்டரில் சேமித்த படங்களையும் வீடியோக்களையும் பகிர முடியாது.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d ஆப்ஸைத் தேர்வுசெய்யவும்</item>
+        <item quantity="other">%1$d ஆப்ஸ் வரை தேர்வுசெய்யவும்</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s நிமிடத்திற்கான வீடியோக்கள்</item>
+        <item quantity="other">%s நிமிடங்களுக்கான வீடியோக்கள்</item>
+    </plurals>
+</resources>
