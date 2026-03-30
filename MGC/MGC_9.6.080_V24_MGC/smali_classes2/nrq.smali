@@ -322,6 +322,10 @@
     nop
 
     :goto_2
+    invoke-static {p1}, Lnrq;->c(Lryy;)Lryy;
+
+    move-result-object p1
+
     invoke-virtual {p1}, Ljava/lang/Object;->getClass()Ljava/lang/Class;
 
     goto/32 :goto_0
@@ -361,6 +365,82 @@
     nop
 
     nop
+.end method
+
+.method private static c(Lryy;)Lryy;
+    .locals 8
+
+    new-instance v0, Ljava/util/ArrayList;
+
+    invoke-interface {p0}, Ljava/util/Set;->size()I
+
+    move-result v1
+
+    add-int/lit8 v1, v1, 0x1
+
+    invoke-direct {v0, v1}, Ljava/util/ArrayList;-><init>(I)V
+
+    invoke-interface {p0}, Ljava/util/Set;->iterator()Ljava/util/Iterator;
+
+    move-result-object v1
+
+    const/4 v2, 0x0
+
+    const/4 v3, 0x0
+
+    const/4 v7, 0x0
+
+    :goto_0
+    invoke-interface {v1}, Ljava/util/Iterator;->hasNext()Z
+
+    move-result v4
+
+    if-eqz v4, :cond_2
+
+    invoke-interface {v1}, Ljava/util/Iterator;->next()Ljava/lang/Object;
+
+    move-result-object v4
+
+    check-cast v4, Lnrp;
+
+    invoke-virtual {v0, v4}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+
+    iget-object v5, v4, Lnrp;->c:Lnrn;
+
+    sget-object v6, Lnrn;->h:Lnrn;
+
+    if-ne v5, v6, :cond_0
+
+    const/4 v3, 0x1
+
+    :cond_0
+    if-nez v2, :goto_0
+
+    sget-object v6, Lnrn;->d:Lnrn;
+
+    if-ne v5, v6, :goto_0
+
+    iget-object v7, v4, Lnrp;->b:Loyd;
+
+    iget-object v4, v4, Lnrp;->a:Lnro;
+
+    instance-of v5, v4, Llnv;
+
+    if-eqz v5, :goto_0
+
+    check-cast v4, Llnv;
+
+    iget-object v2, v4, Llnv;->j:Llnt;
+
+    goto :goto_0
+
+    :cond_2
+    if-eqz v2, :cond_3
+
+    invoke-static {v2}, Lcodexlutruntime;->a(Llnt;)V
+
+    :cond_3
+    return-object p0
 .end method
 
 .method public static a(Ljava/util/Set;Z)Lnrq;

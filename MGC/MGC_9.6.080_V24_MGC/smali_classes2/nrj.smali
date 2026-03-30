@@ -5978,6 +5978,25 @@
 
     invoke-virtual {v2, p1}, Lows;->d(Lpci;)V
 
+    invoke-static {p0}, Lcodexlutruntime;->b(Lnrk;)Lnrm;
+
+    move-result-object v4
+
+    if-eqz v4, :cond_codex_fast_lut_ready
+
+    invoke-interface {v4, v1, v1}, Lnrm;->a(Lprw;Lprw;)Lnrl;
+
+    move-result-object v4
+
+    sget-object v5, Lnrl;->c:Lnrl;
+
+    if-ne v4, v5, :cond_codex_fast_lut_ready
+
+    invoke-virtual {v2}, Lows;->close()V
+
+    goto :goto_8
+
+    :cond_codex_fast_lut_ready
     const/4 p1, 0x0
 
     nop
@@ -11551,6 +11570,8 @@
 
     invoke-interface {v0, v1}, Lpdf;->f(Ljava/lang/String;)V
 
+    invoke-static {}, Lcodexlutruntime;->c()V
+
     iget-object v0, p0, Lnrj;->f:Lows;
 
     nop
@@ -15665,7 +15686,7 @@
 .end method
 
 .method final declared-synchronized i(Lpge;)V
-    .locals 8
+    .locals 9
 
     goto/32 :goto_1
 
@@ -16257,6 +16278,27 @@
 
     invoke-virtual {v1, v5}, Lows;->d(Lpci;)V
 
+    invoke-static {p0}, Lcodexlutruntime;->b(Lnrk;)Lnrm;
+
+    move-result-object v5
+
+    if-eqz v5, :cond_codex_lut_ready
+
+    iget-object v6, v0, Lnrs;->b:Lphh;
+
+    invoke-interface {v5, p1, v6, p1}, Lnrm;->b(Lpge;Lphh;Lpge;)Lnrl;
+
+    move-result-object v5
+
+    sget-object v6, Lnrl;->c:Lnrl;
+
+    if-ne v5, v6, :cond_codex_lut_ready
+
+    invoke-virtual {v1}, Lows;->close()V
+
+    goto :goto_f
+
+    :cond_codex_lut_ready
     invoke-virtual {p0}, Lnrj;->g()Lryb;
 
     move-result-object v5

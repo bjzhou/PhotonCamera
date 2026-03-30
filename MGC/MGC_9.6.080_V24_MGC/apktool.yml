@@ -1,0 +1,110 @@
+version: 3.0.1
+apkFileName: MGC_9.6.080_V24_MGC.apk
+usesFramework:
+  ids:
+  - 1
+sdkInfo:
+  minSdkVersion: 30
+  targetSdkVersion: 35
+versionInfo:
+  versionCode: 68013614
+  versionName: 9.6.080.695519101.19
+resourcesInfo:
+  packageId: 127
+doNotCompress:
+- arsc
+- ogg
+- png
+- assets/P21/face_light_256_256-P21-custom_op.tflite.enc
+- assets/P21/facemesh-full-P21-custom_op.tflite.enc
+- assets/P21/ffv6_holo040820_normals_net_mixed_fp16_256_256-P21-custom_op.tflite.enc
+- assets/P21/ffv6_holo040820_relighting_net_mixed_fp16_256_256-P21-custom_op.tflite.enc
+- assets/P22/face_light_256_256-P22-custom_op.tflite.enc
+- assets/P22/facemesh-full-P22-custom_op.tflite.enc
+- assets/P22/ffv6_holo040820_normals_net_mixed_fp16_256_256-P22-custom_op.tflite.enc
+- assets/P22/ffv6_holo040820_relighting_net_mixed_fp16_256_256-P22-custom_op.tflite.enc
+- assets/P23/face_light_256_256-P23-custom_op.tflite.enc
+- assets/P23/facemesh-full-P23-custom_op.tflite.enc
+- assets/P23/ffv6_holo040820_normals_net_mixed_fp16_256_256-P23-custom_op.tflite.enc
+- assets/P23/ffv6_holo040820_relighting_net_mixed_fp16_256_256-P23-custom_op.tflite.enc
+- assets/avenh-model0.tflite.uncompressed
+- assets/camera_vkp/corner_detector_anchor.uncompressed
+- assets/camera_vkp/corner_detector_fixed_input_shape_with_partial_metadata.tflite.uncompressed
+- assets/camera_vkp/corner_detector_label_map.uncompressed
+- assets/camera_vkp/mobile_ica_v2_classifier_embedder.tflite.uncompressed
+- assets/camera_vkp/mobilenet_v2_050_combined_16classes.tflite.uncompressed
+- assets/deblur_04_20_2023_v0.tflite.uncompressed
+- assets/deblur_06_20_2023_pwcnet_v0.tflite.uncompressed
+- assets/deeprestore_face_float32_512x512_v13_rc2_float-graph-custom_op.tflite.uncompressed
+- assets/deeprestore_face_float32_512x512_v13_rc2_float-graph-custom_op_p23.tflite.uncompressed
+- assets/deeprestore_face_float32_512x512_v13_rc2_float-graph-custom_op_pixel6.tflite.uncompressed
+- assets/dexopt/baseline.profm
+- assets/efaffa0bfaf74be2ad2e17aeff79f3db/efaffa0bfaf74be2ad2e17aeff79f3db.uncompressed
+- assets/empty_asset_generated_by_bazel~
+- assets/face_light_256_256.tflite.enc
+- assets/face_model_468.xnft.enc
+- assets/facedetector-front.tflite.enc
+- assets/facemesh-full.tflite.enc
+- assets/ffv6_holo040820_normals_net_mixed_fp16_256_256.tflite.enc
+- assets/ffv6_holo040820_relighting_net_mixed_fp16_256_256.tflite.enc
+- assets/gyrfalcon-p23.tflite.uncompressed
+- assets/hawk_05_18_2023_pwcnet_v0.tflite.uncompressed
+- assets/hawk_06_15_2022_v1.tflite.uncompressed
+- assets/hawk_full_fov_custom-op.tflite.uncompressed
+- assets/mosaic_f2p_512x512_f16.tflite.uncompressed
+- assets/motion.tflite.enc.uncompressed
+- assets/phenotype/com_google_android_apps_camera_package_metadata.binarypb
+- assets/phenotype/com_google_android_gms_icing_mdd_package_metadata.binarypb
+- assets/phenotype/com_google_android_libraries_consentverifier_package_metadata.binarypb
+- assets/phenotype/com_google_android_libraries_performance_primes_package_metadata.binarypb
+- assets/saliency.tflite.enc.uncompressed
+- assets/siamese_end2end_darwinn_custom_op_abrolhos_b0.tflite.uncompressed
+- assets/siamese_end2end_darwinn_custom_op_janeiro_a0.tflite.uncompressed
+- assets/siamese_end2end_darwinn_custom_op_rio_a0.tflite.uncompressed
+- assets/siamese_fe_darwinn_custom_op_abrolhos_b0.tflite.uncompressed
+- assets/siamese_fe_darwinn_custom_op_janeiro_a0.tflite.uncompressed
+- assets/siamese_fe_darwinn_custom_op_rio_a0.tflite.uncompressed
+- assets/tflite_vakunov_multi-subject_2018-06-09.fb.enc
+- assets/walnut-p23-custom_op.tflite.uncompressed
+- org/joda/time/format/messages_en.properties
+- org/joda/time/tz/data/EST
+- org/joda/time/tz/data/Etc/GMT
+- org/joda/time/tz/data/Etc/GMT+1
+- org/joda/time/tz/data/Etc/GMT+10
+- org/joda/time/tz/data/Etc/GMT+11
+- org/joda/time/tz/data/Etc/GMT+12
+- org/joda/time/tz/data/Etc/GMT+2
+- org/joda/time/tz/data/Etc/GMT+3
+- org/joda/time/tz/data/Etc/GMT+4
+- org/joda/time/tz/data/Etc/GMT+5
+- org/joda/time/tz/data/Etc/GMT+6
+- org/joda/time/tz/data/Etc/GMT+7
+- org/joda/time/tz/data/Etc/GMT+8
+- org/joda/time/tz/data/Etc/GMT+9
+- org/joda/time/tz/data/Etc/GMT-1
+- org/joda/time/tz/data/Etc/GMT-10
+- org/joda/time/tz/data/Etc/GMT-11
+- org/joda/time/tz/data/Etc/GMT-12
+- org/joda/time/tz/data/Etc/GMT-13
+- org/joda/time/tz/data/Etc/GMT-14
+- org/joda/time/tz/data/Etc/GMT-2
+- org/joda/time/tz/data/Etc/GMT-3
+- org/joda/time/tz/data/Etc/GMT-4
+- org/joda/time/tz/data/Etc/GMT-5
+- org/joda/time/tz/data/Etc/GMT-6
+- org/joda/time/tz/data/Etc/GMT-7
+- org/joda/time/tz/data/Etc/GMT-8
+- org/joda/time/tz/data/Etc/GMT-9
+- org/joda/time/tz/data/Etc/UTC
+- org/joda/time/tz/data/HST
+- org/joda/time/tz/data/MST
+- res/raw/build_data.pb
+- res/raw/com_google_android_apps_camera_registration_info_release.binarypb
+- res/raw/com_google_android_gms_analytics_heterodyne_info
+- res/raw/com_google_android_gms_icing_mdd_registration_info.binarypb
+- res/raw/com_google_android_gms_ulr_heterodyne_info
+- res/raw/com_google_android_gms_usagereporting_heterodyne_info
+- res/raw/com_google_android_libraries_consentverifier_heterodyne_info
+- res/raw/com_google_android_libraries_consentverifier_registration_info.binarypb
+- res/raw/com_google_android_libraries_performance_primes_heterodyne_info
+- res/raw/com_google_android_libraries_performance_primes_registration_info.binarypb

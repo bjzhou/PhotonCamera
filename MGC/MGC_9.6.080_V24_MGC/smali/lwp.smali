@@ -5845,7 +5845,49 @@
 .end method
 
 .method public final s([BLmla;)Lsui;
-    .locals 1
+    .locals 6
+
+    const-string v1, "codex_save_chain"
+
+    const-string v2, "lwp.s"
+
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    array-length v3, p1
+
+    new-instance v4, Ljava/lang/StringBuilder;
+
+    const-string v5, "lwp.s before helper len="
+
+    invoke-direct {v4, v5}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v4
+
+    invoke-static {v1, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-static {v2, p1}, Lcom/hinnka/mycamera/previewhook/api/MgcCapturedJpegHook;->processJpegWithSource(Ljava/lang/String;[B)[B
+
+    move-result-object p1
+
+    array-length v3, p1
+
+    new-instance v4, Ljava/lang/StringBuilder;
+
+    const-string v5, "lwp.s after helper len="
+
+    invoke-direct {v4, v5}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v4
+
+    invoke-static {v1, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     goto/32 :goto_1
 

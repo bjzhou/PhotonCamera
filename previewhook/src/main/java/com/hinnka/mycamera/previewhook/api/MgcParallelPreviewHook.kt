@@ -16,6 +16,7 @@ import com.hinnka.mycamera.previewhook.generated.DefaultVerificationLutData
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.raw.ColorSpace as RawColorSpace
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.ShortBuffer
 import java.util.Base64
 
@@ -119,7 +120,10 @@ object MgcParallelPreviewHook {
     ): LutConfig {
         return LutConfig(
             size = size,
-            byteBuffer = ByteBuffer.allocateDirect(rgb.size).put(rgb).apply { position(0) },
+            byteBuffer = ByteBuffer.allocateDirect(rgb.size)
+                .order(ByteOrder.nativeOrder())
+                .put(rgb)
+                .apply { position(0) },
             title = title,
             configDataType = LutConfig.CONFIG_DATA_TYPE_UINT8,
             curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB },
@@ -136,7 +140,10 @@ object MgcParallelPreviewHook {
     ): LutConfig {
         return LutConfig(
             size = size,
-            byteBuffer = ByteBuffer.allocateDirect(rgb.size).put(rgb).apply { position(0) },
+            byteBuffer = ByteBuffer.allocateDirect(rgb.size)
+                .order(ByteOrder.nativeOrder())
+                .put(rgb)
+                .apply { position(0) },
             title = title,
             configDataType = LutConfig.CONFIG_DATA_TYPE_UINT16,
             curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB },
@@ -201,7 +208,10 @@ object MgcParallelPreviewHook {
         val payload = Base64.getDecoder().decode(DefaultVerificationLutData.PAYLOAD_BASE64)
         return LutConfig(
             size = DefaultVerificationLutData.SIZE,
-            byteBuffer = ByteBuffer.allocateDirect(payload.size).put(payload).apply { position(0) },
+            byteBuffer = ByteBuffer.allocateDirect(payload.size)
+                .order(ByteOrder.nativeOrder())
+                .put(payload)
+                .apply { position(0) },
             title = DefaultVerificationLutData.TITLE,
             configDataType = DefaultVerificationLutData.CONFIG_DATA_TYPE,
             curve = LutCurve.entries.getOrElse(DefaultVerificationLutData.CURVE_ORDINAL) { LutCurve.SRGB },

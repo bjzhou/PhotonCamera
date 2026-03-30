@@ -34,6 +34,114 @@
 
 
 # direct methods
+.method public constructor <init>(Lqht;Ljava/lang/String;)V
+    .locals 4
+
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    const-string v0, "#FF00FF"
+
+    invoke-static {v0}, Landroid/graphics/Color;->parseColor(Ljava/lang/String;)I
+
+    move-result v0
+
+    invoke-static {v0}, Landroid/graphics/Color;->valueOf(I)Landroid/graphics/Color;
+
+    move-result-object v0
+
+    iput-object v0, p0, Llnw;->b:Landroid/graphics/Color;
+
+    const/high16 v0, 0x3f800000    # 1.0f
+
+    iput v0, p0, Llnw;->c:F
+
+    const v1, 0x3e4ccccd    # 0.2f
+
+    iput v1, p0, Llnw;->d:F
+
+    const/4 v1, 0x0
+
+    iput v1, p0, Llnw;->e:F
+
+    iput v1, p0, Llnw;->f:F
+
+    iput v1, p0, Llnw;->g:F
+
+    const/high16 v2, 0x40400000    # 3.0f
+
+    iput v2, p0, Llnw;->h:F
+
+    new-instance v2, Landroid/graphics/PointF;
+
+    invoke-direct {v2}, Landroid/graphics/PointF;-><init>()V
+
+    iput-object v2, p0, Llnw;->i:Landroid/graphics/PointF;
+
+    new-instance v2, Landroid/graphics/PointF;
+
+    const/high16 v3, 0x42480000    # 50.0f
+
+    invoke-direct {v2, v3, v3}, Landroid/graphics/PointF;-><init>(FF)V
+
+    iput-object v2, p0, Llnw;->j:Landroid/graphics/PointF;
+
+    new-instance v2, Landroid/graphics/PointF;
+
+    const/high16 v3, 0x43960000    # 300.0f
+
+    invoke-direct {v2, v3, v3}, Landroid/graphics/PointF;-><init>(FF)V
+
+    iput-object v2, p0, Llnw;->k:Landroid/graphics/PointF;
+
+    new-instance v2, Landroid/graphics/PointF;
+
+    invoke-direct {v2, v1, v1}, Landroid/graphics/PointF;-><init>(FF)V
+
+    iput-object v2, p0, Llnw;->l:Landroid/graphics/PointF;
+
+    new-instance v1, Landroid/graphics/Rect;
+
+    invoke-direct {v1}, Landroid/graphics/Rect;-><init>()V
+
+    iput-object v1, p0, Llnw;->m:Landroid/graphics/Rect;
+
+    new-instance v1, Lqjc;
+
+    invoke-direct {v1, p1}, Lqjc;-><init>(Lqht;)V
+
+    const-string v2, "#version 300 es\nin vec2 aPosition;\n\nvoid main() {\n  gl_Position = vec4(aPosition.xy, 0.0, 1.0);\n}\n"
+
+    invoke-static {p1, v2}, Lqjs;->h(Lqht;Ljava/lang/String;)Lqjs;
+
+    move-result-object v2
+
+    new-instance v3, Lqlr;
+
+    invoke-direct {v3, v2}, Lqlr;-><init>(Ljava/lang/Object;)V
+
+    invoke-virtual {v1, v3}, Lqjc;->a(Lqlt;)V
+
+    invoke-static {p1, p2}, Lqjs;->b(Lqht;Ljava/lang/String;)Lqjs;
+
+    move-result-object p2
+
+    new-instance v2, Lqlr;
+
+    invoke-direct {v2, p2}, Lqlr;-><init>(Ljava/lang/Object;)V
+
+    invoke-virtual {v1, v2}, Lqjc;->a(Lqlt;)V
+
+    invoke-virtual {v1}, Lqjc;->b()Lqjs;
+
+    move-result-object p2
+
+    iput-object p2, p0, Llnw;->n:Lqjs;
+
+    iput-object p1, p0, Llnw;->a:Lqht;
+
+    return-void
+.end method
+
 .method public constructor <init>(Landroid/content/Context;Lqht;)V
     .locals 6
 

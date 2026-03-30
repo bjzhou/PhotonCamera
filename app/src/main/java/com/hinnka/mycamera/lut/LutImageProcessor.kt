@@ -15,6 +15,7 @@ import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -32,8 +33,14 @@ import androidx.core.graphics.createBitmap
 class LutImageProcessor {
     // 单线程调度器，确保所有 EGL 操作在同一线程
     private val glDispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "LutImageProcessor-GL").apply { isDaemon = true }
+        Thread(r, "LutImageProcessor-GL").apply {
+            isDaemon = true
+            glThread = this
+        }
     }.asCoroutineDispatcher()
+
+    @Volatile
+    private var glThread: Thread? = null
 
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -116,7 +123,16 @@ class LutImageProcessor {
      */
     fun initialize(): Boolean {
         if (isInitialized) return true
+        if (isOnGlThread()) {
+            return initializeInternal()
+        }
+        return runBlocking(glDispatcher) {
+            initializeInternal()
+        }
+    }
 
+    private fun initializeInternal(): Boolean {
+        if (isInitialized) return true
         try {
             // 获取 EGL Display
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
@@ -1213,7 +1229,17 @@ class LutImageProcessor {
      */
     fun release() {
         if (!isInitialized) return
+        if (isOnGlThread()) {
+            releaseInternal()
+            return
+        }
+        runBlocking(glDispatcher) {
+            releaseInternal()
+        }
+    }
 
+    private fun releaseInternal() {
+        if (!isInitialized) return
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
 
         if (shaderProgram != 0) {
@@ -1272,6 +1298,8 @@ class LutImageProcessor {
         isInitialized = false
         PLog.d(TAG, "LutImageProcessor released")
     }
+
+    private fun isOnGlThread(): Boolean = Thread.currentThread() === glThread
 
     companion object {
         private const val TAG = "LutImageProcessor"

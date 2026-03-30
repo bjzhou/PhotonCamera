@@ -57,6 +57,8 @@
 
 .field private final w:I
 
+.field private y:Lnrn;
+
 
 # direct methods
 .method static constructor <clinit>()V
@@ -2187,53 +2189,16 @@
 .end method
 
 .method public final c()Lnrn;
-    .locals 0
+    .locals 1
 
-    goto/32 :goto_1
+    iget-object v0, p0, Llns;->y:Lnrn;
 
-    nop
+    if-nez v0, :cond_0
 
-    nop
+    sget-object v0, Lnrn;->d:Lnrn;
 
-    nop
-
-    nop
-
-    :goto_0
-    return-object p0
-
-    nop
-
-    nop
-
-    nop
-
-    nop
-
-    nop
-
-    :goto_1
-    sget-object p0, Lnrn;->d:Lnrn;
-
-    nop
-
-    nop
-
-    nop
-
-    nop
-
-    goto/32 :goto_0
-
-    nop
-
-    nop
-
-    nop
-
-    nop
-
-    nop
+    :cond_0
+    return-object v0
 .end method
 
 .method public final declared-synchronized close()V
@@ -2761,6 +2726,7 @@
 
     nop
 
+
     nop
 
     nop
@@ -2780,6 +2746,14 @@
     nop
 
     nop
+.end method
+
+.method public final g(Lnrn;)V
+    .locals 0
+
+    iput-object p1, p0, Llns;->y:Lnrn;
+
+    return-void
 .end method
 
 .method public final synthetic r()Z

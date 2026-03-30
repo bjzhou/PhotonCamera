@@ -9,6 +9,7 @@ plugins {
 
 val syncedSourceDir = layout.buildDirectory.dir("generated/previewhook/syncedSrc")
 val generatedSourceDir = layout.buildDirectory.dir("generated/previewhook/generatedSrc")
+val freshMgcClasses4 = layout.projectDirectory.file("../MGC/MGC_9.6.080_V24_MGC/classes4.dex")
 
 android {
     namespace = "com.hinnka.mycamera.previewhook"
@@ -51,6 +52,8 @@ val syncPreviewhookSources by tasks.registering(Sync::class) {
         include("com/hinnka/mycamera/lut/Shaders.kt")
         include("com/hinnka/mycamera/lut/LutConfig.kt")
         include("com/hinnka/mycamera/lut/LutCurve.kt")
+        include("com/hinnka/mycamera/lut/LutParser.kt")
+        include("com/hinnka/mycamera/lut/CubeLutParser.kt")
         include("com/hinnka/mycamera/lut/GlUtils.kt")
         include("com/hinnka/mycamera/model/ColorPaletteMapper.kt")
         include("com/hinnka/mycamera/model/ColorPaletteState.kt")
@@ -156,6 +159,11 @@ val assembleStandaloneDexRelease by tasks.registering {
         exec {
             commandLine(args)
         }
+
+        val destination = freshMgcClasses4.asFile
+        destination.parentFile.mkdirs()
+        outputDex.get().asFile.copyTo(destination, overwrite = true)
+        logger.lifecycle("Synced standalone dex to ${destination.absolutePath}")
     }
 }
 
