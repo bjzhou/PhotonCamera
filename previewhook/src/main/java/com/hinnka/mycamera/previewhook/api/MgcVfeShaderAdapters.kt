@@ -50,13 +50,20 @@ object MgcVfeShaderAdapters {
         }
     """.trimIndent()
 
-    @JvmStatic
-    fun buildPackedLutFragmentShader(fragmentShader: String): String {
-        val withAtlasUniforms = fragmentShader.replace(LUT_UNIFORM_3D, atlasUniformBlock)
-        val withAtlasSampler = withAtlasUniforms.replace(LUT_SAMPLE_3D, "vec4 lutColor = samplePackedLut(lutCoord);")
-        return withAtlasSampler
+    private fun normalizeShaderSource(source: String): String {
+        return source
+            .removePrefix("\uFEFF")
+            .trimStart()
     }
 
     @JvmStatic
-    fun getVfeVertexShaderSource(): String = vfeVertexShader
+    fun buildPackedLutFragmentShader(fragmentShader: String): String {
+        val normalizedFragment = normalizeShaderSource(fragmentShader)
+        val withAtlasUniforms = normalizedFragment.replace(LUT_UNIFORM_3D, atlasUniformBlock)
+        val withAtlasSampler = withAtlasUniforms.replace(LUT_SAMPLE_3D, "vec4 lutColor = samplePackedLut(lutCoord);")
+        return normalizeShaderSource(withAtlasSampler)
+    }
+
+    @JvmStatic
+    fun getVfeVertexShaderSource(): String = normalizeShaderSource(vfeVertexShader)
 }

@@ -20,6 +20,12 @@ import java.nio.ByteOrder
 object MgcVfeReflectiveStageFactory {
     private const val TAG = "codex_lut_chain"
 
+    private fun normalizeShaderSource(source: String): String {
+        return source
+            .removePrefix("\uFEFF")
+            .trimStart()
+    }
+
     private val bridge = Bridge()
 
     @JvmStatic
@@ -28,6 +34,7 @@ object MgcVfeReflectiveStageFactory {
             MgcVfeLutRuntime.ensureBootstrapVerificationLut()
             val snapshot = MgcVfeLutRuntime.buildSnapshot()
             if (!snapshot.lutEnabled && !snapshot.colorRecipeEnabled) {
+                Log.d(TAG, "reflective stage skipped because snapshot has no active LUT/recipe")
                 return null
             }
             val qht = bridge.nrkGetContext.invoke(nrk)
@@ -118,12 +125,16 @@ object MgcVfeReflectiveStageFactory {
             if (program == null) {
                 program = bridge.buildProgram(
                     qht,
-                    MgcVfeLutRuntime.getVfeVertexShaderSource(),
-                    snapshot.atlasFragmentShader,
+                    normalizeShaderSource(MgcVfeLutRuntime.getVfeVertexShaderSource()),
+                    normalizeShaderSource(snapshot.atlasFragmentShader),
                 )
             }
             if (copyProgram == null) {
-                copyProgram = bridge.buildProgram(qht, COPY_VERTEX_SHADER, COPY_FRAGMENT_SHADER)
+                copyProgram = bridge.buildProgram(
+                    qht,
+                    normalizeShaderSource(COPY_VERTEX_SHADER),
+                    normalizeShaderSource(COPY_FRAGMENT_SHADER),
+                )
             }
         }
 

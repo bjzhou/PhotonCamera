@@ -233,7 +233,7 @@ object MgcVfeLutRuntime {
     )
 
     @JvmStatic
-    fun getVertexShaderSource(): String = Shaders.VERTEX_SHADER
+    fun getVertexShaderSource(): String = Shaders.VERTEX_SHADER.removePrefix("\uFEFF").trimStart()
 
     @JvmStatic
     fun getVfeVertexShaderSource(): String = MgcVfeShaderAdapters.getVfeVertexShaderSource()
@@ -245,7 +245,7 @@ object MgcVfeLutRuntime {
     fun getFullCropRect(): FloatArray = fullCropRect
 
     @JvmStatic
-    fun getFragmentShaderSource(): String = Shaders.FRAGMENT_SHADER_COLOR_RECIPE
+    fun getFragmentShaderSource(): String = Shaders.FRAGMENT_SHADER_COLOR_RECIPE.removePrefix("\uFEFF").trimStart()
 
     @JvmStatic
     fun getPackedAtlasFragmentShaderSource(): String =
