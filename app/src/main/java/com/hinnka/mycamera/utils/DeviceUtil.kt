@@ -45,6 +45,14 @@ object DeviceUtil {
             return list.any { SystemPropertiesUtil.get(it)?.isNotEmpty() == true }
         }
 
+    val isSamsung: Boolean
+        get() {
+            val manufacturer = Build.MANUFACTURER.lowercase()
+            val brand = Build.BRAND.lowercase()
+            return manufacturer.contains("samsung") ||
+                    brand.contains("samsung")
+        }
+
     val isChinaFlavor: Boolean
         get() = BuildConfig.FLAVOR == "china"
 
