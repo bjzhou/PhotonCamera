@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="35" android:compileSdkVersionCodename="VanillaIceCream" package="com.android.MGC_9_6_080" platformBuildVersionCode="35" platformBuildVersionName="VanillaIceCream">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="35" android:compileSdkVersionCodename="VanillaIceCream" package="com.hinnka.MGC" platformBuildVersionCode="35" platformBuildVersionName="VanillaIceCream">
     <uses-feature android:name="android.hardware.camera.level.full" android:required="true"/>
     <uses-feature android:name="android.hardware.location" android:required="false"/>
     <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
@@ -110,7 +110,7 @@
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
     <uses-permission android:name="android.permission.INSTALL_PACKAGE_UPDATES"/>
     <uses-feature android:name="android.hardware.camera"/>
-    <permission android:name="com.android.MGC_9_6_080.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" android:protectionLevel="signature"/>
+    <permission android:name="com.hinnka.MGC.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" android:protectionLevel="signature"/>
     <application android:allowBackup="true" android:appComponentFactory="androidx.core.app.CoreComponentFactory" android:backupAgent="com.google.android.apps.camera.backup.CameraBackupAgent" android:enableOnBackInvokedCallback="true" android:extractNativeLibs="true" android:fullBackupOnly="false" android:gwpAsanMode="never" android:hardwareAccelerated="true" android:icon="@mipmap/adaptiveproduct_pixelcamera" android:label="@string/app_name" android:largeHeap="true" android:name="com.pairip.application.Application" android:restoreAnyVersion="true" android:supportsRtl="true" android:theme="@style/Theme.Camera" android:usesCleartextTraffic="true">
         <uses-library android:name="com.google.android.gestureservice" android:required="false"/>
         <uses-library android:name="com.google.android.camera2" android:required="false"/>
@@ -190,7 +190,7 @@
                 <action android:name="android.media.action.STILL_IMAGE_CAMERA"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:host="com.android.MGC_9_6_080" android:path="/still-image" android:scheme="launch-camera"/>
+                <data android:host="com.hinnka.MGC" android:path="/still-image" android:scheme="launch-camera"/>
             </intent-filter>
         </activity-alias>
         <activity-alias android:exported="true" android:name="com.android.camera.CameraVideoShortcutActivity" android:targetActivity="com.google.android.apps.camera.legacy.app.activity.CameraImageActivity">
@@ -226,10 +226,10 @@
         </activity-alias>
         <activity android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize" android:exported="true" android:label="@string/mode_settings" android:name="com.google.android.apps.camera.legacy.app.settings.CameraSettingsActivity" android:theme="@style/Theme.CameraSettings"/>
         <service android:exported="false" android:name="com.google.android.apps.camera.app.silentfeedback.SilentFeedbackService" android:process=":crash_report"/>
-        <provider android:authorities="com.android.MGC_9_6_080.DebugContentProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.contentprovider.DebugContentProvider"/>
-        <provider android:authorities="com.android.MGC_9_6_080.DbDebugDumper" android:exported="true" android:name="com.google.android.apps.camera.debug.shottracker.db.DbDebugDumper"/>
-        <provider android:authorities="com.android.MGC_9_6_080.MetricsProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.metrics.MetricsProvider"/>
-        <provider android:authorities="com.android.MGC_9_6_080.fileprovider" android:exported="false" android:grantUriPermissions="true" android:name="com.google.android.apps.camera.cameravisionkit.ScanDocumentBitmapFileProvider">
+        <provider android:authorities="com.hinnka.MGC.DebugContentProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.contentprovider.DebugContentProvider"/>
+        <provider android:authorities="com.hinnka.MGC.DbDebugDumper" android:exported="true" android:name="com.google.android.apps.camera.debug.shottracker.db.DbDebugDumper"/>
+        <provider android:authorities="com.hinnka.MGC.MetricsProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.metrics.MetricsProvider"/>
+        <provider android:authorities="com.hinnka.MGC.fileprovider" android:exported="false" android:grantUriPermissions="true" android:name="com.google.android.apps.camera.cameravisionkit.ScanDocumentBitmapFileProvider">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
         </provider>
         <meta-data android:name="com.google.android.gms.phenotype.registration.xml:com.google.android.apps.camera" android:resource="@xml/com_google_android_apps_camera_phenotype_release"/>
@@ -254,7 +254,7 @@
         <meta-data android:name="com.google.android.backup.api_key" android:value="AEdPqrEAAAAIAtBj1ElOYwhIB-X9XDJr91_j0tTe8PPt6pZmnw"/>
         <meta-data android:name="com.android.device.restriction" android:value="brand=google, deviceName=raven; brand=google, deviceName=oriole;brand=google, deviceName=cheetah;brand=google, deviceName=panther;brand=google, deviceName=bluejay; brand=google, deviceName=tangorpro; brand=google, deviceName=lynx; brand=google, deviceName=felix; brand=google, deviceName=shiba; brand=google, deviceName=husky; brand=google, deviceName=akita; brand=google, deviceName=komodo; brand=google, deviceName=caiman; brand=google, deviceName=tokay; brand=google, deviceName=comet;"/>
         <provider android:authorities="com.google.android.apps.camera.MGC_9_6_080.specialtypes.SpecialTypesProvider" android:exported="true" android:name="com.google.android.apps.camera.contentprovider.CameraContentProvider" android:syncable="false"/>
-        <provider android:authorities="com.android.MGC_9_6_080" android:enabled="true" android:exported="true" android:grantUriPermissions="true" android:multiprocess="false" android:name="com.google.android.apps.camera.legacy.app.settings.CameraSearchIndexablesProvider" android:permission="android.permission.READ_SEARCH_INDEXABLES">
+        <provider android:authorities="com.hinnka.MGC" android:enabled="true" android:exported="true" android:grantUriPermissions="true" android:multiprocess="false" android:name="com.google.android.apps.camera.legacy.app.settings.CameraSearchIndexablesProvider" android:permission="android.permission.READ_SEARCH_INDEXABLES">
             <intent-filter>
                 <action android:name="android.content.action.SEARCH_INDEXABLES_PROVIDER"/>
             </intent-filter>
@@ -335,7 +335,7 @@
         <uses-library android:name="wear-sdk" android:required="false"/>
         <uses-library android:name="androidx.window.extensions" android:required="false"/>
         <uses-library android:name="androidx.window.sidecar" android:required="false"/>
-        <provider android:authorities="com.android.MGC_9_6_080.androidx-startup" android:exported="false" android:name="androidx.startup.InitializationProvider">
+        <provider android:authorities="com.hinnka.MGC.androidx-startup" android:exported="false" android:name="androidx.startup.InitializationProvider">
             <meta-data android:name="androidx.work.WorkManagerInitializer" android:value="androidx.startup"/>
         </provider>
         <service android:directBootAware="false" android:enabled="@bool/enable_system_alarm_service_default" android:exported="false" android:name="androidx.work.impl.background.systemalarm.SystemAlarmService"/>

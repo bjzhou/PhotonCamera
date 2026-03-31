@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shortcuts
   xmlns:android="http://schemas.android.com/apk/res/android">
-    <shortcut android:icon="@drawable/ic_selfie" android:enabled="true" android:shortcutId="selfie" android:shortcutShortLabel="@string/shortcut_selfie_short_label" android:shortcutLongLabel="@string/shortcut_selfie_long_label">
-        <intent android:targetPackage="com.android.MGC_9_6_080" android:action="android.media.action.STILL_IMAGE_CAMERA" android:targetClass="com.android.camera.CameraImageActivity">
+    <!--<shortcut android:icon="@drawable/ic_selfie" android:enabled="true" android:shortcutId="selfie" android:shortcutShortLabel="@string/shortcut_selfie_short_label" android:shortcutLongLabel="@string/shortcut_selfie_long_label">
+        <intent android:targetPackage="com.hinnka.MGC" android:action="android.media.action.STILL_IMAGE_CAMERA" android:targetClass="com.android.camera.CameraImageActivity">
             <extra android:name="android.intent.extra.USE_FRONT_CAMERA" android:value="true" />
         </intent>
     </shortcut>
     <shortcut android:icon="@drawable/ic_video" android:enabled="true" android:shortcutId="video" android:shortcutShortLabel="@string/shortcut_video_short_label" android:shortcutLongLabel="@string/shortcut_video_long_label">
-        <intent android:targetPackage="com.android.MGC_9_6_080" android:action="android.media.action.VIDEO_CAMERA" android:targetClass="com.android.camera.CameraVideoShortcutActivity" />
-    </shortcut>
+        <intent android:targetPackage="com.hinnka.MGC" android:action="android.media.action.VIDEO_CAMERA" android:targetClass="com.android.camera.CameraVideoShortcutActivity" />
+    </shortcut>-->
     <shortcut android:icon="@drawable/ic_settings" android:enabled="true" android:shortcutId="settings" android:shortcutShortLabel="@string/shortcut_settings_short_label" android:shortcutLongLabel="@string/shortcut_settings_long_label">
-        <intent android:targetPackage="com.android.MGC_9_6_080" android:action="android.intent.action.MAIN" android:targetClass="com.google.android.apps.camera.legacy.app.settings.CameraSettingsActivity">
+        <intent android:targetPackage="com.hinnka.MGC" android:action="android.intent.action.MAIN" android:targetClass="com.google.android.apps.camera.legacy.app.settings.CameraSettingsActivity">
             <extra android:name="com.android.settings.action.EXTRA_SETTINGS" android:value="true" />
         </intent>
     </shortcut>
