@@ -19,6 +19,21 @@ import java.nio.ByteOrder
  */
 object MgcVfeReflectiveStageFactory {
     private const val TAG = "codex_lut_chain"
+    private val directRgbaOutputScope = ThreadLocal<Boolean>()
+
+    fun <T> withDirectRgbaOutput(block: () -> T): T {
+        val alreadyEnabled = directRgbaOutputScope.get() == true
+        directRgbaOutputScope.set(true)
+        return try {
+            block()
+        } finally {
+            if (alreadyEnabled) {
+                directRgbaOutputScope.set(true)
+            } else {
+                directRgbaOutputScope.remove()
+            }
+        }
+    }
 
     private fun normalizeShaderSource(source: String): String {
         return source
@@ -38,6 +53,12 @@ object MgcVfeReflectiveStageFactory {
                 return null
             }
             val qht = bridge.nrkGetContext.invoke(nrk)
+            MgcMtkPreviewDebug.logOnce(
+                TAG,
+                "create-stage:${System.identityHashCode(nrk)}:${snapshot.lutEnabled}:${snapshot.colorRecipeEnabled}",
+            ) {
+                "create reflective LUT stage nrk=${nrk.javaClass.simpleName}@${System.identityHashCode(nrk)} lutEnabled=${snapshot.lutEnabled} recipeEnabled=${snapshot.colorRecipeEnabled}"
+            }
             val state = StageState(qht)
             Proxy.newProxyInstance(
                 bridge.nrmClass.classLoader,
@@ -95,10 +116,25 @@ object MgcVfeReflectiveStageFactory {
             return try {
                 val snapshot = MgcVfeLutRuntime.buildSnapshot()
                 ensureProgram(snapshot)
-                ensureIntermediate(inputQiu)
                 ensureAtlasTexture(snapshot)
-                renderStage(inputQiu, snapshot)
-                copyToOutput(outputQjs)
+                val directRgbaOutput = directRgbaOutputScope.get() == true
+                val outputLayout = runCatching { bridge.qjsGetLayout.invoke(outputQjs) }.getOrNull()
+                val outputLayoutName = outputLayout?.toString().orEmpty()
+                MgcMtkPreviewDebug.logOnce(
+                    TAG,
+                    "render-layout:${if (outputLayoutName.isBlank()) "?" else outputLayoutName}:$directRgbaOutput",
+                ) {
+                    "reflective stage render outputLayout=${if (outputLayoutName.isBlank()) "?" else outputLayoutName} directRgbaOutput=$directRgbaOutput"
+                }
+                if (directRgbaOutput) {
+                    renderStage(inputQiu, snapshot, outputQjs)
+                } else {
+                    ensureIntermediate(inputQiu)
+                    renderStage(inputQiu, snapshot, intermediateCanvas ?: error("intermediate canvas missing"))
+                    bridge.glDrain.invoke(null, qht)
+                    copyToOutput(outputQjs)
+                }
+                bridge.glDrain.invoke(null, qht)
                 true
             } catch (t: Throwable) {
                 Log.e(TAG, "reflective LUT render failed", t)
@@ -194,8 +230,8 @@ object MgcVfeReflectiveStageFactory {
             )
         }
 
-        private fun renderStage(inputQiu: Any, snapshot: MgcVfeLutSnapshot) {
-            val targetCanvas = intermediateCanvas ?: error("intermediate canvas missing")
+        private fun renderStage(inputQiu: Any, snapshot: MgcVfeLutSnapshot, targetCanvas: Any) {
+            updateInputSize(inputQiu)
             val targetContext = bridge.qiaContextField.get(targetCanvas)
             val qio = bridge.createQio(targetContext, program ?: error("program missing"))
             bridge.qioBindExternal.invoke(qio, "uCameraTexture", inputQiu)
@@ -262,6 +298,13 @@ object MgcVfeReflectiveStageFactory {
             bridge.qioBindAttribute.invoke(qio, "aPosition", 0)
             bridge.qioBindAttribute.invoke(qio, "aTexCoord", 1)
             bridge.qioRender.invoke(qio, outputQjs)
+        }
+
+        private fun updateInputSize(inputQiu: Any) {
+            val inputSpec = bridge.qiuGetSpec.invoke(inputQiu)
+            val qfd = bridge.qheFormatField.get(inputSpec)
+            inputWidth = (bridge.qfdGetWidth.invoke(qfd) as Number).toInt()
+            inputHeight = (bridge.qfdGetHeight.invoke(qfd) as Number).toInt()
         }
 
         private fun closeQuietly(obj: Any?) {
@@ -345,6 +388,7 @@ object MgcVfeReflectiveStageFactory {
         val qjsCompileVertex: Method = qjsClass.getMethod("h", qhtClass, String::class.java)
         val qjsCompileFragment: Method = qjsClass.getMethod("b", qhtClass, String::class.java)
         val qjsFromQlt: Method = qjsClass.getMethod("l", Class.forName("qlt"))
+        val qjsGetLayout: Method = qjsClass.getMethod("i")
         val qjcCtor = qjcClass.getConstructor(qhtClass)
         val qjcAdd: Method = qjcClass.getMethod("a", Class.forName("qlt"))
         val qjcBuild: Method = qjcClass.getMethod("b")
@@ -388,6 +432,7 @@ object MgcVfeReflectiveStageFactory {
         val qioFinalize: Method = qioClass.getMethod("a")
         val qioRender: Method = qioClass.getMethod("n", qjsClass)
         val qjnGetUniformLocation: Method = qjnClass.getMethod("b", String::class.java)
+        val glDrain: Method = Class.forName("qoe").getMethod("B", qhtClass)
 
         fun buildProgram(qht: Any, vertexSource: String, fragmentSource: String): Any {
             val builder = qjcCtor.newInstance(qht)
@@ -457,4 +502,5 @@ object MgcVfeReflectiveStageFactory {
             outColor = rgb_2_yuv(texture(uImgTex, texCoord).rgb, itu_601_full_range);
         }
     """
+
 }

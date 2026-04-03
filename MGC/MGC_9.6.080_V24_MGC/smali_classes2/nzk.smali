@@ -103433,7 +103433,7 @@
 .end method
 
 .method public static k(Lnrm;Lprw;Lprw;)Lnrl;
-    .locals 5
+    .locals 6
 
     goto/32 :goto_8
 
@@ -103741,17 +103741,27 @@
     nop
 
     :try_start_4
+    move-object v4, p2
+
     invoke-interface {p2}, Lprw;->f()Landroid/hardware/HardwareBuffer;
 
     move-result-object p2
 
-    nop
+    invoke-static {p0, p1, v4, v1, p2}, Lcom/hinnka/mycamera/previewhook/api/MgcAliasedStageRunner;->renderIfAliased(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Landroid/hardware/HardwareBuffer;Landroid/hardware/HardwareBuffer;)Ljava/lang/Object;
 
-    nop
+    move-result-object v5
 
-    nop
+    if-eqz v5, :cond_codex_alias_unhandled
 
-    nop
+    check-cast v5, Lnrl;
+
+    move-object p0, v5
+
+    invoke-virtual {p2}, Landroid/hardware/HardwareBuffer;->close()V
+
+    goto/32 :goto_21
+
+    :cond_codex_alias_unhandled
     :try_end_4
     .catchall {:try_start_4 .. :try_end_4} :catchall_3
 

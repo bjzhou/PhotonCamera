@@ -6009,6 +6009,10 @@
 
     nop
 
+    invoke-static {v1, v3}, Lcom/hinnka/mycamera/previewhook/api/MgcMtkPreviewFlowTracer;->refreshSubmitBuffer(Ljava/lang/Object;Landroid/hardware/HardwareBuffer;)Landroid/hardware/HardwareBuffer;
+
+    move-result-object v3
+
     invoke-direct {p0, v1, v3, v2, p1}, Lnrj;->c43d12f4f4da28dd6c943a4effe477b7m(Lprw;Landroid/hardware/HardwareBuffer;Lows;Z)V
     :try_end_3
     .catchall {:try_start_3 .. :try_end_3} :catchall_2
@@ -7260,6 +7264,10 @@
     nop
 
     nop
+
+    invoke-static/range {p1 .. p2}, Lcom/hinnka/mycamera/previewhook/api/MgcMtkPreviewFlowTracer;->refreshSubmitBuffer(Ljava/lang/Object;Landroid/hardware/HardwareBuffer;)Landroid/hardware/HardwareBuffer;
+
+    move-result-object p2
 
     invoke-virtual/range {p2 .. p2}, Landroid/hardware/HardwareBuffer;->getWidth()I
 
@@ -16443,6 +16451,10 @@
 
     nop
 
+    invoke-static {v3, v4}, Lcom/hinnka/mycamera/previewhook/api/MgcMtkPreviewFlowTracer;->refreshSubmitBuffer(Ljava/lang/Object;Landroid/hardware/HardwareBuffer;)Landroid/hardware/HardwareBuffer;
+
+    move-result-object v4
+
     invoke-direct {p0, v3, v4, v1, p1}, Lnrj;->c43d12f4f4da28dd6c943a4effe477b7m(Lprw;Landroid/hardware/HardwareBuffer;Lows;Z)V
     :try_end_3
     .catchall {:try_start_3 .. :try_end_3} :catchall_2
@@ -16463,7 +16475,7 @@
 .end method
 
 .method public final j(Lryb;)V
-    .locals 1
+    .locals 2
 
     goto/32 :goto_2
 
@@ -16492,6 +16504,17 @@
     nop
 
     :try_start_0
+    invoke-static {p0, p1}, Lcom/hinnka/mycamera/previewhook/api/MgcNrjStageChainAugmenter;->augmentStages(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+
+    move-result-object v1
+
+    if-eqz v1, :cond_codex_keep_stages
+
+    move-object p1, v1
+
+    check-cast p1, Lryb;
+
+    :cond_codex_keep_stages
     iput-object p1, p0, Lnrj;->G:Lryb;
 
     nop

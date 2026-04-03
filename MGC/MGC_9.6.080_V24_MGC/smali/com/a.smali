@@ -212234,14 +212234,6 @@
 
     move-result-object v2
 
-    const-string v9, "codex_ig_class"
-
-    invoke-static {v2}, Ljava/lang/String;->valueOf(Ljava/lang/Object;)Ljava/lang/String;
-
-    move-result-object v10
-
-    invoke-static {v9, v10}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
-
     nop
 
     nop
@@ -213057,14 +213049,6 @@
 
     move-result-object v1
 
-    const-string v9, "codex_ig_field_value"
-
-    invoke-static {v1}, Ljava/lang/String;->valueOf(Ljava/lang/Object;)Ljava/lang/String;
-
-    move-result-object v10
-
-    invoke-static {v9, v10}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
-
     nop
 
     nop
@@ -213268,14 +213252,6 @@
     invoke-static {v1}, Lcom/android/app/Application;->g(Ljava/lang/Object;)Ljava/lang/Object;
 
     move-result-object v1
-
-    const-string v9, "codex_ig_field"
-
-    invoke-static {v1}, Ljava/lang/String;->valueOf(Ljava/lang/Object;)Ljava/lang/String;
-
-    move-result-object v10
-
-    invoke-static {v9, v10}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     nop
 
