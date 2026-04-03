@@ -21,6 +21,8 @@ lifecycleService = "2.10.0"
 lifecycleProcess = "2.10.0"
 okhttp = "4.12.0"
 gson = "2.11.0"
+runtime = "1.10.6"
+recyclerview = "1.4.0"
 
 [libraries]
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
@@ -52,6 +54,8 @@ androidx-animation-core = { group = "androidx.compose.animation", name = "animat
 androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycleProcess" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+androidx-compose-runtime = { group = "androidx.compose.runtime", name = "runtime", version.ref = "runtime" }
+androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
 
 
 [plugins]

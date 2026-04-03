@@ -25182,11 +25182,11 @@
 
     nop
 
-    :goto_4d
+:goto_4d
     invoke-virtual {v1, v2}, Landroid/preference/Preference;->setOnPreferenceClickListener(Landroid/preference/Preference$OnPreferenceClickListener;)V
 
-    :goto_4e
-    goto/32 :goto_57
+:goto_4e
+    goto/32 :goto_mgc_filter_bind
 
     nop
 
@@ -28513,7 +28513,7 @@
 
     nop
 
-    :goto_110
+:goto_110
     invoke-virtual {v5}, Landroid/content/Context;->getResources()Landroid/content/res/Resources;
 
     move-result-object v5
@@ -28527,6 +28527,24 @@
     nop
 
     nop
+
+    :goto_mgc_filter_bind
+    const-string v1, "mgc_filter_management_key"
+
+    invoke-virtual {p0, v1}, Ljly;->findPreference(Ljava/lang/CharSequence;)Landroid/preference/Preference;
+
+    move-result-object v1
+
+    if-eqz v1, :cond_mgc_filter_missing
+
+    new-instance v2, Lcom/hinnka/mycamera/previewhook/filters/MgcFilterPreferenceClickListener;
+
+    invoke-direct {v2, v0}, Lcom/hinnka/mycamera/previewhook/filters/MgcFilterPreferenceClickListener;-><init>(Landroid/app/Activity;)V
+
+    invoke-virtual {v1, v2}, Landroid/preference/Preference;->setOnPreferenceClickListener(Landroid/preference/Preference$OnPreferenceClickListener;)V
+
+    :cond_mgc_filter_missing
+    goto/32 :goto_57
 .end method
 
 .method public final onSharedPreferenceChanged(Landroid/content/SharedPreferences;Ljava/lang/String;)V

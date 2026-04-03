@@ -1843,4 +1843,20 @@ Invalid format."</string>
     <string name="frame_def_desc">Default frames selection</string>
     <string name="frame_auto">Auto</string>
     <string name="frame_auto_desc">Auto frames selection</string>
+    <string name="mgc_filter_title">Filter Manager</string>
+    <string name="mgc_filter_refresh">Refresh</string>
+    <string name="mgc_filter_import">Import</string>
+    <string name="mgc_filter_rename">Rename</string>
+    <string name="mgc_filter_delete">Delete</string>
+    <string name="mgc_filter_empty">No LUTs found yet.</string>
+    <string name="mgc_filter_source_custom">Imported</string>
+    <string name="mgc_filter_source_public">Public</string>
+    <string name="mgc_filter_action_failed">Action failed.</string>
+    <string name="mgc_filter_rename_success">Rename complete.</string>
+    <string name="mgc_filter_delete_success">Delete complete.</string>
+    <string name="mgc_filter_select_success">Filter applied.</string>
+    <string name="mgc_filter_delete_confirm">Delete %1$s?</string>
+    <string name="mgc_filter_import_result">Imported %1$d file(s), skipped %2$d file(s).</string>
+    <string name="mgc_filter_import_hint">Import reads .cube/.plut files from /sdcard/MGC/import and lists public LUTs from /sdcard/MGC/luts.</string>
+    <string name="mgc_filter_entry_summary">Manage LUT filters and choose the active look.</string>
 </resources>

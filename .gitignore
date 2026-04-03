@@ -13,7 +13,7 @@ app/release.jks
 .gradle-home
 MGC/MGC_9.6.080_V24_MGC/build
 MGC/MGC_9.6.080_V24_MGC/dist
-MGC/MGC_9.6.080_V24_MGC/classes4.dex
+MGC/MGC_9.6.080_V24_MGC/classes*.dex
 MGC/MGC_9.6.080_V24_MGC/assets
 MGC/MGC_9.6.080_V24_MGC/lib
 MGC/MGC_9.6.080_V24_MGC/original

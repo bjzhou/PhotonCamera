@@ -53,6 +53,10 @@ data class ColorRecipeParams(
     val lutIntensity: Float = 1f,
     val remarks: String = "",
 ) {
+    fun isSameAs(other: ColorRecipeParams): Boolean {
+        return this == other
+    }
+
     fun isDefault(): Boolean {
         return exposure == 0f &&
             contrast == 1f &&

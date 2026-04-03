@@ -4,7 +4,15 @@
       "Bash(./gradlew assembleDebug:*)",
       "Bash(wc -l:*)",
       "Bash(./gradlew compileDebugKotlin:*)",
-      "Bash(./gradlew assembleGoogleDebug:*)"
+      "Bash(./gradlew assembleGoogleDebug:*)",
+      "Bash(grep -l \"FilterManagementScreen\" /Users/zhoubinjia/Projects/PhotonMGC/app/src/main/java/com/hinnka/mycamera/**/*.kt)",
+      "Bash(./gradlew :previewhook:compileReleaseKotlin)",
+      "Bash(./gradlew :previewhook:assembleStandaloneDexRelease)",
+      "Bash(ls MGC/MGC_9.6.080_V24_MGC/classes*.dex)",
+      "Bash(ls:*)",
+      "Bash(./gradlew :previewhook:assembleRelease --console=rich)",
+      "Bash(./gradlew :previewhook:assembleRelease --console=plain)",
+      "Bash(./gradlew :previewhook:assembleStandaloneDexRelease --console=plain)"
     ]
   }
 }

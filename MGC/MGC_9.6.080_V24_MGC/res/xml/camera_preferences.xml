@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<PreferenceScreen android:orderingFromXml="true" android:key="prefscreen_top"
+    <PreferenceScreen android:orderingFromXml="true" android:key="prefscreen_top"
   xmlns:android="http://schemas.android.com/apk/res/android">
     <PreferenceCategory android:title="@string/setting_general_mod" android:key="pref_category_general_mod">
+        <Preference android:icon="@drawable/gs_colors_vd_theme_24" android:layout="@layout/preference_with_margin" android:title="@string/mgc_filter_title" android:key="mgc_filter_management_key" android:summary="@string/mgc_filter_entry_summary" android:order="0" />
         <PreferenceScreen android:icon="@drawable/mgc_ses_config" android:layout="@layout/preference_with_margin" android:title="@string/ses_config" android:key="pref_ses_config" />
     </PreferenceCategory>
     <PreferenceCategory android:layout="@layout/preference_category_layout" android:title="@string/setting_general" android:key="pref_category_general">

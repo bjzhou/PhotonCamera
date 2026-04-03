@@ -9,6 +9,7 @@ import com.hinnka.mycamera.lut.LutParser
 import com.hinnka.mycamera.lut.Shaders
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.previewhook.filters.MgcFilterStore
 import com.hinnka.mycamera.raw.ColorSpace
 import java.io.File
 import java.nio.Buffer
@@ -55,6 +56,9 @@ object MgcVfeLutRuntime {
 
     @Volatile
     private var externalBootstrapLastModified: Long = Long.MIN_VALUE
+
+    @Volatile
+    private var savedSelectionRestoreAttempted: Boolean = false
 
     private fun invalidateSnapshot() {
         snapshotVersion += 1
@@ -119,15 +123,10 @@ object MgcVfeLutRuntime {
     @JvmStatic
     fun ensureBootstrapVerificationLut(): LutConfig? {
         activeLutConfig?.let { return it }
-        val bootstrap = loadExternalBootstrapLut()
-        if (bootstrap == null) {
-            activeLutConfig = null
-            invalidateSnapshot()
-            return null
-        }
-        activeLutConfig = bootstrap
+        restoreSavedSelectionIfNeeded()?.let { return it }
+        activeLutConfig = null
         invalidateSnapshot()
-        return bootstrap
+        return null
     }
 
     @JvmStatic
@@ -155,6 +154,23 @@ object MgcVfeLutRuntime {
     fun clearActiveRecipeParams() {
         activeRecipeParams = ColorRecipeParams.DEFAULT
         invalidateSnapshot()
+    }
+
+    private fun restoreSavedSelectionIfNeeded(): LutConfig? {
+        if (savedSelectionRestoreAttempted) {
+            return activeLutConfig
+        }
+        savedSelectionRestoreAttempted = true
+        val application = currentApplication() ?: return activeLutConfig
+        return runCatching {
+            if (MgcFilterStore.restoreSavedSelection(application)) {
+                Log.d(TAG, "restored saved LUT selection from MGC filter store")
+            }
+            activeLutConfig
+        }.getOrElse {
+            Log.e(TAG, "failed to restore saved LUT selection", it)
+            activeLutConfig
+        }
     }
 
     private fun loadExternalBootstrapLut(): LutConfig? {
