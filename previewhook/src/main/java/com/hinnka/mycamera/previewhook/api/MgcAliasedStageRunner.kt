@@ -22,6 +22,12 @@ object MgcAliasedStageRunner {
     private val states = ConcurrentHashMap<Int, StageState>()
 
     @JvmStatic
+    fun releaseStage(stage: Any?) {
+        if (stage == null) return
+        states.remove(System.identityHashCode(stage))?.close()
+    }
+
+    @JvmStatic
     fun renderIfAliased(
         stage: Any?,
         inputPrw: Any?,
@@ -90,6 +96,22 @@ object MgcAliasedStageRunner {
         private var rgbTexture: Any? = null
         private var rgbCanvas: Any? = null
         private var rgbToYuvProgram: Any? = null
+
+        fun close() {
+            closeQuietly(rgbCanvas)
+            rgbCanvas = null
+            closeQuietly(rgbTexture)
+            rgbTexture = null
+            closeQuietly(textureCopier)
+            textureCopier = null
+            closeQuietly(rgbToYuvProgram)
+            rgbToYuvProgram = null
+            scratchBuffer?.close()
+            scratchBuffer = null
+            while (reflectiveScratchHistory.isNotEmpty()) {
+                reflectiveScratchHistory.removeFirst().close()
+            }
+        }
 
         @Synchronized
         fun render(

@@ -5853,6 +5853,8 @@
 
     invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
+    if-eqz p1, :cond_codex_bypass
+
     array-length v3, p1
 
     new-instance v4, Ljava/lang/StringBuilder;
@@ -5873,6 +5875,8 @@
 
     move-result-object p1
 
+    if-eqz p1, :cond_codex_bypass
+
     array-length v3, p1
 
     new-instance v4, Ljava/lang/StringBuilder;
@@ -5888,6 +5892,13 @@
     move-result-object v4
 
     invoke-static {v1, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    goto/32 :goto_1
+
+    :cond_codex_bypass
+    const-string v3, "lwp.s bypass helper because jpegBytes is null"
+
+    invoke-static {v1, v3}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
 
     goto/32 :goto_1
 

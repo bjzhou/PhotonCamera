@@ -32,13 +32,21 @@ object MgcCapturedJpegHook {
     }
 
     @JvmStatic
-    fun processJpegWithSource(source: String, jpegBytes: ByteArray): ByteArray {
-        Log.e(TAG, "entry source=$source in=${jpegBytes.size}")
+    fun processJpegWithSource(source: String, jpegBytes: ByteArray?): ByteArray? {
+        Log.e(TAG, "entry source=$source in=${jpegBytes?.size ?: -1}")
         return processJpeg(jpegBytes)
     }
 
     @JvmStatic
-    fun processJpeg(jpegBytes: ByteArray): ByteArray {
+    fun processJpeg(jpegBytes: ByteArray?): ByteArray? {
+        if (jpegBytes == null) {
+            Log.e(TAG, "processJpeg bypass because jpegBytes is null")
+            return null
+        }
+        if (jpegBytes.isEmpty()) {
+            Log.e(TAG, "processJpeg bypass because jpegBytes is empty")
+            return jpegBytes
+        }
         val activeLut = MgcVfeLutRuntime.getActiveLutConfig() ?: MgcVfeLutRuntime.ensureBootstrapVerificationLut()
         val activeRecipe = MgcVfeLutRuntime.getActiveRecipeParams().takeUnless(ColorRecipeParams::isDefault)
         Log.e(

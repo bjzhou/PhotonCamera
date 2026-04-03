@@ -11,6 +11,7 @@ import java.lang.reflect.Proxy
 import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * Hosts the real MGC lower-hook LUT stage without compile-time dependencies on
@@ -76,14 +77,19 @@ object MgcVfeReflectiveStageFactory {
     ) : InvocationHandler {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
             return when (method.name) {
-                "a" -> bridge.nzkFast.invoke(null, proxy, args!![0], args[1])
-                "b" -> bridge.nzkSlow.invoke(null, proxy, args!![0], args[1], args[2])
+                "a" -> invokeStageWrapper(proxy) {
+                    bridge.nzkFast.invoke(null, proxy, args!![0], args[1])
+                }
+                "b" -> invokeStageWrapper(proxy) {
+                    bridge.nzkSlow.invoke(null, proxy, args!![0], args[1], args[2])
+                }
                 "c" -> bridge.stageId
                 "d" -> state.qht
                 "e" -> "TEST_2"
                 "r" -> false
                 "t" -> if (state.render(args!![0]!!, args[1]!!)) bridge.nrlSuccess else bridge.nrlFailure
                 "close" -> {
+                    MgcAliasedStageRunner.releaseStage(proxy)
                     state.close()
                     null
                 }
@@ -93,6 +99,37 @@ object MgcVfeReflectiveStageFactory {
                 "equals" -> proxy === args?.getOrNull(0)
                 else -> null
             }
+        }
+
+        private fun invokeStageWrapper(proxy: Any, block: () -> Any?): Any {
+            return try {
+                block() ?: bridge.nrlFailure
+            } catch (t: Throwable) {
+                if (isClosedGlContextFailure(t)) {
+                    Log.w(TAG, "reflective LUT stage skipped because GL context is already closed", t)
+                    MgcAliasedStageRunner.releaseStage(proxy)
+                    state.close()
+                    bridge.nrlFailure
+                } else {
+                    throw t
+                }
+            }
+        }
+
+        private fun isClosedGlContextFailure(error: Throwable): Boolean {
+            var current: Throwable? = error
+            while (current != null) {
+                if (current is RejectedExecutionException &&
+                    current.message?.contains("GLContext that is already closed", ignoreCase = true) == true
+                ) {
+                    return true
+                }
+                if (current.message?.contains("GLContext that is already closed", ignoreCase = true) == true) {
+                    return true
+                }
+                current = current.cause
+            }
+            return false
         }
     }
 
