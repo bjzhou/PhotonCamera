@@ -3,7 +3,7 @@
 /local.properties
 .idea
 .DS_Store
-/build
+build
 /captures
 .externalNativeBuild
 .cxx
@@ -20,4 +20,3 @@ MGC/MGC_9.6.080_V24_MGC/original
 MGC/MGC_9.6.080_V24_MGC/unknown
 MGC/jadx_decompile_src
 MGC/MGC_9.6.080_V24_MGC.apk
-previewhook/build

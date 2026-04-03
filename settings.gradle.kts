@@ -25,4 +25,5 @@ dependencyResolutionManagement {
 rootProject.name = "PhotonCamera"
 include(":app")
 include(":previewhook")
+include(":layoutpreview")
  
