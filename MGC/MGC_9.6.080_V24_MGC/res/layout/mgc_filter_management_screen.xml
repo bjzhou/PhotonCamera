@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#151515">
+
+    <!-- Toolbar -->
+    <LinearLayout
+        android:id="@+id/mgc_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:paddingTop="40dp"
+        android:paddingEnd="4dp"
+        android:paddingBottom="0dp">
+
+        <ImageButton
+            android:id="@+id/mgc_nav_btn"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/quantum_gm_ic_keyboard_arrow_left_white_24"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:scaleType="center" />
+
+        <TextView
+            android:id="@+id/mgc_title_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:paddingStart="4dp"
+            android:fontFamily="sans-serif-medium" />
+
+        <!-- 普通模式操作按钮 -->
+        <LinearLayout
+            android:id="@+id/mgc_normal_actions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/mgc_settings_btn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_category"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:scaleType="center" />
+
+            <ImageButton
+                android:id="@+id/mgc_import_btn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/quantum_ic_add_white_24"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:scaleType="center" />
+        </LinearLayout>
+
+        <!-- 多选模式操作按钮 -->
+        <LinearLayout
+            android:id="@+id/mgc_selection_actions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <ImageButton
+                android:id="@+id/mgc_select_all_btn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@android:drawable/checkbox_off_background"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:scaleType="center" />
+
+            <ImageButton
+                android:id="@+id/mgc_batch_category_btn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_edit"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:scaleType="center" />
+
+            <ImageButton
+                android:id="@+id/mgc_batch_delete_btn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_delete"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:scaleType="center" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- 导入进度条 -->
+    <ProgressBar
+        android:id="@+id/mgc_import_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:visibility="gone"
+        android:progressTint="#FFFF6B35"
+        android:progressBackgroundTint="#1AFFFFFF"
+        android:indeterminate="true" />
+
+    <!-- 分类 Tab 横向滚动条 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:fillViewport="false">
+
+        <LinearLayout
+            android:id="@+id/mgc_tab_layout"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp" />
+    </HorizontalScrollView>
+
+    <!-- 分隔线 -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#33FFFFFF" />
+
+    <!-- 滤镜列表 -->
+    <ScrollView
+        android:id="@+id/mgc_list_scroll_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:id="@+id/mgc_list_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="16dp" />
+    </ScrollView>
+
+</LinearLayout>

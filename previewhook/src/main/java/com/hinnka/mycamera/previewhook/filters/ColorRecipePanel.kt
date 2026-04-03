@@ -32,7 +32,7 @@ class ColorRecipePanel @JvmOverloads constructor(
     private val tabRow = LinearLayout(context).apply {
         orientation = HORIZONTAL
         background = GradientDrawable().apply {
-            color = ColorStateList.valueOf(Color.parseColor("#1A1A1A"))
+            color = ColorStateList.valueOf(Color.argb(102, 0, 0, 0))
             cornerRadius = dpFloat(18f)
         }
         setPadding(dp(4), dp(4), dp(4), dp(4))
@@ -41,7 +41,7 @@ class ColorRecipePanel @JvmOverloads constructor(
     private var selectedLchTabIndex = 0
     private val contentContainer = FrameLayout(context).apply {
         background = GradientDrawable().apply {
-            color = ColorStateList.valueOf(Color.parseColor("#0D000000"))
+            color = ColorStateList.valueOf(Color.argb(77, 0, 0, 0))
             cornerRadius = dpFloat(8f)
         }
         setPadding(dp(8), dp(8), dp(8), dp(8))
@@ -69,6 +69,7 @@ class ColorRecipePanel @JvmOverloads constructor(
     var onRemarksChange: ((String) -> Unit)? = null
 
     val strings: HostStrings
+    private val density = context.resources.displayMetrics.density
 
     init {
         orientation = VERTICAL
@@ -155,7 +156,7 @@ class ColorRecipePanel @JvmOverloads constructor(
         )
         val lchColors = listOf(
             Color.parseColor("#D8A47F"), Color.parseColor("#FF3B30"), Color.parseColor("#FF9F0A"),
-            Color.parseColor("#FFD835"), Color.parseColor("#43A047"), Color.parseColor("#00ACC1"),
+            Color.parseColor("#FFD835"), Color.parseColor("#6BCB3C"), Color.parseColor("#12D7F2"),
             Color.parseColor("#1E88E5"), Color.parseColor("#9B30FF"), Color.parseColor("#FF2DFF"),
         )
 
@@ -192,7 +193,7 @@ class ColorRecipePanel @JvmOverloads constructor(
                 }
                 lchRow.addView(chip)
             }
-            innerContent.addView(lchRow, LayoutParams(MATCH_PARENT, dp(32)))
+            innerContent.addView(lchRow, LayoutParams(MATCH_PARENT, dp(40)))
             innerContent.addView(View(context).apply {
                 layoutParams = LayoutParams(MATCH_PARENT, dp(6))
             })
@@ -248,7 +249,7 @@ class ColorRecipePanel @JvmOverloads constructor(
         }
 
         val label = TextView(context).apply {
-            text = param.displayName
+            text = getParamDisplayName(param)
             setTextColor(Color.WHITE)
             textSize = 11f
         }
@@ -333,6 +334,19 @@ class ColorRecipePanel @JvmOverloads constructor(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
     private fun dpFloat(value: Float): Float = value * resources.displayMetrics.density
+
+    private fun res(name: String, type: String): Int =
+        resources.getIdentifier(name, type, context.packageName)
+
+    private fun getStringRes(name: String, fallback: String): String {
+        val id = res(name, "string")
+        return if (id != 0) resources.getString(id) else fallback
+    }
+
+    private fun getParamDisplayName(param: RecipeParam): String {
+        return getStringRes("mgc_param_${param.name.lowercase()}", param.displayName)
+    }
+
 }
 
 /**
@@ -359,7 +373,7 @@ class LchColorChipView @JvmOverloads constructor(
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val innerRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1f * resources.displayMetrics.density }
 
-    private val size = dp(24)
+    private val size = dp(28)
 
     init { setMinimumHeight(size) }
 

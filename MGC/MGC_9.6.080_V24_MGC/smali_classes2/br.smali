@@ -3410,6 +3410,8 @@
     :goto_2
     invoke-super {p0, p1, p2, p3}, Lmy;->onActivityResult(IILandroid/content/Intent;)V
 
+    invoke-static {p0, p1, p2, p3}, Lcom/hinnka/mycamera/previewhook/filters/MgcFilterManagementDialog;->handleActivityResult(Landroid/app/Activity;IILandroid/content/Intent;)V
+
     goto/32 :goto_1
 
     nop

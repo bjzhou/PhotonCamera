@@ -12,7 +12,8 @@
       "Bash(ls:*)",
       "Bash(./gradlew :previewhook:assembleRelease --console=rich)",
       "Bash(./gradlew :previewhook:assembleRelease --console=plain)",
-      "Bash(./gradlew :previewhook:assembleStandaloneDexRelease --console=plain)"
+      "Bash(./gradlew :previewhook:assembleStandaloneDexRelease --console=plain)",
+      "Bash(./gradlew :previewhook:compileDebugKotlin)"
     ]
   }
 }

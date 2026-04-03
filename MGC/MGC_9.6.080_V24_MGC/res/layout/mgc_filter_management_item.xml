@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- background/foreground 在代码中按状态动态设置 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="4dp"
+    android:paddingEnd="4dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp"
+    android:foreground="?android:attr/selectableItemBackground">
+
+    <!-- 多选复选框区域，普通模式 GONE -->
+    <FrameLayout
+        android:id="@+id/mgc_item_left_area"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:visibility="gone">
+
+        <CheckBox
+            android:id="@+id/mgc_item_checkbox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:clickable="false"
+            android:focusable="false" />
+    </FrameLayout>
+
+    <!-- 主内容区 -->
+    <LinearLayout
+        android:id="@+id/mgc_item_content"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <!-- 名称行：name + 动态标签 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/mgc_item_name"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <!-- type / vip / category 标签，代码动态填充 -->
+            <LinearLayout
+                android:id="@+id/mgc_item_tags"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingStart="6dp"
+                android:gravity="center_vertical" />
+        </LinearLayout>
+
+        <!-- 当前默认标记 -->
+        <TextView
+            android:id="@+id/mgc_item_default_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFF6B35"
+            android:textSize="11sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 色彩配方快捷按钮 -->
+    <ImageButton
+        android:id="@+id/mgc_item_tune_btn"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@drawable/ic_edit"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:scaleType="center" />
+
+    <!-- 更多操作 -->
+    <ImageButton
+        android:id="@+id/mgc_item_more_btn"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@drawable/ic_more_vert"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:scaleType="center" />
+
+</LinearLayout>
