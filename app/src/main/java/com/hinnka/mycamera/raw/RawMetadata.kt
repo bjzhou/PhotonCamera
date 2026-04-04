@@ -99,7 +99,7 @@ data class RawMetadata(
             characteristics: CameraCharacteristics,
             captureResult: CaptureResult,
             userExposureCompensation: Float? = null,
-            colorSpace: ColorSpace = ColorSpace.BT2020
+            colorSpace: ColorSpace = ColorSpace.SRGB
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
             val cfaId = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -320,7 +320,7 @@ data class RawMetadata(
         private fun computeCCMFromCharacteristics(
             characteristics: CameraCharacteristics,
             captureResult: CaptureResult,
-            colorSpace: ColorSpace = ColorSpace.BT2020
+            colorSpace: ColorSpace = ColorSpace.SRGB
         ): FloatArray {
             // XYZ D50 到 Linear sRGB 的转换矩阵
             val XYZ_D50_TO_SRGB = floatArrayOf(

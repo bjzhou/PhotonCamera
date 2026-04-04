@@ -232,8 +232,8 @@ class RawDemosaicProcessor {
     private var maxTextureSize = 8192 // default, queried at init
 
     private var baseLut: LutConfig? = null
-    private var colorSpace = ColorSpace.BT2020
-    private var logCurve = LogCurve.FLOG2
+    private var colorSpace = ColorSpace.SRGB
+    private var logCurve = LogCurve.SRGB
 
     /**
      * 设置 RAW 还原 LUT

@@ -75,9 +75,9 @@ data class UserPreferences(
     val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
     val droMode: String = "OFF", // DRO 模式
     val applyUltraHDR: Boolean = false, // 是否应用 Ultra HDR 策略
-    val colorSpace: ColorSpace = ColorSpace.BT2020, // 默认 F-Gamut
-    val logCurve: LogCurve = LogCurve.FLOG2, // 默认 F-Log2
-    val rawLuts: Map<String, String> = mapOf(LogCurve.FLOG2.name to RawProfile.FUJI_PROVIA.rawLut),
+    val colorSpace: ColorSpace = ColorSpace.SRGB,
+    val logCurve: LogCurve = LogCurve.SRGB,
+    val rawLuts: Map<String, String> = mapOf(LogCurve.SRGB.name to RawProfile.STANDARD_SRGB.rawLut),
     val useP010: Boolean = false,
     val useHlg10: Boolean = false,
     val useP3ColorSpace: Boolean = false,
@@ -220,8 +220,8 @@ class UserPreferencesRepository(private val context: Context) {
                 useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
                 droMode = preferences[DRO_MODE] ?: "OFF",
                 applyUltraHDR = preferences[APPLY_ULTRA_HDR] ?: false,
-                colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.BT2020.name),
-                logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.FLOG2.name),
+                colorSpace = ColorSpace.valueOf(preferences[COLOR_SPACE] ?: ColorSpace.SRGB.name),
+                logCurve = LogCurve.valueOf(preferences[LOG_CURVE] ?: LogCurve.SRGB.name),
                 rawLuts = parseRawLuts(preferences),
                 useP010 = preferences[USE_P010] ?: false,
                 useHlg10 = preferences[USE_HLG10] ?: false,

@@ -200,10 +200,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val colorSpace: StateFlow<ColorSpace> = userPreferencesRepository.userPreferences
         .map { it.colorSpace }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.BT2020)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.SRGB)
     val logCurve: StateFlow<LogCurve> = userPreferencesRepository.userPreferences
         .map { it.logCurve }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, LogCurve.FLOG2)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, LogCurve.SRGB)
 
     val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { prefs ->
