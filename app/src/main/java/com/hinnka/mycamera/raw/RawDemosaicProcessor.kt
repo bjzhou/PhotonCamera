@@ -546,35 +546,27 @@ class RawDemosaicProcessor {
             )
             renderLinearPass(actualMetadata)
 
-            // RT-style histogram matching uses the embedded preview as source and
-            // our neutral RAW render as target. When no preview is available, it
-            // falls back to a neutral curve.
-            val curveLut =
+            val calcExposureGain =
                 analyzeFromGpuTexture(
                     demosaicTextureId,
                     actualWidth,
                     actualHeight,
-                    logCurve,
-                    dngRawDataCleanup?.embeddedPreview
+                    metadata
                 )
+            PLog.d(TAG, "calc Exposure Gain: $calcExposureGain")
             val workingColorSpace = resolveWorkingColorSpace()
 
-            val denoiseValue = denoiseValue ?: 0.2f
-            val chromaDenoiseValue = chromaDenoiseValue ?: 0.2f
-            val outputTexture = if (denoiseValue > 0f || chromaDenoiseValue > 0f) {
-                // NLM 降噪
-                renderNLMPass(
-                    sourceTextureId = demosaicTextureId,
-                    width = actualWidth,
-                    height = actualHeight,
-                    metadata = actualMetadata,
-                    denoiseValue = denoiseValue,
-                    chromaDenoiseValue = chromaDenoiseValue,
-                )
-                gfTexId[1]
-            } else {
-                demosaicTextureId
-            }
+            // NLM 降噪
+            renderNLMPass(
+                sourceTextureId = demosaicTextureId,
+                width = actualWidth,
+                height = actualHeight,
+                metadata = actualMetadata,
+                denoiseValue = denoiseValue,
+                chromaDenoiseValue = chromaDenoiseValue,
+            )
+
+            val outputTexture = gfTexId[1]
 
             val hdrReferenceBitmap = if (includeHdrReference) {
                 setupHdrReferenceFramebuffer(actualWidth, actualHeight)
@@ -598,7 +590,7 @@ class RawDemosaicProcessor {
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             setupCombinedFramebuffer(actualWidth, actualHeight)
             val combinedStart = System.currentTimeMillis()
-            renderCombinedPass(actualMetadata, curveLut, baseLut, logCurve, inputTextureId = outputTexture)
+            renderCombinedPass(actualMetadata, calcExposureGain, baseLut, logCurve, inputTextureId = outputTexture)
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
 
             // 6. 第三步：锐化 (Sharpen Pass)
@@ -949,8 +941,8 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         metadata: RawMetadata,
-        denoiseValue: Float,
-        chromaDenoiseValue: Float,
+        denoiseValue: Float?,
+        chromaDenoiseValue: Float?,
     ) {
         setupNLMFramebuffers(width, height)
 
@@ -988,12 +980,12 @@ class RawDemosaicProcessor {
         }
         val noise = baseNoise + gainNoise
 
+        val denoiseValue = denoiseValue ?: 0f
+        val chromaDenoiseValue = chromaDenoiseValue ?: 0f
+
         val h = (noise * denoiseValue).coerceIn(0.0f, 0.1f)
-        val ch = (noise * chromaDenoiseValue).coerceIn(0.0f, 0.1f)
-        PLog.d(
-            TAG,
-            "Dynamic NLM: totalGain=${"%.2f".format(totalGain)} (ISO=$isoGain, Boost=$digitalGain, Post=$postGain), noiseBase=$noiseBase, baseNoise=$baseNoise, gainNoise=$gainNoise, h=$h"
-        )
+        val ch = (noise * (chromaDenoiseValue + 0.5f)).coerceIn(0.0f, 0.1f)
+        PLog.d(TAG, "Dynamic NLM: noise=$noise, h=$h ch=$ch")
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -1434,9 +1426,8 @@ class RawDemosaicProcessor {
         textureId: Int,
         width: Int,
         height: Int,
-        logCurve: LogCurve,
-        referencePreview: Bitmap? = null
-    ): FloatArray? {
+        metadata: RawMetadata?,
+    ): Float {
         // 1. 生成 mipmap
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR_MIPMAP_NEAREST)
@@ -1474,7 +1465,7 @@ class RawDemosaicProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            return null
+            return 1f
         }
 
         // 4. 读取整个 mip 的像素数据 (RGBA float)
@@ -1491,12 +1482,11 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        return HistogramMatching.analyze(
-            neutralBuffer = floatBuffer,
+        return MeteringSystem.analyze(
+            floatBuffer = floatBuffer,
             width = mipWidth,
             height = mipHeight,
-            logCurve = logCurve,
-            referenceBitmap = referencePreview
+            metadata = metadata
         )
     }
 
@@ -1578,7 +1568,7 @@ class RawDemosaicProcessor {
      */
     private fun renderCombinedPass(
         metadata: RawMetadata,
-        curveLut: FloatArray?,
+        calcExposureGain: Float,
         lutConfig: LutConfig?,
         logCurve: LogCurve,
         inputTextureId: Int = demosaicTextureId
@@ -1606,17 +1596,7 @@ class RawDemosaicProcessor {
             if (lutConfig != null) 1 else 0
         )
 
-        // S-Curve LUT
-        if (curveLut != null) {
-            uploadCurveTexture(curveLut)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveTexture"), 2)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveEnabled"), 1)
-        } else {
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(combinedProgram, "uCurveEnabled"), 0)
-        }
-
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(combinedProgram, "uExposureGain"), calcExposureGain)
 
         // Log 曲线参数
         GLES30.glUniform4f(

@@ -130,14 +130,11 @@ object RawShaders {
         uniform mediump sampler3D uLutTexture;
         uniform float uLutSize;
         uniform bool uLutEnabled;
-        
-        uniform sampler2D uCurveTexture;
-        uniform bool uCurveEnabled;
+        uniform float uExposureGain;
         
         uniform vec4 uLogCoeffs;  // a, b, c, d
         uniform vec4 uLogLimits;  // e, f, cut1, cut2
         uniform int uLogType;     // 0=Linear, 1=Quadratic
-        uniform bool uCustomCurveEnable;
         
         float log10(float x) { return log(x) * 0.4342944819; }
         vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
@@ -163,32 +160,25 @@ object RawShaders {
             return mix(lowPart, logPart, step(uLogLimits.z, reflection));
         }
         
-        vec3 applyCurve(vec3 color) {
-            float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-            // 索引使用 Log 映射以覆盖高动态范围
-            float samplePos = linearToLog(vec3(luma)).r;
-            float targetLuma = texture(uCurveTexture, vec2(samplePos, 0.5)).r;
-            
-            // 在线性空间直接做乘法：即增益 (Gain)
-            // 这能完美保护 Hue 和 Saturation，彻底解决 sRGB 下的脏色问题
-            return color * (targetLuma / max(luma, 1e-6));
+        vec3 filmicOperatorLinear(vec3 x) {
+            vec3 t = max(x - 0.004, vec3(0.0));
+            vec3 filmic = (t * (6.2 * t + 0.5)) / (t * (6.2 * t + 1.7) + 0.06);
+            return mix(filmic / 12.92, pow((filmic + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), filmic));
         }
         
         void main() {
             vec3 rawColor = texture(uInputTexture, vTexCoord).rgb;
             
             // 1. Exposure
-            vec3 color = rawColor;
+            vec3 color = rawColor * uExposureGain;
             
-            // 2. 线性空间曲线应用 (Tonemapping)
-            if (uCurveEnabled) {
-                color = applyCurve(color);
-            }
+            // 2. Filmic tone mapping (linear in, linear out)
+            color = filmicOperatorLinear(color);
             
-            // 3. 颜色空间转换 (Log or sRGB)
+            // 4. 颜色空间转换 (Log or sRGB)
             color = linearToLog(color);
-            
-            // 4. 3D LUT
+
+            // 5. 3D LUT
             if (uLutEnabled) {
                 float scale = (uLutSize - 1.0) / uLutSize;
                 float offset = 1.0 / (2.0 * uLutSize);

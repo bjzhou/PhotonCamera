@@ -328,7 +328,7 @@ class PhotoProcessor(
             rotation = metadata.rotation,
             exposureBias = metadata.exposureBias ?: 0f,
             sharpeningValue = 0.4f,
-            denoiseValue = metadata.rawDenoiseValue ?: 0.2f
+            denoiseValue = metadata.rawDenoiseValue
         ) ?: return@withContext null
         prepareUltraHdrSourceFromRawResult(
             context = context,
@@ -381,7 +381,7 @@ class PhotoProcessor(
             cropRegion,
             metadata.rotation,
             metadata.exposureBias ?: 0f,
-            denoiseValue = metadata.rawDenoiseValue ?: 0.2f
+            denoiseValue = metadata.rawDenoiseValue
         )
 
         result = bitmap?.let {

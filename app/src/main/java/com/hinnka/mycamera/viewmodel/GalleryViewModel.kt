@@ -248,7 +248,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editChromaNoiseReduction = MutableStateFlow(0f)
         private set
-    var editRawDenoise = MutableStateFlow(0.2f)
+    var editRawDenoise = MutableStateFlow(0f)
         private set
 
     // Computational Bokeh editing state
@@ -749,7 +749,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = m.sharpening ?: 0f
             editNoiseReduction.value = m.noiseReduction ?: 0f
             editChromaNoiseReduction.value = m.chromaNoiseReduction ?: 0f
-            editRawDenoise.value = m.rawDenoiseValue ?: 0.2f
+            editRawDenoise.value = m.rawDenoiseValue ?: 0f
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -1266,7 +1266,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editChromaNoiseReduction.value =
                 metadata.chromaNoiseReduction
                     ?: (if (metadata.isImported) 0f else chromaNoiseReduction.value)
-            editRawDenoise.value = metadata.rawDenoiseValue ?: 0.2f
+            editRawDenoise.value = metadata.rawDenoiseValue ?: 0f
             
             editComputationalAperture.value = metadata.computationalAperture
             editFocusPointX.value = metadata.focusPointX

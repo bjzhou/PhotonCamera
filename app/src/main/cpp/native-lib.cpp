@@ -1881,8 +1881,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   RawProcessor.imgdata.params.use_camera_wb = 1;
   RawProcessor.imgdata.params.output_color = 0; // Raw color space
   RawProcessor.imgdata.params.user_qual = 14;
-  RawProcessor.imgdata.params.fbdd_noiserd = 0;
-  RawProcessor.imgdata.params.threshold = 0;
+  RawProcessor.imgdata.params.fbdd_noiserd = 1;
+  RawProcessor.imgdata.params.threshold = 100;
   RawProcessor.imgdata.params.med_passes = 0;
 
   ret = RawProcessor.dcraw_process();
