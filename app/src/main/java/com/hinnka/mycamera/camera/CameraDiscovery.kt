@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.camera
 
 import android.content.Context
+import android.graphics.ImageFormat
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -8,7 +9,9 @@ import android.hardware.camera2.CameraMetadata
 import android.os.Build
 import android.util.Log
 import android.util.Range
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
+import kotlin.math.abs
 
 /**
  * 相机发现器
@@ -126,12 +129,6 @@ class CameraDiscovery(private val context: Context) {
 
         PLog.d(TAG, "System camera IDs: $systemCameraIds")
 
-        // 如果系统已经返回了足够多的摄像头，或者需要跳过探测，直接返回
-        if (systemCameraIds.size > 2 || shouldSkipProbing()) {
-            cachedCameraIds = systemCameraIds
-            return systemCameraIds
-        }
-
         // 探测隐藏的摄像头
         val probedIds = probeCameraIds(systemCameraIds)
         val allIds = (systemCameraIds + probedIds).distinct()
@@ -157,12 +154,6 @@ class CameraDiscovery(private val context: Context) {
 
         // Vivo 特殊处理
         if (manufacturer.contains("vivo")) {
-            // Android 10 及以下跳过
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-                PLog.d(TAG, "Skipping probe for Vivo on Android ${Build.VERSION.SDK_INT}")
-                return true
-            }
-
             // 特定机型跳过
             if (VIVO_SKIP_MODELS.contains(Build.MODEL)) {
                 PLog.d(TAG, "Skipping probe for Vivo model: ${Build.MODEL}")
@@ -180,29 +171,53 @@ class CameraDiscovery(private val context: Context) {
     private fun probeCameraIds(existingIds: List<String>): List<String> {
         val existingSet = existingIds.toSet()
         val foundIds = mutableListOf<String>()
+        val foundMap = mutableMapOf<String, Float>()
 
-        for (id in 0 until MAX_PROBE_ID) {
+        val idList = mutableListOf(0, 1, 2, 3, 4, 5)
+        if (DeviceUtil.isSamsung) {
+            val samsungList = listOf(52,54,56,58)
+            idList.addAll(samsungList)
+        }
+
+        for (id in idList) {
             val cameraId = id.toString()
 
             if (existingSet.contains(cameraId)) {
+                foundMap[cameraId] = loadZoomRation(cameraId) ?: 1f
                 continue
             }
 
             try {
                 val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+
+                val availableCapabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                availableCapabilities ?: continue
+                if (!availableCapabilities.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE)) {
+                    continue
+                }
+
+                val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                map ?: continue
+                if (map.getOutputSizes(ImageFormat.JPEG).isEmpty()) {
+                    continue
+                }
+
                 val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                lensFacing ?: continue
 
-                if (lensFacing != null) {
-                    // 计算 intrinsicZoomRatio 来判断是否是有意义的摄像头
-                    val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
+                // 计算 intrinsicZoomRatio 来判断是否是有意义的摄像头
+                val intrinsicZoomRatio = calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
 
-                    // 只有 intrinsicZoomRatio != 1.0 的才是广角/长焦
-                    if (intrinsicZoomRatio != 1f) {
-                        PLog.d(TAG, "Probed camera $cameraId: intrinsicZoom=$intrinsicZoomRatio")
+                // 只有 intrinsicZoomRatio != 1.0 的才是广角/长焦
+                if (intrinsicZoomRatio != 1f) {
+                    PLog.d(TAG, "Probed camera $cameraId: intrinsicZoom=$intrinsicZoomRatio")
+                    val exist = foundMap.any { abs(it.value - intrinsicZoomRatio) <= 0.01f }
+                    if (!exist) {
                         foundIds.add(cameraId)
-                    } else {
-                        PLog.d(TAG, "Probed camera $cameraId: skipped (intrinsicZoom=1.0)")
+                        foundMap[cameraId] = intrinsicZoomRatio
                     }
+                } else {
+                    PLog.d(TAG, "Probed camera $cameraId: skipped (intrinsicZoom=1.0)")
                 }
             } catch (e: Exception) {
                 // 该 ID 不存在或无法访问，忽略
@@ -211,6 +226,12 @@ class CameraDiscovery(private val context: Context) {
         }
 
         return foundIds
+    }
+
+    private fun loadZoomRation(cameraId: String): Float? {
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+        val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: return null
+        return calculateIntrinsicZoomRatio(cameraId, characteristics, lensFacing)
     }
 
     /**

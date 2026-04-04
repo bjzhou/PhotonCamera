@@ -163,7 +163,7 @@ fun CameraTopSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (DeviceUtil.isChinaFlavor) {
+                if (DeviceUtil.canShowPhantom) {
                     QuickSettingToggle(
                         title = stringResource(R.string.ghost_mode),
                         checked = phantomMode,
@@ -179,7 +179,7 @@ fun CameraTopSheet(
                     modifier = Modifier.weight(1f)
                 )
 
-                if (!DeviceUtil.isChinaFlavor) {
+                if (!DeviceUtil.canShowPhantom) {
                     QuickSettingButton(
                         title = stringResource(R.string.settings_frame_management),
                         icon = Icons.Default.BorderBottom,

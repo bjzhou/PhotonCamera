@@ -4,8 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationManager
-import android.os.Bundle
-import com.hinnka.mycamera.utils.PLog
 
 class LocationManager(private val context: Context) {
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -36,7 +34,7 @@ class LocationManager(private val context: Context) {
     fun getCurrentLocation(): Location? {
         updateLocation()
         val location = currentLocation ?: return null
-        if (DeviceUtil.isChinaFlavor) {
+        if (DeviceUtil.canShowPhantom) {
             val converted = CoordinateConverter.wgs84ToGcj02(location.latitude, location.longitude)
             location.latitude = converted[0]
             location.longitude = converted[1]

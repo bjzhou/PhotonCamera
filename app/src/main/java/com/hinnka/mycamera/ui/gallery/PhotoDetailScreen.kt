@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import android.net.Uri
 import android.os.Build
-import android.os.SystemClock
 import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,7 +40,6 @@ import androidx.compose.ui.text.font.FontWeight
 import com.hinnka.mycamera.R
 import androidx.compose.ui.res.painterResource
 import com.hinnka.mycamera.gallery.PhotoData
-import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.ui.theme.AccentOrange
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
@@ -54,14 +52,11 @@ import androidx.core.view.isVisible
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.request.ImageRequest
 import com.hinnka.mycamera.utils.DeviceUtil
-import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import me.saket.telephoto.zoomable.ZoomSpec
-import me.saket.telephoto.zoomable.ZoomableContentLocation
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
-import me.saket.telephoto.zoomable.zoomable
 import kotlin.math.min
 
 /**
@@ -643,7 +638,7 @@ fun PhotoDetailScreen(
                         InfoRow(stringResource(R.string.photo_info_aperture), it.aperture ?: "N/A")
                         InfoRow(stringResource(R.string.photo_info_iso), it.iso?.toString() ?: "N/A")
                         InfoRow(stringResource(R.string.photo_info_shutter_speed), it.shutterSpeed ?: "N/A")
-                        if (DeviceUtil.isChinaFlavor) {
+                        if (DeviceUtil.canShowPhantom) {
                             InfoRow("LV", "%.2f".format(it.lv))
                             InfoRow("平均亮度", "%.2f".format(viewModel.currentBrightness[currentPhoto.id]))
                         }

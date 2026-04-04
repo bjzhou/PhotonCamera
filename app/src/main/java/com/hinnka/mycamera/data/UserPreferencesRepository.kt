@@ -283,6 +283,7 @@ class UserPreferencesRepository(private val context: Context) {
         LogCurve.entries.forEach { entry ->
             val default = when (entry) {
                 LogCurve.FLOG2 -> "PROVIA.plut"
+                LogCurve.SRGB -> "none"
                 LogCurve.LINEAR -> "none"
                 else -> "sRGB.plut"
             }

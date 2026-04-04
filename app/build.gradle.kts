@@ -64,8 +64,16 @@ android {
         create("google") {
             dimension = "channel"
         }
-        create("china") {
+        create("default") {
             dimension = "channel"
+        }
+        create("meitu") {
+            dimension = "channel"
+            applicationId = "com.meitu.meiyancamera"
+        }
+        create("samsung") {
+            dimension = "channel"
+            applicationId = "com.samsung.android.scan3d"
         }
     }
 
@@ -81,6 +89,21 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    sourceSets {
+        getByName("meitu") {
+            java {
+                srcDir("src/default/java")
+            }
+            manifest.srcFile("src/default/AndroidManifest.xml")
+        }
+        getByName("samsung") {
+            java {
+                srcDir("src/default/java")
+            }
+            manifest.srcFile("src/default/AndroidManifest.xml")
+        }
     }
     
     externalNativeBuild {
@@ -129,8 +152,10 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.gson)
 
-    // Bugly for china flavor
-    "chinaImplementation"("com.tencent.bugly:crashreport:latest.release")
+    // Bugly for default flavor
+    "defaultImplementation"("com.tencent.bugly:crashreport:latest.release")
+    "meituImplementation"("com.tencent.bugly:crashreport:latest.release")
+    "samsungImplementation"("com.tencent.bugly:crashreport:latest.release")
 
     // Billing for google flavor
     "googleImplementation"(libs.google.billing)

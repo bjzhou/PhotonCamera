@@ -91,7 +91,6 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.raw.RawProfile
-import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
@@ -379,7 +378,7 @@ fun SettingsScreen(
             mutableStateListOf<Pair<SettingsTab, String>>().apply {
                 add(SettingsTab.GENERAL to general)
                 add(SettingsTab.IMAGING to imaging)
-                if (DeviceUtil.isChinaFlavor) {
+                if (DeviceUtil.canShowPhantom) {
                     add(SettingsTab.PHANTOM to phantom)
                 }
                 add(SettingsTab.ABOUT to about)
@@ -946,7 +945,7 @@ fun SettingsScreen(
                 }
 
                 SettingsTab.PHANTOM -> {
-                    if (DeviceUtil.isChinaFlavor) {
+                    if (DeviceUtil.canShowPhantom) {
                         // 幻影模式设置
                         SettingsSection(title = stringResource(R.string.ghost_mode)) {
                             SwitchSettingItem(

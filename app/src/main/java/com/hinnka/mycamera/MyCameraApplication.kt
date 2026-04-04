@@ -34,7 +34,7 @@ class MyCameraApplication : Application() {
                         PhantomPipPreviewCoordinator.requestStop(this@MyCameraApplication)
                         phantomService.stop()
                     }
-                    if (DeviceUtil.isChinaFlavor) {
+                    if (DeviceUtil.canShowPhantom) {
                         updateShortcuts(phantomMode)
                     }
                     updateWidgets(this@MyCameraApplication)

@@ -164,7 +164,7 @@ fun ZoomRuler(
         verticalAlignment = Alignment.CenterVertically
     ) {
         stops.forEachIndexed { _, stop ->
-            val isSelected = abs(stop - zoomRatio) <= 0.1f
+            val isSelected = abs(stop - zoomRatio) <= 0.01f
 
             // 显示文本
             val text = when (displayMode) {

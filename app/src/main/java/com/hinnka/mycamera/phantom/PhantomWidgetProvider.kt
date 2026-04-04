@@ -197,7 +197,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         views.setInt(R.id.recent_arrow, "setColorFilter", ContextCompat.getColor(context, R.color.widget_recent_accent))
         views.setInt(R.id.phantom_icon, "setColorFilter", ContextCompat.getColor(context, R.color.widget_accent))
 
-        if (DeviceUtil.isChinaFlavor) {
+        if (DeviceUtil.canShowPhantom) {
             views.setViewVisibility(R.id.btn_frames, View.GONE)
             views.setViewVisibility(R.id.btn_phantom, View.VISIBLE)
         } else {
