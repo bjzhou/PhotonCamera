@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.model
 
+import com.google.gson.Gson
 import com.hinnka.mycamera.R
 
 /**
@@ -173,7 +174,20 @@ data class ColorRecipeParams(
                 remarks == other.remarks
     }
 
+    /**
+     * 序列化为 JSON 字符串
+     */
+    fun toJson(): String = gson.toJson(this)
+
     companion object {
+        private val gson = Gson()
+
+        /**
+         * 从 JSON 字符串反序列化
+         */
+        fun fromJson(json: String): ColorRecipeParams =
+            gson.fromJson(json, ColorRecipeParams::class.java) ?: DEFAULT
+
         /**
          * 默认参数（无调整）
          */

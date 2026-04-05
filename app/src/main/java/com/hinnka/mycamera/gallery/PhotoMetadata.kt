@@ -139,58 +139,7 @@ data class PhotoMetadata(
             put("lutId", lutId ?: JSONObject.NULL)
             // 色彩配方配置
             if (colorRecipeParams != null) {
-                put("colorRecipeParams", JSONObject().apply {
-                    put("exposure", colorRecipeParams.exposure.toDouble())
-                    put("contrast", colorRecipeParams.contrast.toDouble())
-                    put("saturation", colorRecipeParams.saturation.toDouble())
-                    put("temperature", colorRecipeParams.temperature.toDouble())
-                    put("tint", colorRecipeParams.tint.toDouble())
-                    put("fade", colorRecipeParams.fade.toDouble())
-                    put("vibrance", colorRecipeParams.color.toDouble())
-                    put("highlights", colorRecipeParams.highlights.toDouble())
-                    put("shadows", colorRecipeParams.shadows.toDouble())
-                    put("toneToe", colorRecipeParams.toneToe.toDouble())
-                    put("toneShoulder", colorRecipeParams.toneShoulder.toDouble())
-                    put("tonePivot", colorRecipeParams.tonePivot.toDouble())
-                    put("paletteX", colorRecipeParams.paletteX.toDouble())
-                    put("paletteY", colorRecipeParams.paletteY.toDouble())
-                    put("paletteDensity", colorRecipeParams.paletteDensity.toDouble())
-                    put("filmGrain", colorRecipeParams.filmGrain.toDouble())
-                    put("vignette", colorRecipeParams.vignette.toDouble())
-                    put("bleachBypass", colorRecipeParams.bleachBypass.toDouble())
-                    put("halation", colorRecipeParams.halation.toDouble())
-                    put("chromaticAberration", colorRecipeParams.chromaticAberration.toDouble())
-                    put("noise", colorRecipeParams.noise.toDouble())
-                    put("lowRes", colorRecipeParams.lowRes.toDouble())
-                    put("skinHue", colorRecipeParams.skinHue.toDouble())
-                    put("skinChroma", colorRecipeParams.skinChroma.toDouble())
-                    put("skinLightness", colorRecipeParams.skinLightness.toDouble())
-                    put("redHue", colorRecipeParams.redHue.toDouble())
-                    put("redChroma", colorRecipeParams.redChroma.toDouble())
-                    put("redLightness", colorRecipeParams.redLightness.toDouble())
-                    put("orangeHue", colorRecipeParams.orangeHue.toDouble())
-                    put("orangeChroma", colorRecipeParams.orangeChroma.toDouble())
-                    put("orangeLightness", colorRecipeParams.orangeLightness.toDouble())
-                    put("yellowHue", colorRecipeParams.yellowHue.toDouble())
-                    put("yellowChroma", colorRecipeParams.yellowChroma.toDouble())
-                    put("yellowLightness", colorRecipeParams.yellowLightness.toDouble())
-                    put("greenHue", colorRecipeParams.greenHue.toDouble())
-                    put("greenChroma", colorRecipeParams.greenChroma.toDouble())
-                    put("greenLightness", colorRecipeParams.greenLightness.toDouble())
-                    put("cyanHue", colorRecipeParams.cyanHue.toDouble())
-                    put("cyanChroma", colorRecipeParams.cyanChroma.toDouble())
-                    put("cyanLightness", colorRecipeParams.cyanLightness.toDouble())
-                    put("blueHue", colorRecipeParams.blueHue.toDouble())
-                    put("blueChroma", colorRecipeParams.blueChroma.toDouble())
-                    put("blueLightness", colorRecipeParams.blueLightness.toDouble())
-                    put("purpleHue", colorRecipeParams.purpleHue.toDouble())
-                    put("purpleChroma", colorRecipeParams.purpleChroma.toDouble())
-                    put("purpleLightness", colorRecipeParams.purpleLightness.toDouble())
-                    put("magentaHue", colorRecipeParams.magentaHue.toDouble())
-                    put("magentaChroma", colorRecipeParams.magentaChroma.toDouble())
-                    put("magentaLightness", colorRecipeParams.magentaLightness.toDouble())
-                    put("lutIntensity", colorRecipeParams.lutIntensity.toDouble())
-                })
+                put("colorRecipeParams", JSONObject(colorRecipeParams.toJson()))
             } else {
                 put("colorRecipeParams", JSONObject.NULL)
             }
@@ -319,58 +268,11 @@ data class PhotoMetadata(
                 // 解析色彩配方参数
                 val colorRecipeParamsObj = obj.optJSONObject("colorRecipeParams")
                 val colorRecipeParams = if (colorRecipeParamsObj != null && !obj.isNull("colorRecipeParams")) {
-                    ColorRecipeParams(
-                        exposure = colorRecipeParamsObj.optDouble("exposure", 0.0).toFloat(),
-                        contrast = colorRecipeParamsObj.optDouble("contrast", 1.0).toFloat(),
-                        saturation = colorRecipeParamsObj.optDouble("saturation", 1.0).toFloat(),
-                        temperature = colorRecipeParamsObj.optDouble("temperature", 0.0).toFloat(),
-                        tint = colorRecipeParamsObj.optDouble("tint", 0.0).toFloat(),
-                        fade = colorRecipeParamsObj.optDouble("fade", 0.0).toFloat(),
-                        color = colorRecipeParamsObj.optDouble("vibrance", 0.0).toFloat(),
-                        highlights = colorRecipeParamsObj.optDouble("highlights", 0.0).toFloat(),
-                        shadows = colorRecipeParamsObj.optDouble("shadows", 0.0).toFloat(),
-                        toneToe = colorRecipeParamsObj.optDouble("toneToe", 0.0).toFloat(),
-                        toneShoulder = colorRecipeParamsObj.optDouble("toneShoulder", 0.0).toFloat(),
-                        tonePivot = colorRecipeParamsObj.optDouble("tonePivot", 0.0).toFloat(),
-                        paletteX = colorRecipeParamsObj.optDouble("paletteX", 0.5).toFloat(),
-                        paletteY = colorRecipeParamsObj.optDouble("paletteY", 0.5).toFloat(),
-                        paletteDensity = colorRecipeParamsObj.optDouble("paletteDensity", 1.0).toFloat(),
-                        filmGrain = colorRecipeParamsObj.optDouble("filmGrain", 0.0).toFloat(),
-                        vignette = colorRecipeParamsObj.optDouble("vignette", 0.0).toFloat(),
-                        bleachBypass = colorRecipeParamsObj.optDouble("bleachBypass", 0.0).toFloat(),
-                        halation = colorRecipeParamsObj.optDouble("halation", 0.0).toFloat(),
-                        chromaticAberration = colorRecipeParamsObj.optDouble("chromaticAberration", 0.0).toFloat(),
-                        noise = colorRecipeParamsObj.optDouble("noise", 0.0).toFloat(),
-                        lowRes = colorRecipeParamsObj.optDouble("lowRes", 0.0).toFloat(),
-                        skinHue = colorRecipeParamsObj.optDouble("skinHue", 0.0).toFloat(),
-                        skinChroma = colorRecipeParamsObj.optDouble("skinChroma", 0.0).toFloat(),
-                        skinLightness = colorRecipeParamsObj.optDouble("skinLightness", 0.0).toFloat(),
-                        redHue = colorRecipeParamsObj.optDouble("redHue", 0.0).toFloat(),
-                        redChroma = colorRecipeParamsObj.optDouble("redChroma", 0.0).toFloat(),
-                        redLightness = colorRecipeParamsObj.optDouble("redLightness", 0.0).toFloat(),
-                        orangeHue = colorRecipeParamsObj.optDouble("orangeHue", 0.0).toFloat(),
-                        orangeChroma = colorRecipeParamsObj.optDouble("orangeChroma", 0.0).toFloat(),
-                        orangeLightness = colorRecipeParamsObj.optDouble("orangeLightness", 0.0).toFloat(),
-                        yellowHue = colorRecipeParamsObj.optDouble("yellowHue", 0.0).toFloat(),
-                        yellowChroma = colorRecipeParamsObj.optDouble("yellowChroma", 0.0).toFloat(),
-                        yellowLightness = colorRecipeParamsObj.optDouble("yellowLightness", 0.0).toFloat(),
-                        greenHue = colorRecipeParamsObj.optDouble("greenHue", 0.0).toFloat(),
-                        greenChroma = colorRecipeParamsObj.optDouble("greenChroma", 0.0).toFloat(),
-                        greenLightness = colorRecipeParamsObj.optDouble("greenLightness", 0.0).toFloat(),
-                        cyanHue = colorRecipeParamsObj.optDouble("cyanHue", 0.0).toFloat(),
-                        cyanChroma = colorRecipeParamsObj.optDouble("cyanChroma", 0.0).toFloat(),
-                        cyanLightness = colorRecipeParamsObj.optDouble("cyanLightness", 0.0).toFloat(),
-                        blueHue = colorRecipeParamsObj.optDouble("blueHue", 0.0).toFloat(),
-                        blueChroma = colorRecipeParamsObj.optDouble("blueChroma", 0.0).toFloat(),
-                        blueLightness = colorRecipeParamsObj.optDouble("blueLightness", 0.0).toFloat(),
-                        purpleHue = colorRecipeParamsObj.optDouble("purpleHue", 0.0).toFloat(),
-                        purpleChroma = colorRecipeParamsObj.optDouble("purpleChroma", 0.0).toFloat(),
-                        purpleLightness = colorRecipeParamsObj.optDouble("purpleLightness", 0.0).toFloat(),
-                        magentaHue = colorRecipeParamsObj.optDouble("magentaHue", 0.0).toFloat(),
-                        magentaChroma = colorRecipeParamsObj.optDouble("magentaChroma", 0.0).toFloat(),
-                        magentaLightness = colorRecipeParamsObj.optDouble("magentaLightness", 0.0).toFloat(),
-                        lutIntensity = colorRecipeParamsObj.optDouble("lutIntensity", 1.0).toFloat()
-                    )
+                    // 兼容旧版本将 color 字段序列化为 "vibrance" 的历史数据
+                    if (colorRecipeParamsObj.has("vibrance") && !colorRecipeParamsObj.has("color")) {
+                        colorRecipeParamsObj.put("color", colorRecipeParamsObj.optDouble("vibrance", 0.0))
+                    }
+                    ColorRecipeParams.fromJson(colorRecipeParamsObj.toString())
                 } else {
                     null
                 }

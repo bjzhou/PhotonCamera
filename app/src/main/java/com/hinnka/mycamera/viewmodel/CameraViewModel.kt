@@ -22,6 +22,7 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoManager
 import com.hinnka.mycamera.gallery.PhotoMetadata
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.LutGenerator
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
@@ -2541,6 +2542,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         LutGenerator.exportToCubeString(floatArray, lutConfig.size, lutInfo.getName())
     }
+
+    /**
+     * 将 LUT（含色彩配方）导出为 .plut v4 字节数组
+     * 若该 LUT 没有色彩配方则导出为标准 v3 格式
+     */
+    suspend fun exportLutToPlut(lutId: String): ByteArray? = withContext(Dispatchers.IO) {
+        val lutConfig = contentRepository.lutManager.loadLut(lutId) ?: return@withContext null
+        val recipe = contentRepository.lutManager.loadColorRecipeParams(lutId)
+        val recipeJson = if (!recipe.isDefault()) recipe.toJson() else null
+
+        val outputStream = java.io.ByteArrayOutputStream()
+        LutConverter.exportToPlut(lutConfig, outputStream, recipeJson)
+        outputStream.toByteArray()
+    }
+
+    /**
+     * 从导入的 .plut URI 中提取嵌入的色彩配方并保存到指定 LUT（仅 v4 文件含有配方）
+     */
+    suspend fun extractAndSaveColorRecipeFromPlut(lutId: String, uri: android.net.Uri) = withContext(Dispatchers.IO) {
+        try {
+            val recipeJson = getApplication<android.app.Application>().contentResolver
+                .openInputStream(uri)?.use { LutConverter.extractRecipeJsonFromPlut(it) }
+                ?: return@withContext
+            val params = ColorRecipeParams.fromJson(recipeJson)
+            contentRepository.lutManager.saveColorRecipeParams(lutId, params)
+        } catch (e: Exception) {
+            PLog.e("CameraViewModel", "Failed to extract recipe from plut", e)
+        }
+    }
+
 }
 
 private fun shouldIncludeCropRegionInOutputSize(imageFormat: Int): Boolean {

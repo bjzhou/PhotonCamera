@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
+// LutConfig is in the same package (com.hinnka.mycamera.lut), no import needed
 import kotlin.math.roundToInt
 
 /**
@@ -21,7 +22,9 @@ import kotlin.math.roundToInt
 object LutConverter {
 
     private const val MAGIC_PLUT = "PLUT"
+    private const val MAGIC_PLUT_INT = 0x54554C50  // 'PLUT' in Little Endian
     private const val VERSION = 3
+    private const val VERSION_WITH_RECIPE = 4
     private const val DATA_TYPE_UINT16 = 1
 
     /**
@@ -478,6 +481,120 @@ object LutConverter {
 
         outputStream.write(buffer.array())
         outputStream.flush()
+    }
+
+    /**
+     * 将 LutConfig 导出为 .plut 格式（可选嵌入色彩配方）
+     *
+     * - recipeJson == null：写 v3 格式（不含配方）
+     * - recipeJson != null：写 v4 格式，像素数据后追加 recipeLength(uint32) + recipeJSON(UTF-8)
+     */
+    fun exportToPlut(lutConfig: LutConfig, outputStream: OutputStream, recipeJson: String? = null) {
+        val pixelBuf = lutConfig.toByteBuffer()
+        val pixelBytes = ByteArray(pixelBuf.capacity())
+        pixelBuf.position(0)
+        pixelBuf.get(pixelBytes)
+
+        val recipeBytes = recipeJson?.toByteArray(Charsets.UTF_8)
+        val version = if (recipeBytes != null) VERSION_WITH_RECIPE else VERSION
+        val recipeSection = if (recipeBytes != null) 4 + recipeBytes.size else 0
+
+        val outBuffer = ByteBuffer.allocate(24 + pixelBytes.size + recipeSection)
+            .order(ByteOrder.LITTLE_ENDIAN)
+        outBuffer.put(MAGIC_PLUT.toByteArray(Charsets.US_ASCII))
+        outBuffer.putInt(version)
+        outBuffer.putInt(lutConfig.size)
+        outBuffer.putInt(lutConfig.configDataType)
+        outBuffer.putInt(lutConfig.curve.ordinal)
+        outBuffer.putInt(lutConfig.colorSpace.ordinal)
+        outBuffer.put(pixelBytes)
+        if (recipeBytes != null) {
+            outBuffer.putInt(recipeBytes.size)
+            outBuffer.put(recipeBytes)
+        }
+
+        outputStream.write(outBuffer.array())
+        outputStream.flush()
+    }
+
+    /**
+     * 将输入的 .plut 文件（任意版本）复制到输出，统一写成 v3 格式（去除 v4 中嵌入的配方段）
+     *
+     * @return 转换成功返回 true
+     */
+    fun importPlutStrippingRecipe(inputStream: InputStream, outputStream: OutputStream): Boolean {
+        return try {
+            val fullData = inputStream.readBytes()
+            val inBuffer = ByteBuffer.wrap(fullData).order(ByteOrder.LITTLE_ENDIAN)
+
+            val magic = inBuffer.int
+            if (magic != MAGIC_PLUT_INT) return false
+
+            val version = inBuffer.int
+            val size = inBuffer.int
+            val dataType = inBuffer.int
+            val curveOrdinal = if (version >= 2) inBuffer.int else LutCurve.SRGB.ordinal
+            val colorSpaceOrdinal = if (version >= 3) inBuffer.int else ColorSpace.SRGB.ordinal
+
+            val bytesPerComponent = if (dataType == DATA_TYPE_UINT16) 2 else 1
+            val dataByteCount = size * size * size * 3 * bytesPerComponent
+            val dataBytes = ByteArray(dataByteCount)
+            inBuffer.get(dataBytes)
+
+            // 始终写为 v3（去掉 v4 的配方尾部）
+            val outBuffer = ByteBuffer.allocate(24 + dataByteCount).order(ByteOrder.LITTLE_ENDIAN)
+            outBuffer.put(MAGIC_PLUT.toByteArray(Charsets.US_ASCII))
+            outBuffer.putInt(VERSION)
+            outBuffer.putInt(size)
+            outBuffer.putInt(dataType)
+            outBuffer.putInt(curveOrdinal)
+            outBuffer.putInt(colorSpaceOrdinal)
+            outBuffer.put(dataBytes)
+
+            outputStream.write(outBuffer.array())
+            outputStream.flush()
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * 从 .plut 输入流中提取嵌入的色彩配方 JSON（仅 v4 格式含有）
+     *
+     * @return 配方 JSON 字符串，若不含配方则返回 null
+     */
+    fun extractRecipeJsonFromPlut(inputStream: InputStream): String? {
+        return try {
+            val fullData = inputStream.readBytes()
+            val buffer = ByteBuffer.wrap(fullData).order(ByteOrder.LITTLE_ENDIAN)
+
+            val magic = buffer.int
+            if (magic != MAGIC_PLUT_INT) return null
+
+            val version = buffer.int
+            if (version < VERSION_WITH_RECIPE) return null
+
+            val size = buffer.int
+            val dataType = buffer.int
+            buffer.int  // curve
+            buffer.int  // colorSpace
+
+            val bytesPerComponent = if (dataType == DATA_TYPE_UINT16) 2 else 1
+            val dataByteCount = size * size * size * 3 * bytesPerComponent
+            if (buffer.remaining() < dataByteCount + 4) return null
+            buffer.position(buffer.position() + dataByteCount)
+
+            val recipeLength = buffer.int
+            if (recipeLength <= 0 || buffer.remaining() < recipeLength) return null
+
+            val recipeBytes = ByteArray(recipeLength)
+            buffer.get(recipeBytes)
+            String(recipeBytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**

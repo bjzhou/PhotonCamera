@@ -173,61 +173,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     ) {
         val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
 
-        renderer.exposure = effectiveParams.exposure
-        renderer.contrast = effectiveParams.contrast
-        renderer.saturation = effectiveParams.saturation
-        renderer.temperature = effectiveParams.temperature
-        renderer.tint = effectiveParams.tint
-        renderer.fade = effectiveParams.fade
-        renderer.vibrance = effectiveParams.color
-        renderer.highlights = effectiveParams.highlights
-        renderer.shadows = effectiveParams.shadows
-        renderer.toneToe = effectiveParams.toneToe
-        renderer.toneShoulder = effectiveParams.toneShoulder
-        renderer.tonePivot = effectiveParams.tonePivot
-        renderer.filmGrain = effectiveParams.filmGrain
-        renderer.vignette = effectiveParams.vignette
-        renderer.bleachBypass = effectiveParams.bleachBypass
-        renderer.chromaticAberration = effectiveParams.chromaticAberration
-        renderer.noise = effectiveParams.noise
-        renderer.lowRes = effectiveParams.lowRes
-        renderer.halation = effectiveParams.halation
-        renderer.lutIntensity = effectiveParams.lutIntensity
-        renderer.setLchAdjustments(
-            floatArrayOf(
-                effectiveParams.skinHue,
-                effectiveParams.redHue,
-                effectiveParams.orangeHue,
-                effectiveParams.yellowHue,
-                effectiveParams.greenHue,
-                effectiveParams.cyanHue,
-                effectiveParams.blueHue,
-                effectiveParams.purpleHue,
-                effectiveParams.magentaHue,
-            ),
-            floatArrayOf(
-                effectiveParams.skinChroma,
-                effectiveParams.redChroma,
-                effectiveParams.orangeChroma,
-                effectiveParams.yellowChroma,
-                effectiveParams.greenChroma,
-                effectiveParams.cyanChroma,
-                effectiveParams.blueChroma,
-                effectiveParams.purpleChroma,
-                effectiveParams.magentaChroma,
-            ),
-            floatArrayOf(
-                effectiveParams.skinLightness,
-                effectiveParams.redLightness,
-                effectiveParams.orangeLightness,
-                effectiveParams.yellowLightness,
-                effectiveParams.greenLightness,
-                effectiveParams.cyanLightness,
-                effectiveParams.blueLightness,
-                effectiveParams.purpleLightness,
-                params.magentaLightness,
-            )
-        )
+        renderer.setRecipeParams(effectiveParams)
         renderer.aperture = aperture
         requestRender()
     }

@@ -1787,6 +1787,46 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
     }
 
+    /**
+     * 从 ColorRecipeParams 统一设置所有渲染参数
+     */
+    fun setRecipeParams(params: com.hinnka.mycamera.model.ColorRecipeParams) {
+        lutIntensity = params.lutIntensity
+        exposure = params.exposure
+        contrast = params.contrast
+        saturation = params.saturation
+        temperature = params.temperature
+        tint = params.tint
+        fade = params.fade
+        vibrance = params.color
+        highlights = params.highlights
+        shadows = params.shadows
+        toneToe = params.toneToe
+        toneShoulder = params.toneShoulder
+        tonePivot = params.tonePivot
+        filmGrain = params.filmGrain
+        vignette = params.vignette
+        bleachBypass = params.bleachBypass
+        chromaticAberration = params.chromaticAberration
+        halation = params.halation
+        noise = params.noise
+        lowRes = params.lowRes
+        setLchAdjustments(
+            floatArrayOf(
+                params.skinHue, params.redHue, params.orangeHue, params.yellowHue,
+                params.greenHue, params.cyanHue, params.blueHue, params.purpleHue, params.magentaHue,
+            ),
+            floatArrayOf(
+                params.skinChroma, params.redChroma, params.orangeChroma, params.yellowChroma,
+                params.greenChroma, params.cyanChroma, params.blueChroma, params.purpleChroma, params.magentaChroma,
+            ),
+            floatArrayOf(
+                params.skinLightness, params.redLightness, params.orangeLightness, params.yellowLightness,
+                params.greenLightness, params.cyanLightness, params.blueLightness, params.purpleLightness, params.magentaLightness,
+            )
+        )
+    }
+
     private fun initBokehProgram() {
         val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
         val fs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.BOKEH_FRAGMENT_SHADER)

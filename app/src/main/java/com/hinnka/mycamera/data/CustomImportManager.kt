@@ -90,14 +90,19 @@ class CustomImportManager(private val context: Context) {
             val plutFileName = "$lutId.plut"
             val plutFile = File(customLutDir, plutFileName)
 
-            // 读取 .cube / .png / .xmp 文件并转换为 .plut
+            // 读取 .cube / .png / .xmp / .plut 文件并转换（或复制）为内部 .plut (v3)
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 FileOutputStream(plutFile).use { outputStream ->
-                    val success = if (fileName.endsWith(".xmp", ignoreCase = true)) {
-                        XmpLutParser.parse(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
-                    } else if (fileName.endsWith(".png", ignoreCase = true)) {
-                        LutConverter.convertPngToplut(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
-                    } else LutConverter.convertCubeToplut(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
+                    val success = when {
+                        fileName.endsWith(".xmp", ignoreCase = true) ->
+                            XmpLutParser.parse(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
+                        fileName.endsWith(".png", ignoreCase = true) ->
+                            LutConverter.convertPngToplut(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
+                        fileName.endsWith(".plut", ignoreCase = true) ->
+                            LutConverter.importPlutStrippingRecipe(inputStream, outputStream)
+                        else ->
+                            LutConverter.convertCubeToplut(inputStream, outputStream, colorSpace = colorSpace, curve = curve)
+                    }
 
                     if (!success) {
                         plutFile.delete()

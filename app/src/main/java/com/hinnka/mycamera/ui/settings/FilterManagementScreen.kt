@@ -184,16 +184,16 @@ fun FilterManagementScreen(
     }
 
     var pendingExportName by remember { mutableStateOf("") }
-    var pendingExportContent by remember { mutableStateOf("") }
+    var pendingExportBytes by remember { mutableStateOf(ByteArray(0)) }
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/plain"),
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri ->
         if (uri != null) {
             scope.launch {
                 withContext(Dispatchers.IO) {
                     try {
                         context.contentResolver.openOutputStream(uri)?.use { output ->
-                            output.write(pendingExportContent.toByteArray())
+                            output.write(pendingExportBytes)
                         }
                         withContext(Dispatchers.Main) {
                             android.widget.Toast.makeText(
@@ -580,10 +580,10 @@ fun FilterManagementScreen(
                             onExport = if (!isSelectionMode) {
                                 {
                                     scope.launch {
-                                        val content = viewModel.getLutCubeString(lutInfo.id)
-                                        if (content != null) {
-                                            pendingExportContent = content
-                                            pendingExportName = "${lutInfo.getName()}.cube"
+                                        val bytes = viewModel.exportLutToPlut(lutInfo.id)
+                                        if (bytes != null) {
+                                            pendingExportBytes = bytes
+                                            pendingExportName = "${lutInfo.getName()}.plut"
                                             exportLauncher.launch(pendingExportName)
                                         }
                                     }
@@ -1028,7 +1028,7 @@ fun FilterManagementScreen(
 
                                 urisToImport.forEachIndexed { index, uri ->
                                     importProgress = Pair(index + 1, urisToImport.size)
-                                    val result = withContext(Dispatchers.IO) {
+                                    val lutId = withContext(Dispatchers.IO) {
                                         customImportManager.importLut(
                                             uri,
                                             category = targetCategory,
@@ -1036,8 +1036,10 @@ fun FilterManagementScreen(
                                             curve = curveToUse
                                         )
                                     }
-                                    if (result != null) {
+                                    if (lutId != null) {
                                         successCount++
+                                        // 若为 .plut v4 文件，提取嵌入的色彩配方并保存
+                                        viewModel.extractAndSaveColorRecipeFromPlut(lutId, uri)
                                     } else {
                                         failCount++
                                     }

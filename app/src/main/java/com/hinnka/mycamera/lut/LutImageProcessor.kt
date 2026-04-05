@@ -228,28 +228,7 @@ class LutImageProcessor {
 
         // 提取色彩配方参数
         val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
-        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
-        val exposure = effectiveRecipeParams?.exposure ?: 0f
-        val contrast = effectiveRecipeParams?.contrast ?: 1f
-        val saturation = effectiveRecipeParams?.saturation ?: 1f
-        val temperature = effectiveRecipeParams?.temperature ?: 0f
-        val tint = effectiveRecipeParams?.tint ?: 0f
-        val fade = effectiveRecipeParams?.fade ?: 0f
-        val vibrance = effectiveRecipeParams?.color ?: 0f
-        val highlights = effectiveRecipeParams?.highlights ?: 0f
-        val shadows = effectiveRecipeParams?.shadows ?: 0f
-        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
-        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
-        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
-        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
-        val vignette = effectiveRecipeParams?.vignette ?: 0f
-        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
         val halation = effectiveRecipeParams?.halation ?: 0f
-        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
-        val noise = effectiveRecipeParams?.noise ?: 0f
-        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
-        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
-        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(effectiveRecipeParams)
 
         // 后期处理参数
         val sharpening: Float = sharpeningValue
@@ -280,8 +259,7 @@ class LutImageProcessor {
         val inputTexId = if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId
 
         // HDF 光晕效果预处理（在主 shader 之前，需要模糊的光晕纹理）
-        val hdfEnabled = halation > 0f
-        if (hdfEnabled) {
+        if (halation > 0f) {
             renderHDFBlur(inputTexId, width, height, halation)
             currentCoroutineContext().ensureActive()
         }
@@ -292,14 +270,8 @@ class LutImageProcessor {
             inputTexId,
             colorSpace,
             lutConfig,
-            colorRecipeEnabled,
-            exposure, contrast, saturation, temperature, tint, fade,
-            vibrance, highlights, shadows, toneToe, toneShoulder, tonePivot,
-            filmGrain, vignette, bleachBypass,
-            halation, chromaticAberration, noise, lowRes,
-            intensity, sharpening,
-            lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments
-            // GL_RGBA16 已自动归一化，使用标准 shader
+            effectiveRecipeParams,
+            sharpening,
         )
 
         outputBitmap
@@ -332,28 +304,7 @@ class LutImageProcessor {
 
         // 提取色彩配方参数
         val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
-        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
-        val exposure = effectiveRecipeParams?.exposure ?: 0f
-        val contrast = effectiveRecipeParams?.contrast ?: 1f
-        val saturation = effectiveRecipeParams?.saturation ?: 1f
-        val temperature = effectiveRecipeParams?.temperature ?: 0f
-        val tint = effectiveRecipeParams?.tint ?: 0f
-        val fade = effectiveRecipeParams?.fade ?: 0f
-        val vibrance = effectiveRecipeParams?.color ?: 0f
-        val highlights = effectiveRecipeParams?.highlights ?: 0f
-        val shadows = effectiveRecipeParams?.shadows ?: 0f
-        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
-        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
-        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
-        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
-        val vignette = effectiveRecipeParams?.vignette ?: 0f
-        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
         val halation = effectiveRecipeParams?.halation ?: 0f
-        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
-        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
-        val noise = effectiveRecipeParams?.noise ?: 0f
-        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
-        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(effectiveRecipeParams)
 
         // 后期处理参数（仅在软件处理模式下生效）
         val sharpening: Float = sharpeningValue
@@ -387,8 +338,7 @@ class LutImageProcessor {
         val inputTexId = if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId
 
         // HDF 光晕效果预处理
-        val hdfEnabled = halation > 0f
-        if (hdfEnabled) {
+        if (halation > 0f) {
             renderHDFBlur(inputTexId, width, height, halation)
             currentCoroutineContext().ensureActive()
         }
@@ -399,13 +349,8 @@ class LutImageProcessor {
             inputTexId,
             bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
             lutConfig,
-            colorRecipeEnabled,
-            exposure, contrast, saturation, temperature, tint, fade,
-            vibrance, highlights, shadows, toneToe, toneShoulder, tonePivot,
-            filmGrain, vignette, bleachBypass,
-            halation, chromaticAberration,
-            noise, lowRes, intensity, sharpening,
-            lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments
+            effectiveRecipeParams,
+            sharpening,
         )
 
         outputBitmap
@@ -465,32 +410,31 @@ class LutImageProcessor {
         inputTextureId: Int,
         inputColorSpace: ColorSpace,
         lutConfig: LutConfig?,
-        colorRecipeEnabled: Boolean,
-        exposure: Float,
-        contrast: Float,
-        saturation: Float,
-        temperature: Float,
-        tint: Float,
-        fade: Float,
-        vibrance: Float,
-        highlights: Float,
-        shadows: Float,
-        toneToe: Float,
-        toneShoulder: Float,
-        tonePivot: Float,
-        filmGrain: Float,
-        vignette: Float,
-        bleachBypass: Float,
-        halation: Float,
-        chromaticAberration: Float,
-        noise: Float,
-        lowRes: Float,
-        intensity: Float,
+        effectiveRecipeParams: ColorRecipeParams?,
         sharpening: Float,
-        lchHueAdjustments: FloatArray,
-        lchChromaAdjustments: FloatArray,
-        lchLightnessAdjustments: FloatArray
     ): Bitmap {
+        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
+        val exposure = effectiveRecipeParams?.exposure ?: 0f
+        val contrast = effectiveRecipeParams?.contrast ?: 1f
+        val saturation = effectiveRecipeParams?.saturation ?: 1f
+        val temperature = effectiveRecipeParams?.temperature ?: 0f
+        val tint = effectiveRecipeParams?.tint ?: 0f
+        val fade = effectiveRecipeParams?.fade ?: 0f
+        val vibrance = effectiveRecipeParams?.color ?: 0f
+        val highlights = effectiveRecipeParams?.highlights ?: 0f
+        val shadows = effectiveRecipeParams?.shadows ?: 0f
+        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
+        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
+        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
+        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
+        val vignette = effectiveRecipeParams?.vignette ?: 0f
+        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
+        val halation = effectiveRecipeParams?.halation ?: 0f
+        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
+        val noise = effectiveRecipeParams?.noise ?: 0f
+        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
+        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
+        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(effectiveRecipeParams)
         val program = shaderProgram
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
