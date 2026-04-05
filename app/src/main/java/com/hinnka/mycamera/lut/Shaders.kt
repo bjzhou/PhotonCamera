@@ -243,6 +243,11 @@ object Shaders {
     uniform float uAperture;      // 计算光圈 (1.4 ~ 16.0)
     uniform vec2 uFocusPoint;     // 对焦点 (0.0 ~ 1.0)
 
+    // 曲线调整纹理 (256×1 RGBA8)
+    // R = master_curve(red_curve(x)), G = master_curve(green_curve(x)), B = master_curve(blue_curve(x))
+    uniform sampler2D uCurveTexture;
+    uniform bool uCurveEnabled;
+
     const vec3 W = vec3(0.2126, 0.7152, 0.0722);
     const float PI = 3.14159265359;
 
@@ -694,6 +699,14 @@ object Shaders {
             }
 
             color.rgb = sanitizeColor(color.rgb);
+        }
+
+        // === 曲线调整（色彩配方之后、LUT 之前） ===
+        if (uCurveEnabled) {
+            float r = texture(uCurveTexture, vec2(color.r, 0.5)).r;
+            float g = texture(uCurveTexture, vec2(color.g, 0.5)).g;
+            float b = texture(uCurveTexture, vec2(color.b, 0.5)).b;
+            color.rgb = sanitizeColor(vec3(r, g, b));
         }
 
         // === LUT 处理（在色彩配方之后） ===

@@ -224,6 +224,20 @@ fun LutEditBottomSheet(
                 onRemarksChange = {
                     onParamsUpdated(editingParams.copy(remarks = it))
                 },
+                onCurveChange = { channel, points ->
+                    onParamsUpdated(
+                        when (channel) {
+                            com.hinnka.mycamera.ui.components.CurveChannel.MASTER ->
+                                editingParams.copy(masterCurvePoints = points)
+                            com.hinnka.mycamera.ui.components.CurveChannel.RED ->
+                                editingParams.copy(redCurvePoints = points)
+                            com.hinnka.mycamera.ui.components.CurveChannel.GREEN ->
+                                editingParams.copy(greenCurvePoints = points)
+                            com.hinnka.mycamera.ui.components.CurveChannel.BLUE ->
+                                editingParams.copy(blueCurvePoints = points)
+                        }
+                    )
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         }

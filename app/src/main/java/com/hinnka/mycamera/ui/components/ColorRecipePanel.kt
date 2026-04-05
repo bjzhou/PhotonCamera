@@ -44,6 +44,7 @@ fun ColorRecipePanel(
     onPaletteStateChange: (ColorPaletteState) -> Unit,
     onParamChange: (RecipeParam, Float) -> Unit,
     onRemarksChange: (String) -> Unit,
+    onCurveChange: (CurveChannel, FloatArray?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
@@ -51,40 +52,42 @@ fun ColorRecipePanel(
     var isExpanded by remember { mutableStateOf(true) }
 
     val tabs = listOf(
-        R.string.recipe_tab_palette,
-        R.string.filter,
-        R.string.recipe_tab_light,
-        R.string.recipe_tab_color,
-        R.string.recipe_tab_lch,
-        R.string.recipe_tab_texture,
-        R.string.recipe_tab_lens,
-        R.string.recipe_tab_remarks,
+        R.string.recipe_tab_palette,  // 0
+        R.string.filter,              // 1
+        R.string.recipe_tab_light,    // 2
+        R.string.recipe_tab_curve,    // 3 (曲线)
+        R.string.recipe_tab_color,    // 4
+        R.string.recipe_tab_lch,      // 5
+        R.string.recipe_tab_texture,  // 6
+        R.string.recipe_tab_lens,     // 7
+        R.string.recipe_tab_remarks,  // 8
     )
     val parameterGroups = listOf(
-        emptyList(),
-        listOf(
+        emptyList(),       // 0 palette
+        listOf(            // 1 filter
             RecipeParam.LUT_INTENSITY,
         ),
-        listOf(
+        listOf(            // 2 light
             RecipeParam.EXPOSURE,
             RecipeParam.CONTRAST,
             RecipeParam.HIGHLIGHTS,
             RecipeParam.SHADOWS,
         ),
-        listOf(
+        emptyList(),       // 3 curve (handled specially)
+        listOf(            // 4 color
             RecipeParam.SATURATION,
             RecipeParam.TEMPERATURE,
             RecipeParam.TINT,
             RecipeParam.COLOR
         ),
-        emptyList(),
-        listOf(
+        emptyList(),       // 5 lch (handled specially)
+        listOf(            // 6 texture
             RecipeParam.VIGNETTE,
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
             RecipeParam.BLEACH_BYPASS,
         ),
-        listOf(
+        listOf(            // 7 lens
             RecipeParam.HALATION,
             RecipeParam.CHROMATIC_ABERRATION,
             RecipeParam.NOISE,
@@ -161,48 +164,62 @@ fun ColorRecipePanel(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        if (selectedTabIndex == 0) {
-                            ColorRecipePalettePanel(
-                                paletteState = paletteState,
-                                onPaletteStateChange = onPaletteStateChange,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        } else if (selectedTabIndex == 4) {
-                            LchSecondaryTabs(
-                                tabs = lchGroups.map { it.first },
-                                selectedTabIndex = selectedLchTabIndex,
-                                onTabSelected = { selectedLchTabIndex = it }
-                            )
+                        when (selectedTabIndex) {
+                            0 -> {
+                                // 调色盘
+                                ColorRecipePalettePanel(
+                                    paletteState = paletteState,
+                                    onPaletteStateChange = onPaletteStateChange,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            3 -> {
+                                // 曲线编辑器
+                                CurveEditorPanel(
+                                    currentParams = currentParams,
+                                    onCurveChange = onCurveChange,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            5 -> {
+                                // LCH 颜色混合
+                                LchSecondaryTabs(
+                                    tabs = lchGroups.map { it.first },
+                                    selectedTabIndex = selectedLchTabIndex,
+                                    onTabSelected = { selectedLchTabIndex = it }
+                                )
 
-                            Spacer(modifier = Modifier.height(6.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
 
-                            lchGroups[selectedLchTabIndex].second.forEach { param ->
-                                key(param) {
-                                    ColorRecipeSlider(
-                                        param = param,
-                                        value = param.getValue(currentParams),
-                                        onValueChange = { newValue ->
-                                            onParamChange(param, newValue)
-                                        },
-                                        onDoubleTap = {
-                                            onParamChange(param, param.defaultValue)
-                                        }
-                                    )
+                                lchGroups[selectedLchTabIndex].second.forEach { param ->
+                                    key(param) {
+                                        ColorRecipeSlider(
+                                            param = param,
+                                            value = param.getValue(currentParams),
+                                            onValueChange = { newValue ->
+                                                onParamChange(param, newValue)
+                                            },
+                                            onDoubleTap = {
+                                                onParamChange(param, param.defaultValue)
+                                            }
+                                        )
+                                    }
                                 }
                             }
-                        } else {
-                            parameterGroups[selectedTabIndex].forEach { param ->
-                                key(param) {
-                                    ColorRecipeSlider(
-                                        param = param,
-                                        value = param.getValue(currentParams),
-                                        onValueChange = { newValue ->
-                                            onParamChange(param, newValue)
-                                        },
-                                        onDoubleTap = {
-                                            onParamChange(param, param.defaultValue)
-                                        }
-                                    )
+                            else -> {
+                                parameterGroups[selectedTabIndex].forEach { param ->
+                                    key(param) {
+                                        ColorRecipeSlider(
+                                            param = param,
+                                            value = param.getValue(currentParams),
+                                            onValueChange = { newValue ->
+                                                onParamChange(param, newValue)
+                                            },
+                                            onDoubleTap = {
+                                                onParamChange(param, param.defaultValue)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }

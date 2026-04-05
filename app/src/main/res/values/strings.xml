@@ -287,6 +287,7 @@
     <string name="recipe_tab_color">Color</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">Light</string>
+    <string name="recipe_tab_curve">Curve</string>
     <string name="recipe_lch_skin">Skin</string>
     <string name="recipe_lch_red">Red</string>
     <string name="recipe_lch_orange">Orange</string>

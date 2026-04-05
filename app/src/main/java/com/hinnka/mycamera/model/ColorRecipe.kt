@@ -60,6 +60,11 @@ data class ColorRecipeParams(
     val magentaLightness: Float = 0f,
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
     val remarks: String = "",       // 用户备注
+    // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
+    val masterCurvePoints: FloatArray? = null,
+    val redCurvePoints: FloatArray? = null,
+    val greenCurvePoints: FloatArray? = null,
+    val blueCurvePoints: FloatArray? = null,
 ) {
     /**
      * 检查参数是否为默认值（无任何调整）
@@ -114,7 +119,11 @@ data class ColorRecipeParams(
                 magentaHue == 0f &&
                 magentaChroma == 0f &&
                 magentaLightness == 0f &&
-                remarks.isEmpty()
+                remarks.isEmpty() &&
+                masterCurvePoints == null &&
+                redCurvePoints == null &&
+                greenCurvePoints == null &&
+                blueCurvePoints == null
     }
 
     /**
@@ -171,7 +180,11 @@ data class ColorRecipeParams(
                 magentaChroma == other.magentaChroma &&
                 magentaLightness == other.magentaLightness &&
                 lutIntensity == other.lutIntensity &&
-                remarks == other.remarks
+                remarks == other.remarks &&
+                (masterCurvePoints === other.masterCurvePoints || masterCurvePoints?.contentEquals(other.masterCurvePoints) == true) &&
+                (redCurvePoints === other.redCurvePoints || redCurvePoints?.contentEquals(other.redCurvePoints) == true) &&
+                (greenCurvePoints === other.greenCurvePoints || greenCurvePoints?.contentEquals(other.greenCurvePoints) == true) &&
+                (blueCurvePoints === other.blueCurvePoints || blueCurvePoints?.contentEquals(other.blueCurvePoints) == true)
     }
 
     /**

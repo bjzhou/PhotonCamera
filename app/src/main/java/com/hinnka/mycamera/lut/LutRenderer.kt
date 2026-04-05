@@ -124,6 +124,29 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var uCropRectLocation: Int = 0
     private var uApertureLocation: Int = 0
     private var uFocusPointLocation: Int = 0
+    private var uCurveTextureLocation: Int = 0
+    private var uCurveEnabledLocation: Int = 0
+
+    // 曲线纹理
+    private var curveTextureId: Int = 0
+
+    @Volatile
+    var curveEnabled: Boolean = false
+
+    @Volatile
+    var pendingCurveBuffer: java.nio.ByteBuffer? = null
+
+    @Volatile
+    var masterCurvePoints: FloatArray? = null
+
+    @Volatile
+    var redCurvePoints: FloatArray? = null
+
+    @Volatile
+    var greenCurvePoints: FloatArray? = null
+
+    @Volatile
+    var blueCurvePoints: FloatArray? = null
 
     // HDF 实时预览资源
     private var hdfExtractBlurHProgram: Int = 0
@@ -394,6 +417,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         lastCaptureHeight = 0
         viewportWidth = 0
         viewportHeight = 0
+        curveTextureId = 0
     }
 
     /**
@@ -660,6 +684,32 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glUniform1fv(uLchLightnessAdjustmentsLocation, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
         }
 
+        // 曲线纹理上传（如有待处理数据）
+        pendingCurveBuffer?.let { buf ->
+            pendingCurveBuffer = null
+            if (curveTextureId == 0) {
+                val ids = IntArray(1)
+                GLES30.glGenTextures(1, ids, 0)
+                curveTextureId = ids[0]
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, 256, 1, 0,
+                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf)
+        }
+        // 绑定曲线纹理到 Unit 2
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        if (curveEnabled && curveTextureId != 0) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+        } else {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        }
+        GLES30.glUniform1i(uCurveTextureLocation, 2)
+        GLES30.glUniform1i(uCurveEnabledLocation, if (curveEnabled && curveTextureId != 0) 1 else 0)
+
         // 虚化预览和色散效果始终更新（如果启用）
         GLES30.glUniform1f(uApertureLocation, aperture)
         val fp = focusPoint ?: PointF(0.5f, 0.5f)
@@ -782,6 +832,8 @@ class LutRenderer : GLSurfaceView.Renderer {
         uCropRectLocation = GLES30.glGetUniformLocation(programId, "uCropRect")
         uApertureLocation = GLES30.glGetUniformLocation(programId, "uAperture")
         uFocusPointLocation = GLES30.glGetUniformLocation(programId, "uFocusPoint")
+        uCurveTextureLocation = GLES30.glGetUniformLocation(programId, "uCurveTexture")
+        uCurveEnabledLocation = GLES30.glGetUniformLocation(programId, "uCurveEnabled")
 
         // Attribute 位置
         aPositionLocation = GLES30.glGetAttribLocation(programId, "aPosition")
@@ -1776,6 +1828,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             magentaHue = lchHueAdjustments[8],
             magentaChroma = lchChromaAdjustments[8],
             magentaLightness = lchLightnessAdjustments[8],
+            masterCurvePoints = masterCurvePoints,
+            redCurvePoints = redCurvePoints,
+            greenCurvePoints = greenCurvePoints,
+            blueCurvePoints = blueCurvePoints,
         )
     }
 
@@ -1825,6 +1881,19 @@ class LutRenderer : GLSurfaceView.Renderer {
                 params.greenLightness, params.cyanLightness, params.blueLightness, params.purpleLightness, params.magentaLightness,
             )
         )
+        // 更新曲线纹理
+        val masterPts = params.masterCurvePoints
+        val redPts = params.redCurvePoints
+        val greenPts = params.greenCurvePoints
+        val bluePts = params.blueCurvePoints
+        masterCurvePoints = masterPts
+        redCurvePoints = redPts
+        greenCurvePoints = greenPts
+        blueCurvePoints = bluePts
+        curveEnabled = !CurveUtils.isIdentity(masterPts, redPts, greenPts, bluePts)
+        if (curveEnabled) {
+            pendingCurveBuffer = CurveUtils.buildCurveTextureBuffer(masterPts, redPts, greenPts, bluePts)
+        }
     }
 
     private fun initBokehProgram() {

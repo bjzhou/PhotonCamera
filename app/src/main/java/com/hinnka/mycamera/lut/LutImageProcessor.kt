@@ -111,6 +111,9 @@ class LutImageProcessor {
     private var uSharpeningLoc = 0
     private var uTexelSizeLoc = 0  // 用于卷积计算
 
+    // 曲线纹理
+    private var curveTextureId = 0
+
     /**
      * 初始化 EGL 环境
      */
@@ -500,6 +503,30 @@ class LutImageProcessor {
             GLES30.glUniform1fv(uLchChromaAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
             GLES30.glUniform1fv(uLchLightnessAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
         }
+
+        // 设置曲线纹理（Unit 3）
+        val masterPts = effectiveRecipeParams?.masterCurvePoints
+        val redPts = effectiveRecipeParams?.redCurvePoints
+        val greenPts = effectiveRecipeParams?.greenCurvePoints
+        val bluePts = effectiveRecipeParams?.blueCurvePoints
+        val curveActive = !CurveUtils.isIdentity(masterPts, redPts, greenPts, bluePts)
+        if (curveActive) {
+            if (curveTextureId == 0) {
+                val ids = IntArray(1); GLES30.glGenTextures(1, ids, 0); curveTextureId = ids[0]
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTextureId)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            val curveBuffer = CurveUtils.buildCurveTextureBuffer(masterPts, redPts, greenPts, bluePts)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, 256, 1, 0,
+                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, curveBuffer)
+        }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (curveActive) curveTextureId else 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveTexture"), 3)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveEnabled"), if (curveActive) 1 else 0)
 
         // 设置 HDF 参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHalation"), halation)
@@ -1276,7 +1303,9 @@ class LutImageProcessor {
             uniform float uLchHueAdjustments[9];
             uniform float uLchChromaAdjustments[9];
             uniform float uLchLightnessAdjustments[9];
-            
+            uniform sampler2D uCurveTexture;
+            uniform bool uCurveEnabled;
+
             // HDF 光晕效果
             uniform float uHalation;      // 0.0 ~ 1.0 (光晕强度)
             uniform sampler2D uHdfTexture; // 光晕合成纹理
@@ -1759,6 +1788,14 @@ class LutImageProcessor {
 
                     // Clamp 到合法范围
                     color.rgb = clamp(color.rgb, 0.0, 1.0);
+                }
+
+                // === 曲线调整（色彩配方之后、HDF/LUT 之前） ===
+                if (uCurveEnabled) {
+                    float r = texture(uCurveTexture, vec2(color.r, 0.5)).r;
+                    float g = texture(uCurveTexture, vec2(color.g, 0.5)).g;
+                    float b = texture(uCurveTexture, vec2(color.b, 0.5)).b;
+                    color.rgb = clamp(vec3(r, g, b), 0.0, 1.0);
                 }
 
                 // === HDF 光晕效果（在色彩配方之后，LUT 之前） ===

@@ -280,6 +280,7 @@
     <string name="recipe_tab_color">顏色</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">亮度</string>
+    <string name="recipe_tab_curve">曲線</string>
     <string name="recipe_lch_skin">膚色</string>
     <string name="recipe_lch_red">紅</string>
     <string name="recipe_lch_orange">橙</string>
