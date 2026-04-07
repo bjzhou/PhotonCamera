@@ -13918,6 +13918,8 @@
     nop
 
     :goto_c8
+    invoke-static/range {p0 .. p0}, Lcom/hinnka/mycamera/previewhook/api/MgcUiHook;->onActivityCreate(Landroid/app/Activity;)V
+
     new-instance v2, Lpzi;
 
     nop
