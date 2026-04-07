@@ -50,8 +50,22 @@ data class ColorRecipeParams(
     val magentaHue: Float = 0f,
     val magentaChroma: Float = 0f,
     val magentaLightness: Float = 0f,
-    val lutIntensity: Float = 1f,
-    val remarks: String = "",
+    val primaryRedHue: Float = 0f,
+    val primaryRedSaturation: Float = 0f,
+    val primaryRedLightness: Float = 0f,
+    val primaryGreenHue: Float = 0f,
+    val primaryGreenSaturation: Float = 0f,
+    val primaryGreenLightness: Float = 0f,
+    val primaryBlueHue: Float = 0f,
+    val primaryBlueSaturation: Float = 0f,
+    val primaryBlueLightness: Float = 0f,
+    val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
+    val remarks: String? = "",       // 用户备注
+    // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
+    val masterCurvePoints: FloatArray? = null,
+    val redCurvePoints: FloatArray? = null,
+    val greenCurvePoints: FloatArray? = null,
+    val blueCurvePoints: FloatArray? = null,
 ) {
     fun isSameAs(other: ColorRecipeParams): Boolean {
         return this == other
@@ -107,8 +121,20 @@ data class ColorRecipeParams(
             magentaHue == 0f &&
             magentaChroma == 0f &&
             magentaLightness == 0f &&
-            lutIntensity == 1f &&
-            remarks.isEmpty()
+            primaryRedHue == 0f &&
+            primaryRedSaturation == 0f &&
+            primaryRedLightness == 0f &&
+            primaryGreenHue == 0f &&
+            primaryGreenSaturation == 0f &&
+            primaryGreenLightness == 0f &&
+            primaryBlueHue == 0f &&
+            primaryBlueSaturation == 0f &&
+            primaryBlueLightness == 0f &&
+            remarks.isNullOrEmpty() &&
+            masterCurvePoints == null &&
+            redCurvePoints == null &&
+            greenCurvePoints == null &&
+            blueCurvePoints == null
     }
 
     companion object {

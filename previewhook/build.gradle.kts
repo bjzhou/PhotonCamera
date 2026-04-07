@@ -58,6 +58,7 @@ val syncPreviewhookSources by tasks.registering(Sync::class) {
         include("com/hinnka/mycamera/lut/LutConverter.kt")
         include("com/hinnka/mycamera/lut/XmpLutParser.kt")
         include("com/hinnka/mycamera/lut/GlUtils.kt")
+        include("com/hinnka/mycamera/lut/CurveUtils.kt")
         include("com/hinnka/mycamera/model/ColorPaletteMapper.kt")
         include("com/hinnka/mycamera/model/ColorPaletteState.kt")
         include("com/hinnka/mycamera/screencapture/PhantomPipCrop.kt")

@@ -536,7 +536,8 @@ object MgcVfeReflectiveStageFactory {
         in vec2 texCoord;
         layout (yuv) out vec3 outColor;
         void main() {
-            outColor = rgb_2_yuv(texture(uImgTex, texCoord).rgb, itu_601_full_range);
+            vec3 rgb = clamp(texture(uImgTex, texCoord).rgb, 0.0, 1.0);
+            outColor = rgb_2_yuv(rgb, itu_601);
         }
     """
 

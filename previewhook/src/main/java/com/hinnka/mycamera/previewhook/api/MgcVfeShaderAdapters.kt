@@ -27,10 +27,11 @@ object MgcVfeShaderAdapters {
         uniform vec2 uLutAtlasSize;
         
         vec4 samplePackedLut(vec3 lutCoord) {
+            vec3 coord = clamp(lutCoord, 0.0, 1.0);
             float lutSize = max(uLutAtlasSize.x, 2.0);
-            float scaledR = lutCoord.r * (lutSize - 1.0);
-            float scaledG = lutCoord.g * (lutSize - 1.0);
-            float scaledB = lutCoord.b * (lutSize - 1.0);
+            float scaledR = coord.r * (lutSize - 1.0);
+            float scaledG = coord.g * (lutSize - 1.0);
+            float scaledB = coord.b * (lutSize - 1.0);
             float slice0 = floor(scaledB);
             float slice1 = min(slice0 + 1.0, lutSize - 1.0);
             float sliceMix = fract(scaledB);
