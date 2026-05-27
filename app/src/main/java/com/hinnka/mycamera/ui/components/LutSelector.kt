@@ -25,7 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
+// import androidx.compose.ui.res.stringResource -- replaced by safe override below
+import com.hinnka.mycamera.ui.components.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,16 +82,16 @@ fun LutSelector(
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var showLutEditDialogState by remember { mutableStateOf(false) }
-    val favoriteText = stringResource(R.string.favorite)
-    val builtInText = stringResource(R.string.built_in)
-    val uncategorizedText = stringResource(R.string.uncategorized)
-    val clearBaselineText = stringResource(R.string.settings_baseline_clear)
-    val styleText = stringResource(R.string.lut_selector_style_tab)
-    val baselineText = stringResource(R.string.lut_selector_baseline_tab)
+    val favoriteText = safeStringResource(R.string.favorite, "收藏", "Favorites")
+    val builtInText = safeStringResource(R.string.built_in, "内置", "Built-in")
+    val uncategorizedText = safeStringResource(R.string.uncategorized, "未分类", "Uncategorized")
+    val clearBaselineText = safeStringResource(R.string.settings_baseline_clear, "清除", "Clear")
+    val styleText = safeStringResource(R.string.lut_selector_style_tab, "风格", "Style")
+    val baselineText = safeStringResource(R.string.lut_selector_baseline_tab, "基准", "Baseline")
     val baselineModeText = when (baselineTarget) {
-        BaselineColorCorrectionTarget.JPG -> stringResource(R.string.baseline_target_jpg)
-        BaselineColorCorrectionTarget.RAW -> stringResource(R.string.baseline_target_raw)
-        BaselineColorCorrectionTarget.PHANTOM -> stringResource(R.string.baseline_target_phantom)
+        BaselineColorCorrectionTarget.JPG -> safeStringResource(R.string.baseline_target_jpg, "JPG", "JPG")
+        BaselineColorCorrectionTarget.RAW -> safeStringResource(R.string.baseline_target_raw, "RAW", "RAW")
+        BaselineColorCorrectionTarget.PHANTOM -> safeStringResource(R.string.baseline_target_phantom, "Phantom", "Phantom")
     }
 
     // 分类逻辑
@@ -538,7 +539,7 @@ private fun LutItem(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Tune,
-                            contentDescription = stringResource(R.string.edit),
+                            contentDescription = safeStringResource(R.string.edit, "编辑", "Edit"),
                             tint = Color.White,
                             modifier = Modifier.size(14.dp)
                         )
@@ -557,7 +558,7 @@ private fun LutItem(
                         .padding(horizontal = 4.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = stringResource(R.string.billing_vip_tag),
+                        text = safeStringResource(R.string.billing_vip_tag, "VIP", "VIP"),
                         color = Color.Black,
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold,
@@ -582,3 +583,24 @@ private fun LutItem(
         )
     }
 }
+
+@Composable
+fun safeStringResource(id: Int, zhFallback: String, enFallback: String): String {
+    val context = LocalContext.current
+    return remember(id, zhFallback, enFallback) {
+        val isZh = java.util.Locale.getDefault().language == "zh"
+        val fallback = if (isZh) zhFallback else enFallback
+        try {
+            val resName = context.resources.getResourceEntryName(id)
+            val resId = context.resources.getIdentifier(resName, "string", context.packageName)
+            if (resId != 0) {
+                context.resources.getString(resId)
+            } else {
+                fallback
+            }
+        } catch (e: Exception) {
+            fallback
+        }
+    }
+}
+

@@ -15,6 +15,7 @@ mkdir -p "$OUT_DIR"
 
 cd "$ROOT_DIR"
 ./gradlew :agc-photon-lut:buildAgcPhotonDex
+./gradlew :app:buildCMakeDebug
 
 next_dex_number() {
   local max=1
@@ -67,6 +68,24 @@ find_android_tool() {
 }
 
 inject_dex_files
+
+# 同步插件所必须的内置 assets 资源文件（LUT 描述文件与内置配置文件）
+echo "Syncing plugin assets into host..."
+if [[ -d "$ROOT_DIR/app/src/main/assets" ]]; then
+  mkdir -p "$AGC_DIR/assets"
+  rsync -a --ignore-existing "$ROOT_DIR/app/src/main/assets/" "$AGC_DIR/assets/"
+fi
+
+# 同步插件所必须的 native 动态库文件 (.so)
+echo "Syncing native libraries into host..."
+SO_DIR="$ROOT_DIR/app/build/intermediates/stripped_native_libs/defaultDebug/stripDefaultDebugDebugSymbols/out/lib/arm64-v8a"
+if [[ -d "$SO_DIR" ]]; then
+  mkdir -p "$AGC_DIR/lib/arm64-v8a"
+  cp -pf "$SO_DIR"/*.so "$AGC_DIR/lib/arm64-v8a/"
+  echo "Native libraries successfully synced."
+else
+  echo "Warning: Native library directory not found at $SO_DIR"
+fi
 
 apktool b "$AGC_DIR" -o "$UNSIGNED_APK"
 

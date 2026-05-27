@@ -24,7 +24,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -47,8 +51,8 @@ android {
             manifest.srcFile("src/main/AndroidManifest.xml")
             java.srcDir("src/main/java")
             java.srcDir("src/photon/java")
-            res.srcDir("../app/src/main/res")
-            assets.srcDir("../app/src/main/assets")
+            assets.srcDir("src/main/assets")
+            res.srcDir("src/main/res")
         }
     }
 
@@ -74,7 +78,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.fragment.ktx)
-    implementation(libs.androidx.recyclerview)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.coil.compose)
@@ -83,17 +86,8 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation(libs.androidx.animation.core)
-    implementation(libs.androidx.lifecycle.process)
-    implementation(libs.androidx.core.splashscreen)
-    implementation(libs.okhttp)
     implementation(libs.gson)
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui)
     implementation("sh.calvin.reorderable:reorderable:2.4.3")
-    implementation("org.tensorflow:tensorflow-lite:2.17.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.17.0")
-    implementation("org.tensorflow:tensorflow-lite-support:0.5.0")
 }
 
 val agcDexOutputDir = layout.buildDirectory.dir("outputs/agc-dex")

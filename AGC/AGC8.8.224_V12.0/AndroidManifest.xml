@@ -390,6 +390,11 @@
         </service>
         <meta-data android:name="com.android.stamp.source" android:value="https://play.google.com/store"/>
         <meta-data android:name="com.android.stamp.type" android:value="STAMP_TYPE_DISTRIBUTION_APK"/>
+        <!-- Photon AGC: 文件选择中继 Activity，用于安全地在宿主环境中弹出文件选择器 -->
+        <activity android:name="com.hinnka.mycamera.agc.FilePickerProxyActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"/>
     </application>
     <queries>
         <provider android:authorities="com.agc.gcam_tools.AgcAndroidContentProvider"/>
