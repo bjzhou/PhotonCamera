@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center_vertical" android:background="?android:selectableItemBackground" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="?android:listPreferredItemHeightSmall" android:paddingStart="?android:listPreferredItemPaddingStart" android:paddingEnd="?android:listPreferredItemPaddingEnd"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:gravity="start|center" android:orientation="horizontal" android:id="@id/icon_frame" android:paddingTop="4.0dp" android:paddingBottom="4.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:minWidth="@dimen/secondary_app_icon_size" android:paddingEnd="16.0dp">
+        <ImageView android:id="@android:id/icon" android:layout_width="@dimen/secondary_app_icon_size" android:layout_height="@dimen/secondary_app_icon_size" />
+    </LinearLayout>
+    <LinearLayout android:orientation="vertical" android:paddingTop="16.0dp" android:paddingBottom="16.0dp" android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_weight="1.0">
+        <TextView android:textAppearance="?android:textAppearanceListItem" android:ellipsize="marquee" android:id="@android:id/title" android:fadingEdge="horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxLines="2" />
+        <TextView android:textAppearance="?android:textAppearanceSmall" android:textColor="?android:textColorSecondary" android:id="@android:id/summary" android:layout_width="match_parent" android:layout_height="wrap_content" android:textDirection="locale" />
+        <TextView android:textAppearance="?android:textAppearanceSmall" android:textColor="?android:textColorSecondary" android:ellipsize="end" android:id="@id/appendix" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="1" />
+        <ProgressBar android:id="@android:id/progress" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4.0dp" android:max="100" style="?android:progressBarStyleHorizontal" />
+    </LinearLayout>
+    <LinearLayout android:gravity="end|center" android:orientation="vertical" android:id="@android:id/widget_frame" android:layout_width="wrap_content" android:layout_height="match_parent" android:minWidth="@dimen/two_target_min_width" />
+</LinearLayout>

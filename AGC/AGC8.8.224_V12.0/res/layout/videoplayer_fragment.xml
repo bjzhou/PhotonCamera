@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:id="@id/video_view_holder" android:layout_width="match_parent" android:layout_height="match_parent">
+        <VideoView android:layout_gravity="center" android:id="@id/video_view" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <ImageButton android:layout_gravity="center" android:id="@id/videoplayer_pause_button" android:background="@drawable/pause_button" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:contentDescription="@string/pause_video" />
+        <ImageButton android:layout_gravity="center" android:id="@id/videoplayer_play_button" android:background="@drawable/play_button" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:contentDescription="@string/play_video" />
+    </FrameLayout>
+    <LinearLayout android:gravity="center_horizontal" android:layout_gravity="bottom" android:orientation="horizontal" android:id="@id/video_progress_group" android:background="@drawable/gradient_bar_background" android:visibility="gone" android:fitsSystemWindows="true" android:clipChildren="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="-15.0dp">
+        <TextView android:textSize="12.0sp" android:textColor="@color/google_white" android:gravity="center" android:layout_gravity="bottom" android:id="@id/video_current_time" android:paddingLeft="17.0dp" android:paddingTop="8.0dp" android:paddingRight="4.0dp" android:paddingBottom="8.0dp" android:layout_width="wrap_content" android:layout_height="@dimen/thumb_halo_size" android:letterSpacing="0.03" />
+        <SeekBar android:layout_gravity="bottom" android:id="@id/video_player_progress" android:clickable="true" android:layout_width="0.0dp" android:layout_height="@dimen/thumb_halo_size" android:maxHeight="@dimen/thumb_halo_size" android:progressDrawable="@drawable/seekbar_progress" android:minHeight="@dimen/thumb_halo_size" android:thumbOffset="8.0dp" android:layout_weight="1.0" style="@style/VideoPlayerSeekbar" />
+        <TextView android:textSize="12.0sp" android:textColor="@color/google_white" android:gravity="center" android:layout_gravity="bottom" android:id="@id/video_total_time" android:paddingLeft="4.0dp" android:paddingTop="8.0dp" android:paddingRight="15.0dp" android:paddingBottom="8.0dp" android:layout_width="wrap_content" android:layout_height="@dimen/thumb_halo_size" android:letterSpacing="0.03" />
+    </LinearLayout>
+</FrameLayout>

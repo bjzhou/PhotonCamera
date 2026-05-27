@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="top" android:background="?android:selectableItemBackground" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="?android:listPreferredItemHeight" android:paddingEnd="?android:scrollbarSize"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_gravity="center|top" android:id="@android:id/icon" android:layout_width="@dimen/camera_settings_icon_size" android:layout_height="@dimen/camera_settings_icon_size" android:layout_marginTop="26.0dp" android:layout_marginStart="24.0dp" />
+    <RelativeLayout android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" android:layout_marginBottom="16.0dp" android:layout_weight="1.0" android:layout_marginStart="24.0dp" android:layout_marginEnd="6.0dp">
+        <TextView android:textSize="16.0sp" android:ellipsize="marquee" android:id="@android:id/title" android:fadingEdge="horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <TextView android:textAppearance="?android:textAppearanceSmall" android:textColor="?android:textColorSecondary" android:id="@android:id/summary" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_below="@android:id/title" android:layout_alignStart="@android:id/title" />
+        <LinearLayout android:id="@id/btc" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_below="@android:id/summary" android:layout_alignStart="@android:id/title">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="BTC: bc1p****zsdw" android:layout_weight="1.0" />
+            <TextView android:textColor="?android:colorAccent" android:id="@id/btc_copy" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="16.0dp" android:text="复制" />
+        </LinearLayout>
+        <LinearLayout android:id="@id/eth" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16.0sp" android:layout_below="@id/btc" android:layout_alignStart="@android:id/title">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ETH: 0xF4****3A77" android:layout_weight="1.0" />
+            <TextView android:textColor="?android:colorAccent" android:id="@id/eth_copy" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="16.0dp" android:text="复制" />
+        </LinearLayout>
+        <LinearLayout android:id="@id/trx" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16.0sp" android:layout_below="@id/trx" android:layout_alignStart="@android:id/title">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TRX: TEcd****bSvj" android:layout_weight="1.0" />
+            <TextView android:textColor="?android:colorAccent" android:id="@id/trx_copy" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="16.0dp" android:text="复制" />
+        </LinearLayout>
+    </RelativeLayout>
+    <LinearLayout android:gravity="center_vertical" android:orientation="vertical" android:id="@android:id/widget_frame" android:layout_width="wrap_content" android:layout_height="match_parent" android:paddingEnd="16.0dp" />
+</LinearLayout>

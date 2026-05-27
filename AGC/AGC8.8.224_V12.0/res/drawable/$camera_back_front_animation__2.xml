@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set android:ordering="together"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <objectAnimator android:interpolator="@drawable/$$camera_back_front_animation__2__0" android:duration="83" android:startOffset="0" android:valueFrom="22.125" android:valueTo="22.125" android:valueType="floatType" android:propertyName="translateX" />
+    <objectAnimator android:interpolator="@drawable/$$camera_back_front_animation__2__1" android:duration="133" android:startOffset="83" android:valueFrom="22.125" android:valueTo="24" android:valueType="floatType" android:propertyName="translateX" />
+</set>

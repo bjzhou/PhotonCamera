@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:paddingTop="8.0dp" android:paddingBottom="8.0dp" android:layout_width="match_parent" android:layout_height="match_parent" android:paddingStart="24.0dp" android:paddingEnd="24.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.agc.widget.ShrinkGridView android:enabled="false" android:id="@id/agc_view" android:layout_width="match_parent" android:layout_height="match_parent" android:numColumns="3" />
+</LinearLayout>

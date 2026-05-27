@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">টাইম ল্যাপ্স %d গুণ স্পিড</item>
+        <item quantity="other">টাইম ল্যাপ্স %d গুণ স্পিড</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%dটি ক্রপ করা হয়েছে।</item>
+        <item quantity="other">%dটি ক্রপ করা হয়েছে।</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">প্রায় %sটি ফটো তোলা যাবে</item>
+        <item quantity="other">প্রায় %sটি ফটো তোলা যাবে</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$dটি অ্যাপ বেছে নেওয়া হয়েছে)</item>
+        <item quantity="other">(%1$dটি অ্যাপ বেছে নেওয়া হয়েছে)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"ক্যামেরা থেকে সামাজিক অ্যাপে ফটো ও ভিডিও ঝটপট শেয়ার করুন। সর্বাধিক %1$dটি অ্যাপ বেছে নিন। 'লক করা ফোল্ডারে' সেভ থাকা ফটো ও ভিডিও শেয়ার করা যাবে না।"</item>
+        <item quantity="other">"ক্যামেরা থেকে সামাজিক অ্যাপে ফটো ও ভিডিও ঝটপট শেয়ার করুন। সর্বাধিক %1$dটি অ্যাপ বেছে নিন। 'লক করা ফোল্ডারে' সেভ থাকা ফটো ও ভিডিও শেয়ার করা যাবে না।"</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">সর্বাধিক %1$dটি অ্যাপ বেছে নিন</item>
+        <item quantity="other">সর্বাধিক %1$dটি অ্যাপ বেছে নিন</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%dদিন</item>
+        <item quantity="other">%dদিন</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%dঘঃ</item>
+        <item quantity="other">%dঘঃ</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%dমিঃ</item>
+        <item quantity="other">%dমিঃ</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d দিন</item>
+        <item quantity="other">%d দিন</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d ঘণ্টা</item>
+        <item quantity="other">%d ঘণ্টা</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d মিনিট</item>
+        <item quantity="other">%d মিনিট</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s মিনিটের ভিডিও ক্যাপচার করা যাবে</item>
+        <item quantity="other">%s মিনিটের ভিডিও ক্যাপচার করা যাবে</item>
+    </plurals>
+</resources>

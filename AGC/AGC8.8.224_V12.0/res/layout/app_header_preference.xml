@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:orientation="horizontal" android:paddingTop="24.0dp" android:paddingBottom="16.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingStart="?android:listPreferredItemPaddingStart" android:paddingEnd="?android:listPreferredItemPaddingEnd"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:gravity="center_horizontal" android:orientation="vertical" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerHorizontal="true">
+        <ImageView android:id="@android:id/icon" android:layout_width="48.0dp" android:layout_height="48.0dp" android:antialias="true" android:scaleType="fitCenter" />
+        <TextView android:ellipsize="marquee" android:gravity="center" android:id="@android:id/title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8.0dp" android:singleLine="false" android:textDirection="locale" style="@style/TextAppearance.EntityHeaderTitle" />
+        <TextView android:id="@id/install_type" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2.0dp" android:text="@string/install_type_instant" style="@style/TextAppearance.EntityHeaderSummary" />
+        <TextView android:id="@android:id/summary" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2.0dp" android:singleLine="false" android:textAlignment="center" style="@style/TextAppearance.EntityHeaderSummary" />
+        <TextView android:id="@id/second_summary" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxLines="4" android:singleLine="false" style="@style/TextAppearance.EntityHeaderSummary" />
+    </LinearLayout>
+</RelativeLayout>

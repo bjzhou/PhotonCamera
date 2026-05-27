@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.agc.widget.lut.LutSelectorLayout android:id="@id/agc_lut_selector" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="200.0dp" android:layout_alignParentBottom="true" />
+    <FrameLayout android:id="@id/agc_process_bar" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent">
+        <FrameLayout android:layout_gravity="center" android:background="@drawable/agc_2f2f2f_dialog_bg" android:layout_width="80.0dp" android:layout_height="80.0dp">
+            <ProgressBar android:layout_gravity="center" android:visibility="visible" android:layout_width="60.0dp" android:layout_height="60.0dp" style="@android:style/Widget.Material.ProgressBar" />
+            <TextView android:textSize="12.0sp" android:textColor="@android:color/white" android:layout_gravity="center" android:id="@id/agc_tv_process" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        </FrameLayout>
+    </FrameLayout>
+    <TextView android:textSize="32.0sp" android:textColor="@android:color/white" android:id="@id/tv_value_hint" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="200.0dp" android:layout_alignParentTop="true" android:layout_centerHorizontal="true" />
+</RelativeLayout>

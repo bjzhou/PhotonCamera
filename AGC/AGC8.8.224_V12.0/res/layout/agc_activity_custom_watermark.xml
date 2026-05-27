@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:background="@color/c_181818" android:layout_width="match_parent" android:layout_height="match_parent" android:paddingHorizontal="20.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <RelativeLayout android:layout_width="match_parent" android:layout_height="48.0dp">
+        <ImageView android:id="@id/iv_back" android:layout_width="24.0dp" android:layout_height="24.0dp" android:src="@drawable/agc_navitation_white" android:layout_centerVertical="true" />
+        <TextView android:textSize="16.0sp" android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_watermark_custom" android:layout_centerInParent="true" />
+        <ImageView android:id="@id/iv_confirm" android:layout_width="24.0dp" android:layout_height="24.0dp" android:src="@drawable/agc_confim_white" android:layout_alignParentRight="true" android:layout_centerVertical="true" />
+    </RelativeLayout>
+    <EditText android:textSize="14.0sp" android:textColor="#ffffff" android:id="@id/et_watermark" android:background="@drawable/agc_input_layout_bg" android:padding="12.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" />
+</LinearLayout>

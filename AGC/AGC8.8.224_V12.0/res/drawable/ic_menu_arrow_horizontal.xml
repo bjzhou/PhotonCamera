@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:height="@dimen/menu_arrow_height" android:width="@dimen/menu_arrow_base" android:alpha="0.86" android:viewportWidth="15.0" android:viewportHeight="9.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <path android:fillColor="@color/menu_bg_color" android:pathData="m7.5,9 l-7.5,-9 15,0z" />
+</vector>

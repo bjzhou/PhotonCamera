@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:gravity="center" android:layout_gravity="center_vertical" android:id="@id/recording_timer" style="@style/onVideoRecordingCounter" />
+    <TextView android:gravity="center" android:layout_gravity="center_vertical" android:id="@id/output_timer" android:visibility="gone" style="@style/onVideoRecordingCounter" />
+    <ImageView android:layout_gravity="center_vertical" android:id="@id/speech_enhance_view" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="@dimen/indicator_padding" android:layout_marginRight="@dimen/timer_side_padding" android:src="@drawable/gm_filled_record_voice_over_white_18" android:tint="@color/elapsed_timer_text_color" android:contentDescription="@string/accessibility_speech_enhance_indicator" />
+</merge>

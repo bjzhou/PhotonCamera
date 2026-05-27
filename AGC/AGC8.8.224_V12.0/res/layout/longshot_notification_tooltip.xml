@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textAppearance="@style/notification_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxWidth="170.0dp" android:text="@string/long_press_capture_tooltip_title" />
+    <Space android:layout_width="match_parent" android:layout_height="2.0dp" />
+    <TextView android:textAppearance="@style/notification_body" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxWidth="170.0dp" android:text="@string/long_press_capture_tooltip_body" />
+</LinearLayout>

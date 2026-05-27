@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:id="@id/options_menu_top_bar" android:layout_width="match_parent" android:layout_height="@dimen/options_menu_top_bar_size" android:layout_alignParentTop="true">
+        <FrameLayout android:layout_gravity="center" android:id="@id/minibar_container" android:paddingLeft="@dimen/options_icon_side_padding" android:paddingRight="@dimen/options_icon_side_padding" android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <include layout="@layout/minibar" />
+        </FrameLayout>
+        <LinearLayout android:layout_gravity="right|center" android:orientation="horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <com.agc.widget.HdrButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" />
+            <com.agc.widget.AwbButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" />
+            <com.agc.widget.GrayscaleButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" />
+            <com.agc.widget.WatermarkButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" />
+            <com.agc.widget.PatchButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" />
+        </LinearLayout>
+    </FrameLayout>
+    <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent">
+        <com.custom.shutter.RotSeek android:layout_gravity="left|top" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="60.0dp" android:layout_height="120.0dp" android:layout_marginLeft="12.0dp" android:layout_marginTop="56.0dp" android:contextClickable="true" />
+        <com.custom.iso.RotSeek android:layout_gravity="left|top" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="60.0dp" android:layout_height="120.0dp" android:layout_marginLeft="12.0dp" android:layout_marginTop="180.0dp" android:contextClickable="true" />
+        <com.custom.focus.RotSeek android:layout_gravity="left|bottom" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="60.0dp" android:layout_height="200.0dp" android:layout_marginLeft="12.0dp" android:layout_marginBottom="8.0dp" android:contextClickable="true" />
+        <com.custom.lut.RotSeek android:layout_gravity="right|bottom" android:focusable="true" android:focusableInTouchMode="true" android:clickable="true" android:layout_width="60.0dp" android:layout_height="120.0dp" android:layout_marginRight="72.0dp" android:layout_marginBottom="8.0dp" android:contextClickable="true" />
+    </FrameLayout>
+    <FrameLayout android:paddingLeft="9.0dp" android:paddingTop="4.0dp" android:paddingRight="9.0dp" android:layout_width="match_parent" android:layout_height="match_parent">
+        <LinearLayout android:gravity="center" android:layout_gravity="right|bottom" android:orientation="vertical" android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <com.agc.asv.CameraSwitchView android:layout_width="36.0dp" android:layout_height="wrap_content" android:scaleType="center" />
+            <com.agc.widget.colorbar.Button android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" />
+            <com.agc.widget.FeatureButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" type="curve" />
+            <com.agc.widget.FeatureButton android:layout_width="48.0dp" android:layout_height="48.0dp" android:scaleType="center" type="lut" />
+            <com.agc.widget.ApertureButton android:background="@drawable/minibar_background" android:layout_width="48.0dp" android:layout_height="48.0dp" android:textOn="" android:textOff="" android:text="" />
+        </LinearLayout>
+        <com.agc.widget.InfoView android:layout_gravity="center|bottom" android:layout_width="match_parent" android:layout_height="wrap_content" />
+    </FrameLayout>
+    <RelativeLayout android:id="@id/options_menu_middle_bar" android:layout_width="match_parent" android:layout_height="@dimen/options_menu_top_bar_size" android:layout_below="@id/options_menu_top_bar" />
+    <FrameLayout android:id="@id/options_menu_view_frame" android:layout_width="match_parent" android:layout_height="0.0dp" android:layout_marginTop="@dimen/overlap_with_top_bar" android:layout_below="@id/options_menu_top_bar" android:layout_alignParentBottom="true">
+        <android.support.v7.widget.LinearLayoutCompat android:layout_gravity="center" android:orientation="vertical" android:id="@id/options_menu_view" android:background="@drawable/options_menu_background_legacy" android:focusable="true" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_margin="@dimen/options_side_padding" android:contentDescription="@string/options_menu_title" android:layoutDirection="locale">
+            <com.google.android.apps.camera.optionsbar.view.OptionsMenuView android:scrollbarThumbVertical="@drawable/scrollbar_vertical_thumb" android:id="@id/options_menu_view_internal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginLeft="@dimen/options_menu_view_margin" android:layout_marginRight="@dimen/options_menu_view_margin" android:alpha="0.0" />
+            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="@dimen/standalone_settings_top_margin" android:drawablePadding="8.0dp">
+                <android.support.v7.widget.AppCompatButton android:textAppearance="?textAppearanceSubhead2" android:textColor="?colorOnBackground" android:layout_gravity="start" android:id="@id/options_menu_standalone_load_configs" android:background="@drawable/standalone_settings_background" android:visibility="visible" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="@dimen/standalone_settings_top_margin" android:text="@string/agc_config_load_btn_title" android:drawablePadding="8.0dp" android:contentDescription="@string/settings_open_desc" android:fontFamily="@font/google_sans" android:paddingStart="16.0dp" android:paddingEnd="16.0dp" />
+                <Space android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_weight="1.0" />
+                <android.support.v7.widget.AppCompatButton android:textAppearance="?textAppearanceSubhead2" android:textColor="?colorOnBackground" android:layout_gravity="end" android:id="@id/options_menu_standalone_settings" android:background="@drawable/standalone_settings_background" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="@dimen/standalone_settings_top_margin" android:text="@string/more_settings" android:drawablePadding="8.0dp" android:contentDescription="@string/settings_open_desc" android:fontFamily="@font/google_sans" android:paddingStart="16.0dp" android:paddingEnd="16.0dp" />
+            </LinearLayout>
+        </android.support.v7.widget.LinearLayoutCompat>
+    </FrameLayout>
+</merge>

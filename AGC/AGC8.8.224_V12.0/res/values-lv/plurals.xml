@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="zero">Intervāla fotografēšana paātrinājumā %d</item>
+        <item quantity="one">Intervāla fotografēšana paātrinājumā %d</item>
+        <item quantity="other">Intervāla fotografēšana paātrinājumā %d</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="zero">Apgrieztas %d sejas.</item>
+        <item quantity="one">Apgriezta %d seja.</item>
+        <item quantity="other">Apgrieztas %d sejas.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="zero">Aptuveni %s fotoattēlu</item>
+        <item quantity="one">Aptuveni %s fotoattēls</item>
+        <item quantity="other">Aptuveni %s fotoattēli</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="zero">(atlasītas %1$d lietotnes)</item>
+        <item quantity="one">(atlasīta %1$d lietotne)</item>
+        <item quantity="other">(atlasītas %1$d lietotnes)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="zero">Ātri kopīgojiet fotoattēlus un videoklipus sociālajās lietotnēs no lietotnes Kamera. Izvēlieties ne vairāk kā %1$d lietotnes. Bloķētajā mapē saglabātos fotoattēlus un videoklipus nevar kopīgot.</item>
+        <item quantity="one">Ātri kopīgojiet fotoattēlus un videoklipus sociālajās lietotnēs no lietotnes Kamera. Izvēlieties ne vairāk kā %1$d lietotni. Bloķētajā mapē saglabātos fotoattēlus un videoklipus nevar kopīgot.</item>
+        <item quantity="other">Ātri kopīgojiet fotoattēlus un videoklipus sociālajās lietotnēs no lietotnes Kamera. Izvēlieties ne vairāk kā %1$d lietotnes. Bloķētajā mapē saglabātos fotoattēlus un videoklipus nevar kopīgot.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="zero">Izvēlieties ne vairāk kā %1$d lietotnes</item>
+        <item quantity="one">Izvēlieties ne vairāk kā %1$d lietotni</item>
+        <item quantity="other">Izvēlieties ne vairāk kā %1$d lietotnes</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="zero">%d d.</item>
+        <item quantity="one">%d d.</item>
+        <item quantity="other">%d d.</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="zero">%d h</item>
+        <item quantity="one">%d h</item>
+        <item quantity="other">%d h</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="zero">%d min</item>
+        <item quantity="one">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="zero">%d dienu</item>
+        <item quantity="one">%d diena</item>
+        <item quantity="other">%d dienas</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="zero">%d stundu</item>
+        <item quantity="one">%d stunda</item>
+        <item quantity="other">%d stundas</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="zero">%d minūšu</item>
+        <item quantity="one">%d minūte</item>
+        <item quantity="other">%d minūtes</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="zero">%s minūšu ilgs videoklips</item>
+        <item quantity="one">%s minūti ilgs videoklips</item>
+        <item quantity="other">%s minūtes ilgs videoklips</item>
+    </plurals>
+</resources>

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ความเร็ว %d สำหรับไทม์แลปส์</item>
+        <item quantity="other">ความเร็ว %d สำหรับไทม์แลปส์</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">ครอบตัดแล้ว 1 ใบหน้า</item>
+        <item quantity="other">ครอบตัดแล้ว %d ใบหน้า</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ประมาณ %s รูป</item>
+        <item quantity="other">ประมาณ %s รูป</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(เลือกไว้ %1$d แอป)</item>
+        <item quantity="other">(เลือกไว้ %1$d แอป)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">แชร์รูปภาพและวิดีโอจากกล้องกับแอปโซเชียลได้อย่างรวดเร็ว โดยเลือกได้ %1$d แอป ไม่สามารถแชร์รูปภาพและวิดีโอที่บันทึกไว้ในโฟลเดอร์ที่ล็อก</item>
+        <item quantity="other">แชร์รูปภาพและวิดีโอจากกล้องกับแอปโซเชียลได้อย่างรวดเร็ว โดยเลือกได้ถึง %1$d แอป ไม่สามารถแชร์รูปภาพและวิดีโอที่บันทึกไว้ในโฟลเดอร์ที่ล็อก</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">เลือก %1$d แอป</item>
+        <item quantity="other">เลือกได้สูงสุด %1$d แอป</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d ว</item>
+        <item quantity="other">%d ว</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d ชม.</item>
+        <item quantity="other">%d ชม.</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d น</item>
+        <item quantity="other">%d น</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d วัน</item>
+        <item quantity="other">%d วัน</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d ชั่วโมง</item>
+        <item quantity="other">%d ชั่วโมง</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d นาที</item>
+        <item quantity="other">%d นาที</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s นาทีของวิดีโอ</item>
+        <item quantity="other">%s นาทีของวิดีโอ</item>
+    </plurals>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="rectangle"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/zoom_seek_bar_background_color" />
+    <size android:height="@dimen/zoom_seekbar_height" android:width="@dimen/zoom_seekbar_width" />
+    <corners android:radius="4.0dp" />
+    <stroke android:width="@dimen/zoom_seekbar_stroke_width" android:color="@color/zoom_seek_bar_stroke_color" />
+</shape>

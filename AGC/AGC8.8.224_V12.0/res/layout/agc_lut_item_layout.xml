@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:paddingRight="10.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <RelativeLayout android:layout_width="56.0dp" android:layout_height="56.0dp">
+        <ImageView android:id="@id/agc_iv_thumb" android:layout_width="56.0dp" android:layout_height="56.0dp" android:scaleType="centerCrop" />
+        <ImageView android:id="@id/agc_iv_close" android:padding="2.0dp" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/agc_close_ads" android:layout_alignParentRight="true" />
+    </RelativeLayout>
+    <ImageView android:id="@id/agc_iv_selected" android:layout_width="56.0dp" android:layout_height="8.0dp" android:src="@drawable/agc_lut_selected" android:alpha="0.0" />
+    <TextView android:textSize="10.0sp" android:textColor="#ffffff" android:ellipsize="none" android:id="@id/tv_title" android:layout_width="56.0dp" android:layout_height="wrap_content" android:layout_marginTop="2.0dp" android:singleLine="true" />
+</LinearLayout>

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">টাইম লেপ্স: গতিবেগৰ %d গুণ</item>
+        <item quantity="other">টাইম লেপ্স: গতিবেগৰ %d গুণ</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d খন ক্ৰপ কৰা।</item>
+        <item quantity="other">%d খন ক্ৰপ কৰা।</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">প্ৰায় %s খন ফট’</item>
+        <item quantity="other">প্ৰায় %s খন ফট’</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d টা এপ্‌ বাছনি কৰা হৈছে)</item>
+        <item quantity="other">(%1$d টা এপ্‌ বাছনি কৰা হৈছে)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">কেমেৰাৰ পৰা ক্ষিপ্ৰভাৱে ছ’চিয়েল এপ্‌সমূহত ফট’ আৰু ভিডিঅ’ শ্বেয়াৰ কৰক। %1$d টা পৰ্যন্ত এপ্‌ বাছনি কৰক। লক কৰি ৰখা ফ’ল্ডাৰত থকা ফট’ আৰু ভিডিঅ’ শ্বেয়াৰ কৰিব নোৱাৰি।</item>
+        <item quantity="other">কেমেৰাৰ পৰা ক্ষিপ্ৰভাৱে ছ’চিয়েল এপ্‌সমূহত ফট’ আৰু ভিডিঅ’ শ্বেয়াৰ কৰক। %1$d টা পৰ্যন্ত এপ্‌ বাছনি কৰক। লক কৰি ৰখা ফ’ল্ডাৰত থকা ফট’ আৰু ভিডিঅ’ শ্বেয়াৰ কৰিব নোৱাৰি।</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$dটালৈকে এপ্‌ বাছনি কৰক</item>
+        <item quantity="other">%1$dটালৈকে এপ্‌ বাছনি কৰক</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d দি</item>
+        <item quantity="other">%d দি</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d ঘ</item>
+        <item quantity="other">%d ঘ</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d মি</item>
+        <item quantity="other">%d মি</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d দিন</item>
+        <item quantity="other">%d দিন</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d ঘণ্টা</item>
+        <item quantity="other">%d ঘণ্টা</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d মিনিট</item>
+        <item quantity="other">%d মিনিট</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s মিনিটৰ ভিডিঅ’</item>
+        <item quantity="other">%s মিনিটৰ ভিডিঅ’</item>
+    </plurals>
+</resources>

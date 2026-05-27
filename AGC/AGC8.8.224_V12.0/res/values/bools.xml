@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="abc_action_bar_embed_tabs">true</bool>
+    <bool name="config_materialPreferenceIconSpaceReserved">false</bool>
+    <bool name="enable_system_alarm_service_default">false</bool>
+    <bool name="enable_system_foreground_service_default">true</bool>
+    <bool name="enable_system_job_service_default">true</bool>
+    <bool name="gm_sys_typescale_body2_text_all_caps">false</bool>
+    <bool name="gm_sys_typescale_button_text_all_caps">false</bool>
+    <bool name="isLeftToRightLocale">true</bool>
+    <bool name="settingslib_config_allow_divider">false</bool>
+    <bool name="settingslib_config_icon_space_reserved">false</bool>
+    <bool name="workmanager_test_configuration">false</bool>
+</resources>

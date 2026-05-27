@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:background="#33000000" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:id="@id/iv_guide" android:background="@drawable/agc_option_background" android:padding="12.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="200.0dp" android:src="@drawable/agc_lut_cube" android:layout_alignParentRight="true" android:layout_alignParentBottom="true" />
+    <FrameLayout android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    <ImageView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="-20.0dp" android:src="@drawable/agc_lut_guide_line_2" android:layout_toLeftOf="@id/iv_guide" android:layout_above="@id/iv_guide" />
+    <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="12.0dp" android:layout_above="@id/tv_tap" android:layout_centerHorizontal="true">
+        <ImageView android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/agc_lut_cube" />
+        <TextView android:textSize="20.0sp" android:textColor="@android:color/white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="10.0dp" android:text="Tap to use Lut" />
+    </LinearLayout>
+    <TextView android:textSize="17.0sp" android:textColor="@android:color/white" android:id="@id/tv_tap" android:background="@drawable/agc_white_corner_bg" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Got it" android:layout_above="@id/iv_guide" android:layout_centerHorizontal="true" android:paddingHorizontal="15.0dp" android:paddingVertical="5.0dp" />
+</RelativeLayout>

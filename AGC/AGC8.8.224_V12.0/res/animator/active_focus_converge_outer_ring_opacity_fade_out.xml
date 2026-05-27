@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animator android:interpolator="@interpolator/incoming_40_outgoing_40" android:duration="633" android:startOffset="0" android:valueFrom="1.0" android:valueTo="0.0" android:valueType="floatType"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

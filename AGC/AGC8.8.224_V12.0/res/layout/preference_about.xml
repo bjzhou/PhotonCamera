@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center" android:background="?android:selectableItemBackground" android:layout_width="match_parent" android:layout_height="match_parent" android:minHeight="?android:listPreferredItemHeight" android:paddingEnd="?android:scrollbarSize"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:gravity="top" android:layout_gravity="center" android:id="@android:id/icon" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="30.0dp" android:layout_marginBottom="20.0dp" android:scaleType="fitCenter" />
+    <LinearLayout android:gravity="center_vertical" android:orientation="vertical" android:id="@android:id/widget_frame" android:layout_width="wrap_content" android:layout_height="match_parent" android:paddingEnd="16.0dp" />
+</LinearLayout>

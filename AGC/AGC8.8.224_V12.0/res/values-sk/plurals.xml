@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Časozber, %d rýchlosť</item>
+        <item quantity="few">Časozber, %d rýchlosť</item>
+        <item quantity="many">Časozber, %d rýchlosť</item>
+        <item quantity="other">Časozber, %d rýchlosť</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Jedna orezaná.</item>
+        <item quantity="few">%d orezané.</item>
+        <item quantity="many">%d cropped.</item>
+        <item quantity="other">%d orezaných.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Približne %s fotka</item>
+        <item quantity="few">Približne %s fotky</item>
+        <item quantity="many">About %s photos</item>
+        <item quantity="other">Približne %s fotiek</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d vybraná aplikácia)</item>
+        <item quantity="few">(%1$d vybrané aplikácie)</item>
+        <item quantity="many">(%1$d apps selected)</item>
+        <item quantity="other">(%1$d vybraných aplikácií)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Rýchlo zdieľajte fotky a videá v spoločenských aplikáciách priamo z Fotoaparátu. Vyberte %1$d aplikáciu. Fotky a videá uložené v uzamknutom priečinku sa nedajú zdieľať.</item>
+        <item quantity="few">Rýchlo zdieľajte fotky a videá v spoločenských aplikáciách priamo z Fotoaparátu. Vyberte až %1$d aplikácie. Fotky a videá uložené v uzamknutom priečinku sa nedajú zdieľať.</item>
+        <item quantity="many">"Quickly share photos and videos on social apps from Camera. Choose up to %1$d apps. Photos and videos saved to Locked Folder can't be shared."</item>
+        <item quantity="other">Rýchlo zdieľajte fotky a videá v spoločenských aplikáciách priamo z Fotoaparátu. Vyberte až %1$d aplikácií. Fotky a videá uložené v uzamknutom priečinku sa nedajú zdieľať.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Vyberte %1$d aplikáciu</item>
+        <item quantity="few">Môžete vybrať maximálne %1$d aplikácie</item>
+        <item quantity="many">Choose up to %1$d apps</item>
+        <item quantity="other">Môžete vybrať maximálne %1$d aplikácií</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d d.</item>
+        <item quantity="few">%d d.</item>
+        <item quantity="many">%d d.</item>
+        <item quantity="other">%d d.</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d h</item>
+        <item quantity="few">%d h</item>
+        <item quantity="many">%d h</item>
+        <item quantity="other">%d h</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d min</item>
+        <item quantity="few">%d min</item>
+        <item quantity="many">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d deň</item>
+        <item quantity="few">%d dni</item>
+        <item quantity="many">%d dňa</item>
+        <item quantity="other">%d dní</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d hodina</item>
+        <item quantity="few">%d hodiny</item>
+        <item quantity="many">%d hodiny</item>
+        <item quantity="other">%d hodín</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d min</item>
+        <item quantity="few">%d min</item>
+        <item quantity="many">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minúta videí</item>
+        <item quantity="few">%s minúty videí</item>
+        <item quantity="many">%s minúty videí</item>
+        <item quantity="other">%s minút videí</item>
+    </plurals>
+</resources>

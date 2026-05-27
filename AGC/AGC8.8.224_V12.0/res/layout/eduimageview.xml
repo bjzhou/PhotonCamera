@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:id="@id/imageview" android:background="@color/google_grey800" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="center" />
+    <TextView android:textSize="16.0sp" android:textColor="@color/google_white" android:layout_gravity="center" android:id="@id/textview_offline" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/internet_required" android:lineHeight="24.0sp" />
+</merge>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.google.android.apps.camera.ui.modeslider.ModeSlider android:layout_gravity="center|bottom" android:id="@id/mode_slider" android:background="@drawable/bg_mode_slider" android:clickable="true" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="@dimen/mode_slider_bottom_margin" android:animateLayoutChanges="true" />
+    <com.google.android.apps.camera.camcorder.ui.modeslider.recordspeed.RecordSpeedSlider android:layout_gravity="center|bottom" android:id="@id/record_speed_slider" android:background="@drawable/bg_record_speed_slider" android:visibility="gone" android:clickable="true" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="@dimen/record_speed_slider_bottom_margin" android:animateLayoutChanges="true" />
+</merge>

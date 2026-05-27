@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set android:ordering="together"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <objectAnimator android:interpolator="@drawable/$$gleam_animated_vector__7__0" android:duration="500" android:startOffset="0" android:valueFrom="M0 -0.07 C0.04,-0.07 0.07,-0.04 0.07,0 C0.07,0.04 0.04,0.07 0,0.07 C-0.04,0.07 -0.07,0.04 -0.07,0 C-0.07,-0.04 -0.04,-0.07 0,-0.07c " android:valueTo="M0 -66.25 C36.53,-66.25 66.25,-36.53 66.25,0 C66.25,36.53 36.53,66.25 0,66.25 C-36.53,66.25 -66.25,36.53 -66.25,0 C-66.25,-36.53 -36.53,-66.25 0,-66.25c " android:valueType="pathType" android:propertyName="pathData" />
+    <objectAnimator android:duration="100" android:startOffset="500" android:valueFrom="M0 -66.25 C36.53,-66.25 66.25,-36.53 66.25,0 C66.25,36.53 36.53,66.25 0,66.25 C-36.53,66.25 -66.25,36.53 -66.25,0 C-66.25,-36.53 -36.53,-66.25 0,-66.25c " android:valueTo="M0 -75.5 C41.63,-75.5 75.5,-41.63 75.5,0 C75.5,41.63 41.63,75.5 0,75.5 C-41.63,75.5 -75.5,41.63 -75.5,0 C-75.5,-41.63 -41.63,-75.5 0,-75.5c " android:valueType="pathType" android:propertyName="pathData" />
+</set>

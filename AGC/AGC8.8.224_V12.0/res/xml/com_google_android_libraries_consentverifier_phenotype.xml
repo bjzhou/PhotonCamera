@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<phenotype-registrations>
+    <phenotype-registration>
+        <configuration-package>com.google.android.libraries.consentverifier</configuration-package>
+        <auto-subpackage>true</auto-subpackage>
+    </phenotype-registration>
+</phenotype-registrations>

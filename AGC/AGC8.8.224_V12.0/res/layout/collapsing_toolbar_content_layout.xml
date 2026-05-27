@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <com.google.android.material.appbar.AppBarLayout android:theme="@style/Theme.CollapsingToolbar.Settings" android:id="@id/app_bar" android:background="@android:color/transparent" android:fitsSystemWindows="true" android:layout_width="match_parent" android:layout_height="wrap_content" android:outlineSpotShadowColor="@android:color/transparent" android:outlineAmbientShadowColor="@android:color/transparent">
+        <com.google.android.material.appbar.CollapsingToolbarLayout android:id="@id/collapsing_toolbar" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="@dimen/settingslib_toolbar_layout_height" app:collapsedTitleTextAppearance="@style/CollapsingToolbarTitle.Collapsed" app:contentScrim="@color/settingslib_colorSurfaceHeader" app:expandedTitleMarginEnd="@dimen/expanded_title_margin_end" app:expandedTitleMarginStart="@dimen/expanded_title_margin_start" app:expandedTitleTextAppearance="@style/CollapsingToolbarTitle.Expanded" app:extraMultilineHeightEnabled="true" app:forceApplySystemWindowInsetTop="true" app:layout_scrollFlags="scroll|exitUntilCollapsed|snap" app:maxLines="3" app:scrimAnimationDuration="50" app:scrimVisibleHeightTrigger="@dimen/settingslib_scrim_visible_height_trigger" app:statusBarScrim="@null" app:titleCollapseMode="fade" app:toolbarId="@id/action_bar">
+            <Toolbar android:theme="?android:actionBarTheme" android:id="@id/action_bar" android:layout_width="match_parent" android:layout_height="?actionBarSize" android:transitionName="shared_element_view" app:layout_collapseMode="pin" />
+        </com.google.android.material.appbar.CollapsingToolbarLayout>
+    </com.google.android.material.appbar.AppBarLayout>
+    <FrameLayout android:id="@id/content_frame" android:layout_width="match_parent" android:layout_height="wrap_content" app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+</merge>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <RelativeLayout android:id="@id/menu_container" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="@dimen/menu_right_margin">
+        <ImageView android:id="@id/arrow_up" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="@dimen/menu_arrow_right_margin" android:src="@drawable/ic_arrow_down" android:layout_alignRight="@id/menu_background" android:layout_alignParentTop="true" android:scaleX="-1.0" android:scaleY="-1.0" />
+        <LinearLayout android:id="@id/menu_background" android:background="@drawable/menu_background" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_above="@id/arrow_down" android:layout_below="@id/arrow_up">
+            <LinearLayout android:orientation="vertical" android:id="@id/menu_inner_layout" android:paddingTop="24.0dp" android:clickable="true" android:layout_width="@dimen/menu_width" android:layout_height="wrap_content">
+                <FrameLayout android:id="@id/menu_header_container" android:paddingLeft="24.0dp" android:paddingRight="17.0dp" android:layout_width="match_parent" android:layout_height="@dimen/menu_header_height">
+                    <TextView android:textAppearance="?textAppearanceSubhead2" android:textColor="?colorOnSurface" android:layout_gravity="left|center" android:id="@id/menu_header_text" android:visibility="visible" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+                    <ImageButton android:layout_gravity="end|center" android:id="@id/menu_help_button" android:background="#00000000" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/quantum_gm_ic_help_outline_black_18" android:tint="?colorOnSurface" />
+                </FrameLayout>
+                <ListView android:id="@id/option_list" android:paddingLeft="16.0dp" android:paddingTop="16.0dp" android:paddingRight="16.0dp" android:paddingBottom="16.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:listSelector="@android:color/transparent" android:divider="@null" android:dividerHeight="0.0dp" android:choiceMode="singleChoice" android:soundEffectsEnabled="false" />
+            </LinearLayout>
+        </LinearLayout>
+        <ImageView android:id="@id/arrow_down" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="@dimen/menu_arrow_right_margin" android:src="@drawable/ic_arrow_down" android:layout_alignRight="@id/menu_background" android:layout_alignParentBottom="true" />
+    </RelativeLayout>
+</merge>

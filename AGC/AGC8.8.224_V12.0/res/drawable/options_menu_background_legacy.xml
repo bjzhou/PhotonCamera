@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/options_menu_background_opened" />
+    <corners android:radius="@dimen/options_menu_background_corner_radius" />
+</shape>

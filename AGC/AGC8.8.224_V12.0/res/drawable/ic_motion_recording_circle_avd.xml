@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector android:drawable="@drawable/ic_motion_recording_circle"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <target android:name="rotation" android:animation="@anim/ic_motion_recording_rotation_animation" />
+    <target android:name="_offset_rotation" android:animation="@anim/ic_motion_recording__offset_rotation_animation" />
+    <target android:name="path_1" android:animation="@anim/ic_motion_recording_path_1_animation" />
+</animated-vector>

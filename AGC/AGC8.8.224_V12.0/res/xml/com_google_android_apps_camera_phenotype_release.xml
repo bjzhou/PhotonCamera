@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<phenotype-registrations>
+    <phenotype-registration>
+        <configuration-package>com.google.android.apps.camera</configuration-package>
+        <log-sources>
+            <log-source>ANDROID_CAMERA</log-source>
+            <log-source>CAMERA_ANDROID_PRIMES</log-source>
+        </log-sources>
+        <auto-subpackage>true</auto-subpackage>
+        <params>CAQ=</params>
+    </phenotype-registration>
+</phenotype-registrations>

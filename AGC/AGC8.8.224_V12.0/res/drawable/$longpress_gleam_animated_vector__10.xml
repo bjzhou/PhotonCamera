@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set android:ordering="together"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <objectAnimator android:interpolator="@drawable/$$longpress_gleam_animated_vector__10__0" android:duration="433" android:startOffset="0" android:valueFrom="#ffea4335" android:valueTo="#ffea4335" android:valueType="colorType" android:propertyName="strokeColor" />
+    <objectAnimator android:interpolator="@drawable/$$longpress_gleam_animated_vector__10__1" android:duration="133" android:startOffset="433" android:valueFrom="#ffea4335" android:valueTo="#ffffffff" android:valueType="colorType" android:propertyName="strokeColor" />
+</set>

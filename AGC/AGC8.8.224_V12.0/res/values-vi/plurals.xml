@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Tua nhanh thời gian: tốc độ %d lần</item>
+        <item quantity="other">Tua nhanh thời gian: tốc độ %d lần</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Một khuôn mặt đã bị cắt bớt.</item>
+        <item quantity="other">%d khuôn mặt đã bị cắt bớt.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Khoảng %s ảnh</item>
+        <item quantity="other">Khoảng %s ảnh</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(Đã chọn %1$d ứng dụng)</item>
+        <item quantity="other">(Đã chọn %1$d ứng dụng)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Chia sẻ nhanh ảnh và video trên các ứng dụng mạng xã hội ngay từ Máy ảnh. Chọn %1$d ứng dụng. Bạn không thể chia sẻ ảnh và video đã lưu vào Thư mục bị khoá.</item>
+        <item quantity="other">Chia sẻ nhanh ảnh và video trên các ứng dụng mạng xã hội ngay từ Máy ảnh. Chọn tối đa %1$d ứng dụng. Bạn không thể chia sẻ ảnh và video đã lưu vào Thư mục bị khoá.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Bạn có thể chọn %1$d ứng dụng</item>
+        <item quantity="other">Bạn có thể chọn tối đa %1$d ứng dụng</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d ngày</item>
+        <item quantity="other">%d ngày</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d giờ</item>
+        <item quantity="other">%d giờ</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d phút</item>
+        <item quantity="other">%d phút</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d ngày</item>
+        <item quantity="other">%d ngày</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d giờ</item>
+        <item quantity="other">%d giờ</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d phút</item>
+        <item quantity="other">%d phút</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s phút video</item>
+        <item quantity="other">%s phút video</item>
+    </plurals>
+</resources>

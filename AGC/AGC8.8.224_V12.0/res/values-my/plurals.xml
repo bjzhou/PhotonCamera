@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">အမြန်ပြကွက်မုဒ် %d ဆ မြန်နှုန်း</item>
+        <item quantity="other">အမြန်ပြကွက်မုဒ် %d ဆ မြန်နှုန်း</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">တစ်ခု ဖြတ်ညှိထားသည်။</item>
+        <item quantity="other">%d ခု ဖြတ်ညှိထားသည်။</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">ဓာတ်ပုံ %s ပုံ ခန့်</item>
+        <item quantity="other">ဓာတ်ပုံ %s ပုံ ခန့်</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(အက်ပ် %1$d ခုရွေးထားသည်)</item>
+        <item quantity="other">(အက်ပ် %1$d ခုရွေးထားသည်)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">‘ကင်မရာ’ မှနေ၍ လူမှုအက်ပ်များသို့ ဓာတ်ပုံနှင့် ဗီဒီယိုများ အမြန်မျှဝေပါ။ အက်ပ် %1$d ခု ရွေးပါ။ ‘လော့ခ်ချထားသော ဖိုင်တွဲ’ တွင် သိမ်းထားသည့် ဓာတ်ပုံနှင့် ဗီဒီယိုများကို မျှဝေ၍မရပါ။</item>
+        <item quantity="other">‘ကင်မရာ’ မှနေ၍ လူမှုအက်ပ်များသို့ ဓာတ်ပုံနှင့် ဗီဒီယိုများ အမြန်မျှဝေပါ။ အက်ပ် %1$d ခုအထိ ရွေးပါ။ ‘လော့ခ်ချထားသော ဖိုင်တွဲ’ တွင် သိမ်းထားသည့် ဓာတ်ပုံနှင့် ဗီဒီယိုများကို မျှဝေ၍မရပါ။</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">အက်ပ် %1$d ခု ရွေးပါ</item>
+        <item quantity="other">အက်ပ် %1$d ခုအထိ ရွေးပါ</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%dd</item>
+        <item quantity="other">%dd</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%dh</item>
+        <item quantity="other">%dh</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%dm</item>
+        <item quantity="other">%dm</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d ရက်</item>
+        <item quantity="other">%d ရက်</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d နာရီ</item>
+        <item quantity="other">%d နာရီ</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d မိနစ်</item>
+        <item quantity="other">%d မိနစ်</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">ဗီဒီယိုရိုက်ကူးရန်ကျန်ရှိချိန် %s မိနစ်</item>
+        <item quantity="other">ဗီဒီယိုရိုက်ကူးရန်ကျန်ရှိချိန် %s မိနစ်</item>
+    </plurals>
+</resources>

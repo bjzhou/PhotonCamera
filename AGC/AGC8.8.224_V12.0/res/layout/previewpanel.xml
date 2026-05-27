@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <SurfaceView android:id="@id/preview_viewfinder" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_margin="2.0dp" />
+    <com.google.android.apps.camera.aizoom.previewpanel.PolyView android:id="@id/preview_roi" android:background="@drawable/rounded_background" android:visibility="invisible" android:layout_width="match_parent" android:layout_height="match_parent" />
+</RelativeLayout>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<phenotype-registrations>
+    <phenotype-registration>
+        <configuration-package>com.google.android.libraries.performance.primes</configuration-package>
+        <log-sources>
+            <log-source>CLIENT_LOGGING_PROD</log-source>
+        </log-sources>
+        <auto-subpackage>true</auto-subpackage>
+        <params>CPKw0PEB</params>
+    </phenotype-registration>
+</phenotype-registrations>

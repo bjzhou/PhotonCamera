@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:name="ic_motion_recording" android:height="24.0dp" android:width="24.0dp" android:viewportWidth="24.0" android:viewportHeight="24.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:name="inside_white_" android:translateX="12.0" android:translateY="12.0">
+        <group android:name="inside_white__pivot" android:translateX="-12.0" android:translateY="-12.0">
+            <group android:name="circle" android:translateX="12.0" android:translateY="11.99998">
+                <path android:name="path_3" android:fillColor="#ffffffff" android:pathData="M -6.00021362305,-0.00002 c 0.0,-3.31399536133 2.68600463867,-6.0 6.0,-6.0 c 3.31399536133,0.0 6.0,2.68600463867 6.0,6.0 c 0.0,3.31402587891 -2.68600463867,6.00003051758 -6.0,6.00003051758 c -3.31399536133,0.0 -6.0,-2.68600463867 -6.0,-6.00003051758 Z" />
+            </group>
+        </group>
+    </group>
+    <group android:name="rotation" android:scaleX="0.24" android:scaleY="0.24" android:translateX="12.0" android:translateY="12.0">
+        <group android:name="rotation_pivot" android:translateX="-50.0" android:translateY="-50.0">
+            <group android:name="_dot" android:scaleX="4.16667" android:scaleY="4.16667" android:translateX="50.0" android:translateY="50.0">
+                <group android:name="_dot_pivot" android:translateX="-12.0" android:translateY="-12.0">
+                    <group android:name="group_1" android:translateX="12.0" android:translateY="11.99998">
+                        <path android:name="path_5" android:fillColor="#ffffffff" android:pathData="M -5.00021362305,-6.50010681152 c 0.0,0.828002929688 -0.671997070312,1.5 -1.5,1.5 c -0.828002929688,0.0 -1.5,-0.671997070312 -1.5,-1.5 c 0.0,-0.827972412109 0.671997070312,-1.5 1.5,-1.5 c 0.828002929688,0.0 1.5,0.672027587891 1.5,1.5 Z" />
+                    </group>
+                </group>
+            </group>
+        </group>
+    </group>
+    <group android:name="_offset_rotation" android:scaleX="0.24" android:scaleY="0.24" android:rotation="-20.0" android:translateX="12.0" android:translateY="12.0">
+        <group android:name="_offset_rotation_pivot" android:translateX="-50.0" android:translateY="-50.0">
+            <group android:name="_ring" android:scaleX="4.16667" android:scaleY="4.16667" android:translateX="50.0" android:translateY="50.0">
+                <group android:name="_ring_pivot" android:translateX="-3.61456" android:translateY="-2.61456">
+                    <group android:name="ellipse_1" android:translateX="3.97913" android:translateY="2.97913">
+                        <path android:name="path_1" android:pathData="M -0.364562988281,-9.42706298828 c -5.00508117676,0.0 -9.0625,4.05741882324 -9.0625,9.0625 c 0.0,5.00508117676 4.05741882324,9.0625 9.0625,9.0625 c 5.00508117676,0.0 9.0625,-4.05741882324 9.0625,-9.0625 c 0.0,-5.00508117676 -4.05741882324,-9.0625 -9.0625,-9.0625 Z" android:strokeColor="#ffffffff" android:strokeWidth="2.0" android:trimPathStart="0.14" />
+                    </group>
+                </group>
+            </group>
+        </group>
+    </group>
+</vector>

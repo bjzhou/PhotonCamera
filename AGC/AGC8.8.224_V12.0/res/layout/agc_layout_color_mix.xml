@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:id="@id/color_mix_root" android:background="@drawable/shape_color_mix_bg" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginHorizontal="30.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:gravity="center_vertical" android:padding="10.0dp" android:layout_width="match_parent" android:layout_height="48.0dp">
+        <TextView android:textSize="12.0sp" android:textColor="#88ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/color_mix" />
+        <View android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_weight="1.0" />
+        <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:id="@id/color_mix_ll_overried" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content">
+            <TextView android:textSize="12.0sp" android:textColor="#88ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Overried" />
+            <CheckBox android:id="@id/agc_color_checked" android:background="@drawable/color_overried_checkbox" android:layout_width="26.0dp" android:layout_height="14.0dp" android:layout_marginLeft="3.0dp" android:button="@null" android:paddingHorizontal="3.0dp" android:paddingVertical="5.0dp" />
+        </LinearLayout>
+        <ImageView android:id="@id/agc_color_reset" android:layout_width="18.0dp" android:layout_height="18.0dp" android:layout_marginLeft="10.0dp" android:src="@drawable/agc_color_reset" />
+        <TextView android:textSize="12.0sp" android:textColor="@android:color/black" android:id="@id/color_mix_tv_done" android:background="@drawable/shape_color_mix_done" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="12.0dp" android:text="@string/color_mix_done" android:paddingHorizontal="15.0dp" android:paddingVertical="5.0dp" />
+    </LinearLayout>
+    <View android:background="#666666" android:layout_width="match_parent" android:layout_height="0.5dp" />
+    <LinearLayout android:orientation="vertical" android:id="@id/color_root" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingHorizontal="20.0dp" android:paddingVertical="20.0dp">
+        <LinearLayout android:gravity="center_horizontal" android:orientation="horizontal" android:id="@id/color_layout" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <FrameLayout android:id="@id/view_red" android:tag="0" android:padding="5.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_red_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_green" android:tag="1" android:padding="5.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_green_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_blue" android:tag="2" android:padding="5.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_blue_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_yellow" android:tag="3" android:padding="5.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_yellow_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_cyan" android:tag="4" android:padding="5.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_green_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:visibility="gone" android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_orange" android:tag="5" android:padding="5.0dp" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_orange_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:visibility="gone" android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_purple" android:tag="6" android:padding="5.0dp" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_purple_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+            <Space android:visibility="gone" android:layout_width="0.0dp" android:layout_height="1.0dp" android:layout_weight="1.0" />
+            <FrameLayout android:id="@id/view_pink" android:tag="7" android:padding="5.0dp" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content">
+                <View android:background="@drawable/shape_pink_stroke" android:layout_width="24.0dp" android:layout_height="24.0dp" />
+            </FrameLayout>
+        </LinearLayout>
+        <com.agc.widget.colorbar.ColorSliderBar android:id="@id/color_slider_bar" android:layout_width="match_parent" android:layout_height="50.0dp" android:layout_marginTop="15.0dp" />
+    </LinearLayout>
+</LinearLayout>

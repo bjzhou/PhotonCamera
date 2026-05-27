@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:background="@android:color/transparent" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="vertical" android:background="@drawable/agc_error_dialog_bg" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginLeft="25.0dp" android:layout_marginRight="25.0dp" android:layout_centerInParent="true">
+        <TextView android:textSize="18.0sp" android:textColor="@android:color/white" android:id="@id/agc_title_text" android:paddingLeft="23.0dp" android:paddingTop="25.0dp" android:paddingRight="23.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="10.0dp" android:text="@string/camera_keeps_stopping" />
+        <TextView android:textSize="14.0sp" android:textColor="#f1be42" android:id="@id/agc_tips" android:paddingLeft="23.0dp" android:paddingRight="23.0dp" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="10.0dp" android:text="@string/camera_keeps_stopping" />
+        <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:background="@drawable/agc_error_select_item_background" android:paddingLeft="23.0dp" android:paddingTop="11.0dp" android:paddingRight="23.0dp" android:paddingBottom="11.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:onClick="appInfo">
+            <ImageView android:background="?android:colorAccent" android:layout_width="23.0dp" android:layout_height="23.0dp" android:src="@drawable/agc_info" android:scaleType="centerInside" />
+            <Space android:layout_width="26.0dp" android:layout_height="wrap_content" />
+            <TextView android:textColor="@android:color/white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/app_info" />
+        </LinearLayout>
+        <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:background="@drawable/agc_error_select_item_background" android:paddingLeft="23.0dp" android:paddingTop="11.0dp" android:paddingRight="23.0dp" android:paddingBottom="11.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:onClick="closeApp">
+            <ImageView android:background="?android:colorAccent" android:layout_width="23.0dp" android:layout_height="23.0dp" android:src="@drawable/agc_close" android:scaleType="centerInside" />
+            <Space android:layout_width="26.0dp" android:layout_height="wrap_content" />
+            <TextView android:textColor="@android:color/white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/close_app" />
+        </LinearLayout>
+        <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:background="@drawable/agc_error_select_item_background" android:paddingLeft="23.0dp" android:paddingTop="11.0dp" android:paddingRight="23.0dp" android:paddingBottom="11.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="20.0dp" android:onClick="copyText">
+            <ImageView android:background="?android:colorAccent" android:layout_width="23.0dp" android:layout_height="23.0dp" android:src="@drawable/agc_link" android:scaleType="centerInside" />
+            <Space android:layout_width="26.0dp" android:layout_height="wrap_content" />
+            <TextView android:textColor="@android:color/white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/copy_crash_log_url" />
+        </LinearLayout>
+    </LinearLayout>
+</RelativeLayout>

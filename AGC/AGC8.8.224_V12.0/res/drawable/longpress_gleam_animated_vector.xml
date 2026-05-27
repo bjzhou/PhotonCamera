@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector android:drawable="@drawable/$longpress_gleam_animated_vector__0"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <target android:name="_R_G_L_4_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__1" />
+    <target android:name="_R_G_L_4_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__2" />
+    <target android:name="_R_G_L_4_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__3" />
+    <target android:name="_R_G_L_3_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__4" />
+    <target android:name="_R_G_L_3_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__5" />
+    <target android:name="_R_G_L_3_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__6" />
+    <target android:name="_R_G_L_3_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__7" />
+    <target android:name="_R_G_L_3_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__8" />
+    <target android:name="_R_G_L_3_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__9" />
+    <target android:name="_R_G_L_2_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__10" />
+    <target android:name="_R_G_L_2_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__11" />
+    <target android:name="_R_G_L_2_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__12" />
+    <target android:name="_R_G_L_2_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__13" />
+    <target android:name="_R_G_L_2_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__14" />
+    <target android:name="_R_G_L_2_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__15" />
+    <target android:name="_R_G_L_1_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__16" />
+    <target android:name="_R_G_L_1_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__17" />
+    <target android:name="_R_G_L_1_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__18" />
+    <target android:name="_R_G_L_1_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__19" />
+    <target android:name="_R_G_L_1_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__20" />
+    <target android:name="_R_G_L_1_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__21" />
+    <target android:name="_R_G_L_0_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__22" />
+    <target android:name="_R_G_L_0_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__23" />
+    <target android:name="_R_G_L_0_G_D_0_P_0" android:animation="@drawable/$longpress_gleam_animated_vector__24" />
+    <target android:name="_R_G_L_0_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__25" />
+    <target android:name="_R_G_L_0_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__26" />
+    <target android:name="_R_G_L_0_G_N_1_T_0" android:animation="@drawable/$longpress_gleam_animated_vector__27" />
+    <target android:name="time_group" android:animation="@drawable/$longpress_gleam_animated_vector__28" />
+</animated-vector>

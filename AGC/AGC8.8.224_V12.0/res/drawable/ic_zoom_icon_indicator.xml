@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:height="12.0dp" android:width="15.0dp" android:viewportWidth="15.0" android:viewportHeight="12.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <path android:fillColor="@color/zoom_toggle_button_background_color" android:pathData="M8.50384 9.5C8.07288 10.1667 6.99548 10.1667 6.56452 9.5L2.68586 3.5C2.2549 2.83333 2.7936 2 3.65552 2L11.4128 2C12.2748 2 12.8135 2.83333 12.3825 3.5L8.50384 9.5Z" />
+    <path android:pathData="M1.84605 4.04289L5.72471 10.0429C6.15526 10.7089 6.87872 11 7.53418 11C8.18963 11 8.9131 10.7089 9.34365 10.0429L13.2223 4.04289C13.668 3.35342 13.6073 2.55268 13.2223 1.95711C12.8447 1.37297 12.1742 1 11.4128 1L3.65552 1C2.8942 1 2.22367 1.37297 1.84605 1.95711C1.46105 2.55268 1.40035 3.35342 1.84605 4.04289Z" android:strokeColor="#ff222222" android:strokeWidth="2.0" android:strokeAlpha="0.86" />
+</vector>

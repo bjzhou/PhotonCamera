@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:id="@id/content" android:background="@android:color/black" android:padding="20.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_alignParentBottom="true"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <TextView android:textSize="12.0sp" android:textStyle="bold" android:textColor="#000" android:gravity="center" android:layout_gravity="center_horizontal" android:id="@id/tv_thumb_hint" android:background="@drawable/seekbar_text_background" android:padding="10.0dp" android:visibility="invisible" android:layout_width="wrap_content" android:layout_height="45.0dp" />
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+        <RelativeLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView android:id="@id/tv_value_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="dark" android:layout_alignParentLeft="true" />
+            <TextView android:id="@id/tv_value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_alignParentRight="true" />
+        </RelativeLayout>
+        <com.agc.widget.CenterSeekBar android:layout_gravity="center_horizontal" android:id="@id/agc_csb" android:layout_width="300.0dp" android:layout_height="wrap_content" android:layout_marginBottom="15.0dp" android:minHeight="30.0dp" app:backgroundDrawable="@drawable/seekbar_background" app:max="20" app:progressDrawable="@drawable/seekbar_progress" app:thumb="@drawable/seekbar_thumb_selector" />
+    </LinearLayout>
+    <LinearLayout android:orientation="vertical" android:id="@id/ll_content" android:layout_width="match_parent" android:layout_height="wrap_content">
+        <com.agc.asv.HorizontalListView android:id="@id/agc_list_view" android:layout_width="match_parent" android:layout_height="50.0dp" />
+        <com.agc.asv.ShadowRulerView android:layout_gravity="bottom" android:id="@id/agc_agc_ruler" android:visibility="gone" android:layout_width="match_parent" android:layout_height="80.0dp" android:layout_marginTop="10.0dp" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10.0dp">
+            <TextView android:textSize="14.0sp" android:textStyle="bold" android:textColor="@color/agc_multiple_text_color" android:gravity="center" android:id="@id/agc_cancel" android:background="@drawable/agc_btn_cancel" android:layout_width="60.0dp" android:layout_height="25.0dp" android:text="BACK" />
+            <Space android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_weight="1.0" />
+            <TextView android:textSize="14.0sp" android:textStyle="bold" android:textColor="@android:color/black" android:gravity="center" android:id="@id/agc_save" android:background="@drawable/agc_btn_save" android:layout_width="60.0dp" android:layout_height="25.0dp" android:text="SAVE" />
+        </LinearLayout>
+        <Space android:layout_width="wrap_content" android:layout_height="20.0dp" />
+    </LinearLayout>
+</LinearLayout>

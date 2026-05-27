@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:background="@drawable/agc_log_overlay_bg" android:padding="4.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:textSize="12.0sp" android:textColor="#ffffff" android:tag="agc_tv_log" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginLeft="8.0dp" android:layout_marginRight="8.0dp" android:maxWidth="150.0dp" android:minWidth="44.0dp" android:text="\nLog" android:maxLines="4" android:minLines="3" />
+    <ImageView android:tag="agc_iv_overlay" android:padding="8.0dp" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/agc_debug" />
+</LinearLayout>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#6b000000" />
+            <size android:height="32.0dp" android:width="32.0dp" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/quantum_ic_close_white_24" android:left="4.0dp" android:top="4.0dp" android:right="4.0dp" android:bottom="4.0dp" />
+</layer-list>

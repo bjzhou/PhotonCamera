@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:padding="2.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:gravity="center" android:orientation="vertical" android:tag="agc_tv" android:background="@drawable/agc_option_bg" android:paddingTop="8.0dp" android:paddingBottom="8.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:minWidth="80.0dp">
+        <ImageView android:tag="agc_option_iv" android:layout_width="28.0dp" android:layout_height="28.0dp" android:src="@drawable/agc_lib_patcher" android:layout_weight="1.0" app:tint="@color/agc_multiple_text_color" />
+        <TextView android:textSize="12.0sp" android:textColor="@color/agc_multiple_text_color" android:tag="agc_option_tv" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Button" android:layout_weight="1.0" />
+    </LinearLayout>
+</LinearLayout>

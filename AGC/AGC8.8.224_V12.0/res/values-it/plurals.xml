@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Velocità time-lapse: %dx</item>
+        <item quantity="other">Velocità time-lapse: %dx</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Uno tagliato.</item>
+        <item quantity="other">%d tagliati.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Circa %s foto</item>
+        <item quantity="other">Circa %s foto</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d app selezionata)</item>
+        <item quantity="other">(%1$d app selezionate)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Condividi rapidamente foto e video su app social dall'app Fotocamera. Puoi scegliere %1$d app. Non è possibile condividere foto e video salvati nella Cartella protetta."</item>
+        <item quantity="other">"Condividi rapidamente foto e video su app social dall'app Fotocamera. Puoi scegliere fino a %1$d app. Non è possibile condividere foto e video salvati nella Cartella protetta."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Puoi scegliere %1$d app</item>
+        <item quantity="other">Puoi scegliere fino a %1$d app</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d g</item>
+        <item quantity="other">%d g</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d h</item>
+        <item quantity="other">%d h</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d m</item>
+        <item quantity="other">%d m</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d giorno</item>
+        <item quantity="other">%d giorni</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d ora</item>
+        <item quantity="other">%d ore</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minuto di video</item>
+        <item quantity="other">%s minuti di video</item>
+    </plurals>
+</resources>

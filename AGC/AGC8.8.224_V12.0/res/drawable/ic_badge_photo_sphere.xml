@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/filmstrip_center_item_background" />
+            <size android:height="@dimen/filmstrip_center_badge_size" android:width="@dimen/filmstrip_center_badge_size" />
+        </shape>
+    </item>
+    <item android:gravity="center" android:height="@dimen/filmstrip_center_badge_icon_size" android:width="@dimen/filmstrip_center_badge_icon_size" android:drawable="@drawable/quantum_ic_photosphere_white_18" />
+</layer-list>

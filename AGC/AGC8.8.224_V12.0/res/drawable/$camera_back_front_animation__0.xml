@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:height="48.0dp" android:width="48.0dp" android:viewportWidth="48.0" android:viewportHeight="48.0"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <group android:name="_R_G">
+        <group android:name="_R_G_L_2_G" android:pivotX="22.793" android:pivotY="62.975" android:scaleX="0.5" android:scaleY="0.5" android:translateX="-8.396" android:translateY="-28.488">
+            <path android:name="_R_G_L_2_G_D_0_P_0" android:fillColor="#ffffffff" android:pathData=" M42.12 62.96 C42.12,62.96 22.86,37.21 22.86,37.21 C22.86,37.21 3.5,62.96 3.5,62.96 C3.5,62.96 42.12,62.96 42.12,62.96c " android:fillAlpha="1.0" android:fillType="nonZero" />
+        </group>
+        <group android:name="_R_G_L_1_G_T_1" android:scaleX="0.0" android:scaleY="0.0" android:translateX="22.125" android:translateY="15.837">
+            <group android:name="_R_G_L_1_G" android:translateX="-42.0" android:translateY="-21.0">
+                <path android:name="_R_G_L_1_G_D_0_P_0" android:pathData=" M42 10.53 C47.76,10.53 52.47,15.24 52.47,21 C52.47,26.76 47.76,31.47 42,31.47 C36.24,31.47 31.53,26.76 31.53,21 C31.53,15.24 36.24,10.53 42,10.53c " android:strokeColor="#ffffffff" android:strokeWidth="7.0" android:strokeLineCap="round" android:strokeLineJoin="round" android:strokeAlpha="1.0" />
+            </group>
+        </group>
+        <group android:name="_R_G_L_0_G" android:pivotX="42.0" android:pivotY="50.781" android:scaleX="0.5" android:scaleY="0.5" android:translateX="-18.0" android:translateY="-22.391">
+            <path android:name="_R_G_L_0_G_D_0_P_0" android:pathData=" M49 27.25 C42.06,35.81 39.25,39.25 32.67,47.11 C32.67,47.11 22.35,59.59 22.35,59.59 C22.35,59.59 47.88,59.59 47.88,59.59 C47.88,59.59 73.47,59.55 73.47,59.55 C73.47,59.55 73.4,59.45 73.4,59.45 C64.95,48.3 60.28,42.2 49,27.25c " android:strokeColor="#ffffffff" android:strokeWidth="7.0" android:strokeLineCap="round" android:strokeLineJoin="round" android:strokeAlpha="1.0" />
+        </group>
+    </group>
+    <group android:name="time_group" />
+</vector>

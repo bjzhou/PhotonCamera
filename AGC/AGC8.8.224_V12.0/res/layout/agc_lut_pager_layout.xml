@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:id="@id/agc_lut_pager_layout" android:paddingTop="10.0dp" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.agc.widget.recyclerview.AgcRecyclerView android:id="@id/agc_list_view" android:layout_width="match_parent" android:layout_height="90.0dp" android:fastScrollEnabled="false" />
+</FrameLayout>

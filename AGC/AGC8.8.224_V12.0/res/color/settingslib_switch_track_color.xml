@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false" android:color="@color/settingslib_track_off_color" android:alpha="?android:disabledAlpha" />
+    <item android:state_checked="false" android:color="@color/settingslib_track_off_color" />
+    <item android:color="@color/settingslib_track_on_color" />
+</selector>

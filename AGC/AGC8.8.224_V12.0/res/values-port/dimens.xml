@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="photosphere_overlay_message_short_layout_height">188.0dp</dimen>
+    <dimen name="photosphere_overlay_message_short_layout_marginTop">56.0dp</dimen>
+    <dimen name="photosphere_overlay_message_short_layout_width">183.0dp</dimen>
+</resources>

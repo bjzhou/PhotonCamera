@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape>
+            <corners android:radius="8.0dp" />
+            <solid android:color="@color/settingslib_colorSurfaceVariant" />
+        </shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <scale android:scaleWidth="100%" android:useIntrinsicSizeAsMinimum="true">
+            <shape>
+                <corners android:radius="8.0dp" />
+                <solid android:color="?android:textColorPrimary" />
+                <size android:width="8.0dp" />
+            </shape>
+        </scale>
+    </item>
+</layer-list>

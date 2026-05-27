@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">‏Time Lapse במהירות של %d</item>
+        <item quantity="two">‏Time Lapse במהירות של %d</item>
+        <item quantity="other">‏Time Lapse במהירות של %d</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">פנים של %d אנשים נחתכו.</item>
+        <item quantity="two">פנים של %d אנשים נחתכו.</item>
+        <item quantity="other">פנים של %d אנשים נחתכו.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s תמונות בקירוב</item>
+        <item quantity="two">%s תמונות בקירוב</item>
+        <item quantity="other">%s תמונות בקירוב</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">נבחרו %1$d אפליקציות</item>
+        <item quantity="two">נבחרו %1$d אפליקציות</item>
+        <item quantity="other">נבחרו %1$d אפליקציות</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">אפשר לשתף במהירות תמונות וסרטונים באפליקציות חברתיות, ישירות מהמצלמה. יש לבחור עד %1$d אפליקציות. לא ניתן לשתף תמונות וסרטונים שנשמרים בתיקיית הכספת.</item>
+        <item quantity="two">אפשר לשתף במהירות תמונות וסרטונים באפליקציות חברתיות, ישירות מהמצלמה. יש לבחור עד %1$d אפליקציות. לא ניתן לשתף תמונות וסרטונים שנשמרים בתיקיית הכספת.</item>
+        <item quantity="other">אפשר לשתף במהירות תמונות וסרטונים באפליקציות חברתיות, ישירות מהמצלמה. יש לבחור עד %1$d אפליקציות. לא ניתן לשתף תמונות וסרטונים שנשמרים בתיקיית הכספת.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">יש לבחור עד %1$d אפליקציות</item>
+        <item quantity="two">יש לבחור עד %1$d אפליקציות</item>
+        <item quantity="other">יש לבחור עד %1$d אפליקציות</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d י’</item>
+        <item quantity="two">%d י’</item>
+        <item quantity="other">%d י’</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d ש’</item>
+        <item quantity="two">%d ש’</item>
+        <item quantity="other">%d ש’</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d ד’</item>
+        <item quantity="two">%d ד’</item>
+        <item quantity="other">%d ד’</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d ימים</item>
+        <item quantity="two">%d ימים</item>
+        <item quantity="other">%d ימים</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d שעות</item>
+        <item quantity="two">%d שעות</item>
+        <item quantity="other">%d שעות</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d דקות</item>
+        <item quantity="two">%d דקות</item>
+        <item quantity="other">%d דקות</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s דקות להקלטת סרטונים</item>
+        <item quantity="two">%s דקות להקלטת סרטונים</item>
+        <item quantity="other">%s דקות להקלטת סרטונים</item>
+    </plurals>
+</resources>

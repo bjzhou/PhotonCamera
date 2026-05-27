@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Үдету жылдамдығы: %d</item>
+        <item quantity="other">Үдету жылдамдығы: %d</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Біреуі қиылған.</item>
+        <item quantity="other">%d қиылған.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">%s фотосурет туралы</item>
+        <item quantity="other">%s фотосурет туралы</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d қолданба таңдалған)</item>
+        <item quantity="other">(%1$d қолданба таңдалған)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Камера арқылы фотосуреттер мен бейнелерді әлеуметтік қолданбаларда жылдам бөлісіңіз. %1$d қолданбаға дейін таңдаңыз. Құлыпталған қалтаға сақталған фотосуреттер мен бейнелерді бөлісу мүмкін емес.</item>
+        <item quantity="other">Камера арқылы фотосуреттер мен бейнелерді әлеуметтік қолданбаларда жылдам бөлісіңіз. %1$d қолданбаға дейін таңдаңыз. Құлыпталған қалтаға сақталған фотосуреттер мен бейнелерді бөлісу мүмкін емес.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d қолданба таңдаңыз.</item>
+        <item quantity="other">%1$d қолданбаға дейін таңдаңыз.</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%dк</item>
+        <item quantity="other">%dк</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d сағ</item>
+        <item quantity="other">%d сағ</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d мин</item>
+        <item quantity="other">%d мин</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d күн</item>
+        <item quantity="other">%d күн</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d сағат</item>
+        <item quantity="other">%d сағат</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d мин</item>
+        <item quantity="other">%d мин</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">Бейне: %s минут</item>
+        <item quantity="other">Бейне: %s минут</item>
+    </plurals>
+</resources>

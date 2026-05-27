@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<transitionSet
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <transition class="com.google.android.clockwork.common.wearable.wearmaterial.button.ContentChangeTransition">
+        <targets>
+            <target android:targetId="@id/wear_chip_primary_text" />
+            <target android:targetId="@id/wear_chip_secondary_text" />
+        </targets>
+    </transition>
+    <changeBounds android:interpolator="@android:interpolator/fast_out_slow_in" android:duration="200">
+        <targets>
+            <target android:targetName="WearChipButton:Transition" />
+            <target android:targetId="@id/wear_chip_icon" />
+            <target android:targetId="@id/wear_chip_primary_text" />
+            <target android:targetId="@id/wear_chip_secondary_text" />
+            <target android:targetId="@id/wear_chip_selection_control_container" />
+            <target android:targetId="@id/wear_chip_end_icon" />
+            <target android:targetId="@id/wear_chip_selection_control" />
+        </targets>
+    </changeBounds>
+    <fade android:interpolator="@android:interpolator/linear" android:duration="50" android:fadingMode="fade_out">
+        <targets>
+            <target android:targetId="@id/wear_chip_primary_text" />
+            <target android:targetId="@id/wear_chip_secondary_text" />
+        </targets>
+    </fade>
+    <fade android:interpolator="@android:interpolator/fast_out_slow_in" android:duration="250" android:fadingMode="fade_in">
+        <targets>
+            <target android:targetId="@id/wear_chip_primary_text" />
+            <target android:targetId="@id/wear_chip_secondary_text" />
+        </targets>
+    </fade>
+    <fade android:fadingMode="fade_in_out">
+        <targets>
+            <target android:targetId="@id/wear_chip_icon" />
+            <target android:targetId="@id/wear_chip_selection_control_container" />
+        </targets>
+    </fade>
+</transitionSet>

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">%d hızda zaman atlama</item>
+        <item quantity="other">%d hızda zaman atlama</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">Bir tanesi kırpıldı.</item>
+        <item quantity="other">%d tanesi kırpıldı.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Yaklaşık %s fotoğraf</item>
+        <item quantity="other">Yaklaşık %s fotoğraf</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d uygulama seçildi)</item>
+        <item quantity="other">(%1$d uygulama seçildi)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">"Fotoğrafları ve videoları Kamera'dan sosyal uygulamalarda kolayca paylaşın. %1$d uygulama seçin. Kilitli Klasör'e kaydedilen fotoğraf ve videolar paylaşılamaz."</item>
+        <item quantity="other">"Fotoğrafları ve videoları Kamera'dan sosyal uygulamalarda kolayca paylaşın. En fazla %1$d uygulama seçebilirsiniz. Kilitli Klasör'e kaydedilen fotoğraf ve videolar paylaşılamaz."</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d uygulama seçin</item>
+        <item quantity="other">En fazla %1$d uygulama seçebilirsiniz</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d g.</item>
+        <item quantity="other">%d g.</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d sa.</item>
+        <item quantity="other">%d sa.</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d dk.</item>
+        <item quantity="other">%d dk.</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d gün</item>
+        <item quantity="other">%d gün</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d saat</item>
+        <item quantity="other">%d saat</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d dk.</item>
+        <item quantity="other">%d dk.</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s dakikalık video</item>
+        <item quantity="other">%s dakikalık video</item>
+    </plurals>
+</resources>

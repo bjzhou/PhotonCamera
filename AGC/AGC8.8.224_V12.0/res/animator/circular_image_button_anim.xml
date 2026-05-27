@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="true" android:state_pressed="true">
+        <set android:interpolator="@android:anim/decelerate_interpolator">
+            <objectAnimator android:duration="100" android:valueTo="@dimen/circular_button_elevation_pressed" android:valueType="floatType" android:propertyName="translationZ" />
+            <objectAnimator android:duration="100" android:valueTo="1.03" android:valueType="floatType" android:propertyName="scaleX" />
+            <objectAnimator android:duration="100" android:valueTo="1.03" android:valueType="floatType" android:propertyName="scaleY" />
+        </set>
+    </item>
+    <item>
+        <set android:interpolator="@android:anim/decelerate_interpolator">
+            <objectAnimator android:duration="100" android:valueTo="@dimen/circular_button_elevation" android:valueType="floatType" android:propertyName="translationZ" />
+            <objectAnimator android:duration="100" android:valueTo="1.0" android:valueType="floatType" android:propertyName="scaleX" />
+            <objectAnimator android:duration="100" android:valueTo="1.0" android:valueType="floatType" android:propertyName="scaleY" />
+        </set>
+    </item>
+</selector>

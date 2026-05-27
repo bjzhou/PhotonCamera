@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center_horizontal" android:orientation="vertical" android:id="@id/autotimer_tutorial_text_container" android:clipChildren="false" android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <TextView android:id="@id/autotimer_tutorial_text_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="32.0dp" android:layout_marginBottom="32.0dp" android:maxWidth="320.0dp" android:text="@string/autotimer_tutorial_title" style="@style/AutotimerTutorial.Title" />
+    <TextView android:id="@id/autotimer_tutorial_text_body" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="32.0dp" android:maxWidth="320.0dp" android:text="@string/autotimer_tutorial_body" style="@style/AutotimerTutorial.Body" />
+</LinearLayout>

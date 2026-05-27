@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <RelativeLayout android:orientation="horizontal" android:id="@id/rl_time" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="10.0dp">
+        <TextView android:textSize="14.0sp" android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_watermark_time" />
+        <CheckBox android:id="@id/cb_time" android:background="@drawable/agc_selector_watermark" android:layout_width="16.0dp" android:layout_height="16.0dp" android:button="@null" android:layout_alignParentRight="true" />
+    </RelativeLayout>
+    <RelativeLayout android:orientation="horizontal" android:id="@id/rl_model" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="10.0dp">
+        <TextView android:textSize="14.0sp" android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_watermark_model" />
+        <CheckBox android:id="@id/cb_model" android:background="@drawable/agc_selector_watermark" android:layout_width="16.0dp" android:layout_height="16.0dp" android:button="@null" android:layout_alignParentRight="true" />
+    </RelativeLayout>
+    <RelativeLayout android:orientation="horizontal" android:id="@id/rl_spring" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="10.0dp">
+        <TextView android:textSize="14.0sp" android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_watermark_new_year" />
+        <RadioGroup android:orientation="horizontal" android:id="@id/rg_spring" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_alignParentRight="true">
+            <RadioButton android:id="@id/rb_spring_white" android:background="@drawable/agc_selector_watermark_white" android:layout_width="24.0dp" android:layout_height="24.0dp" android:button="@null" />
+            <RadioButton android:id="@id/rb_spring_black" android:background="@drawable/agc_selector_watermark_black" android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginLeft="10.0dp" android:button="@null" />
+            <RadioButton android:id="@id/rb_spring01" android:background="@drawable/agc_selector_spring01" android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginLeft="10.0dp" android:button="@null" />
+            <RadioButton android:id="@id/rb_spring02" android:background="@drawable/agc_selector_spring02" android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginLeft="10.0dp" android:button="@null" />
+            <RadioButton android:id="@id/rb_spring03" android:background="@drawable/agc_selector_spring03" android:layout_width="24.0dp" android:layout_height="24.0dp" android:layout_marginLeft="10.0dp" android:button="@null" />
+        </RadioGroup>
+    </RelativeLayout>
+    <RelativeLayout android:orientation="horizontal" android:id="@id/rl_custom" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="10.0dp">
+        <TextView android:textSize="14.0sp" android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_watermark_custom" />
+        <TextView android:textSize="14.0sp" android:textColor="#ffffff" android:id="@id/tv_custom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxLines="10" android:layout_toLeftOf="@id/iv_more" />
+        <ImageView android:id="@id/iv_more" android:layout_width="16.0dp" android:layout_height="16.0dp" android:src="@drawable/agc_more_gary" android:layout_alignParentRight="true" />
+    </RelativeLayout>
+</LinearLayout>

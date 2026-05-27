@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:background="@color/c_181818" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <RelativeLayout android:layout_width="match_parent" android:layout_height="48.0dp" android:paddingHorizontal="20.0dp">
+        <ImageView android:id="@id/iv_back" android:layout_width="24.0dp" android:layout_height="24.0dp" android:src="@drawable/agc_navitation_white" android:layout_centerVertical="true" />
+        <TextView android:textSize="16.0sp" android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_about_watermark" android:layout_centerInParent="true" />
+    </RelativeLayout>
+    <ScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
+        <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingHorizontal="20.0dp">
+            <TextView android:textSize="14.0sp" android:textColor="@color/agc_white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="20.0dp" android:text="@string/pref_watermark_type_0" />
+            <ImageView android:layout_width="match_parent" android:layout_height="211.0dp" android:layout_marginTop="12.0dp" android:src="@drawable/agc_watermark_01" android:scaleType="fitCenter" />
+            <TextView android:textSize="14.0sp" android:textColor="@color/agc_white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="20.0dp" android:text="@string/pref_watermark_type_1" />
+            <ImageView android:layout_width="match_parent" android:layout_height="211.0dp" android:layout_marginTop="12.0dp" android:src="@drawable/agc_watermark_02" android:scaleType="fitCenter" />
+            <TextView android:textSize="14.0sp" android:textColor="@color/agc_white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="20.0dp" android:text="@string/pref_watermark_type_2" />
+            <ImageView android:layout_width="match_parent" android:layout_height="280.0dp" android:layout_marginTop="12.0dp" android:src="@drawable/agc_watermark_04" android:scaleType="fitCenter" />
+            <ImageView android:layout_width="match_parent" android:layout_height="211.0dp" android:layout_marginTop="12.0dp" android:src="@drawable/agc_watermark_03" android:scaleType="fitCenter" />
+            <TextView android:textSize="14.0sp" android:textColor="@color/agc_white" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="20.0dp" android:text="@string/pref_watermark_type_3" />
+            <ImageView android:layout_width="match_parent" android:layout_height="211.0dp" android:layout_marginTop="12.0dp" android:src="@drawable/agc_watermark_05" android:scaleType="fitCenter" />
+            <TextView android:textSize="12.0sp" android:textColor="@color/agc_white" android:layout_gravity="center_horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="20.0dp" android:text="@string/pref_watermark_about_hint" />
+            <View android:layout_width="wrap_content" android:layout_height="20.0dp" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

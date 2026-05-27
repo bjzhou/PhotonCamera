@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:id="@id/frame" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_margin="@dimen/settingslib_switchbar_margin" android:minHeight="@dimen/settingslib_min_switch_bar_height" android:paddingStart="@dimen/settingslib_switchbar_padding_left" android:paddingEnd="@dimen/settingslib_switchbar_padding_right">
+        <TextView android:textAppearance="?android:textAppearanceListItem" android:ellipsize="end" android:layout_gravity="center_vertical" android:id="@id/switch_text" android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_weight="1.0" android:layout_marginEnd="@dimen/settingslib_switch_title_margin" android:layout_marginVertical="@dimen/settingslib_switch_title_margin" style="@style/MainSwitchText.Settingslib" />
+        <Switch android:theme="@style/Switch.SettingsLib" android:layout_gravity="center_vertical" android:id="@android:id/switch_widget" android:focusable="false" android:clickable="false" android:layout_width="wrap_content" android:layout_height="48.0dp" />
+    </LinearLayout>
+</LinearLayout>

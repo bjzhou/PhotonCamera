@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:layout_gravity="right|bottom" android:id="@id/stab_button_place_holder" android:background="@color/transparent" android:padding="@dimen/button_place_holder_padding" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginRight="@dimen/button_place_holder_right_margin" android:soundEffectsEnabled="false">
+        <com.google.android.apps.camera.ui.popupmenu.PopupMenuButton android:layout_gravity="right" android:id="@id/stab_button" android:clickable="false" android:layout_width="@dimen/button_container_size" android:layout_height="@dimen/button_container_size" android:importantForAccessibility="no" />
+    </FrameLayout>
+</merge>

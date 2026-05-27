@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true">
+        <layer-list>
+            <item android:gravity="center" android:height="16.0dp" android:width="16.0dp">
+                <shape>
+                    <solid android:color="?colorSecondary" />
+                    <corners android:radius="16.0dp" />
+                </shape>
+            </item>
+            <item android:gravity="center" android:height="12.0dp" android:width="12.0dp">
+                <bitmap android:gravity="center" android:src="@drawable/agc_icon_checked" />
+            </item>
+        </layer-list>
+    </item>
+    <item>
+        <shape>
+            <solid android:color="#313131" />
+            <stroke android:width="0.5dp" android:color="@android:color/white" />
+            <corners android:radius="16.0dp" />
+        </shape>
+    </item>
+</selector>

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">Hraði hraðmyndar: %dx</item>
+        <item quantity="other">Hraði hraðmyndar: %dx</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">%d skorið.</item>
+        <item quantity="other">%d skorin.</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Um það bil %s mynd</item>
+        <item quantity="other">Um það bil %s myndir</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d forrit valið)</item>
+        <item quantity="other">(%1$d forrit valin)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Deildu myndum og myndskeiðum á fljótlegan hátt í samfélagsforritum úr myndavélinni. Veldu allt að %1$d forrit. Ekki er hægt að deila myndum og myndskeiðum sem eru vistuð í læstri möppu.</item>
+        <item quantity="other">Deildu myndum og myndskeiðum á fljótlegan hátt í samfélagsforritum úr myndavélinni. Veldu allt að %1$d forrit. Ekki er hægt að deila myndum og myndskeiðum sem eru vistuð í læstri möppu.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Veldu allt að %1$d forrit</item>
+        <item quantity="other">Veldu allt að %1$d forrit</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%dd</item>
+        <item quantity="other">%dd</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%dklst.</item>
+        <item quantity="other">%dklst.</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%dm</item>
+        <item quantity="other">%dm</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d dagur</item>
+        <item quantity="other">%d dagar</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d klst.</item>
+        <item quantity="other">%d klst.</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d mín.</item>
+        <item quantity="other">%d mín.</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s mínúta af myndskeiðum</item>
+        <item quantity="other">%s mínútur af myndskeiðum</item>
+    </plurals>
+</resources>

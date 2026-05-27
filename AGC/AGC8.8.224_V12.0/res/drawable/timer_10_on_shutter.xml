@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:height="24.0dp" android:width="24.0dp" android:viewportWidth="24.0" android:viewportHeight="24.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <path android:fillColor="@color/camera_on_tertiary_color" android:pathData="M2,6.8571L4.5397,6.8571L4.5397,21L8.3492,21L8.3492,3L2,3L2,6.8571ZM22,6.8571L22,17.1429C22,19.2771 20.2984,21 18.1905,21L15.6508,21C13.5429,21 11.8413,19.2771 11.8413,17.1429L11.8413,6.8571C11.8413,4.7229 13.5429,3 15.6508,3L18.1905,3C20.2984,3 22,4.7229 22,6.8571ZM18.1905,6.8571L15.6508,6.8571L15.6508,17.1429L18.1905,17.1429L18.1905,6.8571Z" android:strokeColor="#00000000" android:strokeWidth="1.0" android:fillType="nonZero" />
+</vector>

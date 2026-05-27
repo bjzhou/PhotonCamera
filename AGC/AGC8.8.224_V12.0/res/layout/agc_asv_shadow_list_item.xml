@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:layout_width="wrap_content" android:layout_height="50.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:id="@id/agc_root" android:layout_width="50.0dp" android:layout_height="50.0dp" android:layout_marginLeft="9.0dp" android:layout_marginRight="9.0dp" android:layout_centerInParent="true">
+        <com.agc.asv.CircleProgressView android:layout_gravity="center" android:id="@id/circle_view" android:layout_width="49.0dp" android:layout_height="49.0dp" />
+        <ImageView android:layout_gravity="center" android:id="@id/agc_iv_thumb" android:layout_width="25.0dp" android:layout_height="25.0dp" android:src="@drawable/agc_shadow1" android:scaleType="centerCrop" />
+        <TextView android:textSize="11.0sp" android:textColor="@android:color/white" android:layout_gravity="center" android:id="@id/agc_tv_thumb" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    </FrameLayout>
+</RelativeLayout>

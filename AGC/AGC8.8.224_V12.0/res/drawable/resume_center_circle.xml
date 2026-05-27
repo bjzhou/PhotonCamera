@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape android:shape="oval"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <size android:height="@dimen/resume_circle_control_diameter" android:width="@dimen/resume_circle_control_diameter" />
+    <solid android:color="@color/google_red400" />
+</shape>

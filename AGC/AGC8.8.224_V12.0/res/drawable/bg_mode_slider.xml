@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<inset android:insetTop="@dimen/mode_slider_expand_touch_area_size" android:insetBottom="@dimen/mode_slider_expand_touch_area_size"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <shape android:shape="rectangle">
+        <corners android:radius="@dimen/mode_slider_bg_radius" />
+        <size android:height="@dimen/mode_slider_height" />
+        <solid android:color="@color/mode_slider_bg_color" />
+    </shape>
+</inset>

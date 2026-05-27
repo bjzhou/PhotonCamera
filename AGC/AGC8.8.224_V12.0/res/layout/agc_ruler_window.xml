@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout android:orientation="vertical" android:paddingLeft="16.0dp" android:paddingRight="16.0dp" android:layout_width="match_parent" android:layout_height="43.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+        <View android:layout_gravity="center|top" android:background="#ffffba00" android:layout_width="3.0dp" android:layout_height="10.0dp" android:layout_alignParentTop="true" android:layout_centerHorizontal="true" />
+        <View android:layout_width="match_parent" android:layout_height="3.0dp" />
+        <RelativeLayout android:orientation="vertical" android:paddingLeft="16.0dp" android:paddingRight="16.0dp" android:layout_width="match_parent" android:layout_height="30.0dp" android:layout_weight="1.0" android:layout_alignParentBottom="true">
+            <com.agc.asv.RulerView android:tag="agc_ruler" android:layout_width="match_parent" android:layout_height="match_parent" />
+        </RelativeLayout>
+    </LinearLayout>
+</RelativeLayout>

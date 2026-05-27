@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <objectAnimator android:interpolator="@android:interpolator/fast_out_slow_in" android:duration="666" android:valueFrom="0.0" android:valueTo="1.0" android:valueType="floatType" android:propertyName="trimPathEnd" />
+    <objectAnimator android:interpolator="@android:interpolator/linear" android:duration="2000" android:valueFrom="0.5" android:valueTo="0.0" android:valueType="floatType" android:propertyName="strokeAlpha" />
+    <objectAnimator android:interpolator="@android:interpolator/fast_out_slow_in" android:duration="1000" android:valueFrom="0.0" android:valueTo="1.0" android:valueType="floatType" android:propertyName="trimPathStart" />
+</set>

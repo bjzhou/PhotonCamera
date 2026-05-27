@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:background="@drawable/agc_black_dialog_bg" android:paddingTop="20.0dp" android:paddingBottom="10.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingHorizontal="20.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <RelativeLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+        <ImageView android:id="@id/iv_back" android:layout_width="24.0dp" android:layout_height="24.0dp" android:src="@drawable/agc_back_white" />
+        <TextView android:textColor="#ffffff" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pref_watermark_title" android:layout_centerInParent="true" />
+        <ImageView android:id="@id/iv_info" android:layout_width="24.0dp" android:layout_height="24.0dp" android:src="@drawable/agc_info_white" android:layout_alignParentRight="true" />
+    </RelativeLayout>
+    <LinearLayout android:orientation="horizontal" android:background="@drawable/agc_watermark_title_bg" android:padding="2.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="20.0dp">
+        <TextView android:textColor="@color/agc_watermark_title_color" android:id="@id/tv_leica" android:tag="0" android:background="@drawable/agc_watermark_title_selector" android:layout_width="0.0dp" android:layout_height="28.0dp" android:text="@string/pref_watermark_type_0" android:layout_weight="1.0" android:textAlignment="center" android:paddingVertical="3.0dp" />
+        <TextView android:textColor="@color/agc_watermark_title_color" android:id="@id/tv_hasselblad" android:tag="1" android:background="@drawable/agc_watermark_title_selector" android:layout_width="0.0dp" android:layout_height="28.0dp" android:text="@string/pref_watermark_type_1" android:layout_weight="1.0" android:textAlignment="center" android:paddingVertical="3.0dp" />
+        <TextView android:textColor="@color/agc_watermark_title_color" android:id="@id/tv_art" android:tag="2" android:background="@drawable/agc_watermark_title_selector" android:layout_width="0.0dp" android:layout_height="28.0dp" android:text="@string/pref_watermark_type_2" android:layout_weight="1.0" android:textAlignment="center" android:paddingVertical="3.0dp" />
+        <TextView android:textColor="@color/agc_watermark_title_color" android:id="@id/tv_time" android:tag="3" android:background="@drawable/agc_watermark_title_selector" android:layout_width="0.0dp" android:layout_height="28.0dp" android:text="@string/pref_watermark_type_3" android:layout_weight="1.0" android:textAlignment="center" android:paddingVertical="3.0dp" />
+    </LinearLayout>
+    <FrameLayout android:layout_width="match_parent" android:layout_height="170.0dp" android:layout_marginTop="16.0dp">
+        <com.agc.widget.dialog.watermark.WatermarkSettingItem android:id="@id/item_leica" android:tag="0" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.agc.widget.dialog.watermark.WatermarkSettingItem android:id="@id/item_hasselblad" android:tag="1" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.agc.widget.dialog.watermark.WatermarkSettingItem android:id="@id/item_art" android:tag="2" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.agc.widget.dialog.watermark.WatermarkSettingItem android:id="@id/item_time" android:tag="3" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </FrameLayout>
+</LinearLayout>

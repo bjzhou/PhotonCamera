@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">ពេលដើរលឿន %d ល្បឿនពេលវេលា</item>
+        <item quantity="other">ពេលដើរលឿន %d ល្បឿនពេលវេលា</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">បានច្រឹបមួយ។</item>
+        <item quantity="other">បានច្រឹប %d។</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">រូបថតប្រហែល %s សន្លឹក</item>
+        <item quantity="other">រូបថតប្រហែល %s សន្លឹក</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(បានជ្រើសរើស​កម្មវិធី %1$d)</item>
+        <item quantity="other">(បានជ្រើសរើស​កម្មវិធី %1$d)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">ចែករំលែក​រូបថត និង​វីដេអូ​នៅលើ​កម្មវិធី​សង្គម​ពីកាមេរ៉ា​បានយ៉ាងរហ័ស។ ជ្រើសរើស​កម្មវិធី %1$d។ មិនអាចចែករំលែករូបថត និងវីដេអូដែល​បានរក្សាទុកទៅក្នុង​ថតជាប់សោបានទេ។</item>
+        <item quantity="other">ចែករំលែក​រូបថត និង​វីដេអូ​នៅលើ​កម្មវិធី​សង្គម​ពីកាមេរ៉ា​បានយ៉ាងរហ័ស។ ជ្រើសរើស​កម្មវិធី​បានរហូតដល់ %1$d។ មិនអាចចែករំលែករូបថត និងវីដេអូដែល​បានរក្សាទុកទៅក្នុង​ថតជាប់សោបានទេ។</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">ជ្រើសរើស​កម្មវិធីសង្គម %1$d</item>
+        <item quantity="other">ជ្រើសរើស​កម្មវិធីសង្គមបាន​រហូតដល់ %1$d</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%dថ</item>
+        <item quantity="other">%dថ</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%dម៉</item>
+        <item quantity="other">%dម៉</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%dន</item>
+        <item quantity="other">%dន</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d ថ្ងៃ</item>
+        <item quantity="other">%d ថ្ងៃ</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d ម៉ោង</item>
+        <item quantity="other">%d ម៉ោង</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d ន</item>
+        <item quantity="other">%d ន</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">វីដេអូ %s នាទី</item>
+        <item quantity="other">វីដេអូ %s នាទី</item>
+    </plurals>
+</resources>

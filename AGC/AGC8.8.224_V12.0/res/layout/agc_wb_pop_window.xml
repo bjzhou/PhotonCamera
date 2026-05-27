@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:background="@android:color/transparent" android:paddingLeft="15.0dp" android:paddingRight="15.0dp" android:layout_width="match_parent" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.agc.widget.ShrinkGridView android:tag="agc_list_view" android:layout_width="match_parent" android:layout_height="wrap_content" android:numColumns="3" />
+    <TextView android:textColor="@android:color/white" android:gravity="center" android:tag="agc_toolkit_config_tips_btn" android:background="@drawable/agc_option_bg" android:padding="12.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/toolkit_config_tips" />
+    <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="match_parent">
+        <Button android:layout_gravity="right" android:tag="agc_config_load_btn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/agc_config_load_btn_title" />
+        <Space android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_weight="1.0" />
+        <Button android:layout_gravity="right" android:tag="agc_quick_settings_btn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/quick_settings" />
+    </LinearLayout>
+</LinearLayout>

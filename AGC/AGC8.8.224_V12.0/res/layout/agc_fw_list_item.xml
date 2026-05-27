@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView android:textAppearance="?android:textAppearanceListItemSmall" android:textSize="13.0sp" android:textColor="@android:color/white" android:gravity="center_vertical" android:id="@id/agc_fw_item_text" android:paddingRight="8.0dp" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingStart="8.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android" />

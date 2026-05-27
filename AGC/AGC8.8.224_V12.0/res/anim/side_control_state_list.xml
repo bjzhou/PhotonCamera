@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:state_enabled="true" android:state_pressed="true" app:state_paused="true">
+        <set>
+            <objectAnimator android:duration="100" android:valueTo="@dimen/side_control_pressed_elevation" android:valueType="floatType" android:propertyName="translationZ" />
+            <objectAnimator android:duration="0" android:valueTo="@dimen/side_control_base_elevation" android:valueType="floatType" android:propertyName="elevation" />
+            <objectAnimator android:duration="100" android:valueType="floatType">
+                <propertyValuesHolder android:valueTo="1.06" android:propertyName="scaleX" />
+                <propertyValuesHolder android:valueTo="1.06" android:propertyName="scaleY" />
+            </objectAnimator>
+        </set>
+    </item>
+    <item android:state_enabled="true" android:state_pressed="true">
+        <set>
+            <objectAnimator android:duration="100" android:valueTo="@dimen/side_control_pressed_elevation" android:valueType="floatType" android:propertyName="translationZ" />
+            <objectAnimator android:duration="0" android:valueTo="@dimen/side_control_base_elevation" android:valueType="floatType" android:propertyName="elevation" />
+            <objectAnimator android:duration="100" android:valueType="floatType">
+                <propertyValuesHolder android:valueTo="1.06" android:propertyName="scaleX" />
+                <propertyValuesHolder android:valueTo="1.06" android:propertyName="scaleY" />
+            </objectAnimator>
+        </set>
+    </item>
+    <item android:state_enabled="true" app:state_paused="true">
+        <set>
+            <objectAnimator android:duration="100" android:valueTo="@dimen/side_control_pressed_elevation" android:valueType="floatType" android:propertyName="translationZ" />
+            <objectAnimator android:duration="0" android:valueTo="@dimen/side_control_base_elevation" android:valueType="floatType" android:propertyName="elevation" />
+            <objectAnimator android:interpolator="@android:interpolator/fast_out_slow_in" android:duration="250" android:valueType="floatType">
+                <propertyValuesHolder android:valueTo="1" android:propertyName="scaleX" />
+                <propertyValuesHolder android:valueTo="1" android:propertyName="scaleY" />
+            </objectAnimator>
+        </set>
+    </item>
+    <item android:state_enabled="true">
+        <set>
+            <objectAnimator android:duration="100" android:valueTo="0" android:valueType="floatType" android:propertyName="translationZ" android:startDelay="100" />
+            <objectAnimator android:duration="0" android:valueTo="@dimen/side_control_base_elevation" android:valueType="floatType" android:propertyName="elevation" />
+            <objectAnimator android:duration="250" android:valueType="floatType">
+                <propertyValuesHolder android:valueTo="1" android:propertyName="scaleX" />
+                <propertyValuesHolder android:valueTo="1" android:propertyName="scaleY" />
+            </objectAnimator>
+        </set>
+    </item>
+    <item>
+        <set>
+            <objectAnimator android:duration="0" android:valueTo="0" android:valueType="floatType" android:propertyName="translationZ" />
+            <objectAnimator android:duration="0" android:valueTo="0" android:valueType="floatType" android:propertyName="elevation" />
+        </set>
+    </item>
+</selector>

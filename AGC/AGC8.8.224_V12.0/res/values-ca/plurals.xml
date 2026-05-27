@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">La velocitat de la filmació a intervals és de %d</item>
+        <item quantity="other">La velocitat de la filmació a intervals és de %d</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">"S'ha retallat un."</item>
+        <item quantity="other">"%d s'han retallat."</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">Informació sobre %s foto</item>
+        <item quantity="other">Informació sobre %s fotos</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d aplicació seleccionada)</item>
+        <item quantity="other">(%1$d aplicacions seleccionades)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">Comparteix ràpidament fotos i vídeos en aplicacions socials des de Càmera. Tria %1$d aplicació. Les fotos i els vídeos desats a Carpeta bloquejada no es poden compartir.</item>
+        <item quantity="other">Comparteix ràpidament fotos i vídeos en aplicacions socials des de Càmera. Tria fins a %1$d aplicacions. Les fotos i els vídeos desats a Carpeta bloquejada no es poden compartir.</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">Tria %1$d aplicació</item>
+        <item quantity="other">Tria fins a %1$d aplicacions</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%dd</item>
+        <item quantity="other">%dd</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%dh</item>
+        <item quantity="other">%dh</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%dm</item>
+        <item quantity="other">%dm</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d dia</item>
+        <item quantity="other">%d dies</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d hora</item>
+        <item quantity="other">%d hores</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s minut de vídeo</item>
+        <item quantity="other">%s minuts de vídeo</item>
+    </plurals>
+</resources>

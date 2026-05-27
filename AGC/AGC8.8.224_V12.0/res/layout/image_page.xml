@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <LinearLayout android:orientation="vertical" android:id="@id/edu_image_container" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginHorizontal="4.0dp">
+        <androidx.cardview.widget.CardView android:layout_gravity="center_horizontal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24.0dp" app:cardCornerRadius="28.0dp" app:cardElevation="0.0dp">
+            <com.google.android.apps.camera.ui.eduimageview.EduImageView android:layout_gravity="center_horizontal" android:id="@id/gif_sxs" android:layout_width="370.0dp" android:layout_height="320.0dp" />
+        </androidx.cardview.widget.CardView>
+        <LinearLayout android:layout_gravity="center_horizontal" android:orientation="horizontal" android:id="@id/linearlayout_caption" android:layout_width="370.0dp" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" android:layout_marginBottom="48.0dp">
+            <TextView android:textAppearance="?textAppearanceCaption" android:textColor="?colorOnSurfaceVariant" android:gravity="center" android:id="@id/caption_before_effect" android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_weight="0.5" android:importantForAccessibility="no" />
+            <Space android:layout_width="10.0dp" android:layout_height="match_parent" />
+            <TextView android:textAppearance="?textAppearanceCaption" android:textColor="?colorOnSurfaceVariant" android:gravity="center" android:id="@id/caption_after_effect" android:layout_width="0.0dp" android:layout_height="wrap_content" android:layout_weight="0.5" android:importantForAccessibility="no" />
+        </LinearLayout>
+    </LinearLayout>
+</merge>

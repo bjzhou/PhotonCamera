@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector android:name="ic_motion_recording_red" android:height="24.0dp" android:width="24.0dp" android:viewportWidth="24.0" android:viewportHeight="24.0"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:name="inside_red" android:translateX="12.0" android:translateY="12.0">
+        <group android:name="inside_red_pivot" android:translateX="-12.0" android:translateY="-12.0">
+            <group android:name="circle_0" android:translateX="12.0" android:translateY="11.99998">
+                <path android:name="path_4" android:fillColor="#fff34335" android:pathData="M -6.00021362305,-0.00002 c 0.0,-3.31399536133 2.68600463867,-6.0 6.0,-6.0 c 3.31399536133,0.0 6.0,2.68600463867 6.0,6.0 c 0.0,3.31402587891 -2.68600463867,6.00003051758 -6.0,6.00003051758 c -3.31399536133,0.0 -6.0,-2.68600463867 -6.0,-6.00003051758 Z" />
+            </group>
+        </group>
+    </group>
+</vector>

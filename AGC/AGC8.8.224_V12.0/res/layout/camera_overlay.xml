@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.apps.camera.ui.layout.GcaLayout android:id="@id/camera_app_root_overlay" android:tag="overlayAppRoot" android:layout_width="match_parent" android:layout_height="match_parent" android:layoutDirection="ltr"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:id="@id/social_preview_container2" android:background="@android:color/black" android:visibility="gone" android:layout_width="match_parent" android:layout_height="match_parent">
+        <FrameLayout android:id="@id/social_preview_video_container" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </FrameLayout>
+    <ViewStub android:id="@id/social_root_stub" android:layout="@layout/social_root_layout" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <com.google.android.apps.camera.filmstrip.transition.FilmstripTransitionLayout android:id="@id/filmstrip_transition_layout" android:background="@color/transparent" android:layout_width="match_parent" android:layout_height="match_parent">
+        <com.google.android.apps.camera.filmstrip.transition.FilmstripTransitionThumbnailView android:id="@id/transition_thumbnail_view" android:background="@color/transparent" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </com.google.android.apps.camera.filmstrip.transition.FilmstripTransitionLayout>
+</com.google.android.apps.camera.ui.layout.GcaLayout>

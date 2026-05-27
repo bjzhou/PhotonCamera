@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="accessibility_timelapse_manual_record_speed_desc">
+        <item quantity="one">टाइम ल्याप्सको गति: %d</item>
+        <item quantity="other">टाइम ल्याप्सको गति: %d</item>
+    </plurals>
+    <plurals name="number_of_cropped_face">
+        <item quantity="one">एउटा अनुहार क्रप गरिएको छ।</item>
+        <item quantity="other">%d वटा अनुहार क्रप गरिएका छन्।</item>
+    </plurals>
+    <plurals name="photos_remaining">
+        <item quantity="one">लगभग %s फोटो</item>
+        <item quantity="other">लगभग %s वटा फोटो</item>
+    </plurals>
+    <plurals name="social_apps_selected">
+        <item quantity="one">(%1$d वटा एप चयन गरियो)</item>
+        <item quantity="other">(%1$d वटा एप चयन गरिए)</item>
+    </plurals>
+    <plurals name="social_share_info">
+        <item quantity="one">क्यामेराबाटै छिटोछरितो रूपमा फोटो तथा भिडियोहरू सामाजिक सञ्जालका एपहरूमा सेयर गर्नुहोस्। बढीमा %1$d वटा एप छनौट गर्नुहोस्। लक गरिएको फोल्डरमा सेभ गरिएका फोटो तथा भिडियोहरू सेयर गर्न मिल्दैन।</item>
+        <item quantity="other">क्यामेराबाटै छिटोछरितो रूपमा फोटो तथा भिडियोहरू सामाजिक सञ्जालका एपहरूमा सेयर गर्नुहोस्। बढीमा %1$d वटा एप छनौट गर्नुहोस्। लक गरिएको फोल्डरमा सेभ गरिएका फोटो तथा भिडियोहरू सेयर गर्न मिल्दैन।</item>
+    </plurals>
+    <plurals name="social_share_select_error">
+        <item quantity="one">%1$d एप छनौट गर्नुहोस्</item>
+        <item quantity="other">अधिकतम %1$d एपहरू छनौट गर्नुहोस्</item>
+    </plurals>
+    <plurals name="time_difference_short_days">
+        <item quantity="one">%d दिन</item>
+        <item quantity="other">%d दिन</item>
+    </plurals>
+    <plurals name="time_difference_short_hours">
+        <item quantity="one">%d घन्टा</item>
+        <item quantity="other">%d घन्टा</item>
+    </plurals>
+    <plurals name="time_difference_short_minutes">
+        <item quantity="one">%d मिनेट</item>
+        <item quantity="other">%d मिनेट</item>
+    </plurals>
+    <plurals name="time_difference_words_days">
+        <item quantity="one">%d दिन</item>
+        <item quantity="other">%d दिन</item>
+    </plurals>
+    <plurals name="time_difference_words_hours">
+        <item quantity="one">%d घन्टा</item>
+        <item quantity="other">%d घन्टा</item>
+    </plurals>
+    <plurals name="time_difference_words_minutes">
+        <item quantity="one">%d मिनेट</item>
+        <item quantity="other">%d मिनेट</item>
+    </plurals>
+    <plurals name="videos_remaining">
+        <item quantity="one">%s मिनेटको भिडियो</item>
+        <item quantity="other">%s मिनेटको भिडियो</item>
+    </plurals>
+</resources>

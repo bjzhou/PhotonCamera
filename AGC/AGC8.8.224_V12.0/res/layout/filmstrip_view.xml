@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <ImageView android:layout_gravity="center" android:id="@id/content_view" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <ImageView android:layout_gravity="center" android:id="@id/play_button" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/ic_control_play" android:contentDescription="@string/video_control_play" />
+    <ImageView android:layout_gravity="center" android:id="@id/photo_sphere_center_badge" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:src="@drawable/ic_badge_photo_sphere" />
+</FrameLayout>

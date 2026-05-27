@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="16.0dp" android:layout_marginBottom="40.0dp" android:layout_marginStart="24.0dp" android:layout_marginEnd="24.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnSurface" android:gravity="center_horizontal" android:id="@id/wb_edu_description" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/wb_education_bottom_sheet_description" />
+    <androidx.cardview.widget.CardView android:layout_gravity="center_horizontal" android:id="@id/wb_edu_image_container" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="24.0dp" app:cardCornerRadius="28.0dp" app:cardElevation="0.0dp">
+        <com.google.android.apps.camera.ui.eduimageview.EduImageView android:id="@id/wb_edu_image" android:layout_width="364.0dp" android:layout_height="485.0dp" />
+    </androidx.cardview.widget.CardView>
+    <TextView android:textAppearance="?textAppearanceCaption" android:textColor="?colorOnSurface" android:gravity="start" android:id="@id/wb_edu_information" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16.0dp" android:drawableLeft="@drawable/quantum_gm_ic_info_outline_gm_grey_18" android:drawablePadding="9.0dp" android:drawableTint="?colorOnSurface" />
+</LinearLayout>

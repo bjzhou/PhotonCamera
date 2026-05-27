@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout android:layout_width="wrap_content" android:layout_height="wrap_content"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <TextView android:textAppearance="?textAppearanceSubhead1" android:textColor="?colorOnTertiaryContainer" android:id="@id/title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="200.0dp" android:text="@string/translate_tooltip_title" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toTopOf="parent" />
+    <TextView android:textAppearance="?textAppearanceBody2" android:textColor="?colorOnTertiaryContainer" android:id="@id/body" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="200.0dp" android:text="@string/translate_tooltip_body" app:layout_constraintStart_toStartOf="parent" app:layout_constraintTop_toBottomOf="@id/title" />
+    <TextView android:textAppearance="?textAppearanceButton" android:textColor="?colorOnTertiaryContainer" android:id="@id/try_it" android:paddingLeft="8.0dp" android:paddingRight="8.0dp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:maxWidth="200.0dp" android:text="@string/translate_tooltip_try_it" app:layout_constraintEnd_toEndOf="parent" app:layout_constraintTop_toBottomOf="@id/body" />
+</androidx.constraintlayout.widget.ConstraintLayout>

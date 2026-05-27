@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center_horizontal" android:orientation="vertical" android:background="@drawable/agc_black_gradient" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginHorizontal="20.0dp"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <SeekBar android:id="@id/agc_seek_bar" android:visibility="gone" android:layout_width="315.0dp" android:layout_height="16.0dp" android:layout_marginBottom="10.0dp" android:max="100" android:progress="100" android:progressDrawable="@drawable/sb_bar_lut" android:thumb="@drawable/agc_lut_seekbar_thumb" />
+    <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content">
+        <ImageView android:id="@id/agc_iv_refresh" android:visibility="gone" android:layout_width="20.0dp" android:layout_height="20.0dp" android:src="@drawable/agc_ic_refresh" />
+        <ImageView android:id="@id/agc_iv_reset" android:visibility="gone" android:layout_width="18.0dp" android:layout_height="18.0dp" android:layout_marginLeft="10.0dp" android:src="@drawable/agc_reset_lut" />
+        <com.agc.widget.lut.indicator.ViewPagerIndicator android:id="@id/lut_header_list" android:layout_width="0.0dp" android:layout_height="36.0dp" android:layout_marginLeft="10.0dp" android:layout_weight="1.0" />
+    </LinearLayout>
+    <com.agc.widget.viewpager.AgcViewPager android:id="@id/agc_view_pager" android:layout_width="match_parent" android:layout_height="100.0dp" />
+</LinearLayout>

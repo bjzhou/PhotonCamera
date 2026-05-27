@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <FrameLayout android:layout_gravity="right|bottom" android:id="@id/toggle_container" android:clipChildren="false" android:clipToPadding="false" android:layout_width="wrap_content" android:layout_height="@dimen/toggle_ui_height" android:layout_marginStart="@dimen/toggle_ui_margin" android:layout_marginEnd="@dimen/toggle_ui_margin">
+        <ImageView android:layout_gravity="center" android:id="@id/toggle_background" android:layout_width="@dimen/toggle_button_width" android:layout_height="@dimen/toggle_button_height" android:layout_marginTop="4.0dp" android:scaleType="center" />
+        <view android:layout_gravity="center" android:id="@id/toggle_button" android:background="@android:color/transparent" android:layout_width="@dimen/toggle_button_width" android:layout_height="@dimen/toggle_button_height" android:layout_marginTop="4.0dp" android:scaleType="center" android:importantForAccessibility="no" class="com.google.android.apps.camera.ui.views.ToggleUi$ToggleButton" />
+        <TextView android:textColor="?colorOnPrimaryContainer" android:gravity="center" android:layout_gravity="center" android:id="@id/toggle_text" android:visibility="gone" android:layout_width="@dimen/toggle_button_width" android:layout_height="@dimen/toggle_button_height" android:layout_marginTop="4.0dp" android:scaleType="center" android:importantForAccessibility="no" android:fontFamily="@font/google_sans_text_medium" android:textAlignment="center" />
+    </FrameLayout>
+</merge>

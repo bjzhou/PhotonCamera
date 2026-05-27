@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set android:ordering="together"
+  xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt">
+    <objectAnimator android:interpolator="@drawable/$$gleam_animated_vector__3__0" android:duration="500" android:startOffset="0" android:valueFrom="M0 -0.04 C0.02,-0.04 0.04,-0.02 0.04,0 C0.04,0.02 0.02,0.04 0,0.04 C-0.02,0.04 -0.04,0.02 -0.04,0 C-0.04,-0.02 -0.02,-0.04 0,-0.04c " android:valueTo="M0 -105.72 C58.3,-105.72 105.72,-58.3 105.72,0 C105.72,58.3 58.3,105.72 0,105.72 C-58.3,105.72 -105.72,58.3 -105.72,0 C-105.72,-58.3 -58.3,-105.72 0,-105.72c " android:valueType="pathType" android:propertyName="pathData" />
+</set>

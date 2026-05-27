@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout android:gravity="center" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_weight="1.0" android:layout_alignParentBottom="true"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:background="@drawable/agc_focal_len_bg" android:padding="4.0px" android:layout_width="wrap_content" android:layout_height="wrap_content">
+        <ToggleButton android:id="@id/toggleButton" android:background="@drawable/agc_focal_len_35_icon" android:layout_width="32.0dp" android:layout_height="32.0dp" android:textOn="" android:textOff="" android:text="ToggleButton" android:layout_weight="1.0" />
+        <ToggleButton android:id="@id/toggleButton2" android:background="@drawable/agc_focal_len_50_icon" android:layout_width="32.0dp" android:layout_height="32.0dp" android:textOn="" android:textOff="" android:text="ToggleButton" android:layout_weight="1.0" />
+        <ToggleButton android:id="@id/toggleButton3" android:background="@drawable/agc_focal_len_85_icon" android:layout_width="32.0dp" android:layout_height="32.0dp" android:textOn="" android:textOff="" android:text="ToggleButton" android:layout_weight="1.0" />
+    </LinearLayout>
+</LinearLayout>
