@@ -14,6 +14,7 @@ import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 
 /**
  * DataStore 扩展属性
@@ -331,6 +332,26 @@ class LutManager(private val context: Context) {
             if (json != null) ColorRecipeParams.fromJson(json)
             else if (target == null) readLegacyParams(preferences, lutId) else ColorRecipeParams.DEFAULT
         }.firstOrNull() ?: ColorRecipeParams.DEFAULT
+    }
+
+    /**
+     * 同步加载指定 LUT 的色彩配方参数（用于渲染线程，避免 runBlocking）
+     *
+     * @param lutId LUT ID
+     * @return 色彩配方参数，如果未设置则返回默认值
+     */
+    fun loadColorRecipeParamsSync(
+        lutId: String,
+        target: BaselineColorCorrectionTarget? = null
+    ): ColorRecipeParams {
+        return runBlocking {
+            try {
+                loadColorRecipeParams(lutId, target)
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to load color recipe params for LUT: $lutId", e)
+                ColorRecipeParams.DEFAULT
+            }
+        }
     }
 
     /**

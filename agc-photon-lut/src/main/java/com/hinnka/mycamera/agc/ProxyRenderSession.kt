@@ -138,6 +138,11 @@ class ProxyRenderSession(
     private var currentEglImage: ReflectEGLImage? = null
     // 累积所有未关闭的 EGLImage，在 session release 时统一清理
     private val eglImagePool = mutableListOf<ReflectEGLImage>()
+    // 缓存 LutManager 实例，避免每帧重新初始化
+    private var cachedLutManager: LutManager? = null
+    // 缓存色彩配方参数，避免每帧从 DataStore 读取
+    private var cachedRecipeLutId: String? = null
+    private var cachedRecipeParams: ColorRecipeParams? = null
 
     private val MSG_RENDER_FRAME = 2
     private val MSG_RELEASE = 3
@@ -465,10 +470,22 @@ class ProxyRenderSession(
 
             if (context != null && !lutId.isNullOrBlank()) {
                 runCatching {
-                    val lutManager = LutManager(context).apply { initialize() }
+                    // 使用缓存的 LutManager 实例，避免每帧重新初始化
+                    val lutManager = cachedLutManager ?: LutManager(context).also {
+                        it.initialize()
+                        cachedLutManager = it
+                    }
                     lutConfig = lutManager.loadLut(lutId)
-                    recipeParams = runBlocking {
-                        runCatching { lutManager.loadColorRecipeParams(lutId) }.getOrNull()
+                    // 使用缓存的色彩配方参数，避免每帧从 DataStore 读取
+                    recipeParams = if (cachedRecipeLutId == lutId) {
+                        cachedRecipeParams
+                    } else {
+                        runCatching {
+                            lutManager.loadColorRecipeParamsSync(lutId)
+                        }.getOrNull()?.also {
+                            cachedRecipeLutId = lutId
+                            cachedRecipeParams = it
+                        }
                     }
                     Log.d(TAG, "Selected LUT: $lutId, loadedConfig=${lutConfig != null}, size=${lutConfig?.size}, format=${params.buffer.format}")
                 }.onFailure { e ->
@@ -667,6 +684,11 @@ class ProxyRenderSession(
 
     private fun releaseGlResources() {
         runCatching {
+            // 清理缓存
+            cachedLutManager = null
+            cachedRecipeLutId = null
+            cachedRecipeParams = null
+
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 if (eglSurface != EGL14.EGL_NO_SURFACE && eglContext != EGL14.EGL_NO_CONTEXT)
                     EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
