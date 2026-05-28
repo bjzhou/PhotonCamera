@@ -72,9 +72,9 @@ inject_dex_files
 
 # 同步插件所必须的内置 assets 资源文件（LUT 描述文件与内置配置文件）
 echo "Syncing plugin assets into host..."
-if [[ -d "$ROOT_DIR/app/src/main/assets" ]]; then
-  mkdir -p "$AGC_DIR/assets"
-  rsync -a --ignore-existing "$ROOT_DIR/app/src/main/assets/" "$AGC_DIR/assets/"
+if [[ -d "$ROOT_DIR/app/src/main/assets/luts" ]]; then
+  mkdir -p "$AGC_DIR/assets/luts"
+  rsync -a --ignore-existing "$ROOT_DIR/app/src/main/assets/luts/" "$AGC_DIR/assets/luts/"
 fi
 
 # 同步插件所必须的 native 动态库文件 (.so)

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="23" android:compileSdkVersionCodename="6.0-2438415" package="com.agc.gcam88" platformBuildVersionCode="33" platformBuildVersionName="UpsideDownCake">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="23" android:compileSdkVersionCodename="6.0-2438415" package="com.hinnka.agc88" platformBuildVersionCode="33" platformBuildVersionName="UpsideDownCake">
     <uses-feature android:name="android.hardware.camera.level.full" android:required="true"/>
     <uses-feature android:name="android.hardware.location" android:required="false"/>
     <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
@@ -182,7 +182,7 @@
                 <action android:name="android.media.action.STILL_IMAGE_CAMERA"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:host="com.agc.gcam88" android:path="/still-image" android:scheme="launch-camera"/>
+                <data android:host="com.hinnka.agc88" android:path="/still-image" android:scheme="launch-camera"/>
             </intent-filter>
         </activity-alias>
         <activity-alias android:exported="true" android:name="com.android.camera.CameraVideoShortcutActivity" android:targetActivity="com.google.android.apps.camera.legacy.app.activity.CameraImageActivity">
@@ -219,10 +219,10 @@
         <activity android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize" android:exported="true" android:label="@string/mode_settings" android:name="com.google.android.apps.camera.legacy.app.settings.CameraSettingsActivity" android:theme="@style/Theme.CameraSettings"/>
         <activity android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize" android:exported="false" android:label="@string/mode_settings" android:name="com.google.android.apps.camera.legacy.app.settings.CameraMaterialSettingsActivity" android:theme="@style/Theme.CameraMaterialSettings"/>
         <service android:exported="false" android:name="com.google.android.apps.camera.app.silentfeedback.SilentFeedbackService" android:process=":crash_report"/>
-        <provider android:authorities="com.agc.gcam88.DebugContentProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.contentprovider.DebugContentProvider"/>
-        <provider android:authorities="com.agc.gcam88.DbDebugDumper" android:exported="true" android:name="com.google.android.apps.camera.debug.shottracker.db.DbDebugDumper"/>
-        <provider android:authorities="com.agc.gcam88.MetricsProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.metrics.MetricsProvider"/>
-        <provider android:authorities="com.agc.gcam88.fileprovider" android:exported="false" android:grantUriPermissions="true" android:name="com.google.android.apps.camera.cameravisionkit.ScanDocumentBitmapFileProvider">
+        <provider android:authorities="com.hinnka.agc88.DebugContentProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.contentprovider.DebugContentProvider"/>
+        <provider android:authorities="com.hinnka.agc88.DbDebugDumper" android:exported="true" android:name="com.google.android.apps.camera.debug.shottracker.db.DbDebugDumper"/>
+        <provider android:authorities="com.hinnka.agc88.MetricsProvider" android:exported="true" android:name="com.google.android.apps.camera.debug.metrics.MetricsProvider"/>
+        <provider android:authorities="com.hinnka.agc88.fileprovider" android:exported="false" android:grantUriPermissions="true" android:name="com.google.android.apps.camera.cameravisionkit.ScanDocumentBitmapFileProvider">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
         </provider>
         <meta-data android:name="com.google.android.gms.phenotype.registration.xml:com.google.android.apps.camera" android:resource="@xml/com_google_android_apps_camera_phenotype_release"/>
@@ -252,8 +252,8 @@
         </service>
         <service android:enabled="true" android:exported="false" android:name="com.google.android.apps.camera.brella.mediastore.MediaListeningService" android:permission="android.permission.BIND_JOB_SERVICE"/>
         <meta-data android:name="com.android.device.restriction" android:value="           brand=google, deviceName=sunfish;           brand=google, deviceName=bramble;           brand=google, deviceName=redfin;           brand=google, deviceName=barbet;           brand=google, deviceName=raven;           brand=google, deviceName=oriole;           brand=google, deviceName=cheetah;           brand=google, deviceName=panther;           brand=google, deviceName=bluejay;           "/>
-        <provider android:authorities="com.agc.gcam88.specialtypes.SpecialTypesProvider" android:exported="true" android:name="com.google.android.apps.camera.contentprovider.CameraContentProvider" android:syncable="false"/>
-        <provider android:authorities="com.agc.gcam88" android:enabled="true" android:exported="true" android:grantUriPermissions="true" android:multiprocess="false" android:name="com.google.android.apps.camera.legacy.app.settings.CameraSearchIndexablesProvider" android:permission="android.permission.READ_SEARCH_INDEXABLES">
+        <provider android:authorities="com.hinnka.agc88.specialtypes.SpecialTypesProvider" android:exported="true" android:name="com.google.android.apps.camera.contentprovider.CameraContentProvider" android:syncable="false"/>
+        <provider android:authorities="com.hinnka.agc88" android:enabled="true" android:exported="true" android:grantUriPermissions="true" android:multiprocess="false" android:name="com.google.android.apps.camera.legacy.app.settings.CameraSearchIndexablesProvider" android:permission="android.permission.READ_SEARCH_INDEXABLES">
             <intent-filter>
                 <action android:name="android.content.action.SEARCH_INDEXABLES_PROVIDER"/>
             </intent-filter>
