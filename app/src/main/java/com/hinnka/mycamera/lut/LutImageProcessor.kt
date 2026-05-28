@@ -1912,7 +1912,7 @@ class LutImageProcessor {
         private const val LCH_COLOR_BAND_COUNT = 9
 
         // 2D 图片版本的顶点着色器
-        private val IMAGE_VERTEX_SHADER = """
+        val IMAGE_VERTEX_SHADER = """
             #version 300 es
             
             in vec4 aPosition;
@@ -2681,7 +2681,7 @@ class LutImageProcessor {
             }
         """.trimIndent()
 
-        private val IMAGE_FRAGMENT_SHADER_COLOR_RECIPE = "#version 300 es\n" +
+        val IMAGE_FRAGMENT_SHADER_COLOR_RECIPE = "#version 300 es\n" +
                 "precision highp float;\n" +
                 "uniform sampler2D uImageTexture;\n" +
                 "vec4 sampleImage(vec2 uv) { return texture(uImageTexture, uv); }\n" +

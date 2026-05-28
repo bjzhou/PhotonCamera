@@ -15,6 +15,7 @@ mkdir -p "$OUT_DIR"
 
 cd "$ROOT_DIR"
 ./gradlew :agc-photon-lut:buildAgcPhotonDex
+./gradlew :agc-photon-lut:buildAgcPhotonSo
 ./gradlew :app:buildCMakeDebug
 
 next_dex_number() {
@@ -85,6 +86,16 @@ if [[ -d "$SO_DIR" ]]; then
   echo "Native libraries successfully synced."
 else
   echo "Warning: Native library directory not found at $SO_DIR"
+fi
+
+# 同步 AGC photon LUT 插件的 native 动态库
+PHOTON_SO_DIR="$ROOT_DIR/agc-photon-lut/build/outputs/agc-so/lib/arm64-v8a"
+if [[ -d "$PHOTON_SO_DIR" ]]; then
+  mkdir -p "$AGC_DIR/lib/arm64-v8a"
+  cp -pf "$PHOTON_SO_DIR"/*.so "$AGC_DIR/lib/arm64-v8a/"
+  echo "AGC photon LUT native library synced."
+else
+  echo "Warning: AGC photon LUT native library directory not found at $PHOTON_SO_DIR"
 fi
 
 apktool b "$AGC_DIR" -o "$UNSIGNED_APK"

@@ -7,7 +7,12 @@
       "Bash(grep:*)",
       "Bash(./gradlew compileDebugKotlin)",
       "Bash(./gradlew assembleDebug)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(sed -n '146,160p' /Users/zhoubinjia/Projects/PhotonMGC/app/src/main/java/com/hinnka/mycamera/lut/LutManager.kt)",
+      "Bash(sed -n '325,340p' /Users/zhoubinjia/Projects/PhotonMGC/app/src/main/java/com/hinnka/mycamera/lut/LutManager.kt)",
+      "Bash(./gradlew :agc-photon-lut:buildAgcPhotonDex :agc-photon-lut:buildAgcPhotonSo)",
+      "Bash(bash AGC/build_agc_photon.sh)",
+      "Bash(git -C /Users/zhoubinjia/Projects/PhotonMGC log --oneline --all -- \"AGC/AGC8.8.224_V12.0/smali/iok.smali\")"
     ]
   }
 }

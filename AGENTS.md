@@ -1,34 +1,7 @@
 # Camera App
 
-这是一个 Android 相机 App，模拟现代数码无反相机的操作手感
-
-## 技术框架
-
-* UI: Jetpack Compose
-* 使用 Camera2 API, 不做向下兼容
-* minSdk 30
-
-## 调试编译
-
-编译命令需允许沙箱外执行
-
-* 完整编译
-
-    ```
-    ./gradlew assembleDefaultDebug
-    ```
-
-* 通过性验证（kotlin端）
-
-    ```
-    ./gradlew compileDefaultDebugKotlin
-    ```
-
-* 通过性验证（native端）
-
-    ```
-    ./gradlew buildCMakeDebug
-    ```
+具体查看 AGC/AGC.md
+不需要编译 app，直接编译独立 Dex 即可
 
 ## 注意
 

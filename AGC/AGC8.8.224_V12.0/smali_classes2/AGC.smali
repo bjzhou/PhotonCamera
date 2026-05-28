@@ -1893,11 +1893,7 @@
 
     sget-object v1, Ldhc;->h:Ldhj;
 
-    invoke-static {}, Lagc/Agc;->isMTKDevice()Z
-
-    move-result v2
-
-    xor-int/2addr v2, v4
+    move v2, v4
 
     invoke-virtual {v0, v1, v2}, Ldit;->u(Ldhj;Z)V
 

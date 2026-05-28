@@ -746,6 +746,8 @@
 
     check-cast v6, Lcom/agc/Camera;
 
+    if-eqz v6, :goto_1
+
     invoke-virtual {v6}, Lcom/agc/Camera;->getType()Ljava/lang/String;
 
     move-result-object v7

@@ -759,9 +759,7 @@ object Shaders {
         }
         
         if (uIsHlgInput) {
-            color.rgb = hlgToLinear(color.rgb);
-            color.rgb = bt2020ToLinearSrgb(color.rgb);
-            color.rgb = linearToSrgb(color.rgb);
+            color.rgb = pow(color.rgb, vec3(1.25));
         }
 
         // === 色彩配方处理（按专业后期流程顺序） ===

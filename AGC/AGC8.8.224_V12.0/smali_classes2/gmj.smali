@@ -277,19 +277,15 @@
 
     invoke-virtual {v13, v1}, Ljava/util/EnumMap;->remove(Ljava/lang/Object;)Ljava/lang/Object;
 
-    sget-object v1, Lgml;->m:Lgml;
+    sget-object v1, Lgml;->l:Lgml;
 
-    invoke-interface {v7}, Loiw;->get()Ljava/lang/Object;
+    invoke-interface {v3}, Loiw;->get()Ljava/lang/Object;
 
     move-result-object v2
 
     invoke-virtual {v13, v1, v2}, Ljava/util/EnumMap;->put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;
 
-    sget-object v1, Ldhv;->i:Ldhj;
-
-    invoke-virtual {v8, v1, v0}, Ldit;->u(Ldhj;Z)V
-
-    sget-object v1, Ldhv;->j:Ldhj;
+    sget-object v1, Ldho;->bo:Ldhj;
 
     :goto_0
     invoke-virtual {v8, v1, v0}, Ldit;->u(Ldhj;Z)V

@@ -1073,11 +1073,35 @@
 
     invoke-direct {v10, v4}, Lioh;-><init>(Ljuf;)V
 
+    invoke-static {v7}, Lcom/hinnka/mycamera/agc/PhotonAgcBridge;->processPreviewHardwareBuffer(Landroid/hardware/HardwareBuffer;)Landroid/hardware/HardwareBuffer;
+
+    move-result-object v6
+
+    if-eqz v6, :cond_photon_preview_passthrough
+
+    goto :goto_photon_preview_buffer_ready
+
+    :cond_photon_preview_passthrough
     move-object v6, v7
+
+    :goto_photon_preview_buffer_ready
 
     move-object v7, v0
 
+    # 尝试由光子相机代理接管显示投递
+    invoke-static/range {v5 .. v10}, Lcom/hinnka/mycamera/agc/PhotonAgcBridge;->displayBuffer(Ljava/lang/Object;Landroid/hardware/HardwareBuffer;Landroid/graphics/Rect;Landroid/graphics/Rect;ILjava/lang/Object;)Z
+
+    move-result v3
+
+    if-eqz v3, :cond_photon_display_original
+
+    # 如果代理接管渲染成功，直接跳过原始 BufferFlinger 显示
+    goto :goto_photon_display_done
+
+    :cond_photon_display_original
     invoke-virtual/range {v5 .. v10}, Lcom/google/android/libraries/oliveoil/bufferflinger/BufferFlinger;->displayBuffer(Landroid/hardware/HardwareBuffer;Landroid/graphics/Rect;Landroid/graphics/Rect;ILcom/google/android/libraries/oliveoil/bufferflinger/BufferFlinger$OnBufferReleasedListener;)V
+
+    :goto_photon_display_done
 
     iget v0, v1, Liok;->x:I
 
@@ -1168,6 +1192,8 @@
 
     :cond_1
     iput-object p2, p0, Liok;->v:Landroid/util/Size;
+
+    invoke-static {p1, p2}, Lcom/hinnka/mycamera/agc/PhotonAgcBridge;->recordOriginalSurface(Landroid/view/Surface;Landroid/util/Size;)V
 
     new-instance p2, Lcom/google/android/libraries/oliveoil/bufferflinger/BufferFlinger;
 

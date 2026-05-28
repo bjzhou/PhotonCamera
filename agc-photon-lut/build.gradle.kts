@@ -9,6 +9,7 @@ plugins {
 android {
     namespace = "com.hinnka.mycamera"
     compileSdk = 36
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.hinnka.mycamera.agcphotonlut"
@@ -20,6 +21,16 @@ android {
         buildConfigField("String", "BUILT_IN_API_URL", "\"\"")
         buildConfigField("String", "BUILT_IN_API_KEY", "\"\"")
         buildConfigField("String", "FLAVOR", "\"agc\"")
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     buildTypes {
@@ -91,6 +102,7 @@ dependencies {
 }
 
 val agcDexOutputDir = layout.buildDirectory.dir("outputs/agc-dex")
+val agcSoOutputDir = layout.buildDirectory.dir("outputs/agc-so")
 
 tasks.register<Copy>("buildAgcPhotonDex") {
     dependsOn("assembleRelease")
@@ -114,5 +126,28 @@ tasks.register<Copy>("buildAgcPhotonDex") {
         require(files.isNotEmpty()) { "No dex files were extracted from ${apkFile.get().asFile.absolutePath}" }
         logger.lifecycle("AGC photon LUT dex files:")
         files.forEach { logger.lifecycle(" - ${it.absolutePath}") }
+    }
+}
+
+tasks.register<Copy>("buildAgcPhotonSo") {
+    dependsOn("assembleRelease")
+
+    val apkFile = layout.buildDirectory.file("outputs/apk/release/agc-photon-lut-release-unsigned.apk")
+    from(zipTree(apkFile)) {
+        include("lib/**/*.so")
+    }
+    into(agcSoOutputDir)
+
+    doFirst {
+        val apk = apkFile.get().asFile
+        require(apk.exists()) { "AGC photon LUT APK was not built: ${apk.absolutePath}" }
+        agcSoOutputDir.get().asFile.deleteRecursively()
+    }
+    doLast {
+        val soFiles = agcSoOutputDir.get().asFile.walkTopDown()
+            .filter { it.extension == "so" }
+            .toList()
+        logger.lifecycle("AGC photon LUT so files:")
+        soFiles.forEach { logger.lifecycle(" - ${it.absolutePath}") }
     }
 }
