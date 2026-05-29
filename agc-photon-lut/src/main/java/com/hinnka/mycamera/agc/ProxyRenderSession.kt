@@ -633,11 +633,40 @@ class ProxyRenderSession(
         }.onFailure { Log.e(TAG, "releaseBuffer failed", it) }
     }
 
-    private fun getTexCoords(rotation: Int): FloatArray = when (rotation) {
-        90, 13 -> floatArrayOf(0f, 0f, 0f, 1f, 1f, 0f, 1f, 1f)
-        180 -> floatArrayOf(1f, 0f, 0f, 0f, 1f, 1f, 0f, 1f)
-        270, 12 -> floatArrayOf(1f, 1f, 1f, 0f, 0f, 1f, 0f, 0f)
-        else -> floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f)
+    private fun getTexCoords(rotation: Int): FloatArray {
+        // 1. 获取基础硬件旋转角度
+        val baseAngle = when (rotation) {
+            270, 12 -> 90   // 后摄硬件输出 (顺时针 90 度)
+            90, 13 -> 270   // 前摄硬件输出 (顺时针 270 度)
+            180 -> 180
+            else -> 0
+        }
+
+        // 2. 获取屏幕物理朝向（Display Rotation）造成的旋转角
+        val context = PhotonAgcBridge.getContext()
+        val displayRotation = if (context != null) {
+            val wm = context.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager
+            wm?.defaultDisplay?.rotation ?: 0
+        } else {
+            0
+        }
+        val displayAngle = when (displayRotation) {
+            android.view.Surface.ROTATION_90 -> 90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+
+        // 3. 计算经过物理旋转逆补偿后的有效旋转角度
+        val effectiveAngle = (baseAngle - displayAngle + 360) % 360
+
+        // 4. 返回补偿后的纹理坐标
+        return when (effectiveAngle) {
+            90 -> floatArrayOf(1f, 1f, 1f, 0f, 0f, 1f, 0f, 0f)   // 顺时针 90 度
+            180 -> floatArrayOf(1f, 0f, 0f, 0f, 1f, 1f, 0f, 1f)  // 顺时针 180 度
+            270 -> floatArrayOf(0f, 0f, 0f, 1f, 1f, 0f, 1f, 1f)  // 顺时针 270 度
+            else -> floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f) // 0 度 (无旋转)
+        }
     }
 
     private fun uploadLutTexture(lutConfig: LutConfig) {
