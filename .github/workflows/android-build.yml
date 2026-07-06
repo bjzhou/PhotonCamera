@@ -32,16 +32,45 @@ jobs:
             printf 'BUILT_IN_API_KEY_GOOGLE=%s\n' "$BUILT_IN_API_KEY_GOOGLE"
           } > local.properties
 
-      - name: Decode Keystore
-        run: echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 --decode > app/release.keystore
+      - name: Prepare release keystore
+        env:
+          RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          STORE_PASSWORD="${RELEASE_STORE_PASSWORD:-photoncamera-ci}"
+          KEY_ALIAS="${RELEASE_KEY_ALIAS:-photoncamera}"
+          KEY_PASSWORD="${RELEASE_KEY_PASSWORD:-$STORE_PASSWORD}"
+
+          if [ -n "$RELEASE_KEYSTORE" ]; then
+            echo "$RELEASE_KEYSTORE" | base64 --decode > app/release.keystore
+          else
+            echo "RELEASE_KEYSTORE secret is not set. Generating a temporary CI keystore."
+            keytool -genkeypair -v \
+              -keystore app/release.keystore \
+              -storepass "$STORE_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+              -keypass "$KEY_PASSWORD" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=PhotonCamera CI, OU=CI, O=PhotonCamera, L=CI, ST=CI, C=US"
+          fi
+
+          {
+            echo "RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
 
       - name: Build Release APKs
         run: |
           ./gradlew assembleDefaultRelease assembleSamsungRelease assembleMeituRelease \
             -PRELEASE_STORE_FILE=release.keystore \
-            -PRELEASE_STORE_PASSWORD=${{ secrets.RELEASE_STORE_PASSWORD }} \
-            -PRELEASE_KEY_ALIAS=${{ secrets.RELEASE_KEY_ALIAS }} \
-            -PRELEASE_KEY_PASSWORD=${{ secrets.RELEASE_KEY_PASSWORD }}
+            -PRELEASE_STORE_PASSWORD="$RELEASE_STORE_PASSWORD" \
+            -PRELEASE_KEY_ALIAS="$RELEASE_KEY_ALIAS" \
+            -PRELEASE_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
 
       - name: Upload Release APKs to GitHub Release
         uses: softprops/action-gh-release@v2
