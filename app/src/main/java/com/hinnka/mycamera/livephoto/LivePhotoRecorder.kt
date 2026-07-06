@@ -11,6 +11,8 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -67,6 +69,7 @@ class LivePhotoRecorder(
     // 状态控制
     @Volatile
     private var isRunning = false
+    @Volatile
     private var isCapturing = false
     private var snapshotTimestampUs: Long = 0
 
@@ -75,11 +78,13 @@ class LivePhotoRecorder(
     private var audioDrainJob: Job? = null
     private var audioRecordJob: Job? = null
     private val renderDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val hardwareMutex = Mutex()
 
     private var lastFrameTimestampUs: Long = 0
     private var lastSharedContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var lastWidth: Int = 0
     private var lastHeight: Int = 0
+    @Volatile
     private var pendingRelease = false
 
     /**
@@ -137,30 +142,36 @@ class LivePhotoRecorder(
 
         val matrix = transformMatrix.clone()
         scope.launch(renderDispatcher) {
-            // 如果上下文发生了变化（比如 App 重入）或者分辨率发生了变化（旋转），必须释放旧编码器并重新创建
-            if (videoEncoder != null && (
-                        (lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) ||
-                                (lastWidth != width || lastHeight != height)
-                        )
-            ) {
-                PLog.w(TAG, "Shared EGL Context or dimensions changed, forcing encoder re-init.")
-                internalRelease()
-            }
+            hardwareMutex.withLock {
+                if (!isRunning) return@withLock
 
-            // 延迟初始化编码器
-            if (videoEncoder == null && sharedContext != EGL14.EGL_NO_CONTEXT) {
-                initEncoder(width, height, lutConfig, params, sharedContext, sharedDisplay)
-                lastSharedContext = sharedContext
-                lastWidth = width
-                lastHeight = height
-                pendingRelease = false
-            }
+                // 如果上下文发生了变化（比如 App 重入）或者分辨率发生了变化（旋转），必须释放旧编码器并重新创建
+                if (videoEncoder != null && (
+                            (lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) ||
+                                    (lastWidth != width || lastHeight != height)
+                            )
+                ) {
+                    PLog.w(TAG, "Shared EGL Context or dimensions changed, forcing encoder re-init.")
+                    releaseHardwareLocked()
+                }
 
-            if (!isRunning) return@launch
+                if (!isRunning) return@withLock
 
-            try {
-                lutRenderer?.renderFrame(textureId, matrix, timestampNs / 1000)
-            } catch (e: Exception) {
+                // 延迟初始化编码器
+                if (videoEncoder == null && sharedContext != EGL14.EGL_NO_CONTEXT) {
+                    initEncoder(width, height, lutConfig, params, sharedContext, sharedDisplay)
+                    lastSharedContext = sharedContext
+                    lastWidth = width
+                    lastHeight = height
+                    pendingRelease = false
+                }
+
+                if (!isRunning) return@withLock
+
+                try {
+                    lutRenderer?.renderFrame(textureId, matrix, timestampNs / 1000)
+                } catch (e: Exception) {
+                }
             }
         }
     }
@@ -259,7 +270,7 @@ class LivePhotoRecorder(
     private fun startAudioRecordingLoop() {
         audioRecordJob = scope.launch {
             val buffer = ByteArray(2048)
-            while (isRunning) {
+            while (isActive && isRunning) {
                 try {
                     val record = audioRecord ?: break
                     val encoder = audioEncoder ?: break
@@ -270,10 +281,29 @@ class LivePhotoRecorder(
                         } catch (e: IllegalStateException) {
                             break
                         }
+                        if (!isActive || !isRunning) break
                         if (inputBufferIndex >= 0) {
                             val inputBuffer = encoder.getInputBuffer(inputBufferIndex)
                             inputBuffer?.clear()
-                            inputBuffer?.put(buffer, 0, len)
+                            if (inputBuffer == null || inputBuffer.remaining() < len) {
+                                PLog.w(
+                                    TAG,
+                                    "Audio input buffer too small: len=$len, remaining=${inputBuffer?.remaining() ?: -1}"
+                                )
+                                try {
+                                    encoder.queueInputBuffer(
+                                        inputBufferIndex,
+                                        0,
+                                        0,
+                                        android.os.SystemClock.elapsedRealtimeNanos() / 1000,
+                                        0
+                                    )
+                                } catch (e: IllegalStateException) {
+                                    break
+                                }
+                                continue
+                            }
+                            inputBuffer.put(buffer, 0, len)
                             try {
                                 encoder.queueInputBuffer(
                                     inputBufferIndex,
@@ -446,7 +476,7 @@ class LivePhotoRecorder(
     private fun startDraining() {
         videoDrainJob = scope.launch {
             val bufferInfo = MediaCodec.BufferInfo()
-            while (isRunning) {
+            while (isActive && isRunning) {
                 try {
                     val encoderRef = videoEncoder ?: break
                     val outputBufferIndex = try {
@@ -456,6 +486,7 @@ class LivePhotoRecorder(
                         PLog.d(TAG, "Video encoder dequeue cancelled (encoder stopped)")
                         break
                     }
+                    if (!isActive || !isRunning) break
 
                     if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         synchronized(this@LivePhotoRecorder) {
@@ -480,7 +511,7 @@ class LivePhotoRecorder(
 
         audioDrainJob = scope.launch {
             val bufferInfo = MediaCodec.BufferInfo()
-            while (isRunning) {
+            while (isActive && isRunning) {
                 try {
                     val encoderRef = audioEncoder ?: break
                     val outputBufferIndex = try {
@@ -489,6 +520,7 @@ class LivePhotoRecorder(
                         PLog.d(TAG, "Audio encoder dequeue cancelled (encoder stopped)")
                         break
                     }
+                    if (!isActive || !isRunning) break
 
                     if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         synchronized(this@LivePhotoRecorder) {
@@ -502,6 +534,9 @@ class LivePhotoRecorder(
                         }
                         encoderRef.releaseOutputBuffer(outputBufferIndex, false)
                     }
+                } catch (e: IllegalStateException) {
+                    PLog.w(TAG, "Error draining audio encoder", e)
+                    break
                 } catch (e: Exception) {
                     PLog.e(TAG, "Error draining audio encoder", e)
                     break
@@ -550,16 +585,27 @@ class LivePhotoRecorder(
 
     fun release() {
         isRunning = false
-        videoDrainJob?.cancel()
-        audioDrainJob?.cancel()
-        audioRecordJob?.cancel()
         // 不要在这里立刻置空 videoFormat，因为异步的 recordVideo 还需要它进行 mux
         scope.launch(renderDispatcher) {
-            internalRelease()
+            hardwareMutex.withLock {
+                releaseHardwareLocked()
+            }
         }
     }
 
-    private fun internalRelease() {
+    private suspend fun releaseHardwareLocked() {
+        val jobs = listOfNotNull(videoDrainJob, audioDrainJob, audioRecordJob)
+        videoDrainJob = null
+        audioDrainJob = null
+        audioRecordJob = null
+
+        jobs.forEach { it.cancel() }
+        jobs.joinAll()
+
+        internalReleaseLocked()
+    }
+
+    private fun internalReleaseLocked() {
         videoEncoder?.let {
             try {
                 it.stop()

@@ -1,0 +1,80 @@
+{
+    "id": "xpan",
+    "name": {
+        "en": "XPAN",
+        "zh": "XPAN"
+    },
+    "version": 1,
+    "editable": true,
+    "layout": {
+        "position": "BOTH",
+        "backgroundColor": "#FFFFFF",
+        "lineSpacing": 16,
+        "height": 300,
+        "borderWidth": 30,
+        "padding": 50
+    },
+    "elementsTop": [
+        {
+            "type": "logo",
+            "logoType": "BRAND",
+            "overrideSource": "xpan",
+            "alignment": "START",
+            "light": false,
+            "size": 108,
+            "line": -1
+        }
+    ],
+    "elements": [
+        {
+            "type": "text",
+            "textType": "DEVICE_MODEL",
+            "alignment": "START",
+            "fontSize": 48,
+            "color": "#000000",
+            "fontWeight": "BOLD",
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "FOCAL_LENGTH_35MM",
+            "alignment": "START",
+            "fontSize": 32,
+            "color": "#666666",
+            "line": 1
+        },
+        {
+            "type": "text",
+            "textType": "APERTURE",
+            "alignment": "START",
+            "fontSize": 32,
+            "color": "#666666",
+            "line": 1
+        },
+        {
+            "type": "text",
+            "textType": "SHUTTER_SPEED",
+            "alignment": "START",
+            "fontSize": 32,
+            "color": "#666666",
+            "line": 1
+        },
+        {
+            "type": "text",
+            "textType": "ISO",
+            "alignment": "START",
+            "fontSize": 32,
+            "color": "#666666",
+            "line": 1
+        },
+        {
+            "type": "logo",
+            "logoType": "BRAND",
+            "overrideSource": "photon",
+            "alignment": "END",
+            "light": false,
+            "size": 56,
+            "line": -1
+        }
+    ]
+}

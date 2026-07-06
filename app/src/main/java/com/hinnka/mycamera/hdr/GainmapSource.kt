@@ -19,6 +19,7 @@ data class GainmapSourceSet(
     val hdrReference: HdrBuffer? = null,
     val sourceKind: SourceKind,
     val confidence: Float = 1.0f,
+    val displayHdrSdrRatio: Float = 0f,
 )
 
 data class GainmapResult(

@@ -8,9 +8,16 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
+import android.opengl.GLES31
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
-import com.hinnka.mycamera.raw.NLMShaders
+import com.hinnka.mycamera.lut.ChromaDenoiseShaders
+import com.hinnka.mycamera.raw.DenoiseProfileShaders
+import com.hinnka.mycamera.raw.RawProfileExposureGl
+import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawShaders
+import com.hinnka.mycamera.raw.RawToneMappingGl
+import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
@@ -23,6 +30,10 @@ import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.Executors
 import androidx.core.graphics.createBitmap
+import kotlin.math.ln
+import kotlin.math.max
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
  * LUT 图片处理器
@@ -31,6 +42,12 @@ import androidx.core.graphics.createBitmap
  * 所有 GPU 操作在独立单线程完成，确保 EGL 上下文线程安全
  */
 class LutImageProcessor {
+    @Volatile
+    private var glThread: Thread? = null
+
+    @Volatile
+    private var isReleased = false
+
     // 单线程调度器，确保所有 EGL 操作在同一线程
     private val glDispatcher = Executors.newSingleThreadExecutor { r ->
         Thread(r, "LutImageProcessor-GL").apply {
@@ -51,22 +68,43 @@ class LutImageProcessor {
     private var lutTextureId = 0
     private var framebufferId = 0
     private var outputTextureId = 0
+    private var outputFramebufferWidth = 0
+    private var outputFramebufferHeight = 0
     private var pboId = 0
+    private var readbackBuffer: ByteBuffer? = null
+    private var readbackBufferSize = 0
+    private val naturalLightPrograms = IntArray(RawRenderingEngine.entries.size)
+    private var naturalLightTextureId = 0
+    private var naturalLightFboId = 0
+    private var naturalLightWidth = 0
+    private var naturalLightHeight = 0
+    private var naturalLightCurveTextureId = 0
+    private var naturalLightCurveSize = 0
+    private var naturalLightDummy3DTextureId = 0
 
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
 
-    private var nlmChromaProgram = 0
-    private var nlmPassHProgram = 0
-    private var nlmPassVProgram = 0
+    private var bitmapDenoisePreconditionProgram = 0
+    private var bitmapDenoiseNlmInitProgram = 0
+    private var bitmapDenoiseNlmFusedAccuProgram = 0
+    private var bitmapDenoiseNlmFinishProgram = 0
+    private var bitmapDenoisePassthroughProgram = 0
+    private var naturalLightSrgbToLinearProgram = 0
+    private var bitmapChromaDenoiseProgram = 0
+    private var lutSharpenProgram = 0
 
-    private var nlmChromaTexId = 0
-    private var nlmChromaFboId = 0
-    private val nlmPassTexId = IntArray(2)
-    private val nlmPassFboId = IntArray(2)
-    private var nlmWidth = 0
-    private var nlmHeight = 0
+    private val bitmapDenoiseTexId = IntArray(2)
+    private val bitmapDenoiseFboId = IntArray(2)
+    private var bitmapDenoiseNlmU2BufferId = 0
+    private var bitmapDenoiseNlmBufferPixels = 0
+    private var bitmapDenoiseWidth = 0
+    private var bitmapDenoiseHeight = 0
+    private var lutSharpenTextureId = 0
+    private var lutSharpenFboId = 0
+    private var lutSharpenWidth = 0
+    private var lutSharpenHeight = 0
 
     // HDF (Highlight Diffusion) 光晕效果资源
     private var hdfExtractBlurHProgram = 0
@@ -75,6 +113,34 @@ class LutImageProcessor {
     private var hdfFboId = IntArray(2)      // 1/4 分辨率模糊 FBO
     private var hdfWidth = 0
     private var hdfHeight = 0
+    private var softLightBlurHProgram = 0
+    private var softLightTexId = IntArray(2)
+    private var softLightFboId = IntArray(2)
+    private var softLightWidth = 0
+    private var softLightHeight = 0
+
+    // Halation (胶片红晕) 效果资源
+    private var halationExtractBlurHProgram = 0
+    private var halationBlurVProgram = 0
+    private var halationTexId = IntArray(2)
+    private var halationFboId = IntArray(2)
+    private var halationWidth = 0
+    private var halationHeight = 0
+    private var bloomDownsampleFirstProgram = 0
+    private var bloomDownsampleProgram = 0
+    private var bloomUpsampleProgram = 0
+    private var bloomCompositeProgram = 0
+    private var bloomTexId = IntArray(0)
+    private var bloomFboId = IntArray(0)
+    private var bloomMipWidths = IntArray(0)
+    private var bloomMipHeights = IntArray(0)
+    private var bloomMipCount = 0
+    private var bloomSourceWidth = 0
+    private var bloomSourceHeight = 0
+    private var bloomOutputTextureId = 0
+    private var bloomOutputFboId = 0
+    private var bloomOutputWidth = 0
+    private var bloomOutputHeight = 0
 
     private var isInitialized = false
 
@@ -87,6 +153,7 @@ class LutImageProcessor {
     private var uLutCurveLoc = 0
     private var uLutColorSpaceLoc = 0
     private var uInputColorSpaceLoc = 0
+    private var uIsHlgInputLoc = 0
     private var uMVPMatrixLoc = 0
 
     // 色彩配方 Uniform 位置
@@ -113,10 +180,10 @@ class LutImageProcessor {
     private var uLchHueAdjustmentsLoc = 0
     private var uLchChromaAdjustmentsLoc = 0
     private var uLchLightnessAdjustmentsLoc = 0
+    private var uPrimaryCalibrationMatrixLoc = 0
 
-    // 后期处理参数 Uniform 位置（仅拍摄和后期编辑时生效）
-    private var uSharpeningLoc = 0
-    private var uTexelSizeLoc = 0  // 用于卷积计算
+    // 曲线纹理
+    private var curveTextureId = 0
 
     /**
      * 初始化 EGL 环境
@@ -147,6 +214,9 @@ class LutImageProcessor {
                 PLog.e(TAG, "Unable to initialize EGL")
                 return false
             }
+            val eglExtensions = EGL14.eglQueryString(eglDisplay, EGL14.EGL_EXTENSIONS).orEmpty()
+            val supportsLowPriorityContext =
+                eglExtensions.split(' ').contains("EGL_IMG_context_priority")
 
             // 配置属性
             val configAttribs = intArrayOf(
@@ -169,11 +239,35 @@ class LutImageProcessor {
             val config = configs[0] ?: return false
 
             // 创建 EGL Context
-            val contextAttribs = intArrayOf(
+            val normalContextAttribs = intArrayOf(
                 EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
                 EGL14.EGL_NONE
             )
+            val lowPriorityContextAttribs = intArrayOf(
+                EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
+                EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_LOW_IMG,
+                EGL14.EGL_NONE
+            )
+            val contextAttribs = if (supportsLowPriorityContext) {
+                lowPriorityContextAttribs
+            } else {
+                normalContextAttribs
+            }
             eglContext = EGL14.eglCreateContext(eglDisplay, config, EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
+            if (eglContext == EGL14.EGL_NO_CONTEXT && supportsLowPriorityContext) {
+                val eglError = EGL14.eglGetError()
+                PLog.w(
+                    TAG,
+                    "Low-priority EGL context unavailable, falling back to normal priority: error=$eglError"
+                )
+                eglContext = EGL14.eglCreateContext(
+                    eglDisplay,
+                    config,
+                    EGL14.EGL_NO_CONTEXT,
+                    normalContextAttribs,
+                    0
+                )
+            }
             if (eglContext == EGL14.EGL_NO_CONTEXT) {
                 PLog.e(TAG, "Unable to create EGL context")
                 return false
@@ -199,7 +293,7 @@ class LutImageProcessor {
 
             // 初始化 shader 和缓冲区
             initShaderProgram()
-            initNLMPrograms()
+            initBitmapDenoiseProfilePrograms()
             initHDFPrograms()
             initBuffers()
 
@@ -228,11 +322,18 @@ class LutImageProcessor {
         width: Int,
         height: Int,
         colorSpace: ColorSpace,
+        isHlgInput: Boolean = false,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
+        lutMaskType: Int = 0,
+        linearInputToneMap: Boolean = false,
+        linearInputExposureEv: Float = 0f,
+        naturalLightDefaultChromaDenoise: Boolean = false,
+        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         if (!isInitialized) {
@@ -244,33 +345,19 @@ class LutImageProcessor {
 
         // 提取色彩配方参数
         val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
-        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
-        val exposure = effectiveRecipeParams?.exposure ?: 0f
-        val contrast = effectiveRecipeParams?.contrast ?: 1f
-        val saturation = effectiveRecipeParams?.saturation ?: 1f
-        val temperature = effectiveRecipeParams?.temperature ?: 0f
-        val tint = effectiveRecipeParams?.tint ?: 0f
-        val fade = effectiveRecipeParams?.fade ?: 0f
-        val vibrance = effectiveRecipeParams?.color ?: 0f
-        val highlights = effectiveRecipeParams?.highlights ?: 0f
-        val shadows = effectiveRecipeParams?.shadows ?: 0f
-        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
-        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
-        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
-        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
-        val vignette = effectiveRecipeParams?.vignette ?: 0f
-        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
-        val halation = effectiveRecipeParams?.halation ?: 0f
-        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
-        val noise = effectiveRecipeParams?.noise ?: 0f
-        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
-        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
-        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(effectiveRecipeParams)
+        val halation = 0f
+        val softLight = effectiveRecipeParams?.softLight ?: 0f
+        val redHalation = effectiveRecipeParams?.redHalation ?: 0f
 
         // 后期处理参数
         val sharpening: Float = sharpeningValue
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
+        val applyNaturalLightToneMap = linearInputToneMap && !isHlgInput
+        val preToneMapChromaDenoise = resolvePreToneMapChromaDenoise(
+            userStrength = chromaNoiseReduction,
+            applyNaturalLightDefault = applyNaturalLightToneMap && naturalLightDefaultChromaDenoise
+        )
 
         // 激活上下文
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -283,8 +370,14 @@ class LutImageProcessor {
         uploadImageTextureFromArgb(argbData, width, height)
         currentCoroutineContext().ensureActive()
 
-        if (noiseReduction > 0 || chromaNoiseReduction > 0) {
-            renderNLMDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+        if (preToneMapChromaDenoise > 0) {
+            renderBitmapChromaDenoise(imageTextureId, width, height, preToneMapChromaDenoise)
+            currentCoroutineContext().ensureActive()
+        }
+
+        val chromaDenoisedTexId = if (preToneMapChromaDenoise > 0) bitmapDenoiseTexId[0] else imageTextureId
+        if (noiseReduction > 0) {
+            renderBitmapDenoiseProfile(chromaDenoisedTexId, width, height, noiseReduction)
             currentCoroutineContext().ensureActive()
         }
 
@@ -293,32 +386,142 @@ class LutImageProcessor {
             uploadLutTexture(lutConfig)
         }
 
-        val inputTexId = if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId
+        val inputTexId = if (noiseReduction > 0) {
+            bitmapDenoiseTexId[1]
+        } else {
+            chromaDenoisedTexId
+        }
+
+        val renderInputTexId = if (applyNaturalLightToneMap) {
+            renderNaturalLightToneMap(
+                inputTexId,
+                width,
+                height,
+                rawRenderingEngine,
+                rawToneMappingParameters,
+                linearInputExposureEv
+            )
+        } else {
+            inputTexId
+        }
+        val naturalLightApplied = applyNaturalLightToneMap && renderInputTexId != inputTexId
+        val renderColorSpace = if (naturalLightApplied) {
+            ColorSpace.get(ColorSpace.Named.SRGB)
+        } else {
+            colorSpace
+        }
 
         // HDF 光晕效果预处理（在主 shader 之前，需要模糊的光晕纹理）
-        val hdfEnabled = halation > 0f
-        if (hdfEnabled) {
-            renderHDFBlur(inputTexId, width, height, halation)
+        if (halation > 0f) {
+            renderHDFBlur(renderInputTexId, width, height, halation)
+            currentCoroutineContext().ensureActive()
+        }
+        if (softLight > 0f) {
+            renderSoftLightBlur(renderInputTexId, width, height)
+            currentCoroutineContext().ensureActive()
+        }
+        if (redHalation > 0f) {
+            renderHalationBlur(renderInputTexId, width, height, redHalation)
             currentCoroutineContext().ensureActive()
         }
 
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
-            inputTexId,
-            colorSpace,
+            renderInputTexId,
+            renderColorSpace,
+            isHlgInput,
             lutConfig,
-            colorRecipeEnabled,
-            exposure, contrast, saturation, temperature, tint, fade,
-            vibrance, highlights, shadows, toneToe, toneShoulder, tonePivot,
-            filmGrain, vignette, bleachBypass,
-            halation, chromaticAberration, noise, lowRes,
-            intensity, sharpening,
-            lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments
-            // GL_RGBA16 已自动归一化，使用标准 shader
+            effectiveRecipeParams,
+            sharpening,
+            lutMaskType,
         )
 
         outputBitmap
+    }
+
+    suspend fun applyLutStack(
+        argbData: ShortBuffer,
+        width: Int,
+        height: Int,
+        colorSpace: ColorSpace,
+        isHlgInput: Boolean = false,
+        baselineLayer: LutRenderLayer?,
+        creativeLayer: LutRenderLayer?,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+        linearInputToneMap: Boolean = false,
+        linearInputExposureEv: Float = 0f,
+        naturalLightDefaultChromaDenoise: Boolean = false,
+        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+    ): Bitmap {
+        val hasBaseline = baselineLayer?.lutConfig != null || baselineLayer?.colorRecipeParams != null
+        val hasCreative = creativeLayer?.lutConfig != null || creativeLayer?.colorRecipeParams != null
+        return when {
+            hasBaseline && hasCreative -> {
+                val runDenoiseBeforeNaturalLight = linearInputToneMap && !isHlgInput
+                val baseBitmap = applyLut(
+                    argbData = argbData,
+                    width = width,
+                    height = height,
+                    colorSpace = colorSpace,
+                    isHlgInput = isHlgInput,
+                    lutConfig = baselineLayer.lutConfig,
+                    colorRecipeParams = baselineLayer.colorRecipeParams,
+                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) noiseReductionValue else 0f,
+                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) chromaNoiseReductionValue else 0f,
+                    linearInputToneMap = linearInputToneMap,
+                    linearInputExposureEv = linearInputExposureEv,
+                    naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+                    rawRenderingEngine = rawRenderingEngine,
+                    rawToneMappingParameters = rawToneMappingParameters,
+                )
+                applyLut(
+                    bitmap = baseBitmap,
+                    lutConfig = creativeLayer.lutConfig,
+                    colorRecipeParams = creativeLayer.colorRecipeParams,
+                    sharpeningValue = sharpeningValue,
+                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else noiseReductionValue,
+                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else chromaNoiseReductionValue
+                )
+            }
+            hasBaseline -> applyLut(
+                argbData = argbData,
+                width = width,
+                height = height,
+                colorSpace = colorSpace,
+                isHlgInput = isHlgInput,
+                lutConfig = baselineLayer.lutConfig,
+                colorRecipeParams = baselineLayer.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue,
+                linearInputToneMap = linearInputToneMap,
+                linearInputExposureEv = linearInputExposureEv,
+                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+                rawRenderingEngine = rawRenderingEngine,
+                rawToneMappingParameters = rawToneMappingParameters
+            )
+            else -> applyLut(
+                argbData = argbData,
+                width = width,
+                height = height,
+                colorSpace = colorSpace,
+                isHlgInput = isHlgInput,
+                lutConfig = creativeLayer?.lutConfig,
+                colorRecipeParams = creativeLayer?.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue,
+                linearInputToneMap = linearInputToneMap,
+                linearInputExposureEv = linearInputExposureEv,
+                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+                rawRenderingEngine = rawRenderingEngine,
+                rawToneMappingParameters = rawToneMappingParameters
+            )
+        }
     }
 
     /**
@@ -333,11 +536,19 @@ class LutImageProcessor {
      */
     suspend fun applyLut(
         bitmap: Bitmap,
+        isHlgInput: Boolean = false,
         lutConfig: LutConfig?,
         colorRecipeParams: ColorRecipeParams?,
         sharpeningValue: Float = 0f,
         noiseReductionValue: Float = 0f,
         chromaNoiseReductionValue: Float = 0f,
+        lutMaskType: Int = 0,
+        linearInputToneMap: Boolean = false,
+        naturalLightInputSrgb: Boolean = false,
+        linearInputExposureEv: Float = 0f,
+        naturalLightDefaultChromaDenoise: Boolean = false,
+        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         if (!isInitialized) {
@@ -348,33 +559,19 @@ class LutImageProcessor {
 
         // 提取色彩配方参数
         val effectiveRecipeParams = colorRecipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
-        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
-        val exposure = effectiveRecipeParams?.exposure ?: 0f
-        val contrast = effectiveRecipeParams?.contrast ?: 1f
-        val saturation = effectiveRecipeParams?.saturation ?: 1f
-        val temperature = effectiveRecipeParams?.temperature ?: 0f
-        val tint = effectiveRecipeParams?.tint ?: 0f
-        val fade = effectiveRecipeParams?.fade ?: 0f
-        val vibrance = effectiveRecipeParams?.color ?: 0f
-        val highlights = effectiveRecipeParams?.highlights ?: 0f
-        val shadows = effectiveRecipeParams?.shadows ?: 0f
-        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
-        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
-        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
-        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
-        val vignette = effectiveRecipeParams?.vignette ?: 0f
-        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
-        val halation = effectiveRecipeParams?.halation ?: 0f
-        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
-        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
-        val noise = effectiveRecipeParams?.noise ?: 0f
-        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
-        val (lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments) = buildLchAdjustmentArrays(effectiveRecipeParams)
+        val halation = 0f
+        val softLight = effectiveRecipeParams?.softLight ?: 0f
+        val redHalation = effectiveRecipeParams?.redHalation ?: 0f
 
         // 后期处理参数（仅在软件处理模式下生效）
         val sharpening: Float = sharpeningValue
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
+        val applyNaturalLightToneMap = linearInputToneMap && !isHlgInput
+        val preToneMapChromaDenoise = resolvePreToneMapChromaDenoise(
+            userStrength = chromaNoiseReduction,
+            applyNaturalLightDefault = applyNaturalLightToneMap && naturalLightDefaultChromaDenoise
+        )
 
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -390,8 +587,14 @@ class LutImageProcessor {
         uploadImageTexture(bitmap)
         currentCoroutineContext().ensureActive()
 
-        if (noiseReduction > 0 || chromaNoiseReduction > 0) {
-            renderNLMDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+        if (preToneMapChromaDenoise > 0) {
+            renderBitmapChromaDenoise(imageTextureId, width, height, preToneMapChromaDenoise)
+            currentCoroutineContext().ensureActive()
+        }
+
+        val chromaDenoisedTexId = if (preToneMapChromaDenoise > 0) bitmapDenoiseTexId[0] else imageTextureId
+        if (noiseReduction > 0) {
+            renderBitmapDenoiseProfile(chromaDenoisedTexId, width, height, noiseReduction)
             currentCoroutineContext().ensureActive()
         }
 
@@ -400,75 +603,162 @@ class LutImageProcessor {
             uploadLutTexture(lutConfig)
         }
 
-        val inputTexId = if (noiseReduction > 0 || chromaNoiseReduction > 0) nlmPassTexId[1] else imageTextureId
+        val inputTexId = if (noiseReduction > 0) {
+            bitmapDenoiseTexId[1]
+        } else {
+            chromaDenoisedTexId
+        }
+        val naturalLightSourceTexId = if (applyNaturalLightToneMap && naturalLightInputSrgb) {
+            renderSrgbInputToLinear(inputTexId, width, height)
+        } else {
+            inputTexId
+        }
+        val renderInputTexId = if (applyNaturalLightToneMap) {
+            renderNaturalLightToneMap(
+                naturalLightSourceTexId,
+                width,
+                height,
+                rawRenderingEngine,
+                rawToneMappingParameters,
+                linearInputExposureEv
+            )
+        } else {
+            inputTexId
+        }
+        val naturalLightApplied = applyNaturalLightToneMap && renderInputTexId != inputTexId
+        val renderColorSpace = if (naturalLightApplied) {
+            ColorSpace.get(ColorSpace.Named.SRGB)
+        } else {
+            bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB)
+        }
 
         // HDF 光晕效果预处理
-        val hdfEnabled = halation > 0f
-        if (hdfEnabled) {
-            renderHDFBlur(inputTexId, width, height, halation)
+        if (halation > 0f) {
+            renderHDFBlur(renderInputTexId, width, height, halation)
+            currentCoroutineContext().ensureActive()
+        }
+        if (softLight > 0f) {
+            renderSoftLightBlur(renderInputTexId, width, height)
+            currentCoroutineContext().ensureActive()
+        }
+        if (redHalation > 0f) {
+            renderHalationBlur(renderInputTexId, width, height, redHalation)
             currentCoroutineContext().ensureActive()
         }
 
         // 执行渲染
         val outputBitmap = performRender(
             width, height,
-            inputTexId,
-            bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
+            renderInputTexId,
+            renderColorSpace,
+            isHlgInput,
             lutConfig,
-            colorRecipeEnabled,
-            exposure, contrast, saturation, temperature, tint, fade,
-            vibrance, highlights, shadows, toneToe, toneShoulder, tonePivot,
-            filmGrain, vignette, bleachBypass,
-            halation, chromaticAberration,
-            noise, lowRes, intensity, sharpening,
-            lchHueAdjustments, lchChromaAdjustments, lchLightnessAdjustments
+            effectiveRecipeParams,
+            sharpening,
+            lutMaskType,
         )
 
         outputBitmap
     }
 
-    private fun buildLchAdjustmentArrays(params: ColorRecipeParams?): Triple<FloatArray, FloatArray, FloatArray> {
-        if (params == null) {
-            return Triple(
-                FloatArray(LCH_COLOR_BAND_COUNT),
-                FloatArray(LCH_COLOR_BAND_COUNT),
-                FloatArray(LCH_COLOR_BAND_COUNT)
+    suspend fun applyLutStack(
+        bitmap: Bitmap,
+        isHlgInput: Boolean = false,
+        baselineLayer: LutRenderLayer?,
+        creativeLayer: LutRenderLayer?,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+        linearInputToneMap: Boolean = false,
+        linearInputExposureEv: Float = 0f,
+        naturalLightDefaultChromaDenoise: Boolean = false,
+        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+    ): Bitmap {
+        val hasBaseline = baselineLayer?.lutConfig != null || baselineLayer?.colorRecipeParams != null
+        val hasCreative = creativeLayer?.lutConfig != null || creativeLayer?.colorRecipeParams != null
+        return when {
+            hasBaseline && hasCreative -> {
+                val runDenoiseBeforeNaturalLight = linearInputToneMap && !isHlgInput
+                val baseBitmap = applyLut(
+                    bitmap = bitmap,
+                    isHlgInput = isHlgInput,
+                    lutConfig = baselineLayer.lutConfig,
+                    colorRecipeParams = baselineLayer.colorRecipeParams,
+                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) noiseReductionValue else 0f,
+                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) chromaNoiseReductionValue else 0f,
+                    linearInputToneMap = linearInputToneMap,
+                    linearInputExposureEv = linearInputExposureEv,
+                    naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+                    rawRenderingEngine = rawRenderingEngine,
+                    rawToneMappingParameters = rawToneMappingParameters,
+                )
+                applyLut(
+                    bitmap = baseBitmap,
+                    lutConfig = creativeLayer.lutConfig,
+                    colorRecipeParams = creativeLayer.colorRecipeParams,
+                    sharpeningValue = sharpeningValue,
+                    noiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else noiseReductionValue,
+                    chromaNoiseReductionValue = if (runDenoiseBeforeNaturalLight) 0f else chromaNoiseReductionValue
+                )
+            }
+            hasBaseline -> applyLut(
+                bitmap = bitmap,
+                isHlgInput = isHlgInput,
+                lutConfig = baselineLayer.lutConfig,
+                colorRecipeParams = baselineLayer.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue,
+                linearInputToneMap = linearInputToneMap,
+                linearInputExposureEv = linearInputExposureEv,
+                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+                rawRenderingEngine = rawRenderingEngine,
+                rawToneMappingParameters = rawToneMappingParameters
+            )
+            else -> applyLut(
+                bitmap = bitmap,
+                isHlgInput = isHlgInput,
+                lutConfig = creativeLayer?.lutConfig,
+                colorRecipeParams = creativeLayer?.colorRecipeParams,
+                sharpeningValue = sharpeningValue,
+                noiseReductionValue = noiseReductionValue,
+                chromaNoiseReductionValue = chromaNoiseReductionValue,
+                linearInputToneMap = linearInputToneMap,
+                linearInputExposureEv = linearInputExposureEv,
+                naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+                rawRenderingEngine = rawRenderingEngine,
+                rawToneMappingParameters = rawToneMappingParameters
             )
         }
-        return Triple(
-            floatArrayOf(
-                params.skinHue,
-                params.redHue,
-                params.orangeHue,
-                params.yellowHue,
-                params.greenHue,
-                params.cyanHue,
-                params.blueHue,
-                params.purpleHue,
-                params.magentaHue,
-            ),
-            floatArrayOf(
-                params.skinChroma,
-                params.redChroma,
-                params.orangeChroma,
-                params.yellowChroma,
-                params.greenChroma,
-                params.cyanChroma,
-                params.blueChroma,
-                params.purpleChroma,
-                params.magentaChroma,
-            ),
-            floatArrayOf(
-                params.skinLightness,
-                params.redLightness,
-                params.orangeLightness,
-                params.yellowLightness,
-                params.greenLightness,
-                params.cyanLightness,
-                params.blueLightness,
-                params.purpleLightness,
-                params.magentaLightness,
-            )
+    }
+
+    suspend fun applyChromaDenoise(bitmap: Bitmap, strength: Float = 0.1f): Bitmap = withContext(glDispatcher) {
+        currentCoroutineContext().ensureActive()
+        if (!isInitialized) {
+            if (!initialize()) {
+                return@withContext bitmap
+            }
+        }
+
+        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        val width = bitmap.width
+        val height = bitmap.height
+
+        setupFramebuffer(width, height)
+        uploadImageTexture(bitmap)
+
+        renderBitmapChromaDenoise(imageTextureId, width, height, strength)
+        performRender(
+            width = width,
+            height = height,
+            inputTextureId = bitmapDenoiseTexId[0],
+            inputColorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
+            isHlgInput = false,
+            lutConfig = null,
+            effectiveRecipeParams = null,
+            sharpening = 0f,
+            lutMaskType = 0
         )
     }
 
@@ -480,33 +770,38 @@ class LutImageProcessor {
         height: Int,
         inputTextureId: Int,
         inputColorSpace: ColorSpace,
+        isHlgInput: Boolean,
         lutConfig: LutConfig?,
-        colorRecipeEnabled: Boolean,
-        exposure: Float,
-        contrast: Float,
-        saturation: Float,
-        temperature: Float,
-        tint: Float,
-        fade: Float,
-        vibrance: Float,
-        highlights: Float,
-        shadows: Float,
-        toneToe: Float,
-        toneShoulder: Float,
-        tonePivot: Float,
-        filmGrain: Float,
-        vignette: Float,
-        bleachBypass: Float,
-        halation: Float,
-        chromaticAberration: Float,
-        noise: Float,
-        lowRes: Float,
-        intensity: Float,
+        effectiveRecipeParams: ColorRecipeParams?,
         sharpening: Float,
-        lchHueAdjustments: FloatArray,
-        lchChromaAdjustments: FloatArray,
-        lchLightnessAdjustments: FloatArray
+        lutMaskType: Int,
     ): Bitmap {
+        val colorRecipeEnabled = effectiveRecipeParams != null && !effectiveRecipeParams.isDefault()
+        val exposure = effectiveRecipeParams?.exposure ?: 0f
+        val contrast = effectiveRecipeParams?.contrast ?: 1f
+        val saturation = effectiveRecipeParams?.saturation ?: 1f
+        val temperature = effectiveRecipeParams?.temperature ?: 0f
+        val tint = effectiveRecipeParams?.tint ?: 0f
+        val fade = effectiveRecipeParams?.fade ?: 0f
+        val vibrance = effectiveRecipeParams?.color ?: 0f
+        val highlights = effectiveRecipeParams?.highlights ?: 0f
+        val shadows = effectiveRecipeParams?.shadows ?: 0f
+        val toneToe = effectiveRecipeParams?.toneToe ?: 0f
+        val toneShoulder = effectiveRecipeParams?.toneShoulder ?: 0f
+        val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
+        val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
+        val vignette = effectiveRecipeParams?.vignette ?: 0f
+        val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
+        val bloom = effectiveRecipeParams?.bloom ?: 0f
+        val halation = 0f
+        val softLight = effectiveRecipeParams?.softLight ?: 0f
+        val redHalation = effectiveRecipeParams?.redHalation ?: 0f
+        val chromaticAberration = effectiveRecipeParams?.chromaticAberration ?: 0f
+        val noise = effectiveRecipeParams?.noise ?: 0f
+        val lowRes = effectiveRecipeParams?.lowRes ?: 0f
+        val intensity = effectiveRecipeParams?.lutIntensity ?: 1f
+        val lchAdjustments = ColorRecipeGl.lchAdjustments(effectiveRecipeParams)
+        val primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(effectiveRecipeParams)
         val program = shaderProgram
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
@@ -531,11 +826,16 @@ class LutImageProcessor {
             if (lutConfig != null) intensity else 0f
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutEnabled"), if (lutConfig != null) 1 else 0)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), lutConfig?.curve?.ordinal ?: 0)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutColorSpace"), lutConfig?.colorSpace?.ordinal ?: 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutMaskType"), lutMaskType)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLutCurve"), LutShaderMappings.transferCurveId(lutConfig?.curve))
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uLutColorSpace"),
+            lutConfig?.colorSpace?.let(LutShaderMappings::colorSpaceId) ?: 0
+        )
 
         val inputColorSpaceId = if (inputColorSpace == ColorSpace.get(ColorSpace.Named.DISPLAY_P3)) 1 else 0
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputColorSpace"), inputColorSpaceId)
+        GLES30.glUniform1i(uIsHlgInputLoc, if (isHlgInput) 1 else 0)
 
         // 设置色彩配方参数
         GLES30.glUniform1i(
@@ -550,8 +850,7 @@ class LutImageProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTint"), tint)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFade"), fade)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVibrance"), vibrance)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHighlights"), highlights)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uShadows"), shadows)
+            ShadowsHighlightsShader.bindUniforms(program, highlights, shadows)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uToneToe"), toneToe)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uToneShoulder"), toneShoulder)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTonePivot"), tonePivot)
@@ -568,10 +867,29 @@ class LutImageProcessor {
                 GLES30.glGetUniformLocation(program, "uAspectRatio"),
                 width.toFloat() / Math.max(1, height).toFloat()
             )
-            GLES30.glUniform1fv(uLchHueAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchHueAdjustments, 0)
-            GLES30.glUniform1fv(uLchChromaAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchChromaAdjustments, 0)
-            GLES30.glUniform1fv(uLchLightnessAdjustmentsLoc, LCH_COLOR_BAND_COUNT, lchLightnessAdjustments, 0)
+            ColorRecipeGl.bindLchAdjustments(
+                uLchHueAdjustmentsLoc,
+                uLchChromaAdjustmentsLoc,
+                uLchLightnessAdjustmentsLoc,
+                lchAdjustments
+            )
+            GLES30.glUniformMatrix3fv(uPrimaryCalibrationMatrixLoc, 1, false, primaryCalibrationMatrix, 0)
         }
+
+        // 设置曲线纹理（Unit 3）
+        val masterPts = effectiveRecipeParams?.masterCurvePoints
+        val redPts = effectiveRecipeParams?.redCurvePoints
+        val greenPts = effectiveRecipeParams?.greenCurvePoints
+        val bluePts = effectiveRecipeParams?.blueCurvePoints
+        val curveActive = !CurveUtils.isIdentity(masterPts, redPts, greenPts, bluePts)
+        if (curveActive) {
+            val curveBuffer = CurveUtils.buildCurveTextureBuffer(masterPts, redPts, greenPts, bluePts)
+            curveTextureId = ColorRecipeGl.ensureCurveTextureUploaded(curveTextureId, curveBuffer)
+        }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (curveActive) curveTextureId else 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveTexture"), 3)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveEnabled"), if (curveActive) 1 else 0)
 
         // 设置 HDF 参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHalation"), halation)
@@ -580,12 +898,21 @@ class LutImageProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hdfTexId[1])
             GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHdfTexture"), 2)
         }
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSoftLight"), softLight)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (softLight > 0f) softLightTexId[1] else 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSoftLightTexture"), 5)
+
+        // 设置 Halation 参数
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uRedHalation"), redHalation)
+        if (redHalation > 0f) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, halationTexId[1])
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uRedHalationTexture"), 4)
+        }
 
         // 设置色散参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uChromaticAberration"), chromaticAberration)
-
-        // 设置后期处理参数
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uSharpening"), sharpening)
         GLES30.glUniform2f(GLES30.glGetUniformLocation(program, "uTexelSize"), 1.0f / width, 1.0f / height)
 
         // 设置 MVP 矩阵
@@ -620,8 +947,19 @@ class LutImageProcessor {
         if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
 
+        val sharpened = sharpening > 0f && renderLutSharpenPass(outputTextureId, width, height, sharpening)
+        val postSharpenTextureId = if (sharpened) lutSharpenTextureId else outputTextureId
+        val postSharpenFramebufferId = if (sharpened) lutSharpenFboId else framebufferId
+
+        val readFramebufferId = if (bloom > 0.001f && renderLdrBloom(postSharpenTextureId, width, height, bloom)) {
+            bloomOutputFboId
+        } else {
+            postSharpenFramebufferId
+        }
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFramebufferId)
         val pixelSize = width * height * 4
-        val pixelBuffer = ByteBuffer.allocateDirect(pixelSize).order(ByteOrder.nativeOrder())
+        val pixelBuffer = obtainReadbackBuffer(pixelSize)
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
         GLES30.glReadPixels(
@@ -652,11 +990,15 @@ class LutImageProcessor {
     }
 
     private fun setupFramebuffer(width: Int, height: Int) {
-        // 删除旧的帧缓冲
-        if (framebufferId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
-            GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
+        if (framebufferId != 0 &&
+            outputTextureId != 0 &&
+            outputFramebufferWidth == width &&
+            outputFramebufferHeight == height
+        ) {
+            return
         }
+
+        releaseOutputFramebuffer()
 
         // 创建输出纹理
         val textures = IntArray(1)
@@ -670,6 +1012,8 @@ class LutImageProcessor {
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
         // 创建帧缓冲
         val fbos = IntArray(1)
@@ -688,6 +1032,339 @@ class LutImageProcessor {
         }
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        outputFramebufferWidth = width
+        outputFramebufferHeight = height
+    }
+
+    private fun releaseOutputFramebuffer() {
+        if (framebufferId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
+            framebufferId = 0
+        }
+        if (outputTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
+            outputTextureId = 0
+        }
+        outputFramebufferWidth = 0
+        outputFramebufferHeight = 0
+        releaseLutSharpenFramebuffer()
+    }
+
+    private fun renderNaturalLightToneMap(
+        inputTextureId: Int,
+        width: Int,
+        height: Int,
+        engine: RawRenderingEngine,
+        toneMappingParameters: RawToneMappingParameters,
+        exposureCompensationEv: Float
+    ): Int {
+        val program = getOrCreateNaturalLightProgram(engine)
+        if (program == 0) return inputTextureId
+        setupNaturalLightFramebuffer(width, height)
+        if (naturalLightFboId == 0 || naturalLightTextureId == 0) return inputTextureId
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(program)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        setUniform1i(program, "uInputTexture", 0)
+        RawToneMappingGl.bindRawToneMappingUniforms(program, toneMappingParameters)
+        bindNaturalLightProfileExposureUniforms(program, engine, exposureCompensationEv)
+        bindNaturalLightDisabledDcpUniforms(program)
+        bindNaturalLightColorTransforms(program, engine)
+        if (engine == RawRenderingEngine.AdobeCurve) {
+            bindNaturalLightAdobeCurve(program, toneMappingParameters)
+        }
+        if (engine == RawRenderingEngine.Spektrafilm) {
+            bindNaturalLightDummySpectralFilmUniforms(program)
+        }
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(program, "uTexMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
+        drawQuad(program)
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderNaturalLightToneMap glError $error")
+            return inputTextureId
+        }
+        return naturalLightTextureId
+    }
+
+    private fun getOrCreateNaturalLightProgram(engine: RawRenderingEngine): Int {
+        val cached = naturalLightPrograms[engine.ordinal]
+        if (cached != 0) return cached
+        val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, RawShaders.VERTEX_SHADER)
+        val fragmentShader = compileShader(
+            GLES30.GL_FRAGMENT_SHADER,
+            RawShaders.combinedFragmentShaderFor(engine, includeShadowsHighlights = false)
+        )
+        if (vertexShader == 0 || fragmentShader == 0) {
+            if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
+            if (fragmentShader != 0) GLES30.glDeleteShader(fragmentShader)
+            return 0
+        }
+        val program = GLES30.glCreateProgram()
+        GLES30.glAttachShader(program, vertexShader)
+        GLES30.glAttachShader(program, fragmentShader)
+        GLES30.glLinkProgram(program)
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(fragmentShader)
+        val linked = IntArray(1)
+        GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, linked, 0)
+        if (linked[0] == 0) {
+            PLog.e(TAG, "Natural light program link failed: ${GLES30.glGetProgramInfoLog(program)}")
+            GLES30.glDeleteProgram(program)
+            return 0
+        }
+        naturalLightPrograms[engine.ordinal] = program
+        return program
+    }
+
+    private fun setupNaturalLightFramebuffer(width: Int, height: Int) {
+        if (naturalLightTextureId != 0 &&
+            naturalLightFboId != 0 &&
+            naturalLightWidth == width &&
+            naturalLightHeight == height
+        ) {
+            return
+        }
+        releaseNaturalLightFramebuffer()
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        naturalLightTextureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_RGBA16F,
+            width,
+            height,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_FLOAT,
+            null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        val fbos = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        naturalLightFboId = fbos[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            naturalLightTextureId,
+            0
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(TAG, "Natural light framebuffer not complete: $status")
+            releaseNaturalLightFramebuffer()
+            return
+        }
+        naturalLightWidth = width
+        naturalLightHeight = height
+    }
+
+    private fun releaseNaturalLightFramebuffer() {
+        if (naturalLightFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(naturalLightFboId), 0)
+            naturalLightFboId = 0
+        }
+        if (naturalLightTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(naturalLightTextureId), 0)
+            naturalLightTextureId = 0
+        }
+        naturalLightWidth = 0
+        naturalLightHeight = 0
+    }
+
+    private fun bindNaturalLightColorTransforms(program: Int, engine: RawRenderingEngine) {
+        val profileToEngine = RawToneMappingGl.computeWorkingToOutputTransform(
+            com.hinnka.mycamera.raw.ColorSpace.SRGB,
+            engine.workingColorSpace
+        )
+        val outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(
+            engine.workingColorSpace,
+            com.hinnka.mycamera.raw.ColorSpace.SRGB
+        )
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
+            1,
+            false,
+            RawToneMappingGl.transposeMatrix3x3(profileToEngine),
+            0
+        )
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uOutputTransform"),
+            1,
+            false,
+            RawToneMappingGl.transposeMatrix3x3(outputTransform),
+            0
+        )
+    }
+
+    private fun bindNaturalLightProfileExposureUniforms(
+        program: Int,
+        engine: RawRenderingEngine,
+        exposureCompensationEv: Float
+    ) {
+        val exposure = RawProfileExposureGl.compute(
+            profileExposureCompensation = exposureCompensationEv + engine.defaultExposureCompensationEv,
+            useRamp = engine == RawRenderingEngine.AdobeCurve
+        )
+        RawProfileExposureGl.bindUniforms(program, exposure)
+    }
+
+    private fun bindNaturalLightDisabledDcpUniforms(program: Int) {
+        val dummyTextureId = ensureNaturalLightDummy3DTexture()
+        setUniform1i(program, "uDcpHueSatTexture", 2)
+        setUniform1i(program, "uDcpLookTableTexture", 3)
+        setUniform1i(program, "uDcpHueSatEnabled", 0)
+        setUniform1i(program, "uDcpLookTableEnabled", 0)
+        setUniform3i(program, "uDcpHueSatDivisions", 1, 1, 1)
+        setUniform3i(program, "uDcpLookTableDivisions", 1, 1, 1)
+        setUniform1i(program, "uDcpHueSatEncoding", 0)
+        setUniform1i(program, "uDcpLookTableEncoding", 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyTextureId)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyTextureId)
+    }
+
+    private fun bindNaturalLightAdobeCurve(
+        program: Int,
+        toneMappingParameters: RawToneMappingParameters
+    ) {
+        val curve = RawToneMappingGl.adobeCurveSamplesFor(toneMappingParameters)
+        uploadNaturalLightCurveTexture(curve)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightCurveTextureId)
+        setUniform1i(program, "uCurveTexture", 1)
+        setUniform1f(program, "uCurveSize", curve.size.toFloat())
+        setUniform1i(program, "uCurveEnabled", 1)
+    }
+
+    private fun bindNaturalLightDummySpectralFilmUniforms(program: Int) {
+        setUniform1i(program, "uSpectralFilmTexture", 6)
+        setUniform1i(program, "uSpectralFilmSize", 1)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE6)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, ensureNaturalLightDummy3DTexture())
+    }
+
+    private fun uploadNaturalLightCurveTexture(curve: FloatArray) {
+        if (naturalLightCurveTextureId != 0 && naturalLightCurveSize == curve.size) return
+        if (naturalLightCurveTextureId == 0) {
+            val textures = IntArray(1)
+            GLES30.glGenTextures(1, textures, 0)
+            naturalLightCurveTextureId = textures[0]
+        }
+        val buffer = ByteBuffer.allocateDirect(curve.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        buffer.put(curve)
+        buffer.position(0)
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightCurveTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_R16F,
+            curve.size,
+            1,
+            0,
+            GLES30.GL_RED,
+            GLES30.GL_FLOAT,
+            buffer
+        )
+        naturalLightCurveSize = curve.size
+    }
+
+    private fun ensureNaturalLightDummy3DTexture(): Int {
+        if (naturalLightDummy3DTextureId != 0) return naturalLightDummy3DTextureId
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        naturalLightDummy3DTextureId = textures[0]
+        val buffer = ByteBuffer.allocateDirect(4 * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        buffer.put(floatArrayOf(0f, 1f, 1f, 1f))
+        buffer.position(0)
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, naturalLightDummy3DTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexImage3D(
+            GLES30.GL_TEXTURE_3D,
+            0,
+            GLES30.GL_RGBA16F,
+            1,
+            1,
+            1,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_FLOAT,
+            buffer
+        )
+        return naturalLightDummy3DTextureId
+    }
+
+    private fun setUniform1i(program: Int, name: String, value: Int) {
+        val location = GLES30.glGetUniformLocation(program, name)
+        if (location >= 0) GLES30.glUniform1i(location, value)
+    }
+
+    private fun setUniform1f(program: Int, name: String, value: Float) {
+        val location = GLES30.glGetUniformLocation(program, name)
+        if (location >= 0) GLES30.glUniform1f(location, value)
+    }
+
+    private fun setUniform3i(program: Int, name: String, x: Int, y: Int, z: Int) {
+        val location = GLES30.glGetUniformLocation(program, name)
+        if (location >= 0) GLES30.glUniform3i(location, x, y, z)
+    }
+
+    private fun obtainReadbackBuffer(pixelSize: Int): ByteBuffer {
+        val current = readbackBuffer
+        if (current != null && readbackBufferSize >= pixelSize) {
+            current.clear()
+            current.limit(pixelSize)
+            return current
+        }
+        releaseReadbackBuffer()
+        return (com.hinnka.mycamera.utils.DirectBufferAllocator.allocateNative(pixelSize.toLong())
+            ?.order(ByteOrder.nativeOrder())
+            ?: throw OutOfMemoryError("Failed to allocate native direct buffer")).also {
+            readbackBuffer = it
+            readbackBufferSize = pixelSize
+        }
+    }
+
+    private fun releaseReadbackBuffer() {
+        readbackBuffer?.let { com.hinnka.mycamera.utils.DirectBufferAllocator.freeNative(it) }
+        readbackBuffer = null
+        readbackBufferSize = 0
     }
 
     private fun uploadImageTexture(bitmap: Bitmap) {
@@ -703,7 +1380,22 @@ class LutImageProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
-        android.opengl.GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+        val uploadBitmap = bitmap.asGlUploadCompatibleBitmap()
+        android.opengl.GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, uploadBitmap, 0)
+        if (uploadBitmap !== bitmap) {
+            uploadBitmap.recycle()
+        }
+    }
+
+    private fun Bitmap.asGlUploadCompatibleBitmap(): Bitmap {
+        if (config == Bitmap.Config.ARGB_8888 || config == Bitmap.Config.RGB_565) return this
+        return runCatching { copy(Bitmap.Config.ARGB_8888, false) }.getOrNull()
+            ?: runCatching {
+                Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { converted ->
+                    android.graphics.Canvas(converted).drawBitmap(this, 0f, 0f, null)
+                }
+            }.getOrNull()
+            ?: this
     }
 
     private fun uploadImageTextureFromArgb(argbData: ShortBuffer, width: Int, height: Int) {
@@ -714,9 +1406,9 @@ class LutImageProcessor {
         }
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
-        // 使用线性滤波
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        // 内部高质量源导出路径希望保持与源像素 1:1 对应，避免在首个 pass 之前先发生隐式重采样。
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
@@ -797,6 +1489,7 @@ class LutImageProcessor {
         uLutCurveLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutCurve")
         uLutColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uLutColorSpace")
         uInputColorSpaceLoc = GLES30.glGetUniformLocation(shaderProgram, "uInputColorSpace")
+        uIsHlgInputLoc = GLES30.glGetUniformLocation(shaderProgram, "uIsHlgInput")
         uMVPMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
 
         // 获取色彩配方 uniform 位置
@@ -823,30 +1516,27 @@ class LutImageProcessor {
         uLchHueAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchHueAdjustments")
         uLchChromaAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchChromaAdjustments")
         uLchLightnessAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchLightnessAdjustments")
-
-        uSharpeningLoc = GLES30.glGetUniformLocation(shaderProgram, "uSharpening")
-        uTexelSizeLoc = GLES30.glGetUniformLocation(shaderProgram, "uTexelSize")
+        uPrimaryCalibrationMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uPrimaryCalibrationMatrix")
     }
 
-    private fun initNLMPrograms() {
-        fun createProgram(vShader: Int, fSource: String): Int {
-            val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fSource)
-            if (vShader == 0 || fShader == 0) return 0
-            val program = GLES30.glCreateProgram()
-            GLES30.glAttachShader(program, vShader)
-            GLES30.glAttachShader(program, fShader)
-            GLES30.glLinkProgram(program)
-            GLES30.glDeleteShader(fShader)
-            return program
-        }
-
-        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
-        nlmChromaProgram = createProgram(vShader, NLMShaders.PASS0_CHROMA_DENOISE)
-        nlmPassHProgram = createProgram(vShader, NLMShaders.NLM_PASS_H)
-        nlmPassVProgram = createProgram(vShader, NLMShaders.NLM_PASS_V)
-        GLES30.glDeleteShader(vShader)
-
-        PLog.d(TAG, "NLM programs initialized: Chroma=$nlmChromaProgram H=$nlmPassHProgram V=$nlmPassVProgram")
+    private fun initBitmapDenoiseProfilePrograms() {
+        bitmapDenoisePreconditionProgram = compileComputeProgram(DenoiseProfileShaders.PRECONDITION_V2, "BitmapDenoise_PreconditionV2")
+        bitmapDenoiseNlmInitProgram = compileComputeProgram(DenoiseProfileShaders.INIT, "BitmapDenoise_NLM_Init")
+        bitmapDenoiseNlmFusedAccuProgram = compileComputeProgram(DenoiseProfileShaders.FUSED_ACCU, "BitmapDenoise_NLM_FusedAccu")
+        bitmapDenoiseNlmFinishProgram = compileComputeProgram(DenoiseProfileShaders.FINISH_V2, "BitmapDenoise_NLM_FinishV2")
+        bitmapDenoisePassthroughProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, TEXTURE_PASSTHROUGH_SHADER, "BitmapDenoise_Passthrough")
+        naturalLightSrgbToLinearProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, SRGB_TO_LINEAR_SHADER, "NaturalLight_SrgbToLinear")
+        bitmapChromaDenoiseProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_CHROMA_DENOISE, "BitmapChromaDenoise_BM3DPass0")
+        lutSharpenProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, RawShaders.SHARPEN_FRAGMENT_SHADER, "LutSharpen")
+        PLog.d(
+            TAG,
+            "Bitmap denoiseprofile programs initialized: pre=$bitmapDenoisePreconditionProgram " +
+                "init=$bitmapDenoiseNlmInitProgram fusedAccu=$bitmapDenoiseNlmFusedAccuProgram " +
+                "finish=$bitmapDenoiseNlmFinishProgram " +
+                "pass=$bitmapDenoisePassthroughProgram linearize=$naturalLightSrgbToLinearProgram " +
+                "chroma=$bitmapChromaDenoiseProgram " +
+                "sharpen=$lutSharpenProgram"
+        )
     }
 
     private fun initHDFPrograms() {
@@ -861,86 +1551,45 @@ class LutImageProcessor {
             return program
         }
 
-        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
-        hdfExtractBlurHProgram = createProgram(vShader, HDF_EXTRACT_BLUR_H_SHADER)
-        hdfBlurVProgram = createProgram(vShader, HDF_BLUR_V_SHADER)
-        GLES30.glDeleteShader(vShader)
+        val imageVShader = compileShader(GLES30.GL_VERTEX_SHADER, IMAGE_VERTEX_SHADER)
+        hdfExtractBlurHProgram = createProgram(imageVShader, HDF_EXTRACT_BLUR_H_SHADER)
+        hdfBlurVProgram = createProgram(imageVShader, HDF_BLUR_V_SHADER)
+        softLightBlurHProgram = createProgram(imageVShader, Shaders.SOFT_LIGHT_PREVIEW_BLUR_H)
+        halationExtractBlurHProgram = createProgram(imageVShader, HALATION_EXTRACT_BLUR_H_SHADER)
+        halationBlurVProgram = createProgram(imageVShader, HDF_BLUR_V_SHADER)
+        GLES30.glDeleteShader(imageVShader)
+
+        val simpleVShader = compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
+        bloomDownsampleFirstProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_DOWNSAMPLE_FIRST)
+        bloomDownsampleProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_DOWNSAMPLE)
+        bloomUpsampleProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_UPSAMPLE)
+        bloomCompositeProgram = createProgram(simpleVShader, Shaders.BEVY_BLOOM_COMPOSITE)
+        GLES30.glDeleteShader(simpleVShader)
 
         PLog.d(
             TAG,
-            "HDF programs initialized: ExtractH=$hdfExtractBlurHProgram BlurV=$hdfBlurVProgram"
+            "HDF/Halation/Bloom/SoftLight programs initialized"
         )
     }
 
-    private fun setupNLMFramebuffers(width: Int, height: Int) {
-        if (nlmWidth == width && nlmHeight == height && nlmChromaTexId != 0) return
-        nlmWidth = width
-        nlmHeight = height
+    private fun setupBitmapDenoiseFramebuffers(width: Int, height: Int) {
+        if (bitmapDenoiseWidth == width && bitmapDenoiseHeight == height && bitmapDenoiseTexId[0] != 0) return
+        bitmapDenoiseWidth = width
+        bitmapDenoiseHeight = height
 
-        // 清理旧资源
-        if (nlmChromaTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(nlmChromaTexId), 0)
-        if (nlmChromaFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmChromaFboId), 0)
         for (i in 0..1) {
-            if (nlmPassTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(nlmPassTexId[i]), 0)
-            if (nlmPassFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmPassFboId[i]), 0)
+            if (bitmapDenoiseTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(bitmapDenoiseTexId[i]), 0)
+            if (bitmapDenoiseFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bitmapDenoiseFboId[i]), 0)
         }
 
-        // 创建色度降噪 FBO
-        val ct = IntArray(1)
-        val cf = IntArray(1)
-        GLES30.glGenTextures(1, ct, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ct[0])
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D,
-            0,
-            GLES30.GL_RGBA16F,
-            width,
-            height,
-            0,
-            GLES30.GL_RGBA,
-            GLES30.GL_HALF_FLOAT,
-            null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glGenFramebuffers(1, cf, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, cf[0])
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            ct[0],
-            0
-        )
-        nlmChromaTexId = ct[0]
-        nlmChromaFboId = cf[0]
-
-        var status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.e(TAG, "NLM Chroma Framebuffer not complete: $status")
-        }
-
-        // 创建 NLM ping-pong FBO
         for (i in 0..1) {
             val t = IntArray(1)
             val f = IntArray(1)
             GLES30.glGenTextures(1, t, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_RGBA16F,
-                width,
-                height,
-                0,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA16F, width, height)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
             GLES30.glGenFramebuffers(1, f, 0)
@@ -952,96 +1601,454 @@ class LutImageProcessor {
                 t[0],
                 0
             )
-            nlmPassTexId[i] = t[0]
-            nlmPassFboId[i] = f[0]
+            bitmapDenoiseTexId[i] = t[0]
+            bitmapDenoiseFboId[i] = f[0]
 
-            status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
             if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                PLog.e(TAG, "NLM Pass $i Framebuffer not complete: $status")
+                PLog.e(TAG, "Bitmap denoiseprofile FBO $i incomplete: $status")
             }
         }
+        setupBitmapDenoiseResources(width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun renderNLMDenoise(
+    private fun renderBitmapDenoiseProfile(
         sourceTextureId: Int,
         width: Int,
         height: Int,
-        noiseReduction: Float,
-        chromaNoiseReduction: Float
+        noiseReduction: Float
     ) {
-        setupNLMFramebuffers(width, height)
+        setupBitmapDenoiseFramebuffers(width, height)
 
-        if (nlmChromaProgram == 0 || nlmPassHProgram == 0 || nlmPassVProgram == 0) return
+        val force = noiseReduction.coerceIn(0f, 1f)
+        val strength = force
+        if (strength <= 0f || width * height < 2) {
+            renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
+            return
+        }
+        if (!isBitmapDenoiseProfileReady()) {
+            renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
+            return
+        }
 
-        val texelW = 1.0f / width
-        val texelH = 1.0f / height
-        // 将降噪强度映射到合理范围 (0.001 ~ 0.1)
-        val h = 0.001f + noiseReduction * noiseReduction * 0.2f
-        val ch = 0.001f + chromaNoiseReduction * chromaNoiseReduction * 0.2f
+        val preconditionTextureId = if (sourceTextureId == bitmapDenoiseTexId[0]) {
+            bitmapDenoiseTexId[1]
+        } else {
+            bitmapDenoiseTexId[0]
+        }
+        val params = buildBitmapDenoiseParams(width, height, strength, force)
+        dispatchBitmapDenoisePreconditionV2(sourceTextureId, preconditionTextureId, width, height, params)
+        dispatchBitmapDenoiseNlm(sourceTextureId, preconditionTextureId, bitmapDenoiseTexId[1], width, height, params)
+        checkGlError("renderBitmapDenoiseProfile")
+    }
+
+    private fun renderBitmapChromaDenoise(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+        chromaNoiseReduction: Float,
+        targetIndex: Int = 0
+    ) {
+        setupBitmapDenoiseFramebuffers(width, height)
+
+        val strength = chromaNoiseReduction.coerceIn(0f, 1f)
+        val target = targetIndex.coerceIn(0, bitmapDenoiseTexId.lastIndex)
+        if (strength <= 0f || bitmapChromaDenoiseProgram == 0) {
+            renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[target], width, height)
+            return
+        }
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+        val h = strength * strength * ChromaDenoiseShaders.SIGMA_STRENGTH_AT_SLIDER_ONE
+
+        GLES30.glUseProgram(bitmapChromaDenoiseProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bitmapDenoiseFboId[target])
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uTexelSize"),
+            1.0f / width,
+            1.0f / height
+        )
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uH"), h)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uNoiseModel"),
+            BITMAP_DENOISE_A * 2f,
+            BITMAP_DENOISE_B * 2f
+        )
+        drawQuad(bitmapChromaDenoiseProgram)
+        checkGlError("renderBitmapChromaDenoise")
+    }
+
+    private fun resolvePreToneMapChromaDenoise(
+        userStrength: Float,
+        applyNaturalLightDefault: Boolean
+    ): Float {
+        return if (applyNaturalLightDefault) {
+            ChromaDenoiseDefaults.rawDefaultStrength(userStrength)
+        } else {
+            userStrength.coerceIn(0f, 1f)
+        }
+    }
+
+    private fun renderTexturePassthrough(sourceTextureId: Int, targetFboId: Int, width: Int, height: Int) {
+        GLES30.glUseProgram(bitmapDenoisePassthroughProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapDenoisePassthroughProgram, "uInputTexture"), 0)
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(bitmapDenoisePassthroughProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
+        drawQuad(bitmapDenoisePassthroughProgram)
+    }
+
+    private fun renderSrgbInputToLinear(sourceTextureId: Int, width: Int, height: Int): Int {
+        setupBitmapDenoiseFramebuffers(width, height)
+        if (naturalLightSrgbToLinearProgram == 0) return sourceTextureId
+        val targetIndex = if (sourceTextureId == bitmapDenoiseTexId[0]) 1 else 0
+        val targetFboId = bitmapDenoiseFboId[targetIndex]
+        val targetTextureId = bitmapDenoiseTexId[targetIndex]
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+
+        GLES30.glUseProgram(naturalLightSrgbToLinearProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(naturalLightSrgbToLinearProgram, "uInputTexture"), 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(naturalLightSrgbToLinearProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
+        drawQuad(naturalLightSrgbToLinearProgram)
+        checkGlError("renderSrgbInputToLinear")
+        return targetTextureId
+    }
+
+    private fun setupLutSharpenFramebuffer(width: Int, height: Int): Boolean {
+        if (lutSharpenFboId != 0 &&
+            lutSharpenTextureId != 0 &&
+            lutSharpenWidth == width &&
+            lutSharpenHeight == height
+        ) {
+            return true
+        }
+
+        releaseLutSharpenFramebuffer()
+
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        lutSharpenTextureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lutSharpenTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_RGBA,
+            width,
+            height,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_UNSIGNED_BYTE,
+            null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        val framebuffers = IntArray(1)
+        GLES30.glGenFramebuffers(1, framebuffers, 0)
+        lutSharpenFboId = framebuffers[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, lutSharpenFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            lutSharpenTextureId,
+            0
+        )
+
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(TAG, "LUT sharpen FBO incomplete: $status")
+            releaseLutSharpenFramebuffer()
+            return false
+        }
+
+        lutSharpenWidth = width
+        lutSharpenHeight = height
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return true
+    }
+
+    private fun renderLutSharpenPass(
+        sourceTextureId: Int,
+        width: Int,
+        height: Int,
+        sharpening: Float
+    ): Boolean {
+        if (lutSharpenProgram == 0 || sharpening <= 0f || !setupLutSharpenFramebuffer(width, height)) {
+            return false
+        }
 
         val identityMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(identityMatrix, 0)
 
-        // Pass 0: Chroma Denoise
-        GLES30.glUseProgram(nlmChromaProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nlmChromaFboId)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glUseProgram(lutSharpenProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, lutSharpenFboId)
         GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmChromaProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmChromaProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(lutSharpenProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(lutSharpenProgram, "uTexelSize"),
+            1.0f / width,
+            1.0f / height
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(lutSharpenProgram, "uSharpening"),
+            sharpening
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(lutSharpenProgram, "uRadius"),
+            RawShaders.DEFAULT_USM_RADIUS
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(lutSharpenProgram, "uThreshold"),
+            RawShaders.DEFAULT_USM_THRESHOLD
+        )
         GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(nlmChromaProgram, "uMVPMatrix"),
+            GLES30.glGetUniformLocation(lutSharpenProgram, "uMVPMatrix"),
             1,
             false,
             identityMatrix,
             0
         )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmChromaProgram, "uH"), ch)
-        drawQuad(nlmChromaProgram)
+        drawQuad(lutSharpenProgram)
 
-        // NLM Pass H
-        GLES30.glUseProgram(nlmPassHProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nlmPassFboId[0])
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmChromaTexId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassHProgram, "uInputTexture"), 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassHProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(nlmPassHProgram, "uMVPMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderLutSharpenPass: glError $error")
+            return false
+        }
+        return true
+    }
+
+    private fun releaseLutSharpenFramebuffer() {
+        if (lutSharpenFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(lutSharpenFboId), 0)
+            lutSharpenFboId = 0
+        }
+        if (lutSharpenTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(lutSharpenTextureId), 0)
+            lutSharpenTextureId = 0
+        }
+        lutSharpenWidth = 0
+        lutSharpenHeight = 0
+    }
+
+    private data class BitmapDenoiseParams(
+        val strength: Float,
+        val lumaForce: Float,
+        val chromaForce: Float,
+        val patchRadius: Int,
+        val searchRadius: Int,
+        val norm: Float,
+        val centralPixelWeight: Float,
+        val p: FloatArray,
+        val wb: FloatArray,
+        val aa: FloatArray,
+        val bb: FloatArray,
+        val bias: Float,
+        val scale: Float
+    )
+
+    private fun isBitmapDenoiseProfileReady(): Boolean {
+        return bitmapDenoisePreconditionProgram != 0 &&
+            bitmapDenoiseNlmInitProgram != 0 &&
+            bitmapDenoiseNlmFusedAccuProgram != 0 &&
+            bitmapDenoiseNlmFinishProgram != 0 &&
+            bitmapDenoisePassthroughProgram != 0
+    }
+
+    private fun setupBitmapDenoiseResources(width: Int, height: Int) {
+        val pixelCount = width * height
+        if (
+            bitmapDenoiseNlmBufferPixels == pixelCount &&
+            bitmapDenoiseNlmU2BufferId != 0
+        ) {
+            return
+        }
+
+        if (bitmapDenoiseNlmU2BufferId != 0) {
+            GLES31.glDeleteBuffers(1, intArrayOf(bitmapDenoiseNlmU2BufferId), 0)
+            bitmapDenoiseNlmU2BufferId = 0
+        }
+
+        val buffers = IntArray(1)
+        GLES31.glGenBuffers(buffers.size, buffers, 0)
+        bitmapDenoiseNlmU2BufferId = buffers[0]
+
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bitmapDenoiseNlmU2BufferId)
+        GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, pixelCount * 4 * 4, null, GLES31.GL_DYNAMIC_DRAW)
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+        bitmapDenoiseNlmBufferPixels = pixelCount
+    }
+
+    private fun buildBitmapDenoiseParams(
+        width: Int,
+        height: Int,
+        strengthValue: Float,
+        force: Float
+    ): BitmapDenoiseParams {
+        val a = BITMAP_DENOISE_A
+        val b = BITMAP_DENOISE_B
+        val scale = 1.0f
+        val shadows = max(0.1f - 0.1f * ln(a), 0.7f).coerceAtMost(1.8f)
+        val bias = -max(5f + 0.5f * ln(a), 0.0f)
+        val compensateP = 0.05f / 0.05f.pow(shadows)
+        val strength = strengthValue.coerceAtLeast(1e-6f)
+        val patchRadius = DenoiseProfileShaders.PATCH_RADIUS
+        val searchRadius = DenoiseProfileShaders.SEARCH_RADIUS
+        val patchWidth = 2 * patchRadius + 1
+        val norm = 0.045f / (patchWidth * patchWidth).toFloat()
+        val centralPixelWeight = 0.1f * scale
+        return BitmapDenoiseParams(
+            strength = strength,
+            lumaForce = force,
+            chromaForce = force,
+            patchRadius = patchRadius,
+            searchRadius = searchRadius,
+            norm = norm,
+            centralPixelWeight = centralPixelWeight,
+            p = floatArrayOf(shadows, shadows, shadows, 1.0f),
+            wb = floatArrayOf(
+                strength * scale,
+                strength * scale,
+                strength * scale,
+                0.0f
+            ),
+            aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f),
+            bb = floatArrayOf(b, b, b, 1.0f),
+            bias = bias,
+            scale = scale
         )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassHProgram, "uH"), h)
-        drawQuad(nlmPassHProgram)
+    }
 
-        // NLM Pass V
-        GLES30.glUseProgram(nlmPassVProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nlmPassFboId[1])
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmChromaTexId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uInputTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nlmPassTexId[0])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(nlmPassVProgram, "uBlurTexture"), 1)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(nlmPassVProgram, "uTexelSize"), texelW, texelH)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(nlmPassVProgram, "uMVPMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
+    private fun dispatchBitmapDenoisePreconditionV2(input: Int, output: Int, width: Int, height: Int, params: BitmapDenoiseParams) {
+        GLES31.glUseProgram(bitmapDenoisePreconditionProgram)
+        bindComputeSampler(bitmapDenoisePreconditionProgram, "uInput", 0, input)
+        GLES31.glBindImageTexture(1, output, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES31.GL_RGBA16F)
+        setBitmapDenoiseCommonUniforms(bitmapDenoisePreconditionProgram, width, height, params)
+        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM precondition")
+    }
+
+    private fun dispatchBitmapDenoiseNlm(
+        originalTextureId: Int,
+        preconditionedTextureId: Int,
+        outputTextureId: Int,
+        width: Int,
+        height: Int,
+        params: BitmapDenoiseParams
+    ) {
+        dispatchBitmapDenoiseNlmInit(width, height)
+
+        for (qy in -params.searchRadius..0) {
+            for (qx in -params.searchRadius..params.searchRadius) {
+                dispatchBitmapDenoiseNlmFusedAccumulate(preconditionedTextureId, width, height, qx, qy, params)
+            }
+        }
+
+        dispatchBitmapDenoiseNlmFinish(originalTextureId, outputTextureId, width, height, params)
+    }
+
+    private fun dispatchBitmapDenoiseNlmInit(width: Int, height: Int) {
+        GLES31.glUseProgram(bitmapDenoiseNlmInitProgram)
+        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
+        GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmInitProgram, "uImageSize"), width, height)
+        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM init")
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+    }
+
+    private fun dispatchBitmapDenoiseNlmFusedAccumulate(
+        input: Int,
+        width: Int,
+        height: Int,
+        qx: Int,
+        qy: Int,
+        params: BitmapDenoiseParams
+    ) {
+        GLES31.glUseProgram(bitmapDenoiseNlmFusedAccuProgram)
+        bindComputeSampler(bitmapDenoiseNlmFusedAccuProgram, "uInput", 0, input)
+        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
+        GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uImageSize"), width, height)
+        GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uQ"), qx, qy)
+        GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uNorm"), params.norm)
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uCentralPixelWeight"),
+            params.centralPixelWeight
         )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(nlmPassVProgram, "uH"), h)
-        drawQuad(nlmPassVProgram)
+        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM fused accu q=($qx,$qy)")
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+    }
 
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("renderNLMDenoise")
+    private fun dispatchBitmapDenoiseNlmFinish(input: Int, output: Int, width: Int, height: Int, params: BitmapDenoiseParams) {
+        GLES31.glUseProgram(bitmapDenoiseNlmFinishProgram)
+        bindComputeSampler(bitmapDenoiseNlmFinishProgram, "uInput", 0, input)
+        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
+        GLES31.glBindImageTexture(1, output, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES31.GL_RGBA16F)
+        setBitmapDenoiseCommonUniforms(bitmapDenoiseNlmFinishProgram, width, height, params)
+        GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFinishProgram, "uBias"), params.bias - 0.5f * ln(params.scale))
+        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM finish")
+    }
+
+    private fun setBitmapDenoiseCommonUniforms(program: Int, width: Int, height: Int, params: BitmapDenoiseParams) {
+        GLES31.glUniform2i(GLES31.glGetUniformLocation(program, "uImageSize"), width, height)
+        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uA"), 1, params.aa, 0)
+        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uP"), 1, params.p, 0)
+        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uB"), 1, params.bb, 0)
+        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uWb"), 1, params.wb, 0)
+    }
+
+    private fun bindComputeSampler(program: Int, name: String, unit: Int, textureId: Int) {
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + unit)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, textureId)
+        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, name), unit)
+    }
+
+    private fun dispatchBitmapDenoiseImage(width: Int, height: Int, tag: String) {
+        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT
+        )
+        checkGlError(tag)
     }
 
     /**
@@ -1085,6 +2092,179 @@ class LutImageProcessor {
             hdfTexId[i] = t[0]
             hdfFboId[i] = f[0]
         }
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun setupSoftLightFramebuffers(width: Int, height: Int) {
+        val dsW = max(1, width / 4)
+        val dsH = max(1, height / 4)
+        if (softLightWidth == dsW && softLightHeight == dsH && softLightTexId[0] != 0) return
+        softLightWidth = dsW
+        softLightHeight = dsH
+
+        for (i in 0..1) {
+            if (softLightTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(softLightTexId[i]), 0)
+            if (softLightFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(softLightFboId[i]), 0)
+        }
+
+        for (i in 0..1) {
+            val t = IntArray(1)
+            val f = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
+                dsW, dsH, 0,
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glGenFramebuffers(1, f, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D, t[0], 0
+            )
+            softLightTexId[i] = t[0]
+            softLightFboId[i] = f[0]
+        }
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun setupHalationFramebuffers(width: Int, height: Int) {
+        val dsW = width / 4
+        val dsH = height / 4
+        if (halationWidth == dsW && halationHeight == dsH && halationTexId[0] != 0) return
+        halationWidth = dsW
+        halationHeight = dsH
+
+        for (i in 0..1) {
+            if (halationTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(halationTexId[i]), 0)
+            if (halationFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(halationFboId[i]), 0)
+            val t = IntArray(1)
+            val f = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
+                dsW, dsH, 0,
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glGenFramebuffers(1, f, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D, t[0], 0
+            )
+            halationTexId[i] = t[0]
+            halationFboId[i] = f[0]
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun renderSoftLightBlur(
+        sourceTexId: Int,
+        width: Int,
+        height: Int
+    ) {
+        setupSoftLightFramebuffers(width, height)
+        if (softLightBlurHProgram == 0 || hdfBlurVProgram == 0) return
+
+        val dsW = softLightWidth
+        val dsH = softLightHeight
+        val texelW = 1.0f / dsW
+        val texelH = 1.0f / dsH
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+
+        GLES30.glUseProgram(softLightBlurHProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, softLightFboId[0])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTexId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(softLightBlurHProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(softLightBlurHProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(softLightBlurHProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(softLightBlurHProgram)
+
+        GLES30.glUseProgram(hdfBlurVProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, softLightFboId[1])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, softLightTexId[0])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(hdfBlurVProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(hdfBlurVProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(hdfBlurVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(hdfBlurVProgram)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        checkGlError("renderSoftLightBlur")
+    }
+
+    private fun renderHalationBlur(
+        sourceTexId: Int,
+        width: Int,
+        height: Int,
+        halation: Float
+    ) {
+        setupHalationFramebuffers(width, height)
+        if (halationExtractBlurHProgram == 0 || halationBlurVProgram == 0) return
+
+        val dsW = width / 4
+        val dsH = height / 4
+        val texelW = 1.0f / dsW
+        val texelH = 1.0f / dsH
+        
+        val threshold = 0.72f - halation.coerceIn(0f, 1f) * 0.22f
+
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+
+        // Pass 1: Extract + Blur H
+        GLES30.glUseProgram(halationExtractBlurHProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[0])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTexId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uTexelSize"), texelW, texelH)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uThreshold"), threshold)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uStrength"), halation)
+        
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(halationExtractBlurHProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(halationExtractBlurHProgram)
+
+        // Pass 2: Blur V
+        GLES30.glUseProgram(halationBlurVProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, halationFboId[1])
+        GLES30.glViewport(0, 0, dsW, dsH)
+        
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, halationTexId[0])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(halationBlurVProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(halationBlurVProgram, "uTexelSize"), texelW, texelH)
+        
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(halationBlurVProgram, "uMVPMatrix"), 1, false, identityMatrix, 0
+        )
+        drawQuad(halationBlurVProgram)
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
@@ -1144,6 +2324,228 @@ class LutImageProcessor {
         checkGlError("renderHDFBlur")
     }
 
+    private fun setupBloomOutputFramebuffer(width: Int, height: Int): Boolean {
+        if (bloomOutputFboId != 0 &&
+            bloomOutputTextureId != 0 &&
+            bloomOutputWidth == width &&
+            bloomOutputHeight == height
+        ) {
+            return true
+        }
+        if (bloomOutputFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bloomOutputFboId), 0)
+        if (bloomOutputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(bloomOutputTextureId), 0)
+        val f = IntArray(1)
+        val t = IntArray(1)
+        GLES30.glGenTextures(1, t, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glGenFramebuffers(1, f, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(TAG, "Bloom output framebuffer not complete: $status")
+            if (f[0] != 0) GLES30.glDeleteFramebuffers(1, f, 0)
+            if (t[0] != 0) GLES30.glDeleteTextures(1, t, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            return false
+        }
+        bloomOutputTextureId = t[0]
+        bloomOutputFboId = f[0]
+        bloomOutputWidth = width
+        bloomOutputHeight = height
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return true
+    }
+
+    private fun setupBloomFramebuffers(width: Int, height: Int): Boolean {
+        val maxMipDimension = BloomLdrSettings.MAX_MIP_DIMENSION
+        val scale = maxMipDimension.toFloat() / maxOf(1, height).toFloat()
+        var mipWidth = (width * scale).toInt().coerceAtLeast(1)
+        var mipHeight = (height * scale).toInt().coerceAtLeast(1)
+        val widths = mutableListOf<Int>()
+        val heights = mutableListOf<Int>()
+        repeat(BloomLdrSettings.MIP_COUNT) {
+            widths += mipWidth
+            heights += mipHeight
+            mipWidth = maxOf(1, mipWidth / 2)
+            mipHeight = maxOf(1, mipHeight / 2)
+        }
+        val nextWidths = widths.toIntArray()
+        val nextHeights = heights.toIntArray()
+        if (bloomSourceWidth == width &&
+            bloomSourceHeight == height &&
+            bloomTexId.isNotEmpty() &&
+            bloomMipWidths.contentEquals(nextWidths) &&
+            bloomMipHeights.contentEquals(nextHeights)
+        ) {
+            return true
+        }
+        releaseBloomFramebuffers()
+        bloomSourceWidth = width
+        bloomSourceHeight = height
+        bloomMipCount = nextWidths.size
+        bloomMipWidths = nextWidths
+        bloomMipHeights = nextHeights
+        bloomTexId = IntArray(bloomMipCount)
+        bloomFboId = IntArray(bloomMipCount)
+        for (i in 0 until bloomMipCount) {
+            val t = IntArray(1)
+            val f = IntArray(1)
+            GLES30.glGenTextures(1, t, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                GLES30.GL_RGBA16F,
+                bloomMipWidths[i],
+                bloomMipHeights[i],
+                0,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                null
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glGenFramebuffers(1, f, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t[0], 0)
+            bloomTexId[i] = t[0]
+            bloomFboId[i] = f[0]
+            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                PLog.e(TAG, "Bloom mip framebuffer[$i] not complete: $status")
+                releaseBloomFramebuffers()
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                return false
+            }
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return true
+    }
+
+    private fun releaseBloomFramebuffers() {
+        for (textureId in bloomTexId) {
+            if (textureId != 0) GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
+        }
+        for (fboId in bloomFboId) {
+            if (fboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)
+        }
+        bloomTexId = IntArray(0)
+        bloomFboId = IntArray(0)
+        bloomMipWidths = IntArray(0)
+        bloomMipHeights = IntArray(0)
+        bloomMipCount = 0
+        bloomSourceWidth = 0
+        bloomSourceHeight = 0
+    }
+
+    private fun renderLdrBloom(sourceTextureId: Int, width: Int, height: Int, bloomStrength: Float): Boolean {
+        if (!setupBloomFramebuffers(width, height)) {
+            return false
+        }
+        if (!setupBloomOutputFramebuffer(width, height)) {
+            return false
+        }
+        if (bloomMipCount <= 0 || bloomDownsampleFirstProgram == 0 || bloomDownsampleProgram == 0 || bloomUpsampleProgram == 0 || bloomCompositeProgram == 0) {
+            return false
+        }
+
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glUseProgram(bloomDownsampleFirstProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[0])
+        GLES30.glViewport(0, 0, bloomMipWidths[0], bloomMipHeights[0])
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uInputTexture"), 0)
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uInputTexelSize"), 1f / width, 1f / height)
+        val thresholdPrecomputations = BloomLdrSettings.thresholdPrecomputations()
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(bloomDownsampleFirstProgram, "uThreshold"),
+            thresholdPrecomputations[0],
+            thresholdPrecomputations[1],
+            thresholdPrecomputations[2],
+            thresholdPrecomputations[3]
+        )
+        drawQuad(bloomDownsampleFirstProgram)
+
+        for (mip in 1 until bloomMipCount) {
+            GLES30.glUseProgram(bloomDownsampleProgram)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[mip])
+            GLES30.glViewport(0, 0, bloomMipWidths[mip], bloomMipHeights[mip])
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[mip - 1])
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomDownsampleProgram, "uInputTexture"), 0)
+            GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomDownsampleProgram, "uInputTexelSize"), 1f / bloomMipWidths[mip - 1], 1f / bloomMipHeights[mip - 1])
+            drawQuad(bloomDownsampleProgram)
+        }
+
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
+        GLES30.glBlendFunc(GLES30.GL_CONSTANT_COLOR, GLES30.GL_ONE)
+        GLES30.glUseProgram(bloomUpsampleProgram)
+        for (mip in bloomMipCount - 1 downTo 1) {
+            val blend = BloomLdrSettings.mipAddWeight(mip, bloomMipCount, bloomStrength)
+            GLES30.glBlendColor(blend, blend, blend, blend)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomFboId[mip - 1])
+            GLES30.glViewport(0, 0, bloomMipWidths[mip - 1], bloomMipHeights[mip - 1])
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[mip])
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomUpsampleProgram, "uInputTexture"), 0)
+            GLES30.glUniform2f(GLES30.glGetUniformLocation(bloomUpsampleProgram, "uInputTexelSize"), 1f / bloomMipWidths[mip], 1f / bloomMipHeights[mip])
+            drawQuad(bloomUpsampleProgram)
+        }
+        GLES30.glDisable(GLES30.GL_BLEND)
+
+        val finalBlend = BloomLdrSettings.compositeStrength(bloomStrength)
+        val compositeMipLower = BloomLdrSettings.compositeMipLowerIndex(bloomMipCount, bloomStrength)
+        val compositeMipUpper = BloomLdrSettings.compositeMipUpperIndex(bloomMipCount, bloomStrength)
+        val compositeMipBlend = BloomLdrSettings.compositeMipBlend(bloomMipCount, bloomStrength)
+        if (bitmapDenoisePassthroughProgram == 0) {
+            return false
+        }
+        renderTexturePassthrough(sourceTextureId, bloomOutputFboId, width, height)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bloomOutputFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glUseProgram(bloomCompositeProgram)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[compositeMipLower])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexture"), 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bloomTexId[compositeMipUpper])
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTextureNext"), 1)
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexelSize"),
+            1f / bloomMipWidths[compositeMipLower],
+            1f / bloomMipHeights[compositeMipLower]
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(bloomCompositeProgram, "uBloomTexelSizeNext"),
+            1f / bloomMipWidths[compositeMipUpper],
+            1f / bloomMipHeights[compositeMipUpper]
+        )
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(bloomCompositeProgram, "uBlend"), finalBlend)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(bloomCompositeProgram, "uMipBlend"), compositeMipBlend)
+        drawQuad(bloomCompositeProgram)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderLdrBloom final composite glError $error")
+            return false
+        }
+        return true
+    }
+
     private fun checkGlError(op: String) {
         val error = GLES30.glGetError()
         if (error != GLES30.GL_NO_ERROR) {
@@ -1195,6 +2597,54 @@ class LutImageProcessor {
         return shader
     }
 
+    private fun createFragmentProgram(vSource: String, fSource: String, name: String): Int {
+        val vShader = compileShader(GLES30.GL_VERTEX_SHADER, vSource)
+        val fShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fSource)
+        if (vShader == 0 || fShader == 0) return 0
+        val program = GLES30.glCreateProgram()
+        GLES30.glAttachShader(program, vShader)
+        GLES30.glAttachShader(program, fShader)
+        GLES30.glLinkProgram(program)
+        val linked = IntArray(1)
+        GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, linked, 0)
+        if (linked[0] == 0) {
+            PLog.e(TAG, "Program $name linking failed: ${GLES30.glGetProgramInfoLog(program)}")
+            GLES30.glDeleteProgram(program)
+            GLES30.glDeleteShader(vShader)
+            GLES30.glDeleteShader(fShader)
+            return 0
+        }
+        GLES30.glDeleteShader(vShader)
+        GLES30.glDeleteShader(fShader)
+        return program
+    }
+
+    private fun compileComputeProgram(source: String, name: String): Int {
+        val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)
+        GLES31.glShaderSource(shader, source)
+        GLES31.glCompileShader(shader)
+        val compiled = IntArray(1)
+        GLES31.glGetShaderiv(shader, GLES31.GL_COMPILE_STATUS, compiled, 0)
+        if (compiled[0] == 0) {
+            PLog.e(TAG, "Compute shader $name compilation failed: ${GLES31.glGetShaderInfoLog(shader)}")
+            GLES31.glDeleteShader(shader)
+            return 0
+        }
+        val program = GLES31.glCreateProgram()
+        GLES31.glAttachShader(program, shader)
+        GLES31.glLinkProgram(program)
+        val linked = IntArray(1)
+        GLES31.glGetProgramiv(program, GLES31.GL_LINK_STATUS, linked, 0)
+        if (linked[0] == 0) {
+            PLog.e(TAG, "Compute program $name linking failed: ${GLES31.glGetProgramInfoLog(program)}")
+            GLES31.glDeleteProgram(program)
+            GLES31.glDeleteShader(shader)
+            return 0
+        }
+        GLES31.glDeleteShader(shader)
+        return program
+    }
+
     private fun initBuffers() {
         // 顶点缓冲
         vertexBuffer = ByteBuffer.allocateDirect(Shaders.FULL_QUAD_VERTICES.size * 4)
@@ -1228,6 +2678,21 @@ class LutImageProcessor {
      * 释放资源
      */
     fun release() {
+        if (isReleased) return
+
+        if (Thread.currentThread() === glThread) {
+            releaseOnGlThread()
+        } else {
+            runBlocking(glDispatcher) {
+                releaseOnGlThread()
+            }
+        }
+
+        isReleased = true
+        glDispatcher.close()
+    }
+
+    private fun releaseOnGlThread() {
         if (!isInitialized) return
         if (isOnGlThread()) {
             releaseInternal()
@@ -1241,6 +2706,7 @@ class LutImageProcessor {
     private fun releaseInternal() {
         if (!isInitialized) return
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        GLES30.glFinish()
 
         if (shaderProgram != 0) {
             GLES30.glDeleteProgram(shaderProgram)
@@ -1251,44 +2717,75 @@ class LutImageProcessor {
         if (lutTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
         }
-        if (framebufferId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(framebufferId), 0)
+        releaseOutputFramebuffer()
+        releaseNaturalLightFramebuffer()
+        for (i in naturalLightPrograms.indices) {
+            if (naturalLightPrograms[i] != 0) {
+                GLES30.glDeleteProgram(naturalLightPrograms[i])
+                naturalLightPrograms[i] = 0
+            }
         }
-        if (outputTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(outputTextureId), 0)
+        if (naturalLightCurveTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(naturalLightCurveTextureId), 0)
+            naturalLightCurveTextureId = 0
+            naturalLightCurveSize = 0
+        }
+        if (naturalLightDummy3DTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(naturalLightDummy3DTextureId), 0)
+            naturalLightDummy3DTextureId = 0
         }
         if (pboId != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(pboId), 0)
             pboId = 0
         }
+        releaseReadbackBuffer()
 
-        if (nlmChromaProgram != 0) {
-            GLES30.glDeleteProgram(nlmChromaProgram)
-        }
-        if (nlmPassHProgram != 0) {
-            GLES30.glDeleteProgram(nlmPassHProgram)
-        }
-        if (nlmPassVProgram != 0) {
-            GLES30.glDeleteProgram(nlmPassVProgram)
-        }
-        if (nlmChromaTexId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(nlmChromaTexId), 0)
-        }
-        if (nlmChromaFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(nlmChromaFboId), 0)
+        if (bitmapDenoisePreconditionProgram != 0) GLES31.glDeleteProgram(bitmapDenoisePreconditionProgram)
+        if (bitmapDenoiseNlmInitProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmInitProgram)
+        if (bitmapDenoiseNlmFusedAccuProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFusedAccuProgram)
+        if (bitmapDenoiseNlmFinishProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFinishProgram)
+        if (bitmapDenoisePassthroughProgram != 0) GLES30.glDeleteProgram(bitmapDenoisePassthroughProgram)
+        if (naturalLightSrgbToLinearProgram != 0) GLES30.glDeleteProgram(naturalLightSrgbToLinearProgram)
+        if (bitmapChromaDenoiseProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseProgram)
+        if (lutSharpenProgram != 0) {
+            GLES30.glDeleteProgram(lutSharpenProgram)
+            lutSharpenProgram = 0
         }
         for (i in 0..1) {
-            if (nlmPassTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(nlmPassTexId[i]), 0)
-            if (nlmPassFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nlmPassFboId[i]), 0)
+            if (bitmapDenoiseTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(bitmapDenoiseTexId[i]), 0)
+            if (bitmapDenoiseFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bitmapDenoiseFboId[i]), 0)
         }
+        releaseLutSharpenFramebuffer()
+        if (bitmapDenoiseNlmU2BufferId != 0) {
+            GLES31.glDeleteBuffers(1, intArrayOf(bitmapDenoiseNlmU2BufferId), 0)
+            bitmapDenoiseNlmU2BufferId = 0
+        }
+        bitmapDenoiseNlmBufferPixels = 0
 
         // 释放 HDF 资源
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
         if (hdfBlurVProgram != 0) GLES30.glDeleteProgram(hdfBlurVProgram)
+        if (softLightBlurHProgram != 0) GLES30.glDeleteProgram(softLightBlurHProgram)
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
+            if (softLightTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(softLightTexId[i]), 0)
+            if (softLightFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(softLightFboId[i]), 0)
         }
+        
+        if (halationExtractBlurHProgram != 0) GLES30.glDeleteProgram(halationExtractBlurHProgram)
+        if (halationBlurVProgram != 0) GLES30.glDeleteProgram(halationBlurVProgram)
+        for (i in 0..1) {
+            if (halationTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(halationTexId[i]), 0)
+            if (halationFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(halationFboId[i]), 0)
+        }
+        if (bloomDownsampleFirstProgram != 0) GLES30.glDeleteProgram(bloomDownsampleFirstProgram)
+        if (bloomDownsampleProgram != 0) GLES30.glDeleteProgram(bloomDownsampleProgram)
+        if (bloomUpsampleProgram != 0) GLES30.glDeleteProgram(bloomUpsampleProgram)
+        if (bloomCompositeProgram != 0) GLES30.glDeleteProgram(bloomCompositeProgram)
+        releaseBloomFramebuffers()
+        if (bloomOutputFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bloomOutputFboId), 0)
+        if (bloomOutputTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(bloomOutputTextureId), 0)
 
         EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         EGL14.eglDestroySurface(eglDisplay, eglSurface)
@@ -1303,7 +2800,10 @@ class LutImageProcessor {
 
     companion object {
         private const val TAG = "LutImageProcessor"
-        private const val LCH_COLOR_BAND_COUNT = 9
+        private const val BITMAP_DENOISE_A = 0.008f
+        private const val BITMAP_DENOISE_B = 0.0005f
+        private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
+        private const val EGL_CONTEXT_PRIORITY_LOW_IMG = 0x3103
 
         // 2D 图片版本的顶点着色器
         private val IMAGE_VERTEX_SHADER = """
@@ -1322,6 +2822,47 @@ class LutImageProcessor {
             }
         """.trimIndent()
 
+        private val TEXTURE_PASSTHROUGH_SHADER = """
+            #version 300 es
+            precision mediump float;
+
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+
+            uniform sampler2D uInputTexture;
+
+            void main() {
+                fragColor = texture(uInputTexture, vTexCoord);
+            }
+        """.trimIndent()
+
+        private val SRGB_TO_LINEAR_SHADER = """
+            #version 300 es
+            precision highp float;
+
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+
+            uniform sampler2D uInputTexture;
+
+            vec3 srgbToLinear(vec3 srgb) {
+                vec3 color = max(srgb, vec3(0.0));
+                bvec3 useHigh = greaterThan(color, vec3(0.04045));
+                vec3 low = color / 12.92;
+                vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+                return vec3(
+                    useHigh.r ? high.r : low.r,
+                    useHigh.g ? high.g : low.g,
+                    useHigh.b ? high.b : low.b
+                );
+            }
+
+            void main() {
+                vec4 color = texture(uInputTexture, vTexCoord);
+                fragColor = vec4(srgbToLinear(color.rgb), color.a);
+            }
+        """.trimIndent()
+
         private val SHADER_BODY = """
             in vec2 vTexCoord;
             out vec4 fragColor;
@@ -1330,9 +2871,11 @@ class LutImageProcessor {
             uniform float uLutSize;
             uniform float uLutIntensity;
             uniform bool uLutEnabled;
+            uniform int uLutMaskType;
             uniform int uLutCurve;
             uniform int uLutColorSpace;
             uniform int uInputColorSpace;
+            uniform bool uIsHlgInput;
 
             // 色彩配方控制
             uniform bool uColorRecipeEnabled;
@@ -1357,19 +2900,23 @@ class LutImageProcessor {
             uniform float uNoiseSeed;     // 噪点随机种子
             uniform float uLowRes;        // 0.0 ~ 1.0 (低像素强度)
             uniform float uAspectRatio;   // 图像长宽比
-            uniform float uLchHueAdjustments[9];
-            uniform float uLchChromaAdjustments[9];
-            uniform float uLchLightnessAdjustments[9];
             
+            // Primary Calibration
+            uniform mat3 uPrimaryCalibrationMatrix;
+            
+            uniform sampler2D uCurveTexture;
+            uniform bool uCurveEnabled;
+
             // HDF 光晕效果
             uniform float uHalation;      // 0.0 ~ 1.0 (光晕强度)
             uniform sampler2D uHdfTexture; // 光晕合成纹理
+            uniform float uSoftLight;      // 0.0 ~ 1.0 (柔光扩散强度)
+            uniform sampler2D uSoftLightTexture; // 柔光扩散纹理
+            uniform float uRedHalation;      // 0.0 ~ 1.0 (胶片红晕强度)
+            uniform sampler2D uRedHalationTexture; // 胶片红晕合成纹理
             
             // 色散效果
             uniform float uChromaticAberration; // 0.0 ~ 1.0 (色散强度)
-            
-            // 后期处理参数
-            uniform float uSharpening;
             uniform vec2 uTexelSize;
             
             // 辅助函数：亮度计算
@@ -1380,41 +2927,48 @@ class LutImageProcessor {
                 return dot(color, weights);
             }
 
-            float log10(float x) { return log(x) * 0.4342944819; }
-            vec3 log10(vec3 x) { return log(x) * 0.4342944819; }
+            ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
+            ${PreviewColorShaderModules.HLG_TO_LINEAR}
+            ${PreviewColorShaderModules.EXPOSURE}
+            ${PreviewColorShaderModules.SANITIZE}
 
-            vec3 linearToSrgb(vec3 l) {
-                vec3 absL = abs(l);
-                vec3 result = mix(absL * 12.92, 1.055 * pow(absL, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, absL));
-                return sign(l) * result;
+            vec3 prepareToneSample(vec3 sampleColor) {
+                vec3 prepared = sampleColor;
+                if (uIsHlgInput) {
+                    prepared = hlgToLinear(prepared);
+                    prepared = linearToSrgb(prepared);
+                }
+                if (abs(uExposure) > 0.001) {
+                    prepared = applyExposureInLinearSpace(prepared, uExposure);
+                }
+                return sanitizeColor(prepared);
             }
 
-            vec3 srgbToLinear(vec3 c) {
-                vec3 absC = abs(c);
-                vec3 result = mix(absC / 12.92, pow((absC + 0.055) / 1.055, vec3(2.4)), step(0.04045, absC));
-                return sign(c) * result;
+            vec3 sampleToneSource(vec2 uv) {
+                return prepareToneSample(sampleImage(clamp(uv, vec2(0.0), vec2(1.0))).rgb);
             }
 
-            vec3 applyExposureInLinearSpace(vec3 srgbColor, float exposureEv) {
-                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
-                linearColor *= exp2(exposureEv);
-                return linearToSrgb(linearColor);
+            vec3 shRgbToXyz(vec3 rgb) {
+                vec3 linearRgb = srgbToLinear(rgb);
+                return mat3(
+                    0.4360747, 0.2225045, 0.0139322,
+                    0.3850649, 0.7168786, 0.0971045,
+                    0.1430804, 0.0606169, 0.7141733
+                ) * linearRgb;
             }
 
-            float sanitizeFloat(float value) {
-                if (value != value) return 0.0;
-                if (value > 1.0) return 1.0;
-                if (value < 0.0) return 0.0;
-                return value;
+            vec3 shXyzToRgb(vec3 xyz) {
+                vec3 linearRgb = mat3(
+                     3.1338561, -0.9787684,  0.0719453,
+                    -1.6168667,  1.9161415, -0.2289914,
+                    -0.4906146,  0.0334540,  1.4052427
+                ) * xyz;
+                return linearToSrgb(linearRgb);
             }
 
-            vec3 sanitizeColor(vec3 color) {
-                return vec3(
-                    sanitizeFloat(color.r),
-                    sanitizeFloat(color.g),
-                    sanitizeFloat(color.b)
-                );
-            }
+            ${ShadowsHighlightsShader.GLSL}
+
+            ${PreviewColorShaderModules.FILM_GRAIN}
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -1429,225 +2983,45 @@ class LutImageProcessor {
                     : mix(1.0, 1.85, shoulderAmount);
 
                 if (safeLuma <= pivotPoint) {
-                    float segment = safeLuma / max(pivotPoint, 0.0001);
-                    return pow(segment, toeGamma) * pivotPoint;
+                    float segment = clamp(safeLuma / max(pivotPoint, 0.0001), 0.0, 1.0);
+                    return clamp(pow(segment, toeGamma) * pivotPoint, 0.0, 1.0);
                 }
 
-                float segment = (safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001);
-                return 1.0 - pow(1.0 - segment, shoulderGamma) * (1.0 - pivotPoint);
+                float segment = clamp((safeLuma - pivotPoint) / max(1.0 - pivotPoint, 0.0001), 0.0, 1.0);
+                float result = 1.0 - pow(max(0.0, 1.0 - segment), shoulderGamma) * (1.0 - pivotPoint);
+                return clamp(result, 0.0, 1.0);
             }
 
             vec3 applyToneCurve(vec3 color, float toe, float shoulder, float pivot) {
                 if (abs(toe) < 0.001 && abs(shoulder) < 0.001 && abs(pivot) < 0.001) {
                     return color;
                 }
-                vec3 safeColor = clamp(color, 0.0, 1.0);
-                float luma = getLuma(safeColor);
-                float curvedLuma = applyToneCurveToLuma(luma, toe, shoulder, pivot);
-                if (luma < 0.0001) {
-                    return safeColor;
+                vec3 nonNegativeColor = max(color, vec3(0.0));
+                vec3 curveSampleColor = clamp(nonNegativeColor, 0.0, 1.0);
+                float luma = getLuma(curveSampleColor);
+                float peak = max(curveSampleColor.r, max(curveSampleColor.g, curveSampleColor.b));
+                float toneSignal = mix(luma, peak, 0.65);
+                float curvedSignal = applyToneCurveToLuma(toneSignal, toe, shoulder, pivot);
+                if (toneSignal < 0.0001) {
+                    return curveSampleColor;
                 }
-                vec3 scaled = safeColor * (curvedLuma / luma);
-                return clamp(mix(vec3(curvedLuma), scaled, 0.92), 0.0, 1.0);
+                float safeRatio = clamp(curvedSignal / max(toneSignal, 0.0001), 0.0, 16.0);
+                vec3 scaled = nonNegativeColor * safeRatio;
+                return sanitizeColor(mix(vec3(curvedSignal), scaled, 0.96));
             }
 
-            bool isLogLutCurve(int curveType) {
-                return curveType >= 2 && curveType <= 6;
-            }
+            ${PreviewColorShaderModules.OKLAB}
 
-            vec3 bt709Gamma24ToSrgb(vec3 gammaColor) {
-                vec3 linearColor = pow(clamp(gammaColor, 0.0, 1.0), vec3(2.4));
-                return clamp(linearToSrgb(linearColor), 0.0, 1.0);
-            }
+            ${PreviewColorShaderModules.LCH_CLASSIFIERS}
 
-            vec3 linearRgbToOklab(vec3 c) {
-                vec3 lms = mat3(
-                    0.4122214708, 0.2119034982, 0.0883024619,
-                    0.5363325363, 0.6806995451, 0.2817188376,
-                    0.0514459929, 0.1073969566, 0.6299787005
-                ) * c;
-                vec3 lmsCbrt = pow(max(lms, vec3(0.0)), vec3(1.0 / 3.0));
-                return mat3(
-                    0.2104542553, 1.9779984951, 0.0259040371,
-                    0.7936177850, -2.4285922050, 0.7827717662,
-                    -0.0040720468, 0.4505937099, -0.8086757660
-                ) * lmsCbrt;
-            }
+            ${PreviewColorShaderModules.LUT_MASK}
+            ${PreviewColorShaderModules.OKLCH_DENSITY}
 
-            vec3 oklabToLinearRgb(vec3 lab) {
-                vec3 lms = mat3(
-                    1.0, 1.0, 1.0,
-                    0.3963377774, -0.1055613458, -0.0894841775,
-                    0.2158037573, -0.0638541728, -1.2914855480
-                ) * lab;
-                vec3 lms3 = lms * lms * lms;
-                return mat3(
-                    4.0767416621, -1.2684380046, -0.0041960863,
-                    -3.3077115913, 2.6097574011, -0.7034186147,
-                    0.2309699292, -0.3413193965, 1.7076147010
-                ) * lms3;
-            }
+            ${PreviewColorShaderModules.LCH_MIXER}
 
-            float wrapAngle(float angle) {
-                return mod(angle + PI, 2.0 * PI) - PI;
-            }
-
-            float colorBandWeight(float hue, float center, float chroma) {
-                float dist = abs(wrapAngle(hue - center));
-                float hueWeight = 1.0 - smoothstep(radians(18.0), radians(42.0), dist);
-                float chromaWeight = smoothstep(0.02, 0.08, chroma);
-                return hueWeight * chromaWeight;
-            }
-
-            float fullCoverageBandWeight(float hue, float center, float chroma) {
-                float dist = abs(wrapAngle(hue - center));
-                float hueWeight = max(0.0, 1.0 - dist / radians(55.0));
-                float chromaWeight = smoothstep(0.005, 0.03, chroma);
-                return hueWeight * chromaWeight;
-            }
-
-            float skinBandWeight(float hue, float chroma, float lightness) {
-                float hueWeight = 1.0 - smoothstep(radians(10.0), radians(24.0), abs(wrapAngle(hue - radians(52.0))));
-                float chromaWeight = smoothstep(0.015, 0.10, chroma);
-                float lightnessWeight = smoothstep(0.32, 0.52, lightness) * (1.0 - smoothstep(0.78, 0.90, lightness));
-                return hueWeight * chromaWeight * lightnessWeight;
-            }
-
-            vec3 applyOklchDensity(vec3 srgbColor, float density) {
-                if (abs(density) < 0.0001) {
-                    return srgbColor;
-                }
-
-                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
-                vec3 lab = linearRgbToOklab(linearColor);
-                float chroma = length(lab.yz);
-                float hue = atan(lab.z, lab.y);
-                const float CHROMA_BIAS = 0.35;
-                float densityScale = max(0.0, 1.0 + density * CHROMA_BIAS);
-                float newChroma = chroma * densityScale;
-                const float DENSITY_K = 1.85;
-                float newLightness = clamp(lab.x * exp(-DENSITY_K * density * chroma), 0.0, 1.0);
-                vec3 denseLab = vec3(newLightness, cos(hue) * newChroma, sin(hue) * newChroma);
-                vec3 denseLinear = max(oklabToLinearRgb(denseLab), vec3(0.0));
-                return clamp(linearToSrgb(denseLinear), 0.0, 1.0);
-            }
-
-            vec3 applyLchColorMixer(vec3 srgbColor) {
-                vec3 linearColor = srgbToLinear(clamp(srgbColor, 0.0, 1.0));
-                vec3 lab = linearRgbToOklab(linearColor);
-                float chroma = length(lab.yz);
-                float hue = atan(lab.z, lab.y);
-                if (hue < 0.0) hue += 2.0 * PI;
-
-                float centers[8] = float[](
-                    radians(20.0),
-                    radians(45.0),
-                    radians(75.0),
-                    radians(140.0),
-                    radians(200.0),
-                    radians(255.0),
-                    radians(295.0),
-                    radians(335.0)
-                );
-
-                float hueShift = 0.0;
-                float chromaScale = 1.0;
-                float lightnessShift = 0.0;
-                float bandWeights[8];
-                float totalBandWeight = 0.0;
-
-                for (int i = 0; i < 8; i++) {
-                    float weight = fullCoverageBandWeight(hue, centers[i], chroma);
-                    bandWeights[i] = weight;
-                    totalBandWeight += weight;
-                }
-
-                if (totalBandWeight > 0.0001) {
-                    for (int i = 0; i < 8; i++) {
-                        float weight = bandWeights[i] / totalBandWeight;
-                        hueShift += uLchHueAdjustments[i + 1] * weight * radians(24.0);
-                        chromaScale += uLchChromaAdjustments[i + 1] * weight;
-                        lightnessShift += uLchLightnessAdjustments[i + 1] * weight * 0.18;
-                    }
-                }
-
-                float yellowRatio = max(0.0, lab.z) / (abs(lab.y) + abs(lab.z) + 0.0001);
-                float redDominance = max(0.0, lab.y - lab.z);
-                float lipSuppression = 1.0 - smoothstep(0.015, 0.065, redDominance);
-                float skinWeight = skinBandWeight(hue, chroma, lab.x) *
-                    smoothstep(0.28, 0.52, yellowRatio) *
-                    lipSuppression;
-                if (skinWeight > 0.0001) {
-                    hueShift += uLchHueAdjustments[0] * skinWeight * radians(18.0);
-                    chromaScale += uLchChromaAdjustments[0] * skinWeight;
-                    lightnessShift += uLchLightnessAdjustments[0] * skinWeight * 0.12;
-                }
-
-                if (abs(hueShift) < 0.0001 && abs(chromaScale - 1.0) < 0.0001 && abs(lightnessShift) < 0.0001) {
-                    return srgbColor;
-                }
-
-                float newHue = hue + hueShift;
-                float newChroma = max(0.0, chroma * max(0.0, chromaScale));
-                float newLightness = clamp(lab.x + lightnessShift, 0.0, 1.0);
-                vec3 mixedLab = vec3(newLightness, cos(newHue) * newChroma, sin(newHue) * newChroma);
-                vec3 mixedLinear = max(oklabToLinearRgb(mixedLab), vec3(0.0));
-                return clamp(linearToSrgb(mixedLinear), 0.0, 1.0);
-            }
-
-            vec3 applyLutCurve(vec3 l, int curveType) {
-                if (curveType == 0) { // sRGB
-                    return linearToSrgb(l);
-                }
-                if (curveType == 1) return l; // LINEAR
-                if (curveType == 2) { // V-Log
-                    return mix(5.6 * l + 0.125, 0.241514 * log10(l + 0.00873) + 0.598206, step(0.01, l));
-                }
-                if (curveType == 3) { // S-Log3
-                    return mix((l * (171.2102946929 - 95.0) / 0.01125 + 95.0) / 1023.0, (420.0 + log10((l + 0.01) / (0.18 + 0.01)) * 261.5) / 1023.0, step(0.01125, l));
-                }
-                if (curveType == 4) { // F-Log2
-                    return mix(8.799461 * l + 0.092864, 0.245281 * log10(5.555556 * l + 0.064829) + 0.384316, step(0.00089, l));
-                }
-                if (curveType == 5) { // LogC
-                    return mix(5.367655 * l + 0.092809, 0.247190 * log10(5.555556 * l + 0.052272) + 0.385537, step(0.010591, l));
-                }
-                if (curveType == 6) { // AppleLog
-                    return mix(mix(vec3(0.0), 47.28711236 * pow(l + 0.05641088, vec3(2.0)), step(-0.05641088, l)), 0.08550479 * (log(l + 0.00964052) / log(2.0)) + 0.69336945, step(0.01, l));
-                }
-                if (curveType == 7) { // HLG
-                    float ha = 0.17883277;
-                    float hb = 1.0 - 4.0 * ha;
-                    float hc = 0.5 - ha * log(4.0 * ha);
-                    return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
-                }
-                return l;
-            }
-
-            vec3 applyLutColorSpace(vec3 rgb, int colorSpace) {
-                if (colorSpace == 0) return rgb; // sRGB
-                
-                // Matrices for Linear sRGB to target color space (aligned with ColorSpace.kt)
-                if (colorSpace == 1) { // DCI-P3 (Bradford adapted)
-                    return mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * rgb;
-                }
-                if (colorSpace == 2) { // BT2020
-                    return mat3(0.627404, 0.069097, 0.016391, 0.329283, 0.919540, 0.088013, 0.043313, 0.011362, 0.895595) * rgb;
-                }
-                if (colorSpace == 3) { // ARRI4
-                    return mat3(0.565837, 0.088626, 0.017750, 0.340331, 0.809347, 0.109448, 0.093832, 0.102028, 0.872802) * rgb;
-                }
-                if (colorSpace == 4) { // AppleLog2
-                    return mat3(0.608104, 0.062316, 0.031133, 0.259353, 0.804609, 0.133756, 0.132543, 0.133076, 0.835112) * rgb;
-                }
-                if (colorSpace == 5) { // S-Gamut3.Cine
-                    return mat3(0.645679, 0.087530, 0.036957, 0.259115, 0.759700, 0.129281, 0.095206, 0.152770, 0.833762) * rgb;
-                }
-                if (colorSpace == 6) { // ACES_AP1
-                    return mat3(0.613083, 0.070004, 0.020491, 0.341167, 0.918063, 0.106764, 0.045750, 0.011934, 0.872745) * rgb;
-                }
-                return rgb;
-            }
+            ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
+            ${PreviewColorShaderModules.EXTENDED_LUT_CURVES}
+            ${PreviewColorShaderModules.LUT_COLOR_SPACE}
             
             // 辅助函数：高斯权重 (预计算 sigma^2 的倒数以提升性能)
             float gaussian(float x, float invSigmaSq2) {
@@ -1701,6 +3075,11 @@ class LutImageProcessor {
                     color = sampleImage(uvCoord);
                 }
 
+                if (uIsHlgInput) {
+                    color.rgb = hlgToLinear(color.rgb);
+                    color.rgb = linearToSrgb(color.rgb);
+                }
+
                 // === 色彩配方处理（按专业后期流程顺序） ===
                 if (uColorRecipeEnabled) {
                     // 1. 曝光调整（在线性空间执行 EV 增益，再回到显示空间）
@@ -1709,24 +3088,8 @@ class LutImageProcessor {
                         color.rgb = sanitizeColor(color.rgb);
                     }
 
-                    // 2. 高光/阴影调整（分区调整，基于亮度 mask）
-                    float luma = getLuma(color.rgb);
-                    float highlightMask = smoothstep(0.5, 1.0, luma);
-                    float shadowMask = smoothstep(0.5, 0.0, luma);
-                    float highlightFactor;
-                    if (uHighlights > 0.0) {
-                        highlightFactor = 1.0 + uHighlights * 0.7;
-                    } else {
-                        highlightFactor = 1.0 + uHighlights * 0.3;
-                    }
-                    color.rgb = mix(color.rgb, color.rgb * highlightFactor, highlightMask);
-                    vec3 shadowTarget;
-                    if (uShadows > 0.0) {
-                        shadowTarget = mix(color.rgb, vec3(1.0) * luma, uShadows * 0.2) + (color.rgb * uShadows * 0.5);
-                    } else {
-                        shadowTarget = color.rgb * (1.0 + uShadows * 0.5);
-                    }
-                    color.rgb = mix(color.rgb, shadowTarget, shadowMask);
+                    // 2. 高光/阴影调整：RT 风格 tonal width + 局部 base mask，避免线性乘法洗白全图
+                    color.rgb = applyShadowsHighlights(color.rgb, uvCoord);
                     color.rgb = sanitizeColor(color.rgb);
 
                     // 3. 对比度（围绕中灰点调整）
@@ -1753,6 +3116,10 @@ class LutImageProcessor {
                         color.rgb = applyOklchDensity(color.rgb, uVibrance);
                         color.rgb = sanitizeColor(color.rgb);
                     }
+
+                    // 6.5. 颜色校准 (Camera Calibration)
+                    color.rgb = applyPrimaryCalibration(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyLchColorMixer(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
@@ -1804,20 +3171,7 @@ class LutImageProcessor {
 
                     // 10. 颗粒（Film Grain - 胶片颗粒感）
                     if (uFilmGrain > 0.0) {
-                        // 使用纹理坐标生成伪随机噪声
-                        float grainNoise = fract(sin(dot(uvCoord * 1000.0, vec2(12.9898, 78.233))) * 43758.5453);
-                        
-                        // 将噪声从 [0,1] 映射到 [-1,1]
-                        grainNoise = (grainNoise - 0.5) * 2.0;
-                        
-                        // 根据亮度自适应调整颗粒强度
-                        float luma = getLuma(color.rgb);
-                        float grainMask = 1.0 - abs(luma - 0.5) * 2.0;
-                        grainMask = grainMask * 0.5 + 0.5;
-                        
-                        // 应用颗粒（增强强度）
-                        float grainStrength = uFilmGrain * 0.1 * grainMask;
-                        color.rgb += grainNoise * grainStrength;
+                        color.rgb = applyDensityParticleGrain(color.rgb, uvCoord, uFilmGrain);
                     }
 
                     // 11. 随机噪点 (增强的亮度和彩色噪点，动态刷新)
@@ -1842,7 +3196,16 @@ class LutImageProcessor {
                     }
 
                     // Clamp 到合法范围
-                    color.rgb = clamp(color.rgb, 0.0, 1.0);
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+
+                // === 曲线调整（色彩配方之后、HDF/LUT 之前） ===
+                if (uCurveEnabled) {
+                    vec3 clamped = clamp(color.rgb, 0.0, 1.0);
+                    float r = texture(uCurveTexture, vec2(clamped.r, 0.5)).r;
+                    float g = texture(uCurveTexture, vec2(clamped.g, 0.5)).g;
+                    float b = texture(uCurveTexture, vec2(clamped.b, 0.5)).b;
+                    color.rgb = sanitizeColor(vec3(r, g, b));
                 }
 
                 // === HDF 光晕效果（在色彩配方之后，LUT 之前） ===
@@ -1867,58 +3230,53 @@ class LutImageProcessor {
                     // 5. 稍微削减对比度以获得“电影感”
                     color.rgb = (color.rgb - 0.5) * (1.0 - uHalation * 0.08) + 0.5;
                 }
+                
+                if (uRedHalation > 0.0) {
+                    vec3 halationBlur = texture(uRedHalationTexture, uvCoord).rgb;
+                    float halationMask = smoothstep(0.001, 0.06, dot(halationBlur, vec3(0.2126, 0.7152, 0.0722)));
+                    vec3 halationStrength = vec3(0.42, 0.14, 0.02) * uRedHalation;
+                    color.rgb += halationBlur * halationStrength * halationMask;
+                }
 
                 // === LUT 处理（在色彩配方之后） ===
-                // 假定 LUT 始终为 sRGB 色彩空间进行计算，进行管线优化：
-                // 省略了 applyLutColorSpace 以及避免了多次线性和非线性空间的来回切换。
                 if (uLutEnabled && uLutIntensity > 0.0) {
                     bool isP3 = (uInputColorSpace == 1);
                     vec3 linearInput = srgbToLinear(color.rgb);
                     
                     if (isP3) {
-                         // 直接将 P3 转为 sRGB 线性空间，避免直接套用非线性转换
                          linearInput = mat3(1.22486, -0.04205, -0.01974, -0.22471, 1.04192, -0.07865, 0.00000, 0.00013, 1.09837) * linearInput;
                     }
+                    float effectiveLutIntensity = uLutIntensity * lutMaskWeight(uLutMaskType, linearInput);
 
-                    // 假定 LUT 为 sRGB 空间，直接用它的专属曲线适配
-                    vec3 lutInColor = applyLutCurve(linearInput, uLutCurve);
+                    vec3 colorSpaceRGB = applyLutColorSpace(linearInput, uLutColorSpace);
+                    vec3 lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
                     
                     float scale = (uLutSize - 1.0) / uLutSize;
                     float offset = 1.0 / (2.0 * uLutSize);
                     vec3 lutCoord = lutInColor * scale + offset;
                     vec4 lutColor = texture(uLutTexture, lutCoord);
-                    if (isLogLutCurve(uLutCurve)) {
-                        lutColor.rgb = bt709Gamma24ToSrgb(lutColor.rgb);
-                    }
 
                     // 在非线性 sRGB 空间进行混合
                     vec3 srgbColor = linearToSrgb(linearInput);
-                    color.rgb = mix(srgbColor, lutColor.rgb, uLutIntensity);
+                    color.rgb = mix(srgbColor, lutColor.rgb, effectiveLutIntensity);
 
                     if (isP3) {
                         // 混合完成后的 sRGB 颜色转回 P3
                         vec3 linearSrgbOut = srgbToLinear(color.rgb);
-                        color.rgb = linearToSrgb(mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * linearSrgbOut);
-                    }
+	                        color.rgb = linearToSrgb(mat3(0.875905, 0.035332, 0.016382, 0.122070, 0.964542, 0.063767, 0.002025, 0.000126, 0.919851) * linearSrgbOut);
+	                    }
+	                }
+
+                // === 柔光效果（LUT 之后，保持和实时预览一致） ===
+                if (uSoftLight > 0.0) {
+                    vec3 softBlur = texture(uSoftLightTexture, uvCoord).rgb;
+                    vec3 screen = vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - softBlur);
+                    vec3 softGlow = mix(color.rgb, screen, 0.42);
+                    color.rgb = mix(color.rgb, softGlow, uSoftLight * 0.75);
+                    float softLuma = dot(softBlur, vec3(0.2126, 0.7152, 0.0722));
+                    color.rgb += vec3(softLuma) * (uSoftLight * 0.025);
+                    color.rgb = (color.rgb - 0.5) * (1.0 - uSoftLight * 0.05) + 0.5;
                 }
-                
-                // --- 4. 锐化 ---
-                if (uSharpening > 0.0) {
-                    // 使用基于亮度的 Unsharp Mask，避免色彩污染
-                    vec3 inputColor = sampleImage(uvCoord).rgb;
-                    float inputLuma = getLuma(inputColor);
-
-                    float neighborsLuma = 0.0;
-                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(-uTexelSize.x, 0.0)).rgb);
-                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(uTexelSize.x, 0.0)).rgb);
-                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(0.0, -uTexelSize.y)).rgb);
-                    neighborsLuma += getLuma(sampleImage(uvCoord + vec2(0.0, uTexelSize.y)).rgb);
-                    float blurLuma = neighborsLuma * 0.25;
-
-                    float detail = inputLuma - blurLuma;
-                    color.rgb += detail * uSharpening * 2.0;
-                }
-
                 fragColor = clamp(color, 0.0, 1.0);
             }
         """.trimIndent()
@@ -1929,7 +3287,41 @@ class LutImageProcessor {
                 "vec4 sampleImage(vec2 uv) { return texture(uImageTexture, uv); }\n" +
                 SHADER_BODY
 
-        // === HDF (Highlight Diffusion Filter) Shaders ===
+        // === HDF (Highlight Diffusion Filter) \u0026 Halation Shaders ===
+
+        private val HALATION_EXTRACT_BLUR_H_SHADER = """
+            #version 300 es
+            precision highp float;
+            
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            
+            uniform sampler2D uInputTexture;
+            uniform vec2 uTexelSize;
+            uniform float uThreshold;
+            uniform float uStrength;
+            
+            void main() {
+                vec3 tint = vec3(1.0, 0.28, 0.04);
+                
+                #define EXTRACT(sampleColor) \
+                    (max(sampleColor - vec3(uThreshold), vec3(0.0)) * tint * (1.5 + uStrength * 3.0) * smoothstep(uThreshold - 0.24, uThreshold + 0.36, max(sampleColor.r, max(sampleColor.g, sampleColor.b))))
+                
+                vec3 color = texture(uInputTexture, vTexCoord).rgb;
+                vec3 sum = EXTRACT(color) * 0.204164;
+                
+                float weights[5] = float[](0.204164, 0.304005, 0.093910, 0.010416, 0.000005);
+                float offsets[5] = float[](0.0, 1.407333, 3.294215, 5.176470, 7.058823);
+                
+                for (int i = 1; i < 5; i++) {
+                    float offset = offsets[i] * uTexelSize.x * 2.0;
+                    sum += EXTRACT(texture(uInputTexture, vTexCoord + vec2(offset, 0.0)).rgb) * weights[i];
+                    sum += EXTRACT(texture(uInputTexture, vTexCoord - vec2(offset, 0.0)).rgb) * weights[i];
+                }
+                
+                fragColor = vec4(sum, 1.0);
+            }
+        """.trimIndent()
 
         /**
          * Pass 1: 提取高光区域 + 水平高斯模糊

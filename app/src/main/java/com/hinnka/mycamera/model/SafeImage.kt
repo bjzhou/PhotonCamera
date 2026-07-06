@@ -2,8 +2,10 @@ package com.hinnka.mycamera.model
 
 import android.media.Image
 import com.hinnka.mycamera.camera.Camera2Controller
+import java.util.concurrent.atomic.AtomicBoolean
 
 class SafeImage(val image: Image, private val camera2Controller: Camera2Controller) : AutoCloseable {
+    private val closed = AtomicBoolean(false)
 
     val width: Int
         get() = image.width
@@ -17,7 +19,9 @@ class SafeImage(val image: Image, private val camera2Controller: Camera2Controll
         get() = image.timestamp
 
     override fun close() {
-        image.close()
-        camera2Controller.onImageRelease()
+        if (closed.compareAndSet(false, true)) {
+            image.close()
+            camera2Controller.onImageRelease()
+        }
     }
 }

@@ -4,13 +4,29 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationManager
-import android.os.Bundle
-import com.hinnka.mycamera.utils.PLog
 
 class LocationManager(private val context: Context) {
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
     private var currentLocation: Location? = null
+
+    @SuppressLint("MissingPermission")
+    fun requestCurrentLocation() {
+        if (!hasLocationPermission()) {
+            return
+        }
+
+        try {
+            val providers = locationManager.getProviders(true)
+            for (provider in providers) {
+                locationManager.getCurrentLocation(provider, null, context.mainExecutor) { location ->
+                    location?.let { updateCurrentLocation(it) }
+                }
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to request current location", e)
+        }
+    }
 
     @SuppressLint("MissingPermission")
     fun updateLocation() {
@@ -20,14 +36,10 @@ class LocationManager(private val context: Context) {
 
         try {
             val providers = locationManager.getProviders(true)
-            var bestLocation: Location? = null
             for (provider in providers) {
-                val l = locationManager.getLastKnownLocation(provider) ?: continue
-                if (bestLocation == null || l.accuracy < bestLocation.accuracy) {
-                    bestLocation = l
-                }
+                val location = locationManager.getLastKnownLocation(provider) ?: continue
+                updateCurrentLocation(location)
             }
-            currentLocation = bestLocation
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to get last known location", e)
         }
@@ -35,13 +47,27 @@ class LocationManager(private val context: Context) {
 
     fun getCurrentLocation(): Location? {
         updateLocation()
-        val location = currentLocation ?: return null
-        if (DeviceUtil.isChinaFlavor) {
+        val location = Location(currentLocation ?: return null)
+        if (DeviceUtil.canShowPhantom) {
             val converted = CoordinateConverter.wgs84ToGcj02(location.latitude, location.longitude)
             location.latitude = converted[0]
             location.longitude = converted[1]
         }
         return location
+    }
+
+    private fun updateCurrentLocation(location: Location) {
+        val previous = currentLocation
+        if (previous == null || isBetterLocation(location, previous)) {
+            currentLocation = Location(location)
+        }
+    }
+
+    private fun isBetterLocation(location: Location, currentBest: Location): Boolean {
+        if (location.elapsedRealtimeNanos != currentBest.elapsedRealtimeNanos) {
+            return location.elapsedRealtimeNanos > currentBest.elapsedRealtimeNanos
+        }
+        return location.accuracy < currentBest.accuracy
     }
 
     private fun hasLocationPermission(): Boolean {

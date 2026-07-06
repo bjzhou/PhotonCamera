@@ -2,42 +2,27 @@
     <string name="app_name">Photon Camera</string>
     
     <!-- Camera Controls -->
-    <string name="capture">촬영</string>
     <string name="switch_camera">카메라 전환</string>
     <string name="settings">설정</string>
     <string name="flash">플래시</string>
     <string name="timer">타이머</string>
     <string name="histogram">히스토그램</string>
-    <string name="grid">격자</string>
     <string name="back">뒤로</string>
     
     <!-- Exposure Controls -->
-    <string name="exposure_compensation">EV</string>
-    <string name="iso">ISO</string>
-    <string name="shutter_speed">셔터</string>
-    <string name="auto">자동</string>
     
     <!-- Focus -->
-    <string name="focus">초점</string>
-    <string name="tap_to_focus">탭하여 초점 맞추기</string>
     
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">화면 비율</string>
-    <string name="ratio_3_2">3:2</string>
-    <string name="ratio_4_3">4:3</string>
-    <string name="ratio_16_9">16:9</string>
-    <string name="ratio_1_1">1:1</string>
     
     <!-- Permissions -->
     <string name="camera_permission_required">카메라 및 마이크 권한이 필요합니다</string>
     <string name="grant_permission">권한 허용</string>
     
     <!-- Zoom -->
-    <string name="zoom">줌</string>
     
     <!-- Gallery -->
-    <string name="gallery">갤러리</string>
-    <string name="photo_detail">사진 상세 정보</string>
     <string name="share">공유</string>
     <string name="delete">삭제</string>
     <string name="export">내보내기</string>
@@ -47,20 +32,16 @@
     <string name="select_all">전체 선택</string>
     <string name="cancel">취소</string>
     <string name="save">저장</string>
-    <string name="rotate">회전</string>
     <string name="crop">자르기</string>
-    <string name="brightness">밝기</string>
     <string name="delete_confirm">이 사진을 삭제하시겠습니까?</string>
     <string name="delete_multiple_confirm">%d개의 사진을 삭제하시겠습니까?</string>
-    <string name="delete_exported_photos">시스템 갤러리에서도 삭제</string>
+    <string name="delete_exported_photos_count">내보낸 사진 %d개도 삭제</string>
+    <string name="delete_exported_videos_count">내보낸 동영상 %d개도 삭제</string>
     <string name="no_photos">사진이 없습니다</string>
     <string name="photo_info">사진 정보</string>
     <string name="filter">LUT</string>
-    <string name="intensity">강도</string>
-    <string name="original">원본</string>
     <string name="export_confirm">LUT가 적용된 사진을 내보내시겠습니까?</string>
     <string name="items_selected">%d개 선택됨</string>
-    <string name="not_selected">선택되지 않음</string>
     <string name="selected">선택됨</string>
     <string name="imported">가져옴</string>
     <string name="photo_info_date">날짜</string>
@@ -75,9 +56,7 @@
     <string name="frame">프레임</string>
     <string name="none">없음</string>
     <string name="show_app_branding">앱 브랜딩 표시</string>
-    <string name="export_with_frame_confirm">프레임 워터마크가 포함된 사진을 내보내시겠습니까?</string>
     <string name="import_photo">가져오기</string>
-    <string name="adjust_watermark">워터마크 조정</string>
     <string name="watermark_adjustment">워터마크 조정</string>
     <string name="logo">로고</string>
     <string name="text_content">텍스트 내용</string>
@@ -94,23 +73,16 @@
     <!-- Settings -->
     <string name="settings_title">설정</string>
     <string name="settings_section_capture">촬영</string>
-    <string name="settings_section_display">화면</string>
     <string name="settings_use_raw">RAW 촬영</string>
-    <string name="settings_use_raw_description">더 높은 품질을 위해 RAW 형식(DNG)으로 사진을 촬영합니다. YUV 형식을 사용하려면 끕니다.</string>
+    <string name="settings_use_raw_description">더 높은 품질을 위해 RAW 형식(DNG)으로 사진을 촬영합니다.</string>
     <string name="settings_level_indicator">수평계</string>
     <string name="settings_level_description">촬영 중 수평계 표시</string>
     <string name="settings_grid_lines">격자선</string>
     <string name="settings_grid_description">구도를 위한 격자선 표시</string>
     <string name="settings_use_multi_frame">멀티 프레임 스태킹</string>
-    <string name="settings_use_multi_frame_description">여러 프레임을 촬영하고 합성하여 품질을 높이고 노이즈를 줄입니다.</string>
     <string name="settings_multi_frame_count">멀티 프레임 수</string>
     <string name="settings_multi_frame_count_description">멀티 프레임 스태킹을 위한 프레임 수 (프레임이 많을수록 품질은 좋아지지만 속도가 느려집니다).</string>
     <string name="settings_use_super_resolution">슈퍼 해상도</string>
-    <string name="settings_use_super_resolution_description">더 자세한 디테일을 위해 2배 멀티 프레임 슈퍼 해상도를 사용합니다. (멀티 프레임 스태킹 필요)</string>
-    <string name="settings_raw_engine">RAW 처리 엔진</string>
-    <string name="settings_raw_engine_description">RAW 데이터 처리를 위한 엔진 선택</string>
-    <string name="settings_raw_engine_native">네이티브</string>
-    <string name="settings_raw_engine_self_developed">자체 개발</string>
     <string name="settings_use_live_photo">라이브 포토</string>
     <string name="settings_use_live_photo_description">역동적인 라이브 포토 효과를 위해 사진과 함께 짧은 비디오 클립을 촬영합니다.</string>
     <string name="settings_use_gpu_acceleration">GPU 가속</string>
@@ -118,13 +90,15 @@
     <string name="settings_section_frame">프레임 워터마크</string>
     <string name="settings_frame_style">프레임 스타일</string>
     <string name="settings_frame_description">사진에 장식용 프레임과 워터마크 추가</string>
-    <string name="settings_section_operation">작동</string>
-    <string name="settings_section_image_processing">이미지 처리</string>
     <string name="settings_section_software_processing">미세 조정</string>
     <string name="settings_shutter_sound">셔터 소리</string>
     <string name="settings_shutter_sound_description">사진 촬영 시 소리 재생</string>
     <string name="settings_vibration">진동</string>
     <string name="settings_vibration_description">사진 촬영 시 진동</string>
+    <string name="settings_keep_screen_on">화면 항상 켜기</string>
+    <string name="settings_keep_screen_on_description">카메라 사용 중 화면이 꺼지지 않게 합니다. 동영상 녹화 중에는 항상 화면을 켜 둡니다.</string>
+    <string name="settings_window_screen_brightness">화면 밝기</string>
+    <string name="settings_window_screen_brightness_description">이 앱 창의 화면 밝기를 설정합니다. 끄면 시스템 기본 밝기를 사용합니다.</string>
     <string name="settings_volume_key_action">볼륨 키 동작</string>
     <string name="settings_volume_key_action_description">촬영 중 볼륨 키의 동작을 선택합니다</string>
     <string name="settings_volume_key_action_none">볼륨 조절</string>
@@ -157,10 +131,6 @@
     
     <!-- LUT -->
     <string name="filter_intensity">LUT 강도</string>
-    <string name="lut_intensity_none">없음</string>
-    <string name="lut_intensity_low">낮음</string>
-    <string name="lut_intensity_medium">중간</string>
-    <string name="lut_intensity_high">높음</string>
     <string name="filters_panel">LUT 목록</string>
     <string name="toggle_display_mode">표시 모드 전환</string>
     
@@ -178,19 +148,7 @@
     
     <!-- Custom Import -->
     <string name="custom_tag">사용자 정의</string>
-    <string name="settings_section_custom">사용자 정의 가져오기</string>
-    <string name="settings_custom_import">사용자 정의 콘텐츠 가져오기</string>
-    <string name="import_lut">LUT 가져오기</string>
-    <string name="import_frame">프레임 가져오기</string>
-    <string name="import_image_frame">이미지 프레임 가져오기</string>
-    <string name="settings_import_description">사용자 정의 LUT 필터(.cube) 또는 프레임 템플릿(.png/.webp)을 가져옵니다</string>
-    <string name="custom_content_management">가져온 콘텐츠</string>
-    <string name="lut_type">LUT 필터</string>
-    <string name="frame_type">프레임 템플릿</string>
     <string name="delete_confirm_title">삭제 확인</string>
-    <string name="delete_custom_content_confirm">\"%s\"을(를) 삭제하시겠습니까?</string>
-    <string name="importing">가져오는 중...</string>
-    <string name="edit_name">이름 편집</string>
     <string name="name">이름</string>
     <string name="confirm">확인</string>
     
@@ -210,23 +168,20 @@
     <string name="recipe_param_film_grain">그레인</string>
     <string name="recipe_param_vignette">비네팅</string>
     <string name="recipe_param_bleach_bypass">블리치 바이패스</string>
+    <string name="recipe_param_bloom">블룸</string>
+    <string name="recipe_param_soft_light">소프트 라이트</string>
     <string name="recipe_param_halation">할레이션</string>
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="recipe_tab_basic">기본</string>
     <string name="recipe_tab_color">색상</string>
     <string name="recipe_tab_light">빛</string>
     <string name="recipe_tab_texture">질감</string>
     <string name="recipe_tab_post">후보정</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->
-    <string name="recipe_param_sharpening">샤프닝</string>
-    <string name="recipe_param_noise_reduction">노이즈 감소</string>
-    <string name="recipe_param_chroma_noise_reduction">크로마 노이즈 감소</string>
     
     <!-- Developer Options -->
-    <string name="settings_section_developer">개발자 옵션</string>
     <string name="settings_log_viewer">로그 뷰어</string>
     <string name="settings_log_viewer_description">진단을 위해 앱 로그를 확인하고 내보냅니다</string>
     <string name="logs">로그</string>
@@ -239,14 +194,11 @@
     <string name="settings_frame_management_description">프레임 관리, 기본값 설정, 순서 변경</string>
     <string name="filter_management_title">LUT 관리</string>
     <string name="frame_management_title">프레임 관리</string>
-    <string name="category_all">전체</string>
     <string name="category_custom">사용자 정의</string>
-    <string name="set_as_default">기본값으로 설정</string>
     <string name="current_default">기본값</string>
     <string name="rename">이름 바꾸기</string>
     <string name="import_filter">LUT 가져오기</string>
     <string name="import_frame_json">프레임 설정 가져오기</string>
-    <string name="import_frame_image">이미지 프레임 가져오기</string>
     <string name="delete_filter_confirm_message">LUT \"%s\"을(를) 삭제하시겠습니까?</string>
     <string name="delete_frame_confirm_message">프레임 \"%s\"을(를) 삭제하시겠습니까?</string>
     <string name="rename_dialog_title">이름 바꾸기</string>
@@ -255,7 +207,6 @@
     <string name="copy_suffix"> (사본)</string>
     <string name="edit_category">카테고리 편집</string>
     <string name="batch_edit_category">카테고리 일괄 편집</string>
-    <string name="sort_categories">카테고리 정렬</string>
     <string name="drag_to_reorder_categories">핸들을 드래그하여 탭 순서를 변경하세요</string>
     <string name="selected_count">%d개 선택됨</string>
     <string name="category">카테고리</string>
@@ -270,15 +221,9 @@
     <string name="delete_category_message">카테고리 \"%s\"을(를) 삭제하시겠습니까? 이 카테고리의 LUT는 분류되지 않음으로 초기화됩니다.</string>
     <string name="built_in">내장</string>
     <string name="custom">사용자 정의</string>
-    <string name="no_filters">사용자 정의 LUT가 없습니다</string>
-    <string name="no_frames">사용자 정의 프레임이 없습니다</string>
     <string name="input_curve">입력 곡선</string>
     
     <!-- Frame Import Help -->
-    <string name="help">도움말</string>
-    <string name="got_it">확인</string>
-    <string name="frame_import_help_title">프레임 가져오기 가이드</string>
-    <string name="frame_import_help_message">지원 형식: PNG, WebP\n\n요구 사항:\n• 이미지는 투명 영역(알파 채널)을 포함해야 합니다\n• 사진은 프레임 뒤에 배치되며 투명한 부분을 통해 보입니다\n\n팁: 사진이 보이고 싶은 부분에 투명한 컷아웃을 만들어 프레임을 디자인하세요.</string>
     
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">카메라 보정</string>
@@ -294,7 +239,6 @@
     <string name="current_camera">현재 카메라</string>
     
     <!-- About & Donation -->
-    <string name="settings_section_about">정보</string>
     <string name="settings_donation">후원</string>
     <string name="settings_donation_description">Photon Camera 개발 지원</string>
     <string name="settings_default_focal_length">기본 초점 거리</string>
@@ -304,17 +248,9 @@
     <string name="refresh">새로고침</string>
     <string name="refresh_success">미리보기 새로고침됨</string>
     <string name="refresh_failed">미리보기 새로고침 실패</string>
-    <string name="settings_raw_restore_lut">RAW 복원 LUT</string>
-    <string name="settings_raw_restore_lut_description">RAW 색상 복원에 사용할 LUT를 선택합니다. 로그 출력을 원하시면 "없음"을 선택하세요.</string>
     <string name="settings_dro_mode">RAW 동적 범위 최적화 도구 (DRO)</string>
-    <string name="settings_dro_mode_description">로그 커브 헤드룸을 활용하여 섀도우 디테일과 하이라이트 압축을 최적화합니다. 높은 값일수록 더 많은 하이라이트를 보존하지만 더 많은 빛이 필요할 수 있습니다.</string>
     <string name="settings_dro_off">꺼짐</string>
-    <string name="settings_dro_low">낮음</string>
-    <string name="settings_dro_high">높음</string>
-    <string name="settings_apply_ultra_hdr">Ultra HDR 노출 전략</string>
-    <string name="settings_apply_ultra_hdr_description">멀티 프레임 스태킹 및 히스토그램 분석을 기반으로, 조명이 충분할 때 하이라이트를 보호하기 위해 자동으로 노출을 줄입니다. RAW 및 멀티 프레임이 활성화된 경우에만 유효합니다.</string>
-    <string name="settings_color_space">RAW 색 공간</string>
-    <string name="settings_color_space_description">RAW 처리를 위한 대상 색 공간을 선택하십시오.</string>
-    <string name="settings_log_curve">RAW 감마</string>
-    <string name="settings_log_curve_description">RAW 처리를 위한 전송 함수(로그 커브)를 선택하십시오.</string>
+    <string name="settings_dro_dr100">DR100</string>
+    <string name="settings_dro_dr200">DR200</string>
+    <string name="settings_dro_dr400">DR400</string>
 </resources>

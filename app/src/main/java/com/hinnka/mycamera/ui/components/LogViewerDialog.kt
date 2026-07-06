@@ -11,7 +11,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
  * 日志查看器弹窗
@@ -132,7 +132,7 @@ private fun LogViewerHeader(
                 )
             ) {
                 Icon(
-                    imageVector = Icons.Default.ContentCopy,
+                    imageVector = AppIcons.ContentCopy,
                     contentDescription = "复制全部",
                     tint = Color(0xFF4CAF50)
                 )

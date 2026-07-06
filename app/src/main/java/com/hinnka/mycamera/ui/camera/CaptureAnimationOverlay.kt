@@ -263,7 +263,7 @@ private fun calculateCenterBounds(
     aspectRatio: Float
 ): Rect {
     val maxWidth = rootWidth * 0.84f
-    val maxHeight = rootHeight * 0.42f
+    val maxHeight = rootHeight * 0.74f
     val targetWidth = min(maxWidth, maxHeight * aspectRatio)
     val targetHeight = targetWidth / aspectRatio
     val left = (rootWidth - targetWidth) / 2f
@@ -307,7 +307,7 @@ private fun calculateDevelopLook(progress: Float): CaptureDevelopLook {
                 inversion = lerp(0.98f, 0.9f, stage),
                 contrast = lerp(0.5f, 0.6f, stage),
                 brightness = lerp(-76f, -56f, stage),
-                saturation = lerp(0.02f, 0.05f, stage),
+                saturation = lerp(0.02f, 0.9f, stage),
                 warmth = lerp(0.08f, 0.18f, stage)
             )
         }
@@ -318,7 +318,7 @@ private fun calculateDevelopLook(progress: Float): CaptureDevelopLook {
                 inversion = lerp(0.9f, 0.7f, stage),
                 contrast = lerp(0.6f, 0.65f, stage),
                 brightness = lerp(-56f, -40f, stage),
-                saturation = lerp(0.05f, 0.1f, stage),
+                saturation = lerp(0.9f, 1f, stage),
                 warmth = lerp(0.18f, 0.14f, stage)
             )
         }
@@ -329,7 +329,7 @@ private fun calculateDevelopLook(progress: Float): CaptureDevelopLook {
                 inversion = lerp(0.7f, 0f, stage),
                 contrast = lerp(0.65f, 1f, stage),
                 brightness = lerp(-40f, 0f, stage),
-                saturation = lerp(0.1f, 1f, stage),
+                saturation = 1f,
                 warmth = lerp(0.14f, 0f, stage)
             )
         }

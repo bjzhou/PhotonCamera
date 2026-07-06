@@ -4,8 +4,6 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -15,6 +13,7 @@
             android:name="android.permission.READ_EXTERNAL_STORAGE"
             android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <uses-feature
             android:name="android.hardware.camera"
@@ -41,11 +40,12 @@
                 android:screenOrientation="portrait"
                 android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
                 android:launchMode="singleTask"
-                android:theme="@style/Theme.MyCamera">
+                android:theme="@style/Theme.MyCamera.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.APP_CAMERA" />
             </intent-filter>
 
             <intent-filter>
@@ -54,26 +54,135 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/cube" />
+                <data android:mimeType="application/x-cube" />
+                <data android:mimeType="application/vnd.adobe.cube" />
+                <data android:mimeType="application/vnd.iridas.cube" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/cube" />
+                <data android:mimeType="application/x-cube" />
+                <data android:mimeType="application/vnd.adobe.cube" />
+                <data android:mimeType="application/vnd.iridas.cube" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.cube" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.CUBE" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.cube" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.CUBE" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="*/*" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.cube" />
+                <data android:scheme="content" android:host="*" android:pathPattern=".*\\.CUBE" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.cube" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.CUBE" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.media.action.IMAGE_CAPTURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.media.action.VIDEO_CAPTURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.media.action.STILL_IMAGE_CAMERA" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.media.action.STILL_IMAGE_CAMERA_SECURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.PICK" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="com.android.camera.action.REVIEW" />
+                <action android:name="android.provider.action.REVIEW" />
+                <action android:name="android.provider.action.REVIEW_SECURE" />
+                <action android:name="com.google.android.apps.photos.action.SECURE_REVIEW" />
+                <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW" />
+                <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW_SECURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                        android:scheme="content"
+                        android:host="com.google.android.libraries.photos.api.mars"
+                        android:pathPrefix="/file" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="com.android.camera.action.REVIEW" />
+                <action android:name="android.provider.action.REVIEW" />
+                <action android:name="android.provider.action.REVIEW_SECURE" />
+                <action android:name="com.google.android.apps.photos.action.SECURE_REVIEW" />
+                <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW" />
+                <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW_SECURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="com.android.camera.action.REVIEW" />
+                <action android:name="android.provider.action.REVIEW" />
+                <action android:name="android.provider.action.REVIEW_SECURE" />
+                <action android:name="com.google.android.apps.photos.action.SECURE_REVIEW" />
+                <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW" />
+                <action android:name="com.google.android.apps.photos.mars.api.ACTION_REVIEW_SECURE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
-        <activity
-                android:name=".screencapture.ScreenCapturePipActivity"
-                android:exported="false"
-                android:supportsPictureInPicture="true"
-                android:resizeableActivity="true"
-                android:excludeFromRecents="true"
-                android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
-                android:theme="@style/Theme.MyCamera" />
-        <activity
-                android:name=".screencapture.ScreenCapturePermissionActivity"
-                android:exported="false"
-                android:excludeFromRecents="true"
-                android:finishOnTaskLaunch="true"
-                android:taskAffinity=":screencapture"
-                android:theme="@style/Theme.MyCamera.Transparent" />
-        <service
-                android:name=".screencapture.ScreenCaptureForegroundService"
-                android:exported="false"
-                android:foregroundServiceType="mediaProjection" />
+
         <provider
                 android:name="androidx.core.content.FileProvider"
                 android:authorities="${applicationId}.fileprovider"

@@ -25,9 +25,21 @@ object CameraUtils {
         cameraId: String,
         aspectRatio: AspectRatio
     ): Size {
-        try {
+        return try {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            getFixedPreviewSize(characteristics, aspectRatio)
+        } catch (e: Exception) {
+            PLog.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
+            Size(1440, 1080)
+        }
+    }
+
+    fun getFixedPreviewSize(
+        characteristics: CameraCharacteristics,
+        aspectRatio: AspectRatio
+    ): Size {
+        return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: return Size(1440, 1080)
 
@@ -84,12 +96,32 @@ object CameraUtils {
     /**
      * 获取最佳拍照尺寸
      */
-    fun getBestCaptureSize(context: Context, cameraId: String, aspectRatio: AspectRatio): Size {
+    fun getBestCaptureSize(
+        context: Context,
+        cameraId: String,
+        aspectRatio: AspectRatio,
+        format: Int = ImageFormat.YUV_420_888
+    ): Size {
         return try {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            getBestCaptureSize(characteristics, aspectRatio, format)
+        } catch (e: Exception) {
+//            PLog.e(TAG, "Failed to get capture size", e)
+            Size(1920, 1080)
+        }
+    }
+
+    fun getBestCaptureSize(
+        characteristics: CameraCharacteristics,
+        aspectRatio: AspectRatio,
+        format: Int = ImageFormat.YUV_420_888
+    ): Size {
+        return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: arrayOf(Size(1920, 1080))
+            val sizes = map?.getOutputSizes(format)
+                ?: map?.getOutputSizes(ImageFormat.YUV_420_888)
+                ?: arrayOf(Size(1920, 1080))
             val sensorRatio = aspectRatio.getValue(true)
 
             // 寻找比例最匹配传感器原生比例
@@ -119,11 +151,31 @@ object CameraUtils {
         return try {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            getRawCaptureSize(characteristics)
+        } catch (e: Exception) {
+            PLog.e("CameraUtils", "Failed to get RAW capture size: ${e.message}")
+            null
+        }
+    }
+
+    fun getRawCaptureSize(characteristics: CameraCharacteristics): Size? {
+        return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
+            val sizes = map?.getOutputSizes(ImageFormat.RAW_SENSOR) ?: return null
             
-            // RAW 通常只有一个尺寸，返回最大的
-            sizes?.maxByOrNull { it.width * it.height }
+            if (sizes.isEmpty()) return null
+
+            val pixelArraySize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+            val preCorrectionSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+
+            // Try to find a size that matches DngCreator's requirements (PixelArray or PreCorrectionActiveArray)
+            val bestMatch = sizes.find {
+                (it.width == pixelArraySize?.width && it.height == pixelArraySize.height) ||
+                (it.width == preCorrectionSize?.width() && it.height == preCorrectionSize.height())
+            }
+
+            // Return the best match if found, otherwise fall back to the largest available size
+            bestMatch ?: sizes.maxByOrNull { it.width * it.height }
         } catch (e: Exception) {
             PLog.e("CameraUtils", "Failed to get RAW capture size: ${e.message}")
             null

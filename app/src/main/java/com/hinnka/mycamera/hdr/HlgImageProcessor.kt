@@ -4,10 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ColorSpace
 import android.util.Half
-import com.hinnka.mycamera.gallery.PhotoMetadata
+import com.hinnka.mycamera.gallery.MediaMetadata
+import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.pow
@@ -15,7 +15,7 @@ import kotlin.system.measureTimeMillis
 
 class HlgImageProcessor {
 
-    fun isHlgCapture(metadata: PhotoMetadata): Boolean {
+    fun isHlgCapture(metadata: MediaMetadata): Boolean {
         return metadata.dynamicRangeProfile == "HLG10"
     }
 
@@ -52,53 +52,58 @@ class HlgImageProcessor {
         )
 
         val pixels = IntArray(width * height)
-        val hdrBuffer = ByteBuffer.allocateDirect(width * height * 8).order(ByteOrder.nativeOrder())
-        val transformElapsed = measureTimeMillis {
-            for (y in 0 until height) {
-                for (x in 0 until width) {
-                    val c = encodedBitmap.getColor(x, y)
-                    val linearBt2020 = floatArrayOf(
-                        hlgToLinear(c.red()),
-                        hlgToLinear(c.green()),
-                        hlgToLinear(c.blue())
-                    )
-                    hdrBuffer.putShort(Half.toHalf(linearBt2020[0].coerceAtLeast(0f)))
-                    hdrBuffer.putShort(Half.toHalf(linearBt2020[1].coerceAtLeast(0f)))
-                    hdrBuffer.putShort(Half.toHalf(linearBt2020[2].coerceAtLeast(0f)))
-                    hdrBuffer.putShort(Half.toHalf(1.0f))
+        val hdrBuffer = LargeDirectBuffer.allocate(width.toLong() * height.toLong() * 8L, "HLG HDR reference")
+            ?: throw OutOfMemoryError("Failed to allocate HLG HDR reference buffer")
+        try {
+            val transformElapsed = measureTimeMillis {
+                for (y in 0 until height) {
+                    for (x in 0 until width) {
+                        val c = encodedBitmap.getColor(x, y)
+                        val linearBt2020 = floatArrayOf(
+                            hlgToLinear(c.red()),
+                            hlgToLinear(c.green()),
+                            hlgToLinear(c.blue())
+                        )
+                        hdrBuffer.putShort(Half.toHalf(linearBt2020[0].coerceAtLeast(0f)))
+                        hdrBuffer.putShort(Half.toHalf(linearBt2020[1].coerceAtLeast(0f)))
+                        hdrBuffer.putShort(Half.toHalf(linearBt2020[2].coerceAtLeast(0f)))
+                        hdrBuffer.putShort(Half.toHalf(1.0f))
 
-                    val sdrSrgb = bt2020LinearToSdrSrgb(linearBt2020)
-                    pixels[y * width + x] = Color.argb(
-                        255,
-                        (sdrSrgb[0].coerceIn(0f, 1f) * 255.0f).toInt(),
-                        (sdrSrgb[1].coerceIn(0f, 1f) * 255.0f).toInt(),
-                        (sdrSrgb[2].coerceIn(0f, 1f) * 255.0f).toInt(),
-                    )
+                        val sdrSrgb = bt2020LinearToSdrSrgb(linearBt2020)
+                        pixels[y * width + x] = Color.argb(
+                            255,
+                            (sdrSrgb[0].coerceIn(0f, 1f) * 255.0f).toInt(),
+                            (sdrSrgb[1].coerceIn(0f, 1f) * 255.0f).toInt(),
+                            (sdrSrgb[2].coerceIn(0f, 1f) * 255.0f).toInt(),
+                        )
+                    }
                 }
             }
-        }
-        val outputElapsed = measureTimeMillis {
-            sdrBase.setPixels(pixels, 0, width, 0, 0, width, height)
-            hdrBuffer.rewind()
-            hdrReference.copyPixelsFromBuffer(hdrBuffer)
-        }
+            val outputElapsed = measureTimeMillis {
+                sdrBase.setPixels(pixels, 0, width, 0, 0, width, height)
+                hdrBuffer.rewind()
+                hdrReference.copyPixelsFromBuffer(hdrBuffer)
+            }
 
-        encodedBitmap.recycle()
-        PLog.d(
-            TAG,
-            "createSourceFromCompressedArgb took ${copyElapsed + transformElapsed + outputElapsed}ms " +
-                    "(copy=${copyElapsed}ms, transform=${transformElapsed}ms, output=${outputElapsed}ms, size=${width}x${height})"
-        )
+            encodedBitmap.recycle()
+            PLog.d(
+                TAG,
+                "createSourceFromCompressedArgb took ${copyElapsed + transformElapsed + outputElapsed}ms " +
+                        "(copy=${copyElapsed}ms, transform=${transformElapsed}ms, output=${outputElapsed}ms, size=${width}x${height})"
+            )
 
-        return GainmapSourceSet(
-            sdrBase = sdrBase,
-            hdrReference = HdrBuffer(
-                bitmap = hdrReference,
-                description = "hlg_bt2020_linear"
-            ),
-            sourceKind = SourceKind.HLG_CAPTURE,
-            confidence = confidence
-        )
+            return GainmapSourceSet(
+                sdrBase = sdrBase,
+                hdrReference = HdrBuffer(
+                    bitmap = hdrReference,
+                    description = "hlg_bt2020_linear"
+                ),
+                sourceKind = SourceKind.HLG_CAPTURE,
+                confidence = confidence
+            )
+        } finally {
+            LargeDirectBuffer.free(hdrBuffer)
+        }
     }
 
     fun createHdrReferenceFromRawSidecar(

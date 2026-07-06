@@ -45,8 +45,26 @@ object DeviceUtil {
             return list.any { SystemPropertiesUtil.get(it)?.isNotEmpty() == true }
         }
 
-    val isChinaFlavor: Boolean
-        get() = BuildConfig.FLAVOR == "china"
+    val isSamsung: Boolean
+        get() {
+            return Build.MANUFACTURER.lowercase() == "samsung"
+                    || Build.BRAND.lowercase() == "samsung"
+        }
+
+    val isGoogle: Boolean
+        get() {
+            return Build.MANUFACTURER.lowercase() == "google"
+                    || Build.BRAND.lowercase() == "google"
+        }
+
+    val isHuawei: Boolean
+        get() {
+            return Build.MANUFACTURER.lowercase() == "huawei"
+                    || Build.BRAND.lowercase() == "huawei"
+        }
+
+    val canShowPhantom: Boolean
+        get() = BuildConfig.FLAVOR != "google"
 
     val defaultGpuAcceleration: Boolean
         get() = true

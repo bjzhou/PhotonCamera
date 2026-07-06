@@ -2,42 +2,27 @@
     <string name="app_name">Photon Camera</string>
     
     <!-- Camera Controls -->
-    <string name="capture">撮影</string>
     <string name="switch_camera">カメラを切り替え</string>
     <string name="settings">設定</string>
     <string name="flash">フラッシュ</string>
     <string name="timer">タイマー</string>
     <string name="histogram">ヒストグラム</string>
-    <string name="grid">グリッド</string>
     <string name="back">戻る</string>
     
     <!-- Exposure Controls -->
-    <string name="exposure_compensation">露出補正</string>
-    <string name="iso">ISO感度</string>
-    <string name="shutter_speed">シャッター</string>
-    <string name="auto">オート</string>
     
     <!-- Focus -->
-    <string name="focus">フォーカス</string>
-    <string name="tap_to_focus">タップしてフォーカス</string>
     
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">アスペクト比</string>
-    <string name="ratio_3_2">3:2</string>
-    <string name="ratio_4_3">4:3</string>
-    <string name="ratio_16_9">16:9</string>
-    <string name="ratio_1_1">1:1</string>
     
     <!-- Permissions -->
     <string name="camera_permission_required">カメラとマイクの権限が必要です</string>
     <string name="grant_permission">権限を許可</string>
     
     <!-- Zoom -->
-    <string name="zoom">ズーム</string>
     
     <!-- Gallery -->
-    <string name="gallery">ギャラリー</string>
-    <string name="photo_detail">写真の詳細</string>
     <string name="share">共有</string>
     <string name="delete">削除</string>
     <string name="export">書き出し</string>
@@ -47,20 +32,15 @@
     <string name="select_all">すべて選択</string>
     <string name="cancel">キャンセル</string>
     <string name="save">保存</string>
-    <string name="rotate">回転</string>
     <string name="crop">切り抜き</string>
-    <string name="brightness">明るさ</string>
     <string name="delete_confirm">この写真を削除しますか？</string>
     <string name="delete_multiple_confirm">%d枚の写真を削除しますか？</string>
-    <string name="delete_exported_photos">システムギャラリーからも削除する</string>
+    <string name="delete_exported_videos_count">エクスポートされた%d個の動画も削除する</string>
     <string name="no_photos">写真がありません</string>
     <string name="photo_info">写真情報</string>
     <string name="filter">LUT</string>
-    <string name="intensity">強度</string>
-    <string name="original">オリジナル</string>
     <string name="export_confirm">LUTを適用した状態で書き出しますか？</string>
     <string name="items_selected">%d個選択済み</string>
-    <string name="not_selected">未選択</string>
     <string name="selected">選択済み</string>
     <string name="imported">インポート済み</string>
     <string name="photo_info_date">日付</string>
@@ -75,9 +55,7 @@
     <string name="frame">フレーム</string>
     <string name="none">なし</string>
     <string name="show_app_branding">アプリのブランディングを表示</string>
-    <string name="export_with_frame_confirm">フレームと透かしを含めて書き出しますか？</string>
     <string name="import_photo">インポート</string>
-    <string name="adjust_watermark">透かしを調整</string>
     <string name="watermark_adjustment">透かしの微調整</string>
     <string name="logo">ロゴ</string>
     <string name="text_content">テキスト内容</string>
@@ -94,23 +72,16 @@
     <!-- Settings -->
     <string name="settings_title">設定</string>
     <string name="settings_section_capture">キャプチャ</string>
-    <string name="settings_section_display">表示</string>
     <string name="settings_use_raw">RAW撮影</string>
-    <string name="settings_use_raw_description">高画質なRAW形式(DNG)で撮影します。YUV形式にするにはオフにしてください。</string>
+    <string name="settings_use_raw_description">高画質なRAW形式(DNG)で撮影します。</string>
     <string name="settings_level_indicator">水準器</string>
     <string name="settings_level_description">撮影中に水平を表示します</string>
     <string name="settings_grid_lines">グリッド線</string>
     <string name="settings_grid_description">構図用のグリッド線を表示します</string>
     <string name="settings_use_multi_frame">マルチフレーム合成</string>
-    <string name="settings_use_multi_frame_description">複数枚のフレームを撮影して合成し、画質の向上とノイズの低減を図ります。</string>
     <string name="settings_multi_frame_count">合成本数</string>
     <string name="settings_multi_frame_count_description">マルチフレーム合成に使用するフレーム数（多いほど高画質ですが、処理が遅くなります）。</string>
     <string name="settings_use_super_resolution">超解像</string>
-    <string name="settings_use_super_resolution_description">2倍のマルチフレーム超解像を使用してディテールを向上させます。(マルチフレーム合成が必要)</string>
-    <string name="settings_raw_engine">RAW現像エンジン</string>
-    <string name="settings_raw_engine_description">RAWデータ処理用エンジンを選択します</string>
-    <string name="settings_raw_engine_native">ネイティブ</string>
-    <string name="settings_raw_engine_self_developed">独自開発</string>
     <string name="settings_use_live_photo">ライブフォト</string>
     <string name="settings_use_live_photo_description">写真と一緒に短い動画を撮影し、動きのあるライブフォト効果を作成します。</string>
     <string name="settings_use_gpu_acceleration">GPU加速</string>
@@ -118,13 +89,15 @@
     <string name="settings_section_frame">フレームと透かし</string>
     <string name="settings_frame_style">フレームスタイル</string>
     <string name="settings_frame_description">写真に装飾フレームや透かしを追加します</string>
-    <string name="settings_section_operation">操作</string>
-    <string name="settings_section_image_processing">画像処理</string>
     <string name="settings_section_software_processing">微調整</string>
     <string name="settings_shutter_sound">シャッター音</string>
     <string name="settings_shutter_sound_description">撮影時に音を鳴らします</string>
     <string name="settings_vibration">バイブレーション</string>
     <string name="settings_vibration_description">撮影時に振動させます</string>
+    <string name="settings_keep_screen_on">画面を常にオン</string>
+    <string name="settings_keep_screen_on_description">カメラ使用中は画面を点灯したままにします。動画録画中は常に点灯したままになります。</string>
+    <string name="settings_window_screen_brightness">画面の明るさ</string>
+    <string name="settings_window_screen_brightness_description">このアプリウィンドウの画面明るさを設定します。オフにするとシステム既定の明るさを使用します。</string>
     <string name="settings_volume_key_action">音量キーの動作</string>
     <string name="settings_volume_key_action_description">撮影中の音量キーの役割を選択します</string>
     <string name="settings_volume_key_action_none">音量調節</string>
@@ -157,10 +130,6 @@
     
     <!-- LUT -->
     <string name="filter_intensity">LUT強度</string>
-    <string name="lut_intensity_none">なし</string>
-    <string name="lut_intensity_low">低</string>
-    <string name="lut_intensity_medium">中</string>
-    <string name="lut_intensity_high">高</string>
     <string name="filters_panel">LUT一覧</string>
     <string name="toggle_display_mode">表示モード切り替え</string>
     
@@ -178,19 +147,7 @@
     
     <!-- Custom Import -->
     <string name="custom_tag">カスタム</string>
-    <string name="settings_section_custom">カスタムインポート</string>
-    <string name="settings_custom_import">カスタムコンテンツをインポート</string>
-    <string name="import_lut">LUTをインポート</string>
-    <string name="import_frame">フレームをインポート</string>
-    <string name="import_image_frame">画像フレームをインポート</string>
-    <string name="settings_import_description">カスタムLUTフィルター(.cube)やフレームテンプレート(.png/.webp)をインポートします</string>
-    <string name="custom_content_management">インポートしたコンテンツ</string>
-    <string name="lut_type">LUTフィルター</string>
-    <string name="frame_type">フレームテンプレート</string>
     <string name="delete_confirm_title">削除の確認</string>
-    <string name="delete_custom_content_confirm">「%s」を削除しますか？</string>
-    <string name="importing">インポート中...</string>
-    <string name="edit_name">名前を編集</string>
     <string name="name">名前</string>
     <string name="confirm">確認</string>
     
@@ -210,23 +167,20 @@
     <string name="recipe_param_film_grain">粒子</string>
     <string name="recipe_param_vignette">周辺減光</string>
     <string name="recipe_param_bleach_bypass">銀残し</string>
+    <string name="recipe_param_bloom">ブルーム</string>
+    <string name="recipe_param_soft_light">ソフトライト</string>
     <string name="recipe_param_halation">ハレーション</string>
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="recipe_tab_basic">基本</string>
     <string name="recipe_tab_color">カラー</string>
     <string name="recipe_tab_light">ライト</string>
     <string name="recipe_tab_texture">テクスチャ</string>
     <string name="recipe_tab_post">現像</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->
-    <string name="recipe_param_sharpening">シャープネス</string>
-    <string name="recipe_param_noise_reduction">ノイズ低減</string>
-    <string name="recipe_param_chroma_noise_reduction">クロマノイズ低減</string>
     
     <!-- Developer Options -->
-    <string name="settings_section_developer">開発者向けオプション</string>
     <string name="settings_log_viewer">ログビューアー</string>
     <string name="settings_log_viewer_description">診断用にアプリのログを表示・エクスポートします</string>
     <string name="logs">ログ</string>
@@ -239,14 +193,11 @@
     <string name="settings_frame_management_description">フレームの管理、デフォルト設定、並べ替え</string>
     <string name="filter_management_title">LUT管理</string>
     <string name="frame_management_title">フレーム管理</string>
-    <string name="category_all">すべて</string>
     <string name="category_custom">カスタム</string>
-    <string name="set_as_default">デフォルトに設定</string>
     <string name="current_default">デフォルト</string>
     <string name="rename">名前変更</string>
     <string name="import_filter">LUTインポート</string>
     <string name="import_frame_json">フレーム設定インポート</string>
-    <string name="import_frame_image">画像フレームインポート</string>
     <string name="delete_filter_confirm_message">LUT「%s」を削除しますか？</string>
     <string name="delete_frame_confirm_message">フレーム「%s」を削除しますか？</string>
     <string name="rename_dialog_title">名前変更</string>
@@ -255,7 +206,6 @@
     <string name="copy_suffix"> (コピー)</string>
     <string name="edit_category">カテゴリを編集</string>
     <string name="batch_edit_category">カテゴリを一括編集</string>
-    <string name="sort_categories">カテゴリを並べ替え</string>
     <string name="drag_to_reorder_categories">ハンドルをドラッグしてタブを並べ替えます</string>
     <string name="selected_count">%d個選択中</string>
     <string name="category">カテゴリ</string>
@@ -270,15 +220,9 @@
     <string name="delete_category_message">カテゴリ「%s」を削除してもよろしいですか？このカテゴリ内のLUTは未分類にリセットされます。</string>
     <string name="built_in">プリセット</string>
     <string name="custom">カスタム</string>
-    <string name="no_filters">カスタムLUTがありません</string>
-    <string name="no_frames">カスタムフレームがありません</string>
     <string name="input_curve">入力カーブ</string>
     
     <!-- Frame Import Help -->
-    <string name="help">ヘルプ</string>
-    <string name="got_it">了解</string>
-    <string name="frame_import_help_title">フレームインポートガイド</string>
-    <string name="frame_import_help_message">対応形式: PNG, WebP\n\n要件:\n• 画像には透明エリア（アルファチャンネル）が必要です\n• 写真はフレームの背後に配置され、透明な部分を通して表示されます\n\nヒント: 写真を表示したい場所を透明に抜いたフレームをデザインしてください。</string>
     
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">カメラキャリブレーション</string>
@@ -294,7 +238,6 @@
     <string name="current_camera">現在のカメラ</string>
     
     <!-- About & Donation -->
-    <string name="settings_section_about">詳細</string>
     <string name="settings_donation">寄付</string>
     <string name="settings_donation_description">Photon Cameraの開発を支援する</string>
     <string name="settings_default_focal_length">デフォルトの焦点距離</string>
@@ -304,17 +247,9 @@
     <string name="refresh">更新</string>
     <string name="refresh_success">プレビューを更新しました</string>
     <string name="refresh_failed">プレビューの更新に失敗しました</string>
-    <string name="settings_raw_restore_lut">RAW復元LUT</string>
-    <string name="settings_raw_restore_lut_description">RAWの色復元に使用するLUTを選択します。ログ出力の場合は「なし」を使用してください。</string>
     <string name="settings_dro_mode">RAWダイナミックレンジ最適化 (DRO)</string>
-    <string name="settings_dro_mode_description">ログ曲線のヘッドルームを利用して、シャドウのディテールとハイライトの圧縮を最適化します。値が高いほどハイライトが維持されますが、より多くの光が必要になる場合があります。</string>
     <string name="settings_dro_off">オフ</string>
-    <string name="settings_dro_low">低</string>
-    <string name="settings_dro_high">高</string>
-    <string name="settings_apply_ultra_hdr">Ultra HDR露出戦略</string>
-    <string name="settings_apply_ultra_hdr_description">マルチフレーム合成とヒストグラム分析に基づき、十分な光量がある場合に露出を自動的に下げてハイライトを保護します。RAWとマルチフレームが有効な場合のみ機能します。</string>
-    <string name="settings_color_space">RAW色空間</string>
-    <string name="settings_color_space_description">RAW処理のターゲット色空間を選択します。</string>
-    <string name="settings_log_curve">RAWガンマ</string>
-    <string name="settings_log_curve_description">RAW処理の転送関数（ログ曲線）を選択します。</string>
+    <string name="settings_dro_dr100">DR100</string>
+    <string name="settings_dro_dr200">DR200</string>
+    <string name="settings_dro_dr400">DR400</string>
 </resources>

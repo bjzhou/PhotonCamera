@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Crop169
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -24,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
  * 边框选择器组件
@@ -95,7 +94,7 @@ private fun FrameItem(
         ) {
             if (isNone) {
                 Icon(
-                    imageVector = Icons.Default.Image,
+                    imageVector = AppIcons.Image,
                     contentDescription = null,
                     tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.6f),
                     modifier = Modifier.size(24.dp)
@@ -103,7 +102,7 @@ private fun FrameItem(
             } else {
                 // 显示边框预览图标
                 Icon(
-                    imageVector = Icons.Default.Crop169,
+                    imageVector = AppIcons.Crop169,
                     contentDescription = null,
                     tint = if (isSelected) AccentOrange else Color.White.copy(alpha = 0.6f),
                     modifier = Modifier.size(24.dp)

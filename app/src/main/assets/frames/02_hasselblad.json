@@ -1,0 +1,36 @@
+{
+    "id": "hasselblad",
+    "name": {
+        "en": "Hasselblad",
+        "zh": "哈苏经典"
+    },
+    "version": 1,
+    "editable": true,
+    "layout": {
+        "position": "OVERLAY",
+        "backgroundColor": "#00000000",
+        "lineSpacing": 12,
+        "height": 165,
+        "padding": 40
+    },
+    "elements": [
+        {
+            "type": "logo",
+            "logoType": "BRAND",
+            "overrideSource": "hasselblad_l",
+            "alignment": "CENTER",
+            "light": true,
+            "size": 32,
+            "line": 0
+        },
+        {
+            "type": "text",
+            "textType": "CUSTOM",
+            "format": "C R E A T E   T O   I N S P I R E",
+            "alignment": "CENTER",
+            "fontSize": 22,
+            "color": "#ffffff",
+            "line": 1
+        }
+    ]
+}

@@ -1,5 +1,8 @@
 package com.hinnka.mycamera.lut.creator
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -8,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,7 +23,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.ui.components.PaymentDialog
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 private data class LocalImagePairDraft(
     val sourceUri: Uri,
@@ -41,6 +46,10 @@ fun LutCreatorScreen(
     onSuccess: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val isPurchased by viewModel.isPurchased.collectAsState()
+    val openAIKey by viewModel.openAIApiKey.collectAsState()
+    val canUseLutCreator = isPurchased || !openAIKey.isNullOrBlank()
     var lutName by remember { mutableStateOf("My AI LUT") }
     var customPrompt by remember { mutableStateOf("") }
     var selectedMode by remember { mutableStateOf(LutCreatorMode.AI) }
@@ -52,6 +61,10 @@ fun LutCreatorScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
+        if (!canUseLutCreator) {
+            viewModel.showPaymentDialog = true
+            return@rememberLauncherForActivityResult
+        }
         viewModel.analyzeAiImage(uri, customPrompt)
     }
 
@@ -101,6 +114,14 @@ fun LutCreatorScreen(
                         verticalArrangement = Arrangement.Top,
                         horizontalAlignment = Alignment.Start
                     ) {
+                        if (!canUseLutCreator) {
+                            LutCreatorPremiumRequiredCard(
+                                onPurchase = { viewModel.showPaymentDialog = true }
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            return@Column
+                        }
+
                         PrimaryTabRow(
                             selectedTabIndex = selectedMode.ordinal,
                             containerColor = Color.Transparent,
@@ -289,6 +310,10 @@ fun LutCreatorScreen(
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
                             onClick = {
+                                if (!canUseLutCreator) {
+                                    viewModel.showPaymentDialog = true
+                                    return@Button
+                                }
                                 if (selectedMode == LutCreatorMode.AI) {
                                     aiImageLauncher.launch("image/*")
                                 } else {
@@ -348,7 +373,7 @@ fun LutCreatorScreen(
                     ) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Icon(
-                            imageVector = Icons.Default.AutoAwesome,
+                            imageVector = AppIcons.AutoAwesome,
                             contentDescription = null,
                             modifier = Modifier.size(48.dp),
                             tint = Color(0xFFE5A324)
@@ -363,7 +388,7 @@ fun LutCreatorScreen(
                         state.generatedSourceBitmap?.let { bitmap ->
                             Spacer(modifier = Modifier.height(24.dp))
                             Text(
-                                text = "AI 还原的原图预览",
+                                text = stringResource(R.string.lut_creator_ai_restored_preview),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -487,4 +512,71 @@ fun LutCreatorScreen(
             }
         }
     }
+
+    if (viewModel.showPaymentDialog) {
+        val activity = context.findActivity()
+        PaymentDialog(
+            onDismiss = { viewModel.showPaymentDialog = false },
+            onPurchase = {
+                if (activity != null) {
+                    viewModel.purchase(activity)
+                }
+                viewModel.showPaymentDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun LutCreatorPremiumRequiredCard(
+    onPurchase: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Text(
+                text = stringResource(R.string.lut_creator_premium_required_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.lut_creator_premium_required_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(
+                onClick = onPurchase,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE5A324),
+                    contentColor = Color.White
+                )
+            ) {
+                Text(
+                    text = stringResource(R.string.billing_premium_get_access),
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+private fun Context.findActivity(): Activity? {
+    var current = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }

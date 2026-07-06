@@ -55,8 +55,12 @@ fun PhotonCameraTheme(
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as Activity).window
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+            val activity = view.context.findActivity()
+            if (activity != null) {
+                val window = activity.window
+                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+            }
+            view.isForceDarkAllowed = false
         }
     }
 
@@ -65,4 +69,13 @@ fun PhotonCameraTheme(
         typography = Typography,
         content = content
     )
+}
+
+private fun android.content.Context.findActivity(): Activity? {
+    var context = this
+    while (context is android.content.ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return null
 }

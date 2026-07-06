@@ -17,9 +17,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalContext
-import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
 import kotlin.math.atan2
+
+private const val TAG = "LevelIndicatorOverlay"
+private const val LevelThresholdDegrees = 3.0f
+private const val DefaultLevelAspectRatio = 3f / 4f
 
 /**
  * 修正版水平仪
@@ -28,7 +32,7 @@ import kotlin.math.atan2
  */
 @Composable
 fun LevelIndicatorOverlay(
-    aspectRatio: AspectRatio,
+    aspectRatio: Float,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -52,33 +56,30 @@ fun LevelIndicatorOverlay(
     DisposableEffect(Unit) {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        var invalidSensorReadingLogged = false
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
-                event?.let {
-                    val x = it.values[0]
-                    val y = it.values[1]
-
-                    // 计算重力矢量的角度
-                    // atan2(x, y) 使得 0 度对应 Y 轴（竖直方向），符合手机传感器的布局
-                    val angleDeg = Math.toDegrees(atan2(x.toDouble(), y.toDouble())).toFloat()
-
-                    // 计算水平判定的偏差值
-                    // 我们只关心当前角度离最近的轴（0, 90, 180, 270）差多少
-                    val deviation = abs(angleDeg % 90)
-                    val realDeviation = if (deviation > 45) 90 - deviation else deviation
-
-                    // 阈值判定 (3度以内变绿)
-                    isLevel = realDeviation < 3.0f
-
-                    targetRotation = angleDeg
+                val reading = event?.toLevelSensorReading()
+                if (reading == null) {
+                    if (!invalidSensorReadingLogged) {
+                        invalidSensorReadingLogged = true
+                        PLog.w(TAG, "Ignored invalid gravity sensor reading: ${event.describeLevelSensorValues()}")
+                    }
+                    isLevel = false
+                    return
                 }
+
+                isLevel = reading.isLevel
+                targetRotation = reading.angleDegrees
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
 
-        sensorManager.registerListener(listener, gravitySensor, SensorManager.SENSOR_DELAY_UI)
+        gravitySensor?.let {
+            sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI)
+        } ?: PLog.w(TAG, "Gravity sensor unavailable; level indicator is disabled")
         onDispose { sensorManager.unregisterListener(listener) }
     }
 
@@ -87,8 +88,8 @@ fun LevelIndicatorOverlay(
         val canvasHeight = size.height
 
         // --- 比例计算区域 ---
-        val containerRatio = 3f / 4f
-        val targetRatio = aspectRatio.getValue(isLandscape = false)
+        val containerRatio = DefaultLevelAspectRatio
+        val targetRatio = aspectRatio.validLevelAspectRatioOrDefault()
         val (drawWidth, drawHeight, offsetX, offsetY) = if (targetRatio > containerRatio) {
             val h = canvasWidth / targetRatio
             Quadruple(canvasWidth, h, 0f, (canvasHeight - h) / 2f)
@@ -105,12 +106,9 @@ fun LevelIndicatorOverlay(
         val lineLength = drawWidth * 0.4f
         val strokeWidth = 6f // 稍粗一点更清晰
 
-        // 核心修正：
-        // 之前是 -animatedRotation + 90f，导致竖屏多了90度变成垂直线。
-        // 现在直接取反。因为 drawLine 默认就是横向(0度)画的。
-        // 如果手机竖直拿 (角度约 0 或 180)，Canvas 旋转 0/180，线依然是横的 -> 正确。
+        // 传感器角度已经表示设备当前倾斜方向，直接用于 Canvas 旋转，保持水平仪运动方向和设备一致。
         withTransform({
-            rotate(degrees = -animatedRotation, pivot = Offset(centerX, centerY))
+            rotate(degrees = animatedRotation, pivot = Offset(centerX, centerY))
         }) {
             // 绘制主水平线
             drawLine(
@@ -166,3 +164,42 @@ fun LevelIndicatorOverlay(
 data class Quadruple<out A, out B, out C, out D>(
     val first: A, val second: B, val third: C, val fourth: D
 )
+
+private data class LevelSensorReading(
+    val angleDegrees: Float,
+    val isLevel: Boolean
+)
+
+private fun SensorEvent.toLevelSensorReading(): LevelSensorReading? {
+    val x = values.getOrNull(0)?.takeIf { it.isFiniteValue() } ?: return null
+    val y = values.getOrNull(1)?.takeIf { it.isFiniteValue() } ?: return null
+
+    // atan2(x, y) 使得 0 度对应 Y 轴（竖直方向），符合手机传感器的布局
+    val angleDegrees = Math.toDegrees(atan2(x.toDouble(), y.toDouble())).toFloat()
+        .takeIf { it.isFiniteValue() }
+        ?: return null
+
+    // 只关心当前角度离最近的轴（0, 90, 180, 270）差多少。
+    val deviation = abs(angleDegrees % 90f)
+    val realDeviation = if (deviation > 45f) 90f - deviation else deviation
+
+    return LevelSensorReading(
+        angleDegrees = angleDegrees,
+        isLevel = realDeviation < LevelThresholdDegrees
+    )
+}
+
+private fun SensorEvent?.describeLevelSensorValues(): String {
+    val x = this?.values?.getOrNull(0)
+    val y = this?.values?.getOrNull(1)
+    val z = this?.values?.getOrNull(2)
+    return "x=$x, y=$y, z=$z"
+}
+
+private fun Float.validLevelAspectRatioOrDefault(): Float {
+    return takeIf { it.isFiniteValue() && it > 0f } ?: DefaultLevelAspectRatio
+}
+
+private fun Float.isFiniteValue(): Boolean {
+    return !isNaN() && !isInfinite()
+}

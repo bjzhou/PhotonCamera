@@ -79,9 +79,20 @@ def convert_cube_to_plut(cube_path, plut_path):
     return True
 
 def main():
+    if len(sys.argv) == 3:
+        cube_path = sys.argv[1]
+        plut_path = sys.argv[2]
+        os.makedirs(os.path.dirname(os.path.abspath(plut_path)), exist_ok=True)
+        print(f"Converting {os.path.basename(cube_path)} -> {os.path.basename(plut_path)}...")
+        if convert_cube_to_plut(cube_path, plut_path):
+            print(f"Successfully converted {plut_path}.")
+        else:
+            sys.exit(1)
+        return
+
     # Adjust path if needed
     base_dir = os.getcwd()
-    lut_dir = os.path.join(base_dir, '..', 'app', 'src', 'main', 'assets', 'raw', 'aces')
+    lut_dir = os.path.join(base_dir, '..', 'app', 'src', 'main', 'assets', 'luts')
 
     if not os.path.exists(lut_dir):
         print(f"Directory not found: {lut_dir}")

@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +23,7 @@ import androidx.compose.ui.unit.sp
 /**
  * 滑块设置项
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SliderSettingItem(
     title: String,
@@ -28,11 +31,16 @@ fun SliderSettingItem(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null,
+    valueTextFormatter: (Float) -> String = { String.format("%.2f", it) },
+    resetValue: Float? = null,
+    onResetValue: ((Float) -> Unit)? = null,
     toggleValue: Boolean? = null,
     onToggleChange: (Boolean) -> Unit = {},
+    enabled: Boolean = toggleValue ?: true,
     modifier: Modifier = Modifier
 ) {
-    val enabled = toggleValue ?: true
+    val shouldShowSlider = enabled || toggleValue == null
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -44,7 +52,7 @@ fun SliderSettingItem(
         ) {
             Text(
                 text = title,
-                color = Color.White,
+                color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Normal
             )
@@ -67,10 +75,10 @@ fun SliderSettingItem(
 
             Spacer(modifier = Modifier.weight(1f))
             
-            if (enabled) {
+            if (shouldShowSlider) {
                 Text(
-                    text = String.format("%.2f", value),
-                    color = Color.White.copy(alpha = 0.8f),
+                    text = valueTextFormatter(value),
+                    color = Color.White.copy(alpha = if (enabled) 0.8f else 0.35f),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -81,22 +89,34 @@ fun SliderSettingItem(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = it,
-                color = Color.White.copy(alpha = 0.6f),
+                color = Color.White.copy(alpha = if (enabled) 0.6f else 0.35f),
                 fontSize = 13.sp,
                 lineHeight = 18.sp
             )
         }
         
-        if (enabled) {
+        if (shouldShowSlider) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            CustomSliderThinThumb(
+            CustomSlider(
                 value = value,
                 onValueChange = onValueChange,
+                onValueChangeFinished = onValueChangeFinished,
+                enabled = enabled,
                 valueRange = valueRange,
-                thumbColor = Color.White,
-                activeTrackColor = Color(0xFFFF6B35),
-                inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                thumbColor = Color.White.copy(alpha = if (enabled) 1f else 0.35f),
+                activeTrackColor = Color(0xFFFF6B35).copy(alpha = if (enabled) 1f else 0.35f),
+                inactiveTrackColor = Color.White.copy(alpha = if (enabled) 0.2f else 0.12f),
+                onDoubleTap = {
+                    if (enabled && resetValue != null) {
+                        if (onResetValue != null) {
+                            onResetValue(resetValue)
+                        } else {
+                            onValueChange(resetValue)
+                            onValueChangeFinished?.invoke()
+                        }
+                    }
+                }
             )
         }
     }

@@ -8,12 +8,18 @@ import android.opengl.GLSurfaceView
 import android.util.AttributeSet
 import android.view.Surface
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
+import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.raw.RawRenderingEngine
+import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.VideoLogProfile
+import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览 GLSurfaceView
@@ -34,7 +40,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
+    var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
     var onDepthInputAvailable: ((Bitmap) -> Unit)? = null
+        set(value) {
+            field = value
+            renderer.onDepthInputAvailable = value
+        }
+    var onAiFocusInputAvailable: ((Bitmap) -> Unit)? = null
+        set(value) {
+            field = value
+            renderer.onAiFocusInputAvailable = value
+        }
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
@@ -76,12 +92,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             onMeteringUpdated?.invoke(totalWeight, weightedSumLuminance)
         }
 
-        renderer.onFirstFrameRendered = {
-            post { onFirstPreviewFrame?.invoke() }
-        }
-
-        renderer.onDepthInputAvailable = { bitmap ->
-            onDepthInputAvailable?.invoke(bitmap)
+        renderer.onHighlightPointUpdated = { hx, hy ->
+            onHighlightPointUpdated?.invoke(hx, hy)
         }
 
         // 保持 EGL 上下文
@@ -96,6 +108,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun setPreviewSize(width: Int, height: Int) {
         queueEvent {
             renderer.setPreviewSize(width, height)
+        }
+    }
+
+    fun setCaptureSize(width: Int, height: Int) {
+        queueEvent {
+            renderer.setCaptureSize(width, height)
         }
     }
 
@@ -123,8 +141,18 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setCaptureAspectRatio(aspectRatio: Float) {
+        queueEvent {
+            renderer.setCaptureAspectRatio(aspectRatio)
+        }
+    }
+
     fun setFocusPoint(point: PointF?) {
         renderer.focusPoint = point
+    }
+
+    fun setMeteringMode(mode: MeteringMode) {
+        renderer.meteringMode = mode
     }
 
     fun setMeteringEnabled(enabled: Boolean) {
@@ -143,11 +171,64 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setBaselineLut(lutConfig: LutConfig?) {
+        queueEvent {
+            renderer.setBaselineLut(lutConfig)
+            requestRender()
+        }
+    }
+
     /**
      * 设置 LUT 是否启用
      */
     fun setLutEnabled(enabled: Boolean) {
         renderer.lutEnabled = enabled
+        requestRender()
+    }
+
+    fun setBaselineLutEnabled(enabled: Boolean) {
+        renderer.baselineLutEnabled = enabled
+        requestRender()
+    }
+
+    fun setIsHlgInput(isHlg: Boolean) {
+        renderer.isHlgInput = isHlg
+        requestRender()
+    }
+
+    fun setRawPreviewSettings(
+        enabled: Boolean,
+        exposureCompensation: Float,
+        blackPointCorrection: Float,
+        whitePointCorrection: Float,
+        renderingEngine: RawRenderingEngine,
+        toneMappingParameters: RawToneMappingParameters
+    ) {
+        queueEvent {
+            renderer.setRawPreviewSettings(
+                enabled = enabled,
+                exposureCompensation = exposureCompensation,
+                blackPointCorrection = blackPointCorrection,
+                whitePointCorrection = whitePointCorrection,
+                renderingEngine = renderingEngine,
+                toneMappingParameters = toneMappingParameters
+            )
+            requestRender()
+        }
+    }
+
+    fun setAutoFocus(auto: Boolean) {
+        renderer.isAutoFocus = auto
+        requestRender()
+    }
+
+    fun setFocusPeakingEnabled(enabled: Boolean) {
+        renderer.focusPeakingEnabled = enabled
+        requestRender()
+    }
+
+    fun setAiFocusBusy(busy: Boolean) {
+        renderer.isAiFocusBusy = busy
         requestRender()
     }
 
@@ -169,6 +250,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setBaselineColorRecipeEnabled(enabled: Boolean) {
+        renderer.baselineColorRecipeEnabled = enabled
+        requestRender()
+    }
+
     /**
      * 设置参数
      */
@@ -178,62 +264,14 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     ) {
         val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
 
-        renderer.exposure = effectiveParams.exposure
-        renderer.contrast = effectiveParams.contrast
-        renderer.saturation = effectiveParams.saturation
-        renderer.temperature = effectiveParams.temperature
-        renderer.tint = effectiveParams.tint
-        renderer.fade = effectiveParams.fade
-        renderer.vibrance = effectiveParams.color
-        renderer.highlights = effectiveParams.highlights
-        renderer.shadows = effectiveParams.shadows
-        renderer.toneToe = effectiveParams.toneToe
-        renderer.toneShoulder = effectiveParams.toneShoulder
-        renderer.tonePivot = effectiveParams.tonePivot
-        renderer.filmGrain = effectiveParams.filmGrain
-        renderer.vignette = effectiveParams.vignette
-        renderer.bleachBypass = effectiveParams.bleachBypass
-        renderer.chromaticAberration = effectiveParams.chromaticAberration
-        renderer.noise = effectiveParams.noise
-        renderer.lowRes = effectiveParams.lowRes
-        renderer.halation = effectiveParams.halation
-        renderer.lutIntensity = effectiveParams.lutIntensity
-        renderer.setLchAdjustments(
-            floatArrayOf(
-                effectiveParams.skinHue,
-                effectiveParams.redHue,
-                effectiveParams.orangeHue,
-                effectiveParams.yellowHue,
-                effectiveParams.greenHue,
-                effectiveParams.cyanHue,
-                effectiveParams.blueHue,
-                effectiveParams.purpleHue,
-                effectiveParams.magentaHue,
-            ),
-            floatArrayOf(
-                effectiveParams.skinChroma,
-                effectiveParams.redChroma,
-                effectiveParams.orangeChroma,
-                effectiveParams.yellowChroma,
-                effectiveParams.greenChroma,
-                effectiveParams.cyanChroma,
-                effectiveParams.blueChroma,
-                effectiveParams.purpleChroma,
-                effectiveParams.magentaChroma,
-            ),
-            floatArrayOf(
-                effectiveParams.skinLightness,
-                effectiveParams.redLightness,
-                effectiveParams.orangeLightness,
-                effectiveParams.yellowLightness,
-                effectiveParams.greenLightness,
-                effectiveParams.cyanLightness,
-                effectiveParams.blueLightness,
-                effectiveParams.purpleLightness,
-                params.magentaLightness,
-            )
-        )
+        renderer.setRecipeParams(effectiveParams)
         renderer.aperture = aperture
+        requestRender()
+    }
+
+    fun setBaselineParams(params: ColorRecipeParams) {
+        val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(params)
+        renderer.updateBaselineRecipeParams(effectiveParams)
         requestRender()
     }
 
@@ -263,6 +301,50 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * @param callback 捕获完成后的回调，在主线程调用
      */
     fun capturePreviewFrame(callback: (Bitmap) -> Unit) {
+        capturePreviewFrameInternal(
+            maxLongEdge = null,
+            source = PreviewCaptureSource.FinalDisplay,
+            requestRenderImmediately = true
+        ) { bitmap ->
+            bitmap?.let(callback)
+        }
+    }
+
+    fun capturePreviewFrame(maxLongEdge: Int, callback: (Bitmap) -> Unit) {
+        capturePreviewFrameInternal(
+            maxLongEdge = maxLongEdge,
+            source = PreviewCaptureSource.FinalDisplay,
+            requestRenderImmediately = true
+        ) { bitmap ->
+            bitmap?.let(callback)
+        }
+    }
+
+    fun captureNextPreviewFrame(maxLongEdge: Int, callback: (Bitmap) -> Unit) {
+        capturePreviewFrameInternal(
+            maxLongEdge = maxLongEdge,
+            source = PreviewCaptureSource.FinalDisplay,
+            requestRenderImmediately = false
+        ) { bitmap ->
+            bitmap?.let(callback)
+        }
+    }
+
+    fun captureOriginalPreviewFrame(callback: (Bitmap?) -> Unit) {
+        capturePreviewFrameInternal(
+            maxLongEdge = null,
+            source = PreviewCaptureSource.Original,
+            requestRenderImmediately = true,
+            callback = callback
+        )
+    }
+
+    private fun capturePreviewFrameInternal(
+        maxLongEdge: Int?,
+        source: PreviewCaptureSource,
+        requestRenderImmediately: Boolean,
+        callback: (Bitmap?) -> Unit
+    ) {
         renderer.onPreviewFrameCaptured = { bitmap ->
             // 在主线程回调
             post {
@@ -270,8 +352,14 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             }
         }
         queueEvent {
-            renderer.capturePreviewFrame()
-            requestRender()
+            if (maxLongEdge != null) {
+                renderer.capturePreviewFrame(maxLongEdge, source)
+            } else {
+                renderer.capturePreviewFrame(source = source)
+            }
+            if (requestRenderImmediately) {
+                requestRender()
+            }
         }
     }
 
@@ -280,6 +368,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      */
     fun setLivePhotoRecorder(recorder: LivePhotoRecorder?) {
         renderer.livePhotoRecorder = recorder
+    }
+
+    fun setVideoRecorder(recorder: VideoRecorder?) {
+        renderer.videoRecorder = recorder
+    }
+
+    fun setVideoLogProfile(profile: VideoLogProfile) {
+        renderer.videoLogProfile = profile
+        requestRender()
     }
 
     /**
@@ -298,13 +395,22 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     override fun onPause() {
+        renderer.setRenderingPaused(true)
         super.onPause()
         PLog.d(TAG, "onPause")
     }
 
     override fun onResume() {
+        renderer.setRenderingPaused(false)
         super.onResume()
         PLog.d(TAG, "onResume")
+    }
+
+    fun restoreRenderStateAfterResume() {
+        queueEvent {
+            renderer.restoreLutTexturesAfterResume()
+            requestRender()
+        }
     }
 
     override fun onDetachedFromWindow() {

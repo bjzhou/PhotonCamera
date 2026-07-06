@@ -7,6 +7,7 @@ import android.opengl.GLES30
 import android.opengl.GLUtils
 import com.hinnka.mycamera.lut.GlUtils
 import com.hinnka.mycamera.lut.Shaders
+import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 
 class OglBokehProcessor {
@@ -16,8 +17,8 @@ class OglBokehProcessor {
 
     private var uDepthMatrixLoc: Int = 0
     private var bokehProgramId = 0
-    private var fgfCoeffProgramId = 0
-    private var fgfApplyProgramId = 0
+    private var jbuUpsampleProgramId = 0
+    private var depthSharpenProgramId = 0
     private var vertexBufferId = 0
     private var texCoordBufferId = 0
     private var indexBufferId = 0
@@ -38,63 +39,58 @@ class OglBokehProcessor {
             initGL()
 
             val inputTex = createTexture(originalImage, mipmap = true)
-            val lowResDepthTex = createTexture(lowResDepthMap)
-
-            // Step 1: FGF Coefficients (Run at low resolution)
-            val lowResCoeffTex = IntArray(1)
-            GLES30.glGenTextures(1, lowResCoeffTex, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lowResCoeffTex[0])
-            // Use RGB16F to store (a, b, mean_I)
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGB16F, lowResDepthMap.width, lowResDepthMap.height, 0, GLES30.GL_RGB, GLES30.GL_HALF_FLOAT, null)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            val lowResDepthTex = createTexture(lowResDepthMap, filterNearest = false, mipmap = false)
 
             val fbo = IntArray(1)
             GLES30.glGenFramebuffers(1, fbo, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, lowResCoeffTex[0], 0)
+            
+            var highResDepthTex = IntArray(1)
+            var refinedDepthTex = IntArray(1)
 
-            GLES30.glViewport(0, 0, lowResDepthMap.width, lowResDepthMap.height)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            GLES30.glUseProgram(fgfCoeffProgramId)
-
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lowResDepthTex)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(fgfCoeffProgramId, "uLowResDepth"), 0)
-
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(fgfCoeffProgramId, "uLowResGuide"), 1)
-
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(fgfCoeffProgramId, "uTexelSize"), 1.0f / lowResDepthMap.width, 1.0f / lowResDepthMap.height)
-
-            drawQuad(fgfCoeffProgramId)
-
-            // Step 2: FGF Apply (Generate High-Res Refined Depth)
-            val highResDepthTex = IntArray(1)
+            // Step 1: JBU Upsample (Generate High-Res Refined Depth)
             GLES30.glGenTextures(1, highResDepthTex, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highResDepthTex[0])
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, originalImage.width, originalImage.height, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
 
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
             GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, highResDepthTex[0], 0)
             GLES30.glViewport(0, 0, originalImage.width, originalImage.height)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            GLES30.glUseProgram(fgfApplyProgramId)
+            GLES30.glUseProgram(jbuUpsampleProgramId)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(fgfApplyProgramId, "uHighResGuide"), 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lowResDepthTex)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uLowResDepth"), 0)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lowResCoeffTex[0])
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(fgfApplyProgramId, "uLowResCoeffs"), 1)
-            
-            // Pass the texel size of the low-res coefficient texture for guidance-aware upsampling
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(fgfApplyProgramId, "uLowResTexelSize"), 1.0f / lowResDepthMap.width, 1.0f / lowResDepthMap.height)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uHighResGuide"), 1)
 
-            drawQuad(fgfApplyProgramId)
+            GLES30.glUniform2f(GLES30.glGetUniformLocation(jbuUpsampleProgramId, "uLowResTexelSize"), 1.0f / lowResDepthMap.width, 1.0f / lowResDepthMap.height)
+
+            drawQuad(jbuUpsampleProgramId)
+
+            // Step 2: Depth Edge Sharpening
+            GLES30.glGenTextures(1, refinedDepthTex, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, refinedDepthTex[0])
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, originalImage.width, originalImage.height, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+
+            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, refinedDepthTex[0], 0)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            GLES30.glUseProgram(depthSharpenProgramId)
+
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highResDepthTex[0])
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(depthSharpenProgramId, "uDepthTexture"), 0)
+            GLES30.glUniform2f(GLES30.glGetUniformLocation(depthSharpenProgramId, "uTexelSize"), 1.0f / originalImage.width, 1.0f / originalImage.height)
+
+            drawQuad(depthSharpenProgramId)
+
+            val finalDepthTex = refinedDepthTex[0]
 
             // Step 3: Apply Bokeh
             val outputTex = IntArray(1)
@@ -115,10 +111,10 @@ class OglBokehProcessor {
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uInputTexture"), 0)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, highResDepthTex[0])
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uDepthTexture"), 1)
 
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius"), originalImage.width.toFloat() / 24.0f)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius"), originalImage.width.toFloat() / 45.0f)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth"), focusDepth)
             GLES30.glUniform2f(GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize"), 1.0f / originalImage.width, 1.0f / originalImage.height)
@@ -133,15 +129,20 @@ class OglBokehProcessor {
             // Read back to Bitmap
             val resultBitmap = Bitmap.createBitmap(originalImage.width, originalImage.height,
                 Bitmap.Config.ARGB_8888, false, originalImage.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB))
-            val buffer = java.nio.ByteBuffer.allocateDirect(originalImage.width * originalImage.height * 4)
-            GLES30.glReadPixels(0, 0, originalImage.width, originalImage.height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer)
-            resultBitmap.copyPixelsFromBuffer(buffer)
+            val bufferByteCount = originalImage.width.toLong() * originalImage.height.toLong() * 4L
+            val buffer = LargeDirectBuffer.allocate(bufferByteCount, "OGL bokeh readback") ?: return null
+            try {
+                GLES30.glReadPixels(0, 0, originalImage.width, originalImage.height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer)
+                resultBitmap.copyPixelsFromBuffer(buffer)
+            } finally {
+                LargeDirectBuffer.free(buffer)
+            }
 
             // Clean up
             GLES30.glDeleteTextures(1, intArrayOf(inputTex), 0)
             GLES30.glDeleteTextures(1, intArrayOf(lowResDepthTex), 0)
-            GLES30.glDeleteTextures(1, lowResCoeffTex, 0)
             GLES30.glDeleteTextures(1, highResDepthTex, 0)
+            GLES30.glDeleteTextures(1, refinedDepthTex, 0)
             GLES30.glDeleteTextures(1, outputTex, 0)
             GLES30.glDeleteFramebuffers(1, fbo, 0)
 
@@ -155,11 +156,25 @@ class OglBokehProcessor {
     }
 
     private fun sampleDepth(depthMap: Bitmap, x: Float, y: Float): Float {
-        val px = (x * depthMap.width).toInt().coerceIn(0, depthMap.width - 1)
-        val py = (y * depthMap.height).toInt().coerceIn(0, depthMap.height - 1)
-        val color = depthMap.getPixel(px, py)
-        // Assume depth is in R channel
-        return (color shr 16 and 0xFF) / 255.0f
+        val px = (x * (depthMap.width - 1)).toInt().coerceIn(0, depthMap.width - 1)
+        val py = (y * (depthMap.height - 1)).toInt().coerceIn(0, depthMap.height - 1)
+        val radius = maxOf((minOf(depthMap.width, depthMap.height) * 0.045f).toInt(), 3)
+        val samples = ArrayList<Float>((radius * 2 + 1) * (radius * 2 + 1))
+
+        val xStart = maxOf(px - radius, 0)
+        val xEnd = minOf(px + radius, depthMap.width - 1)
+        val yStart = maxOf(py - radius, 0)
+        val yEnd = minOf(py + radius, depthMap.height - 1)
+        for (sampleY in yStart..yEnd) {
+            for (sampleX in xStart..xEnd) {
+                val color = depthMap.getPixel(sampleX, sampleY)
+                samples.add(((color shr 16) and 0xFF) / 255.0f)
+            }
+        }
+
+        if (samples.isEmpty()) return 0.5f
+        samples.sort()
+        return samples[samples.size / 2]
     }
 
     private fun createTexture(bitmap: Bitmap, filterNearest: Boolean = false, mipmap: Boolean = false): Int {
@@ -218,16 +233,16 @@ class OglBokehProcessor {
         val fs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.PSF_SPLAT_FRAGMENT_SHADER)
         bokehProgramId = GlUtils.linkProgram(vs, fs)
 
-        val fgfCoeffFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FGF_COEFFS_FRAGMENT_SHADER)
-        fgfCoeffProgramId = GlUtils.linkProgram(vs, fgfCoeffFs)
+        val jbuFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.JBU_UPSAMPLE_FRAGMENT_SHADER)
+        jbuUpsampleProgramId = GlUtils.linkProgram(vs, jbuFs)
 
-        val fgfApplyFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FGF_APPLY_FRAGMENT_SHADER)
-        fgfApplyProgramId = GlUtils.linkProgram(vs, fgfApplyFs)
+        val sharpenFs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.DEPTH_SHARPEN_FRAGMENT_SHADER)
+        depthSharpenProgramId = GlUtils.linkProgram(vs, sharpenFs)
 
         GLES30.glDeleteShader(vs)
         GLES30.glDeleteShader(fs)
-        GLES30.glDeleteShader(fgfCoeffFs)
-        GLES30.glDeleteShader(fgfApplyFs)
+        GLES30.glDeleteShader(jbuFs)
+        GLES30.glDeleteShader(sharpenFs)
 
         vertexBufferId = GlUtils.createBuffer(Shaders.FULL_QUAD_VERTICES)
         texCoordBufferId = GlUtils.createBuffer(Shaders.TEXTURE_COORDS)
@@ -265,8 +280,8 @@ class OglBokehProcessor {
 
     private fun releaseGL() {
         if (bokehProgramId != 0) GLES30.glDeleteProgram(bokehProgramId)
-        if (fgfCoeffProgramId != 0) GLES30.glDeleteProgram(fgfCoeffProgramId)
-        if (fgfApplyProgramId != 0) GLES30.glDeleteProgram(fgfApplyProgramId)
+        if (jbuUpsampleProgramId != 0) GLES30.glDeleteProgram(jbuUpsampleProgramId)
+        if (depthSharpenProgramId != 0) GLES30.glDeleteProgram(depthSharpenProgramId)
         if (vertexBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(vertexBufferId), 0)
         if (texCoordBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(texCoordBufferId), 0)
         if (indexBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(indexBufferId), 0)

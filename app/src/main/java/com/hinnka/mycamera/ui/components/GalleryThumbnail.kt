@@ -8,10 +8,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,8 +20,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.hinnka.mycamera.gallery.PhotoData
+import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
  * 相册入口缩略图组件
@@ -30,12 +30,13 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
  */
 @Composable
 fun GalleryThumbnail(
-    latestPhoto: PhotoData?,
+    latestPhoto: MediaData?,
     viewModel: GalleryViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val refreshKey = latestPhoto?.id?.let { viewModel.getPreparedPhotoThumbnailRefreshKey(it) } ?: 0L
     
     Box(
         modifier = modifier
@@ -47,27 +48,30 @@ fun GalleryThumbnail(
         contentAlignment = Alignment.Center
     ) {
         if (latestPhoto != null) {
-            val transformation = remember(latestPhoto) {
-                viewModel.getPhotoTransformation(latestPhoto)
-            }
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(latestPhoto.thumbnailUri)
+                    .memoryCacheKey(
+                        "gallery_thumbnail_${latestPhoto.id}_${latestPhoto.thumbnailUri}_${refreshKey}"
+                    )
                     .crossfade(true)
-                    .apply {
-                        if (transformation != null) {
-                            transformations(transformation)
-                        }
-                    }
                     .build(),
                 contentDescription = "Gallery",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+            if (latestPhoto.isVideo) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         } else {
             // 没有照片时显示图标
             Icon(
-                imageVector = Icons.Default.PhotoLibrary,
+                imageVector = AppIcons.PhotoLibrary,
                 contentDescription = "Gallery",
                 tint = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.size(24.dp)

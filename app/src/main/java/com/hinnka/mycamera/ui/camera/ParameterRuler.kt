@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.R
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -37,7 +39,7 @@ enum class CameraParameter {
     EXPOSURE_COMPENSATION,  // AE
     SHUTTER_SPEED,         // Tv
     ISO,                   // ISO
-    APERTURE,              // Av
+    FOCUS,                 // Focus
     WHITE_BALANCE          // AWB
 }
 
@@ -52,6 +54,11 @@ fun ParameterRuler(
     maxValue: Float,
     isAdjustable: Boolean,
     showAutoButton: Boolean,
+    resetValue: Float? = null,
+    showHyperfocalButton: Boolean = false,
+    hyperfocalEnabled: Boolean = false,
+    hyperfocalDistanceMeters: Float = 0f,
+    onHyperfocalToggle: ((Boolean) -> Unit)? = null,
     onValueChange: (Float) -> Unit,
     onAutoModeToggle: () -> Unit,
     modifier: Modifier = Modifier
@@ -59,16 +66,15 @@ fun ParameterRuler(
     val yellow = Color(0xFFFFD700)
 
     val currentValueState by rememberUpdatedState(currentValue)
+    val resetValueState by rememberUpdatedState(resetValue)
     var selectedValue by remember(parameter) { mutableStateOf(currentValue) }
     val isAdjustableState by rememberUpdatedState(isAdjustable)
     val scaleValues = remember(parameter, minValue, maxValue) {
         getScaleValues(parameter, minValue, maxValue)
     }
 
-    LaunchedEffect(isAdjustable, currentValue) {
-        if (!isAdjustable) {
-            selectedValue = currentValueState
-        }
+    LaunchedEffect(parameter, currentValue) {
+        selectedValue = currentValueState
     }
 
     Box(
@@ -103,6 +109,14 @@ fun ParameterRuler(
                 }
             }
 
+            if (showHyperfocalButton && onHyperfocalToggle != null) {
+                HyperfocalFocusButton(
+                    enabled = hyperfocalEnabled,
+                    distanceMeters = hyperfocalDistanceMeters,
+                    onToggle = { onHyperfocalToggle(!hyperfocalEnabled) }
+                )
+            }
+
             // Ruler scale area
             Box(
                 modifier = Modifier
@@ -110,17 +124,28 @@ fun ParameterRuler(
                     .fillMaxHeight()
                     .padding(horizontal = 16.dp)
                     .pointerInput(minValue, maxValue) {
-                        detectTapGestures {
-                            if (isAdjustableState) {
-                                val width = size.width
-                                val stepWidth = width / scaleValues.size
-                                val index = (it.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
-                                selectedValue = scaleValues[index]
-                                if (selectedValue != currentValueState) {
-                                    onValueChange(selectedValue)
+                        detectTapGestures(
+                            onDoubleTap = {
+                                val value = resetValueState
+                                if (isAdjustableState && value != null) {
+                                    selectedValue = value
+                                    if (value != currentValueState) {
+                                        onValueChange(value)
+                                    }
+                                }
+                            },
+                            onTap = {
+                                if (isAdjustableState) {
+                                    val width = size.width
+                                    val stepWidth = width / scaleValues.size
+                                    val index = (it.x / stepWidth).toInt().coerceIn(0, scaleValues.lastIndex)
+                                    selectedValue = scaleValues[index]
+                                    if (selectedValue != currentValueState) {
+                                        onValueChange(selectedValue)
+                                    }
                                 }
                             }
-                        }
+                        )
                     }
                     .pointerInput(minValue, maxValue) {
                         detectDragGestures { change, _ ->
@@ -146,6 +171,62 @@ fun ParameterRuler(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun HyperfocalFocusButton(
+    enabled: Boolean,
+    distanceMeters: Float,
+    onToggle: () -> Unit
+) {
+    val yellow = Color(0xFFFFD700)
+    Button(
+        onClick = onToggle,
+        modifier = Modifier
+            .padding(start = 6.dp)
+            .width(58.dp)
+            .height(34.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (enabled) yellow else Color.Gray.copy(alpha = 0.45f),
+            contentColor = if (enabled) Color.Black else Color.White
+        ),
+        shape = RoundedCornerShape(17.dp),
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = stringResource(R.string.camera_hyperfocal_label),
+                fontSize = 9.sp,
+                lineHeight = 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            if (enabled && distanceMeters > 0f) {
+                Text(
+                    text = formatHyperfocalDistance(distanceMeters),
+                    fontSize = 8.sp,
+                    lineHeight = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun formatHyperfocalDistance(distanceMeters: Float): String {
+    return if (distanceMeters >= 1.0f) {
+        stringResource(R.string.camera_hyperfocal_distance_meters, distanceMeters)
+    } else {
+        stringResource(
+            R.string.camera_hyperfocal_distance_centimeters,
+            (distanceMeters * 100).roundToInt()
+        )
     }
 }
 
@@ -337,7 +418,7 @@ private fun DrawScope.drawCurrentValueIndicator(
 private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue: Float): List<Float> {
     return when (parameter) {
         CameraParameter.EXPOSURE_COMPENSATION -> {
-            generateSequence(minValue) { it + 1 / 3f }
+            generateSequence(minValue) { it + 0.333f }
                 .takeWhile { it <= maxValue }
                 .filter { it in minValue..maxValue }
                 .toList()
@@ -443,37 +524,15 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
                 .toList()
         }
 
-        CameraParameter.APERTURE -> {
-            listOf(
-                minValue,
-                1f,
-                1.2f,
-                1.4f,
-                1.8f,
-                2f,
-                2.4f,
-                2.8f,
-                3.2f,
-                3.5f,
-                4f,
-                4.5f,
-                5f,
-                5.6f,
-                6.3f,
-                7.1f,
-                8f,
-                9f,
-                10f,
-                11f,
-                13f,
-                14f,
-                16f,
-                maxValue
-            )
-                .toSet()
-                .map { it }
-                .filter { it in minValue..maxValue }
+        CameraParameter.FOCUS -> {
+            val steps = 20
+            val list = mutableListOf<Float>()
+            for (i in 0..steps) {
+                list.add(minValue + (maxValue - minValue) * i / steps)
+            }
+            list
         }
+
     }
 }
 
@@ -509,8 +568,14 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
             "${value.toInt()}K"
         }
 
-        CameraParameter.APERTURE -> {
-            "f/${String.format("%.1f", value)}"
+        CameraParameter.FOCUS -> {
+            if (value <= 0.01f) "∞"
+            else {
+                val meters = 1.0f / value
+                if (meters >= 1.0f) String.format("%.1fm", meters)
+                else String.format("%dcm", (meters * 100).toInt())
+            }
         }
+
     }
 }

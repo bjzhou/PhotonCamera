@@ -5,40 +5,78 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.phantom.PhantomShortcutActivity
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
+import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class MyCameraApplication : Application() {
+    private val applicationScope = MainScope()
 
     override fun onCreate() {
         super.onCreate()
+        StartupTrace.mark("Application.onCreate start")
         instance = this
-        BuglyHelper.init(this)
-        ContentRepository.getInstance(this).initialize()
-        phantomService = PhantomService(this)
+        StartupTrace.measure("BuglyHelper.init") {
+            BuglyHelper.init(this)
+        }
+        val contentRepository = ContentRepository.getInstance(this)
+        StartupTrace.measure("ContentRepository.initialize") {
+            contentRepository.initialize()
+        }
+        phantomService = StartupTrace.measure("PhantomService()") {
+            PhantomService(this)
+        }
+        recoverPrivateGalleryIndexForDebugBuild()
+//        AppUpdateManager.startSilentUpdate(this)
 
-        val userPreferencesRepository = ContentRepository.getInstance(this).userPreferencesRepository
-        MainScope().launch {
+        val userPreferencesRepository = contentRepository.userPreferencesRepository
+        applicationScope.launch {
+            StartupTrace.measure("Application.first userPreferences load") {
+                userPreferencesRepository.userPreferences.first()
+            }
             userPreferencesRepository.userPreferences.map { it.phantomMode }.distinctUntilChanged()
                 .collect { phantomMode ->
+                    StartupTrace.mark("Application.phantomMode collected", "phantomMode=$phantomMode")
                     if (phantomMode) {
                         phantomService.start()
                     } else {
                         PhantomPipPreviewCoordinator.requestStop(this@MyCameraApplication)
                         phantomService.stop()
                     }
-                    if (DeviceUtil.isChinaFlavor) {
+                    if (DeviceUtil.canShowPhantom) {
                         updateShortcuts(phantomMode)
                     }
                     updateWidgets(this@MyCameraApplication)
                 }
+        }
+        StartupTrace.mark("Application.onCreate end")
+    }
+
+    private fun recoverPrivateGalleryIndexForDebugBuild() {
+        if (!BuildConfig.DEBUG) return
+        applicationScope.launch {
+            try {
+                val result = GalleryManager.recoverPrivatePhotoDirectoryToDatabase(this@MyCameraApplication)
+                PLog.d(
+                    TAG,
+                    "Debug private gallery recovery: scanned=${result.scannedCount}, " +
+                        "restored=${result.restoredCount}, existing=${result.skippedExistingCount}, " +
+                        "unsupported=${result.skippedUnsupportedCount}, failed=${result.failedCount}"
+                )
+            } catch (e: Exception) {
+                PLog.e(TAG, "Debug private gallery recovery failed", e)
+            }
         }
     }
 
@@ -63,6 +101,8 @@ class MyCameraApplication : Application() {
     }
 
     companion object {
+        private const val TAG = "MyCameraApplication"
+
         lateinit var instance: MyCameraApplication
 
         @SuppressLint("StaticFieldLeak")

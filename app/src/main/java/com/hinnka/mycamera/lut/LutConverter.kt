@@ -8,8 +8,11 @@ import kotlin.math.max
 import kotlin.math.min
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.utils.BoundedTextLineReader
 import com.hinnka.mycamera.utils.PLog
+// LutConfig is in the same package (com.hinnka.mycamera.lut), no import needed
 import kotlin.math.roundToInt
 
 /**
@@ -20,8 +23,11 @@ import kotlin.math.roundToInt
  */
 object LutConverter {
 
+    private const val TAG = "LutConverter"
     private const val MAGIC_PLUT = "PLUT"
+    private const val MAGIC_PLUT_INT = 0x54554C50  // 'PLUT' in Little Endian
     private const val VERSION = 3
+    private const val VERSION_WITH_RECIPE = 4
     private const val DATA_TYPE_UINT16 = 1
 
     /**
@@ -43,7 +49,7 @@ object LutConverter {
         cubeInputStream: InputStream,
         plutOutputStream: OutputStream,
         colorSpace: ColorSpace = ColorSpace.SRGB,
-        curve: LutCurve = LutCurve.SRGB
+        curve: TransferCurve = TransferCurve.SRGB
     ): Boolean {
         return try {
             // 解析 .cube 文件
@@ -59,7 +65,7 @@ object LutConverter {
 
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            PLog.e(TAG, "Failed to convert cube LUT", e)
             false
         }
     }
@@ -76,20 +82,25 @@ object LutConverter {
         pngInputStream: InputStream,
         plutOutputStream: OutputStream,
         colorSpace: ColorSpace = ColorSpace.SRGB,
-        curve: LutCurve = LutCurve.SRGB
+        curve: TransferCurve = TransferCurve.SRGB
     ): Boolean {
         return try {
             val options = BitmapFactory.Options()
             options.inScaled = false
             options.inPremultiplied = false
-            options.inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
 
-            val bitmap = BitmapFactory.decodeStream(pngInputStream, null, options) ?: return false
+            val bitmap = BitmapFactory.decodeStream(pngInputStream, null, options)
+            if (bitmap == null) {
+                PLog.e("LutConverter", "convertPngToplut: decodeStream returned null")
+                return false
+            }
             val width = bitmap.width
             val height = bitmap.height
 
             val isHaldStr = isHald(width, height)
             val isUnwrappedCubeStr = isUnwrappedCube(width, height)
+            
+            PLog.d("LutConverter", "convertPngToplut: decoded size = ${width}x${height}, isHald = $isHaldStr, isUnwrappedCube = $isUnwrappedCubeStr")
 
             val lutSize: Int
             val values: ShortArray
@@ -98,7 +109,12 @@ object LutConverter {
             bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
             if (isHaldStr) {
-                val haldLevel = determineHaldLevel(width) ?: return false
+                val haldLevel = determineHaldLevel(width)
+                if (haldLevel == null) {
+                    PLog.e("LutConverter", "convertPngToplut: determineHaldLevel returned null for width = $width")
+                    bitmap.recycle()
+                    return false
+                }
                 lutSize = haldLevel * haldLevel
                 values = ShortArray(lutSize * lutSize * lutSize * 3)
                 
@@ -127,7 +143,13 @@ object LutConverter {
                     }
                 }
             } else if (isUnwrappedCubeStr) {
-                lutSize = determineUnwrappedCubeRoot(width, height) ?: return false
+                val root = determineUnwrappedCubeRoot(width, height)
+                if (root == null) {
+                    PLog.e("LutConverter", "convertPngToplut: determineUnwrappedCubeRoot returned null for ${width}x${height}")
+                    bitmap.recycle()
+                    return false
+                }
+                lutSize = root
                 values = ShortArray(lutSize * lutSize * lutSize * 3)
                 
                 var dataIndex = 0
@@ -153,6 +175,7 @@ object LutConverter {
                     }
                 }
             } else {
+                PLog.e("LutConverter", "convertPngToplut: neither Hald nor UnwrappedCube size format matched")
                 bitmap.recycle()
                 return false
             }
@@ -164,9 +187,10 @@ object LutConverter {
                 cubeData = resampleSize(cubeData, 33)
             }
             writePLutFile(cubeData, plutOutputStream, colorSpace, curve)
+            PLog.d("LutConverter", "convertPngToplut: successfully converted to plut with size = $lutSize")
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            PLog.e("LutConverter", "convertPngToplut exception", e)
             false
         }
     }
@@ -191,27 +215,19 @@ object LutConverter {
 
     private fun isUnwrappedCube(width: Int, height: Int): Boolean {
         if (width <= height || height < 1) return false
-        val size = width.toDouble() * height
-        val root = Math.cbrt(size).roundToInt()
-        return width % root == 0 && height == root && root * root * root == width * height
+        return width == height * height
     }
 
     private fun determineUnwrappedCubeRoot(width: Int, height: Int): Int? {
         if (width <= height || height < 1) return null
-        val size = width.toDouble() * height
-        val root = Math.cbrt(size).roundToInt()
-        return if (width % root == 0 && height == root && root * root * root == width * height) {
-            root
-        } else {
-            null
-        }
+        return if (width == height * height) height else null
     }
 
-    private fun resampleLut(cubeData: CubeData, curve: LutCurve): CubeData {
+    private fun resampleLut(cubeData: CubeData, curve: TransferCurve): CubeData {
         val size = cubeData.size
         // 尝试使用 Native 优化
         val nativeData = try {
-            LutProcessor.resampleLutNative(cubeData.data, size, curve.ordinal)
+            LutProcessor.resampleLutNative(cubeData.data, size, curve.storageId)
         } catch (e: Throwable) {
             null
         }
@@ -231,14 +247,14 @@ object LutConverter {
                     val b = bIdx * step
 
                     // 1. 将 sRGB 输入转换为线性空间 (因为相机预览是 sRGB 的，但 LUT 可能期望 Log)
-                    val rLin = LutCurve.SRGB.toLinear(r)
-                    val gLin = LutCurve.SRGB.toLinear(g)
-                    val bLin = LutCurve.SRGB.toLinear(b)
+                    val rLin = TransferCurve.SRGB.logToLinear(r)
+                    val gLin = TransferCurve.SRGB.logToLinear(g)
+                    val bLin = TransferCurve.SRGB.logToLinear(b)
 
                     // 2. 将线性空间转换为目标 Log 曲线空间
-                    val rLog = curve.fromLinear(rLin)
-                    val gLog = curve.fromLinear(gLin)
-                    val bLog = curve.fromLinear(bLin)
+                    val rLog = curve.linearToLog(rLin)
+                    val gLog = curve.linearToLog(gLin)
+                    val bLog = curve.linearToLog(bLin)
 
                     // 3. 在原始 LUT 中进行三线性插值采样
                     val interpolated = trilinearSample(cubeData, rLog, gLog, bLog)
@@ -374,7 +390,7 @@ object LutConverter {
         }
 
         inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-            reader.forEachLine { line ->
+            BoundedTextLineReader.forEachLine(reader) { line ->
                 val trimmed = line.trim()
 
                 // 跳过空行和注释
@@ -450,7 +466,7 @@ object LutConverter {
     /**
      * 写入 .plut 文件
      */
-    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, colorSpace: ColorSpace, curve: LutCurve) {
+    private fun writePLutFile(cubeData: CubeData, outputStream: OutputStream, colorSpace: ColorSpace, curve: TransferCurve) {
         val buffer = ByteBuffer.allocate(24 + cubeData.data.size * 2)
             .order(ByteOrder.LITTLE_ENDIAN)
 
@@ -467,7 +483,7 @@ object LutConverter {
         buffer.putInt(DATA_TYPE_UINT16)
 
         // Curve Type
-        buffer.putInt(curve.ordinal)
+        buffer.putInt(curve.storageId)
         
         // Color Space
         buffer.putInt(colorSpace.ordinal)
@@ -478,6 +494,120 @@ object LutConverter {
 
         outputStream.write(buffer.array())
         outputStream.flush()
+    }
+
+    /**
+     * 将 LutConfig 导出为 .plut 格式（可选嵌入色彩配方）
+     *
+     * - recipeJson == null：写 v3 格式（不含配方）
+     * - recipeJson != null：写 v4 格式，像素数据后追加 recipeLength(uint32) + recipeJSON(UTF-8)
+     */
+    fun exportToPlut(lutConfig: LutConfig, outputStream: OutputStream, recipeJson: String? = null) {
+        val pixelBuf = lutConfig.toByteBuffer()
+        val pixelBytes = ByteArray(pixelBuf.capacity())
+        pixelBuf.position(0)
+        pixelBuf.get(pixelBytes)
+
+        val recipeBytes = recipeJson?.toByteArray(Charsets.UTF_8)
+        val version = if (recipeBytes != null) VERSION_WITH_RECIPE else VERSION
+        val recipeSection = if (recipeBytes != null) 4 + recipeBytes.size else 0
+
+        val outBuffer = ByteBuffer.allocate(24 + pixelBytes.size + recipeSection)
+            .order(ByteOrder.LITTLE_ENDIAN)
+        outBuffer.put(MAGIC_PLUT.toByteArray(Charsets.US_ASCII))
+        outBuffer.putInt(version)
+        outBuffer.putInt(lutConfig.size)
+        outBuffer.putInt(lutConfig.configDataType)
+        outBuffer.putInt(lutConfig.curve.storageId)
+        outBuffer.putInt(lutConfig.colorSpace.ordinal)
+        outBuffer.put(pixelBytes)
+        if (recipeBytes != null) {
+            outBuffer.putInt(recipeBytes.size)
+            outBuffer.put(recipeBytes)
+        }
+
+        outputStream.write(outBuffer.array())
+        outputStream.flush()
+    }
+
+    /**
+     * 将输入的 .plut 文件（任意版本）复制到输出，统一写成 v3 格式（去除 v4 中嵌入的配方段）
+     *
+     * @return 转换成功返回 true
+     */
+    fun importPlutStrippingRecipe(inputStream: InputStream, outputStream: OutputStream): Boolean {
+        return try {
+            val fullData = inputStream.readBytes()
+            val inBuffer = ByteBuffer.wrap(fullData).order(ByteOrder.LITTLE_ENDIAN)
+
+            val magic = inBuffer.int
+            if (magic != MAGIC_PLUT_INT) return false
+
+            val version = inBuffer.int
+            val size = inBuffer.int
+            val dataType = inBuffer.int
+            val curveStorageId = if (version >= 2) inBuffer.int else TransferCurve.SRGB.storageId
+            val colorSpaceOrdinal = if (version >= 3) inBuffer.int else ColorSpace.SRGB.ordinal
+
+            val bytesPerComponent = if (dataType == DATA_TYPE_UINT16) 2 else 1
+            val dataByteCount = size * size * size * 3 * bytesPerComponent
+            val dataBytes = ByteArray(dataByteCount)
+            inBuffer.get(dataBytes)
+
+            // 始终写为 v3（去掉 v4 的配方尾部）
+            val outBuffer = ByteBuffer.allocate(24 + dataByteCount).order(ByteOrder.LITTLE_ENDIAN)
+            outBuffer.put(MAGIC_PLUT.toByteArray(Charsets.US_ASCII))
+            outBuffer.putInt(VERSION)
+            outBuffer.putInt(size)
+            outBuffer.putInt(dataType)
+            outBuffer.putInt(curveStorageId)
+            outBuffer.putInt(colorSpaceOrdinal)
+            outBuffer.put(dataBytes)
+
+            outputStream.write(outBuffer.array())
+            outputStream.flush()
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * 从 .plut 输入流中提取嵌入的色彩配方 JSON（仅 v4 格式含有）
+     *
+     * @return 配方 JSON 字符串，若不含配方则返回 null
+     */
+    fun extractRecipeJsonFromPlut(inputStream: InputStream): String? {
+        return try {
+            val fullData = inputStream.readBytes()
+            val buffer = ByteBuffer.wrap(fullData).order(ByteOrder.LITTLE_ENDIAN)
+
+            val magic = buffer.int
+            if (magic != MAGIC_PLUT_INT) return null
+
+            val version = buffer.int
+            if (version < VERSION_WITH_RECIPE) return null
+
+            val size = buffer.int
+            val dataType = buffer.int
+            buffer.int  // curve
+            buffer.int  // colorSpace
+
+            val bytesPerComponent = if (dataType == DATA_TYPE_UINT16) 2 else 1
+            val dataByteCount = size * size * size * 3 * bytesPerComponent
+            if (buffer.remaining() < dataByteCount + 4) return null
+            buffer.position(buffer.position() + dataByteCount)
+
+            val recipeLength = buffer.int
+            if (recipeLength <= 0 || buffer.remaining() < recipeLength) return null
+
+            val recipeBytes = ByteArray(recipeLength)
+            buffer.get(recipeBytes)
+            String(recipeBytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.frame
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import android.util.LruCache
 import androidx.datastore.core.DataStore
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
 /**
  * DataStore 扩展属性
@@ -50,7 +52,7 @@ class FrameManager(private val context: Context) {
     fun initialize() {
         val builtInFrames = FrameTemplateParser.listAvailableFrames(context)
         val customFrames = customImportManager.getCustomFrames()
-        availableFrames = builtInFrames + customFrames
+        availableFrames = (builtInFrames + customFrames).distinctBy { it.id }
         PLog.d(TAG, "Found ${availableFrames.size} frame templates (${builtInFrames.size} built-in, ${customFrames.size} custom)")
     }
     
@@ -65,6 +67,20 @@ class FrameManager(private val context: Context) {
     fun getFrameInfo(id: String): FrameInfo? {
         return availableFrames.find { it.id == id }
     }
+
+    fun createEditorDraft(frameId: String?, imageFrame: Boolean = false): FrameEditorDraft {
+        if (frameId == null) {
+            return FrameEditorDraft.createNew(imageFrame = imageFrame)
+        }
+
+        val template = loadTemplate(frameId)
+        val frameInfo = getFrameInfo(frameId)
+        return if (template != null) {
+            FrameEditorDraft.fromTemplate(template, frameInfo)
+        } else {
+            FrameEditorDraft.createNew(imageFrame = imageFrame)
+        }
+    }
     
     /**
      * 加载边框模板
@@ -75,7 +91,7 @@ class FrameManager(private val context: Context) {
     fun loadTemplate(id: String): FrameTemplate? {
         // 先从缓存查找
         templateCache.get(id)?.let {
-            PLog.d(TAG, "Frame template loaded from cache: $id")
+//            PLog.d(TAG, "Frame template loaded from cache: $id")
             return it
         }
         
@@ -139,6 +155,29 @@ class FrameManager(private val context: Context) {
      */
     fun getCacheInfo(): String {
         return "Frame Cache: ${templateCache.size()}/$CACHE_SIZE, hits=${templateCache.hitCount()}, misses=${templateCache.missCount()}"
+    }
+
+    fun importEditorFrameImage(uri: Uri, frameIdHint: String? = null): String? {
+        return customImportManager.importEditorFrameImage(uri, frameIdHint)
+    }
+
+    fun saveEditorDraft(draft: FrameEditorDraft): String? {
+        val overwriteFrameId = draft.editableFrameId?.takeIf { !draft.isBuiltInSource }
+        val templateId = overwriteFrameId ?: draft.sourceFrameId ?: "custom_${UUID.randomUUID()}"
+        val template = draft.toTemplate(templateId)
+        val validationErrors = FrameTemplateParser.validateTemplate(template)
+        if (validationErrors.isNotEmpty()) {
+            PLog.e(TAG, "Frame draft validation failed: $validationErrors")
+            return null
+        }
+
+        val savedId = customImportManager.saveFrameTemplate(template, overwriteFrameId)
+        if (savedId != null) {
+            draft.sourceFrameId?.let { evictTemplate(it) }
+            evictTemplate(savedId)
+            initialize()
+        }
+        return savedId
     }
 
     // ========== 自定义属性持久化方法 ==========

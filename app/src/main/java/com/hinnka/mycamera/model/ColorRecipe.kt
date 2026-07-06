@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.model
 
+import androidx.annotation.Keep
+import com.google.gson.Gson
 import com.hinnka.mycamera.R
 
 /**
@@ -7,6 +9,7 @@ import com.hinnka.mycamera.R
  *
  * 定义所有色彩调整参数的值
  */
+@Keep
 data class ColorRecipeParams(
     val exposure: Float = 0f,       // -2.0 ~ +2.0 (EV值，曝光调整)
     val contrast: Float = 1f,       // 0.5 ~ 1.5 (对比度，1为无调整)
@@ -14,7 +17,7 @@ data class ColorRecipeParams(
     val temperature: Float = 0f,    // -1.0 ~ +1.0 (色温，负值偏冷，正值偏暖)
     val tint: Float = 0f,           // -1.0 ~ +1.0 (色调，负值偏绿，正值偏品红)
     val fade: Float = 0f,           // 0.0 ~ 1.0 (褪色效果，0为无褪色)
-    val color: Float = 0f,       // -1.0 ~ 1.0 (蓝色增强，0为无调整)
+    val color: Float = 0f,       // -1.0 ~ 1.0 (色彩密度，0为无调整)
     val highlights: Float = 0f,     // -1.0 ~ +1.0 (高光调整，0为无调整)
     val shadows: Float = 0f,        // -1.0 ~ +1.0 (阴影调整，0为无调整)
     val toneToe: Float = 0f,        // -1.0 ~ +1.0 (影调曲线暗部塑形)
@@ -26,7 +29,10 @@ data class ColorRecipeParams(
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
-    val halation: Float = 0f,       // 0.0 ~ 1.0 (光晕/高光扩散强度，0为无效果，模拟 GR3 HDF)
+    val bloom: Float = 0f,          // 0.0 ~ 1.0 (Bevy Bloom 泛光强度，0为无效果)
+    val softLight: Float = 0f,      // 0.0 ~ 1.0 (柔光扩散强度，0为无效果)
+    val halation: Float = 0f,       // 0.0 ~ 1.0 (高光扩散强度，0为无效果，模拟 GR3 HDF)
+    val redHalation: Float = 0f,    // 0.0 ~ 1.0 (胶片暖红色边缘光晕强度，0为无效果)
     val chromaticAberration: Float = 0f, // 0.0 ~ 1.0 (色散/边缘溢色强度，0为无效果)
     val noise: Float = 0f,          // 0.0 ~ 1.0 (噪点强度，包含亮度和色彩噪点，0为无效果)
     val lowRes: Float = 0f,         // 0.0 ~ 1.0 (低像素强度，0为无效果)
@@ -57,8 +63,22 @@ data class ColorRecipeParams(
     val magentaHue: Float = 0f,
     val magentaChroma: Float = 0f,
     val magentaLightness: Float = 0f,
+    val primaryRedHue: Float = 0f,
+    val primaryRedSaturation: Float = 0f,
+    val primaryRedLightness: Float = 0f,
+    val primaryGreenHue: Float = 0f,
+    val primaryGreenSaturation: Float = 0f,
+    val primaryGreenLightness: Float = 0f,
+    val primaryBlueHue: Float = 0f,
+    val primaryBlueSaturation: Float = 0f,
+    val primaryBlueLightness: Float = 0f,
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
-    val remarks: String = "",       // 用户备注
+    val remarks: String? = "",       // 用户备注
+    // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
+    val masterCurvePoints: FloatArray? = null,
+    val redCurvePoints: FloatArray? = null,
+    val greenCurvePoints: FloatArray? = null,
+    val blueCurvePoints: FloatArray? = null,
 ) {
     /**
      * 检查参数是否为默认值（无任何调整）
@@ -82,7 +102,9 @@ data class ColorRecipeParams(
                 filmGrain == 0f &&
                 vignette == 0f &&
                 bleachBypass == 0f &&
-                halation == 0f &&
+                bloom == 0f &&
+                softLight == 0f &&
+                redHalation == 0f &&
                 chromaticAberration == 0f &&
                 noise == 0f &&
                 lowRes == 0f &&
@@ -113,7 +135,20 @@ data class ColorRecipeParams(
                 magentaHue == 0f &&
                 magentaChroma == 0f &&
                 magentaLightness == 0f &&
-                remarks.isEmpty()
+                primaryRedHue == 0f &&
+                primaryRedSaturation == 0f &&
+                primaryRedLightness == 0f &&
+                primaryGreenHue == 0f &&
+                primaryGreenSaturation == 0f &&
+                primaryGreenLightness == 0f &&
+                primaryBlueHue == 0f &&
+                primaryBlueSaturation == 0f &&
+                primaryBlueLightness == 0f &&
+                remarks.isNullOrEmpty() &&
+                masterCurvePoints == null &&
+                redCurvePoints == null &&
+                greenCurvePoints == null &&
+                blueCurvePoints == null
     }
 
     /**
@@ -138,7 +173,9 @@ data class ColorRecipeParams(
                 filmGrain == other.filmGrain &&
                 vignette == other.vignette &&
                 bleachBypass == other.bleachBypass &&
-                halation == other.halation &&
+                bloom == other.bloom &&
+                softLight == other.softLight &&
+                redHalation == other.redHalation &&
                 chromaticAberration == other.chromaticAberration &&
                 noise == other.noise &&
                 lowRes == other.lowRes &&
@@ -169,11 +206,38 @@ data class ColorRecipeParams(
                 magentaHue == other.magentaHue &&
                 magentaChroma == other.magentaChroma &&
                 magentaLightness == other.magentaLightness &&
+                primaryRedHue == other.primaryRedHue &&
+                primaryRedSaturation == other.primaryRedSaturation &&
+                primaryRedLightness == other.primaryRedLightness &&
+                primaryGreenHue == other.primaryGreenHue &&
+                primaryGreenSaturation == other.primaryGreenSaturation &&
+                primaryGreenLightness == other.primaryGreenLightness &&
+                primaryBlueHue == other.primaryBlueHue &&
+                primaryBlueSaturation == other.primaryBlueSaturation &&
+                primaryBlueLightness == other.primaryBlueLightness &&
                 lutIntensity == other.lutIntensity &&
-                remarks == other.remarks
+                remarks == other.remarks &&
+                (masterCurvePoints === other.masterCurvePoints || masterCurvePoints?.contentEquals(other.masterCurvePoints) == true) &&
+                (redCurvePoints === other.redCurvePoints || redCurvePoints?.contentEquals(other.redCurvePoints) == true) &&
+                (greenCurvePoints === other.greenCurvePoints || greenCurvePoints?.contentEquals(other.greenCurvePoints) == true) &&
+                (blueCurvePoints === other.blueCurvePoints || blueCurvePoints?.contentEquals(other.blueCurvePoints) == true)
     }
 
+    /**
+     * 序列化为 JSON 字符串
+     */
+    fun toJson(): String = gson.toJson(copy(halation = 0f))
+
     companion object {
+        private val gson = Gson()
+
+        /**
+         * 从 JSON 字符串反序列化
+         */
+        fun fromJson(json: String): ColorRecipeParams {
+            return gson.fromJson(json, ColorRecipeParams::class.java)?.copy(halation = 0f) ?: return DEFAULT
+        }
+
         /**
          * 默认参数（无调整）
          */
@@ -204,6 +268,9 @@ enum class RecipeParam(
     FILM_GRAIN(R.string.recipe_param_film_grain, 0.0f, 1.0f, 0f),
     VIGNETTE(R.string.recipe_param_vignette, -1.0f, 1.0f, 0f),
     BLEACH_BYPASS(R.string.recipe_param_bleach_bypass, 0.0f, 1.0f, 0f),
+    BLOOM(R.string.recipe_param_bloom, 0.0f, 1.0f, 0f),
+    SOFT_LIGHT(R.string.recipe_param_soft_light, 0.0f, 1.0f, 0f),
+    HDF(R.string.recipe_param_hdf, 0.0f, 1.0f, 0f),
     HALATION(R.string.recipe_param_halation, 0.0f, 1.0f, 0f),
     CHROMATIC_ABERRATION(R.string.recipe_param_chromatic_aberration, 0.0f, 1.0f, 0f),
     NOISE(R.string.recipe_param_noise, 0.0f, 1.0f, 0f),
@@ -235,6 +302,15 @@ enum class RecipeParam(
     MAGENTA_HUE(R.string.recipe_param_magenta_hue, -1.0f, 1.0f, 0f),
     MAGENTA_CHROMA(R.string.recipe_param_magenta_chroma, -1.0f, 1.0f, 0f),
     MAGENTA_LIGHTNESS(R.string.recipe_param_magenta_lightness, -1.0f, 1.0f, 0f),
+    PRIMARY_RED_HUE(R.string.recipe_param_primary_red_hue, -1.0f, 1.0f, 0f),
+    PRIMARY_RED_SATURATION(R.string.recipe_param_primary_red_saturation, -1.0f, 1.0f, 0f),
+    PRIMARY_RED_LIGHTNESS(R.string.recipe_param_primary_red_lightness, -1.0f, 1.0f, 0f),
+    PRIMARY_GREEN_HUE(R.string.recipe_param_primary_green_hue, -1.0f, 1.0f, 0f),
+    PRIMARY_GREEN_SATURATION(R.string.recipe_param_primary_green_saturation, -1.0f, 1.0f, 0f),
+    PRIMARY_GREEN_LIGHTNESS(R.string.recipe_param_primary_green_lightness, -1.0f, 1.0f, 0f),
+    PRIMARY_BLUE_HUE(R.string.recipe_param_primary_blue_hue, -1.0f, 1.0f, 0f),
+    PRIMARY_BLUE_SATURATION(R.string.recipe_param_primary_blue_saturation, -1.0f, 1.0f, 0f),
+    PRIMARY_BLUE_LIGHTNESS(R.string.recipe_param_primary_blue_lightness, -1.0f, 1.0f, 0f),
     LUT_INTENSITY(R.string.recipe_param_lut_intensity, 0.0f, 1.0f, 1f);
 
     /**
@@ -261,7 +337,10 @@ enum class RecipeParam(
             FILM_GRAIN -> params.filmGrain
             VIGNETTE -> params.vignette
             BLEACH_BYPASS -> params.bleachBypass
-            HALATION -> params.halation
+            BLOOM -> params.bloom
+            SOFT_LIGHT -> params.softLight
+            HDF -> params.halation
+            HALATION -> params.redHalation
             CHROMATIC_ABERRATION -> params.chromaticAberration
             NOISE -> params.noise
             LOW_RES -> params.lowRes
@@ -292,6 +371,15 @@ enum class RecipeParam(
             MAGENTA_HUE -> params.magentaHue
             MAGENTA_CHROMA -> params.magentaChroma
             MAGENTA_LIGHTNESS -> params.magentaLightness
+            PRIMARY_RED_HUE -> params.primaryRedHue
+            PRIMARY_RED_SATURATION -> params.primaryRedSaturation
+            PRIMARY_RED_LIGHTNESS -> params.primaryRedLightness
+            PRIMARY_GREEN_HUE -> params.primaryGreenHue
+            PRIMARY_GREEN_SATURATION -> params.primaryGreenSaturation
+            PRIMARY_GREEN_LIGHTNESS -> params.primaryGreenLightness
+            PRIMARY_BLUE_HUE -> params.primaryBlueHue
+            PRIMARY_BLUE_SATURATION -> params.primaryBlueSaturation
+            PRIMARY_BLUE_LIGHTNESS -> params.primaryBlueLightness
             LUT_INTENSITY -> params.lutIntensity
         }
     }
@@ -314,7 +402,10 @@ enum class RecipeParam(
             FILM_GRAIN -> params.copy(filmGrain = clampedValue)
             VIGNETTE -> params.copy(vignette = clampedValue)
             BLEACH_BYPASS -> params.copy(bleachBypass = clampedValue)
-            HALATION -> params.copy(halation = clampedValue)
+            BLOOM -> params.copy(bloom = clampedValue)
+            SOFT_LIGHT -> params.copy(softLight = clampedValue)
+            HDF -> params.copy(halation = clampedValue)
+            HALATION -> params.copy(redHalation = clampedValue)
             CHROMATIC_ABERRATION -> params.copy(chromaticAberration = clampedValue)
             NOISE -> params.copy(noise = clampedValue)
             LOW_RES -> params.copy(lowRes = clampedValue)
@@ -345,6 +436,15 @@ enum class RecipeParam(
             MAGENTA_HUE -> params.copy(magentaHue = clampedValue)
             MAGENTA_CHROMA -> params.copy(magentaChroma = clampedValue)
             MAGENTA_LIGHTNESS -> params.copy(magentaLightness = clampedValue)
+            PRIMARY_RED_HUE -> params.copy(primaryRedHue = clampedValue)
+            PRIMARY_RED_SATURATION -> params.copy(primaryRedSaturation = clampedValue)
+            PRIMARY_RED_LIGHTNESS -> params.copy(primaryRedLightness = clampedValue)
+            PRIMARY_GREEN_HUE -> params.copy(primaryGreenHue = clampedValue)
+            PRIMARY_GREEN_SATURATION -> params.copy(primaryGreenSaturation = clampedValue)
+            PRIMARY_GREEN_LIGHTNESS -> params.copy(primaryGreenLightness = clampedValue)
+            PRIMARY_BLUE_HUE -> params.copy(primaryBlueHue = clampedValue)
+            PRIMARY_BLUE_SATURATION -> params.copy(primaryBlueSaturation = clampedValue)
+            PRIMARY_BLUE_LIGHTNESS -> params.copy(primaryBlueLightness = clampedValue)
             LUT_INTENSITY -> params.copy(lutIntensity = clampedValue)
         }
     }

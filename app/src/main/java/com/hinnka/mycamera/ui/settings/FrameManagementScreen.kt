@@ -1,15 +1,14 @@
 package com.hinnka.mycamera.ui.settings
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -23,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,16 +30,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.frame.FrameInfo
-import com.hinnka.mycamera.frame.TextType
 import com.hinnka.mycamera.ui.camera.autoRotate
-import com.hinnka.mycamera.ui.common.WatermarkEditSheet
-import com.hinnka.mycamera.ui.theme.AccentOrange
+import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 /**
  * 边框管理页面
@@ -51,12 +50,15 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 fun FrameManagementScreen(
     viewModel: CameraViewModel,
     onBack: () -> Unit,
+    onCreateFrameClick: () -> Unit,
+    onEditFrameStyle: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val currentFrameId = viewModel.currentFrameId
     val availableFrames = viewModel.availableFrameList
     val customImportManager = viewModel.getCustomImportManager()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // 本地可变列表用于拖拽排序
     var localFrameList by remember { mutableStateOf(availableFrames) }
@@ -76,26 +78,25 @@ fun FrameManagementScreen(
     var renamingFrame by remember { mutableStateOf<FrameInfo?>(null) }
     var renameText by remember { mutableStateOf("") }
 
+    // 复制对话框状态
+    var showCopyDialog by remember { mutableStateOf(false) }
+    var copyingFrame by remember { mutableStateOf<FrameInfo?>(null) }
+    var copyText by remember { mutableStateOf("") }
+
     // 删除确认对话框状态
     var showDeleteDialog by remember { mutableStateOf(false) }
     var deletingFrame by remember { mutableStateOf<FrameInfo?>(null) }
 
     // 导入状态
     var isImporting by remember { mutableStateOf(false) }
+    var pendingExportBytes by remember { mutableStateOf(ByteArray(0)) }
 
-    // 导入类型选择
-    var showImportMenu by remember { mutableStateOf(false) }
-
-    // 帮助对话框状态
-    var showHelpDialog by remember { mutableStateOf(false) }
-
-    // 自定义属性编辑状态
-    var showFrameEditSheet by remember { mutableStateOf(false) }
-    var editingFrameId by remember { mutableStateOf<String?>(null) }
+    // 顶部操作菜单
+    var showCreateMenu by remember { mutableStateOf(false) }
 
     // JSON 边框配置文件选择器
     val frameJsonPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             isImporting = true
@@ -109,18 +110,34 @@ fun FrameManagementScreen(
         }
     }
 
-    // 图片边框文件选择器
-    val frameImagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
         uri?.let {
-            isImporting = true
             scope.launch {
                 withContext(Dispatchers.IO) {
-                    customImportManager.importImageFrame(it)
+                    try {
+                        context.contentResolver.openOutputStream(it)?.use { output ->
+                            output.write(pendingExportBytes)
+                        }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.frame_export_success),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    } catch (e: Exception) {
+                        PLog.e("FrameManagementScreen", "Failed to export frame", e)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.frame_export_failed),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
                 }
-                viewModel.refreshCustomContent()
-                isImporting = false
             }
         }
     }
@@ -181,22 +198,9 @@ fun FrameManagementScreen(
                 }
             },
             actions = {
-                // 帮助按钮
-                IconButton(
-                    onClick = { showHelpDialog = true }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.HelpOutline,
-                        contentDescription = stringResource(R.string.help),
-                        tint = Color.White
-                    )
-                }
-
                 // 导入按钮
                 IconButton(
-                    onClick = {
-                        frameImagePicker.launch(arrayOf("image/png", "image/webp", "image/*"))
-                    },
+                    onClick = { showCreateMenu = true },
                     enabled = !isImporting
                 ) {
                     if (isImporting) {
@@ -208,10 +212,29 @@ fun FrameManagementScreen(
                     } else {
                         Icon(
                             imageVector = Icons.Default.Add,
-                            contentDescription = stringResource(R.string.import_frame),
+                            contentDescription = stringResource(R.string.frame_editor_create_menu),
                             tint = Color.White
                         )
                     }
+                }
+                DropdownMenu(
+                    expanded = showCreateMenu,
+                    onDismissRequest = { showCreateMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.frame_editor_new_title)) },
+                        onClick = {
+                            showCreateMenu = false
+                            onCreateFrameClick()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.import_frame_json)) },
+                        onClick = {
+                            showCreateMenu = false
+                            frameJsonPicker.launch("*/*")
+                        }
+                    )
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -239,14 +262,17 @@ fun FrameManagementScreen(
                     onSetDefault = {
                         viewModel.setFrame(null)
                     },
-                    onRename = null,
-                    onEditProperties = null,
-                    onDelete = null
+                        onEditStyle = null,
+                        onCopy = null,
+                        onExport = null,
+                        onRename = null,
+                        onDelete = null
                 )
             }
 
             itemsIndexed(localFrameList, key = { _, it -> it.id }) { index, frameInfo ->
                 ReorderableItem(reorderableLazyListState, key = frameInfo.id) { isDragging ->
+                    val copySuffix = stringResource(R.string.copy_suffix)
                     FrameManagementItem(
                         name = frameInfo.getName(),
                         isBuiltIn = frameInfo.isBuiltIn,
@@ -256,17 +282,34 @@ fun FrameManagementScreen(
                         onSetDefault = {
                             viewModel.setFrame(frameInfo.id)
                         },
+                        onEditStyle = {
+                            onEditFrameStyle(frameInfo.id)
+                        },
+                        onCopy = {
+                            copyingFrame = frameInfo
+                            copyText = frameInfo.getName() + copySuffix
+                            showCopyDialog = true
+                        },
+                        onExport = {
+                            scope.launch {
+                                val bytes = viewModel.exportFrameToJson(frameInfo)
+                                if (bytes != null) {
+                                    pendingExportBytes = bytes
+                                    exportLauncher.launch("${frameInfo.getName()}.json")
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.frame_export_failed),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        },
                         onRename = if (!frameInfo.isBuiltIn) {
                             {
                                 renamingFrame = frameInfo
                                 renameText = frameInfo.getName()
                                 showRenameDialog = true
-                            }
-                        } else null,
-                        onEditProperties = if (frameInfo.isEditable) {
-                            {
-                                editingFrameId = frameInfo.id
-                                showFrameEditSheet = true
                             }
                         } else null,
                         onDelete = if (!frameInfo.isBuiltIn) {
@@ -322,6 +365,41 @@ fun FrameManagementScreen(
         )
     }
 
+    // 复制对话框
+    if (showCopyDialog && copyingFrame != null) {
+        AlertDialog(
+            onDismissRequest = { showCopyDialog = false },
+            title = {
+                Text(stringResource(R.string.copy_frame_dialog_title))
+            },
+            text = {
+                OutlinedTextField(
+                    value = copyText,
+                    onValueChange = { copyText = it },
+                    label = { Text(stringResource(R.string.name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.copyFrame(copyingFrame!!, copyText)
+                        showCopyDialog = false
+                        copyingFrame = null
+                    }
+                ) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCopyDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
     // 删除确认对话框
     if (showDeleteDialog && deletingFrame != null) {
         AlertDialog(
@@ -363,24 +441,6 @@ fun FrameManagementScreen(
         )
     }
 
-    // 帮助对话框
-    if (showHelpDialog) {
-        AlertDialog(
-            onDismissRequest = { showHelpDialog = false },
-            title = {
-                Text(stringResource(R.string.frame_import_help_title))
-            },
-            text = {
-                Text(stringResource(R.string.frame_import_help_message))
-            },
-            confirmButton = {
-                TextButton(onClick = { showHelpDialog = false }) {
-                    Text(stringResource(R.string.got_it))
-                }
-            }
-        )
-    }
-
     // 页面退出时保存排序
     DisposableEffect(Unit) {
         onDispose {
@@ -388,36 +448,6 @@ fun FrameManagementScreen(
         }
     }
 
-    // 自定义属性编辑底部弹窗
-    if (showFrameEditSheet && editingFrameId != null) {
-        var properties by remember(editingFrameId) { mutableStateOf<Map<String, String>>(emptyMap()) }
-        LaunchedEffect(editingFrameId) {
-            properties = withContext(Dispatchers.IO) {
-                viewModel.getFrameCustomProperties(editingFrameId!!)
-            }
-        }
-        WatermarkEditSheet(
-            customProperties = properties,
-            onPropertiesChange = {
-                properties = it
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        viewModel.saveFrameCustomProperties(editingFrameId!!, it)
-                    }
-                }
-            },
-            onDismiss = {
-                showFrameEditSheet = false
-                editingFrameId = null
-            },
-            onImportFont = { uri ->
-                viewModel.getCustomImportManager().importFont(uri)
-            },
-            onImportLogo = { uri ->
-                viewModel.getCustomImportManager().importLogo(uri)
-            }
-        )
-    }
 }
 
 /**
@@ -431,12 +461,15 @@ private fun FrameManagementItem(
     isDragging: Boolean,
     canDrag: Boolean,
     onSetDefault: () -> Unit,
+    onEditStyle: (() -> Unit)?,
+    onCopy: (() -> Unit)?,
+    onExport: (() -> Unit)?,
     onRename: (() -> Unit)?,
-    onEditProperties: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     dragModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
+    var showActionsMenu by remember { mutableStateOf(false) }
     val borderColor = if (isDefault) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.2f)
     val backgroundColor = when {
         isDragging -> Color.White.copy(alpha = 0.2f)
@@ -464,7 +497,7 @@ private fun FrameManagementItem(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.DragHandle,
+                    imageVector = AppIcons.DragHandle,
                     contentDescription = "Drag to reorder",
                     tint = Color.White.copy(alpha = 0.5f),
                     modifier = dragModifier.size(24.dp)
@@ -526,47 +559,69 @@ private fun FrameManagementItem(
             }
         }
 
-        // 自定义属性编辑按钮（仅可编辑边框）
-        if (onEditProperties != null) {
-            IconButton(
-                onClick = onEditProperties,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = stringResource(R.string.watermark_adjustment),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        // 操作按钮（仅自定义边框）
-        if (onRename != null) {
-            IconButton(
-                onClick = onRename,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = stringResource(R.string.rename),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        if (onDelete != null) {
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.delete),
-                    tint = Color.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(20.dp)
-                )
+        if (onEditStyle != null || onCopy != null || onExport != null || onRename != null || onDelete != null) {
+            Box {
+                IconButton(
+                    onClick = { showActionsMenu = true },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.more_options),
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = showActionsMenu,
+                    onDismissRequest = { showActionsMenu = false }
+                ) {
+                    onEditStyle?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.frame_editor_edit_title)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                    onCopy?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.copy)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                    onExport?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.export_frame_json)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                    onRename?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.rename)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                    onDelete?.let {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete)) },
+                            onClick = {
+                                showActionsMenu = false
+                                it()
+                            }
+                        )
+                    }
+                }
             }
         }
     }

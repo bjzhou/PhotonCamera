@@ -37,7 +37,7 @@ object ColorPaletteMapper {
         val lowKey = positiveBias(-toneBias)
 
         val targetExposure = RecipeParam.EXPOSURE.clamp(
-            highKey * 0.26f - lowKey * 0.18f
+            highKey * 0.4f - lowKey * 0.4f
         )
         val targetContrast = RecipeParam.CONTRAST.clamp(
             1f - highKey * 0.08f + lowKey * 0.18f
@@ -53,7 +53,7 @@ object ColorPaletteMapper {
         val targetTonePivot = clampLch(highKey * 0.14f - lowKey * 0.10f)
 
         val targetVibrance = RecipeParam.COLOR.clamp(
-            vividness * 0.62f - mutedness * 0.28f
+            vividness * 0.42f - mutedness * 0.28f
         )
         val targetSaturation = RecipeParam.SATURATION.clamp(
             1f + vividness * 0.06f - mutedness * 0.04f

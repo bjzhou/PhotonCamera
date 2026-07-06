@@ -190,25 +190,13 @@ object LocalImageAnalyzer {
                 val targetG = matchedTarget.g
                 val targetB = matchedTarget.b
 
-                val tLinearR = OklchConverter.srgbToLinear(targetR)
-                val tLinearG = OklchConverter.srgbToLinear(targetG)
-                val tLinearB = OklchConverter.srgbToLinear(targetB)
-                val tOklab = OklchConverter.linearSrgbToOklab(tLinearR, tLinearG, tLinearB)
-
-                val dL = centroids[c][0] - tOklab[0]
-                val da = centroids[c][1] - tOklab[1]
-                val db = centroids[c][2] - tOklab[2]
-                val deltaE = sqrt(dL * dL + da * da + db * db)
-
-                if (deltaE < 0.50f) {
-                    controlPoints.add(
-                        ControlPoint(
-                            sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
-                            targetR = targetR, targetG = targetG, targetB = targetB,
-                            matchConfidence = matchedTarget.matchConfidence
-                        )
+                controlPoints.add(
+                    ControlPoint(
+                        sourceR = sourceRgb[0], sourceG = sourceRgb[1], sourceB = sourceRgb[2],
+                        targetR = targetR, targetG = targetG, targetB = targetB,
+                        matchConfidence = matchedTarget.matchConfidence
                     )
-                }
+                )
             }
 
             val globalMatchRatio = if (totalMatchAttempts > 0) {
@@ -336,7 +324,8 @@ object LocalImageAnalyzer {
                 }
             }
 
-            val prunedControlPoints = pruneLowConfidenceMonotonicViolations(controlPoints)
+            val oklabFilteredControlPoints = filterOklabAnomalies(controlPoints)
+            val prunedControlPoints = pruneLowConfidenceMonotonicViolations(oklabFilteredControlPoints)
             val monotonicControlPoints = enforceControlPointLuminanceMonotonicity(prunedControlPoints)
 
             scaledSource.recycle()
@@ -412,13 +401,10 @@ object LocalImageAnalyzer {
         targetLuma: FloatArray,
         targetPixels: IntArray
     ): MatchedTargetColor? {
-        var sumTR = 0.0
-        var sumTG = 0.0
-        var sumTB = 0.0
-        var matchedCount = 0
-        var sumConfidence = 0.0
         val step = max(1, clusterCount / CLUSTER_MATCH_SAMPLE_COUNT)
         var attemptCount = 0
+        val samples = mutableListOf<FloatArray>()
+        var sumConfidence = 0.0
 
         for (sampleIndex in 0 until clusterCount step step) {
             attemptCount++
@@ -432,18 +418,28 @@ object LocalImageAnalyzer {
             ) ?: continue
 
             val colorT = targetPixels[matchedPatch.index]
-            sumTR += Color.red(colorT) / 255f
-            sumTG += Color.green(colorT) / 255f
-            sumTB += Color.blue(colorT) / 255f
+            samples.add(
+                floatArrayOf(
+                    Color.red(colorT) / 255f,
+                    Color.green(colorT) / 255f,
+                    Color.blue(colorT) / 255f,
+                    matchedPatch.confidence
+                )
+            )
             sumConfidence += matchedPatch.confidence
-            matchedCount++
         }
 
-        if (matchedCount == 0) return null
+        if (samples.isEmpty()) return null
+
+        val medianR = medianFloat(FloatArray(samples.size) { samples[it][0] })
+        val medianG = medianFloat(FloatArray(samples.size) { samples[it][1] })
+        val medianB = medianFloat(FloatArray(samples.size) { samples[it][2] })
+        val matchedCount = samples.size
+
         return MatchedTargetColor(
-            r = (sumTR / matchedCount).toFloat(),
-            g = (sumTG / matchedCount).toFloat(),
-            b = (sumTB / matchedCount).toFloat(),
+            r = medianR,
+            g = medianG,
+            b = medianB,
             attemptCount = attemptCount,
             matchCount = matchedCount,
             matchConfidence = ((sumConfidence / matchedCount).toFloat() * (matchedCount.toFloat() / attemptCount)).coerceIn(0f, 1f)
@@ -607,6 +603,44 @@ object LocalImageAnalyzer {
 
     private fun lumaFromRgb(r: Float, g: Float, b: Float): Float {
         return 0.2126f * r + 0.7152f * g + 0.0722f * b
+    }
+
+    private fun medianFloat(values: FloatArray): Float {
+        values.sort()
+        val mid = values.size / 2
+        return if (values.size % 2 == 0) {
+            (values[mid - 1] + values[mid]) / 2f
+        } else {
+            values[mid]
+        }
+    }
+
+    private fun filterOklabAnomalies(
+        controlPoints: List<ControlPoint>,
+        threshold: Float = 0.45f
+    ): List<ControlPoint> {
+        return controlPoints.filter { cp ->
+            val sLinear = floatArrayOf(
+                OklchConverter.srgbToLinear(cp.sourceR),
+                OklchConverter.srgbToLinear(cp.sourceG),
+                OklchConverter.srgbToLinear(cp.sourceB)
+            )
+            val tLinear = floatArrayOf(
+                OklchConverter.srgbToLinear(cp.targetR),
+                OklchConverter.srgbToLinear(cp.targetG),
+                OklchConverter.srgbToLinear(cp.targetB)
+            )
+            val sOklab = OklchConverter.linearSrgbToOklab(sLinear[0], sLinear[1], sLinear[2])
+            val tOklab = OklchConverter.linearSrgbToOklab(tLinear[0], tLinear[1], tLinear[2])
+            val dL = sOklab[0] - tOklab[0]
+            val da = sOklab[1] - tOklab[1]
+            val db = sOklab[2] - tOklab[2]
+            val distance = sqrt(dL * dL + da * da + db * db)
+            if (distance >= threshold) {
+                PLog.d("LocalImageAnalyzer", "Removed anomalous control point: distance=%.3f".format(distance))
+            }
+            distance < threshold
+        }
     }
 
     private fun enforceControlPointLuminanceMonotonicity(

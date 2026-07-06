@@ -2,42 +2,27 @@
     <string name="app_name">Photon Camera</string>
     
     <!-- Camera Controls -->
-    <string name="capture">Aufnehmen</string>
     <string name="switch_camera">Kamera wechseln</string>
     <string name="settings">Einstellungen</string>
     <string name="flash">Blitz</string>
     <string name="timer">Timer</string>
     <string name="histogram">Histogramm</string>
-    <string name="grid">Gitter</string>
     <string name="back">Zurück</string>
     
     <!-- Exposure Controls -->
-    <string name="exposure_compensation">EV</string>
-    <string name="iso">ISO</string>
-    <string name="shutter_speed">Verschluss</string>
-    <string name="auto">AUTO</string>
     
     <!-- Focus -->
-    <string name="focus">Fokus</string>
-    <string name="tap_to_focus">Tippen zum Fokussieren</string>
     
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">Seitenverhältnis</string>
-    <string name="ratio_3_2">3:2</string>
-    <string name="ratio_4_3">4:3</string>
-    <string name="ratio_16_9">16:9</string>
-    <string name="ratio_1_1">1:1</string>
     
     <!-- Permissions -->
     <string name="camera_permission_required">Kamera- und Mikrofonberechtigungen sind erforderlich</string>
     <string name="grant_permission">Berechtigung erteilen</string>
     
     <!-- Zoom -->
-    <string name="zoom">Zoom</string>
     
     <!-- Gallery -->
-    <string name="gallery">Galerie</string>
-    <string name="photo_detail">Foto-Details</string>
     <string name="share">Teilen</string>
     <string name="delete">Löschen</string>
     <string name="export">Exportieren</string>
@@ -47,20 +32,15 @@
     <string name="select_all">Alle auswählen</string>
     <string name="cancel">Abbrechen</string>
     <string name="save">Speichern</string>
-    <string name="rotate">Drehen</string>
     <string name="crop">Zuschneiden</string>
-    <string name="brightness">Helligkeit</string>
     <string name="delete_confirm">Dieses Foto löschen?</string>
     <string name="delete_multiple_confirm">%d Fotos löschen?</string>
-    <string name="delete_exported_photos">Auch aus der Systemgalerie löschen</string>
+    <string name="delete_exported_videos_count">Auch %d exportierte Videos löschen</string>
     <string name="no_photos">Noch keine Fotos</string>
     <string name="photo_info">Foto-Info</string>
     <string name="filter">LUT</string>
-    <string name="intensity">Intensität</string>
-    <string name="original">Original</string>
     <string name="export_confirm">Foto mit angewendeter LUT exportieren?</string>
     <string name="items_selected">%d ausgewählt</string>
-    <string name="not_selected">Nicht ausgewählt</string>
     <string name="selected">Ausgewählt</string>
     <string name="imported">Importiert</string>
     <string name="photo_info_date">Datum</string>
@@ -75,9 +55,7 @@
     <string name="frame">Rahmen</string>
     <string name="none">Keine</string>
     <string name="show_app_branding">App-Branding anzeigen</string>
-    <string name="export_with_frame_confirm">Foto mit Rahmen-Wasserzeichen exportieren?</string>
     <string name="import_photo">Importieren</string>
-    <string name="adjust_watermark">Wasserzeichen anpassen</string>
     <string name="watermark_adjustment">Wasserzeichen-Anpassung</string>
     <string name="logo">LOGO</string>
     <string name="text_content">Textinhalt</string>
@@ -94,23 +72,16 @@
     <!-- Settings -->
     <string name="settings_title">Einstellungen</string>
     <string name="settings_section_capture">Aufnahme</string>
-    <string name="settings_section_display">Anzeige</string>
     <string name="settings_use_raw">RAW-Aufnahme</string>
-    <string name="settings_use_raw_description">Fotos im RAW-Format (DNG) für höhere Qualität aufnehmen. Ausschalten, um YUV-Format zu verwenden.</string>
+    <string name="settings_use_raw_description">Fotos im RAW-Format (DNG) für höhere Qualität aufnehmen.</string>
     <string name="settings_level_indicator">Wasserwaage</string>
     <string name="settings_level_description">Horizontale Wasserwaage beim Fotografieren anzeigen</string>
     <string name="settings_grid_lines">Gitternetzlinien</string>
     <string name="settings_grid_description">Gitternetzlinien für die Bildkomposition anzeigen</string>
     <string name="settings_use_multi_frame">Multi-Frame-Stacking</string>
-    <string name="settings_use_multi_frame_description">Mehrere Bilder aufnehmen und zusammenfügen für bessere Qualität und weniger Rauschen.</string>
     <string name="settings_multi_frame_count">Anzahl der Bilder</string>
     <string name="settings_multi_frame_count_description">Anzahl der Bilder für das Multi-Frame-Stacking (mehr Bilder = bessere Qualität, aber langsamer).</string>
     <string name="settings_use_super_resolution">Super-Resolution</string>
-    <string name="settings_use_super_resolution_description">2x Multi-Frame-Super-Resolution für mehr Details verwenden (erfordert Multi-Frame-Stacking).</string>
-    <string name="settings_raw_engine">RAW-Verarbeitungs-Engine</string>
-    <string name="settings_raw_engine_description">Wählen Sie die Engine für die RAW-Datenverarbeitung</string>
-    <string name="settings_raw_engine_native">Nativ</string>
-    <string name="settings_raw_engine_self_developed">Eigenentwicklung</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Nehmen Sie einen kurzen Videoclip zusammen mit Ihrem Foto auf, um einen dynamischen Live-Foto-Effekt zu erzielen.</string>
     <string name="settings_use_gpu_acceleration">GPU-Beschleunigung</string>
@@ -118,13 +89,15 @@
     <string name="settings_section_frame">Rahmen-Wasserzeichen</string>
     <string name="settings_frame_style">Rahmenstil</string>
     <string name="settings_frame_description">Dekorativen Rahmen und Wasserzeichen zu Fotos hinzufügen</string>
-    <string name="settings_section_operation">Bedienung</string>
-    <string name="settings_section_image_processing">Bildverarbeitung</string>
     <string name="settings_section_software_processing">Feinakstimmung</string>
     <string name="settings_shutter_sound">Verschlussgeräusch</string>
     <string name="settings_shutter_sound_description">Ton beim Fotografieren abspielen</string>
     <string name="settings_vibration">Vibration</string>
     <string name="settings_vibration_description">Vibration beim Fotografieren</string>
+    <string name="settings_keep_screen_on">Bildschirm eingeschaltet lassen</string>
+    <string name="settings_keep_screen_on_description">Hält den Bildschirm beim Verwenden der Kamera wach. Videoaufnahmen halten ihn immer wach.</string>
+    <string name="settings_window_screen_brightness">Bildschirmhelligkeit</string>
+    <string name="settings_window_screen_brightness_description">Legt die Bildschirmhelligkeit für dieses App-Fenster fest. Deaktivieren, um die Systemvorgabe zu verwenden.</string>
     <string name="settings_volume_key_action">Lautstärketasten-Aktion</string>
     <string name="settings_volume_key_action_description">Wählen Sie, was die Lautstärketasten bei der Aufnahme bewirken</string>
     <string name="settings_volume_key_action_none">Lautstärkeregelung</string>
@@ -157,10 +130,6 @@
     
     <!-- LUT -->
     <string name="filter_intensity">LUT-Intensität</string>
-    <string name="lut_intensity_none">Keine</string>
-    <string name="lut_intensity_low">Niedrig</string>
-    <string name="lut_intensity_medium">Mittel</string>
-    <string name="lut_intensity_high">Hoch</string>
     <string name="filters_panel">LUTs</string>
     <string name="toggle_display_mode">Anzeigemodus umschalten</string>
     
@@ -178,19 +147,7 @@
     
     <!-- Custom Import -->
     <string name="custom_tag">INDIVIDUELL</string>
-    <string name="settings_section_custom">Eigener Import</string>
-    <string name="settings_custom_import">Eigene Inhalte importieren</string>
-    <string name="import_lut">LUT importieren</string>
-    <string name="import_frame">Rahmen importieren</string>
-    <string name="import_image_frame">Bildrahmen importieren</string>
-    <string name="settings_import_description">Eigene LUT-Filter (.cube) oder Rahmenvorlagen (.png/.webp) importieren</string>
-    <string name="custom_content_management">Importierte Inhalte</string>
-    <string name="lut_type">LUT-Filter</string>
-    <string name="frame_type">Rahmenvorlage</string>
     <string name="delete_confirm_title">Löschen bestätigen</string>
-    <string name="delete_custom_content_confirm">\"%s\" löschen?</string>
-    <string name="importing">Importieren...</string>
-    <string name="edit_name">Name bearbeiten</string>
     <string name="name">Name</string>
     <string name="confirm">Bestätigen</string>
     
@@ -210,23 +167,20 @@
     <string name="recipe_param_film_grain">Körnung</string>
     <string name="recipe_param_vignette">Vignettierung</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_bloom">Bloom</string>
+    <string name="recipe_param_soft_light">Weiches Licht</string>
     <string name="recipe_param_halation">Halation</string>
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="recipe_tab_basic">Basis</string>
     <string name="recipe_tab_color">Farbe</string>
     <string name="recipe_tab_light">Licht</string>
     <string name="recipe_tab_texture">Textur</string>
     <string name="recipe_tab_post">Entwicklung</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->
-    <string name="recipe_param_sharpening">Schärfung</string>
-    <string name="recipe_param_noise_reduction">Rauschunt.</string>
-    <string name="recipe_param_chroma_noise_reduction">Farbrauschen</string>
     
     <!-- Developer Options -->
-    <string name="settings_section_developer">Entwickleroptionen</string>
     <string name="settings_log_viewer">Log-Anzeige</string>
     <string name="settings_log_viewer_description">App-Logs für Diagnosen anzeigen und exportieren</string>
     <string name="logs">Logs</string>
@@ -239,14 +193,11 @@
     <string name="settings_frame_management_description">Rahmen verwalten, Standard festlegen, reihnenfolgen</string>
     <string name="filter_management_title">LUT-Verwaltung</string>
     <string name="frame_management_title">Rahmenverwaltung</string>
-    <string name="category_all">Alle</string>
     <string name="category_custom">Eigene</string>
-    <string name="set_as_default">Als Standard festlegen</string>
     <string name="current_default">Standard</string>
     <string name="rename">Umbenennen</string>
     <string name="import_filter">LUT importieren</string>
     <string name="import_frame_json">Rahmen-Konfig importieren</string>
-    <string name="import_frame_image">Bildrahmen importieren</string>
     <string name="delete_filter_confirm_message">LUT \"%s\" löschen?</string>
     <string name="delete_frame_confirm_message">Rahmen \"%s\" löschen?</string>
     <string name="rename_dialog_title">Umbenennen</string>
@@ -255,7 +206,6 @@
     <string name="copy_suffix"> (Kopie)</string>
     <string name="edit_category">Kategorie bearbeiten</string>
     <string name="batch_edit_category">Kategorie im Batch bearbeiten</string>
-    <string name="sort_categories">Kategorien sortieren</string>
     <string name="drag_to_reorder_categories">Griffe ziehen, um Tabs neu zu ordnen</string>
     <string name="selected_count">%d ausgewählt</string>
     <string name="category">Kategorie</string>
@@ -270,15 +220,9 @@
     <string name="delete_category_message">Sind Sie sicher, dass Sie die Kategorie \"%s\" löschen möchten? LUTs in dieser Kategorie werden auf unkategorisiert zurückgesetzt.</string>
     <string name="built_in">Integriert</string>
     <string name="custom">Eigene</string>
-    <string name="no_filters">Keine eigenen LUTs</string>
-    <string name="no_frames">Keine eigenen Rahmen</string>
     <string name="input_curve">Eingangskurve</string>
     
     <!-- Frame Import Help -->
-    <string name="help">Hilfe</string>
-    <string name="got_it">Verstanden</string>
-    <string name="frame_import_help_title">Anleitung zum Rahmen-Import</string>
-    <string name="frame_import_help_message">Unterstützte Formate: PNG, WebP\n\nAnforderungen:\n• Das Bild muss einen transparenten Bereich haben (Alpha-Kanal)\n• Ihr Foto wird hinter dem Rahmen platziert und ist durch den transparenten Bereich sichtbar\n\nTipp: Entwerfen Sie Ihren Rahmen mit einem transparenten Ausschnitt dort, wo das Foto erscheinen soll.</string>
     
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Kamerakalibrierung</string>
@@ -294,7 +238,6 @@
     <string name="current_camera">Aktuelle Kamera</string>
     
     <!-- About & Donation -->
-    <string name="settings_section_about">Über</string>
     <string name="settings_donation">Spende</string>
     <string name="settings_donation_description">Unterstützen Sie die Entwicklung von Photon Camera</string>
     <string name="settings_default_focal_length">Standard-Brennweite</string>
@@ -302,19 +245,11 @@
     <string name="refresh">Aktualisieren</string>
     <string name="refresh_success">Vorschau aktualisiert</string>
     <string name="refresh_failed">Vorschau konnte nicht aktualisiert werden</string>
-    <string name="settings_raw_restore_lut">RAW-Wiederherstellungs-LUT</string>
-    <string name="settings_raw_restore_lut_description">Wählen Sie die LUT für die RAW-Farbwiederherstellung. Wählen Sie "Keine" für Log-Ausgabe.</string>
     <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>
-    <string name="settings_dro_mode_description">Optimiert Schattendetails und Glanzlichtkompression durch Nutzung des Log-Kurven-Spielraums. Höhere Werte bewahren mehr Glanzlichter, erfordern aber möglicherweise mehr Licht.</string>
     <string name="settings_dro_off">Aus</string>
-    <string name="settings_dro_low">Niedrig</string>
-    <string name="settings_dro_high">Hoch</string>
-    <string name="settings_apply_ultra_hdr">Ultra HDR Belichtungsstrategie</string>
-    <string name="settings_apply_ultra_hdr_description">Reduziert basierend auf Multi-Frame-Stacking und Histogrammanalyse automatisch die Belichtung, um Glanzlichter bei ausreichenden Lichtverhältnissen zu schützen. Nur wirksam, wenn RAW und Multi-Frame aktiviert sind.</string>
-    <string name="settings_color_space">RAW-Farbraum</string>
-    <string name="settings_color_space_description">Wählen Sie den Zielfarbraum für die RAW-Verarbeitung.</string>
-    <string name="settings_log_curve">RAW-Gamma</string>
-    <string name="settings_log_curve_description">Wählen Sie die Transferfunktion für die RAW-Verarbeitung (Log-Kurve).</string>
+    <string name="settings_dro_dr100">DR100</string>
+    <string name="settings_dro_dr200">DR200</string>
+    <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (10-Bit YUV)</string>
     <string name="settings_use_p010_description">Aktiviert die 10-Bit YUV-Ausgabe für eine bessere Bildpräzision. Wirksam auf unterstützten Geräten, wenn RAW deaktiviert ist.</string>
 </resources>

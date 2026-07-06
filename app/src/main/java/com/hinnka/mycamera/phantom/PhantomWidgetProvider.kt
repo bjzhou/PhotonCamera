@@ -6,6 +6,9 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
@@ -15,8 +18,8 @@ import com.hinnka.mycamera.MainActivity
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
-import com.hinnka.mycamera.gallery.PhotoData
-import com.hinnka.mycamera.gallery.PhotoManager
+import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +36,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
 
     companion object {
         private const val TAG = "PhantomWidgetProvider"
+        private const val WIDGET_BITMAP_MAX_EDGE = 512
 
         private const val ACTION_TOGGLE_PHANTOM = "com.hinnka.mycamera.phantom.ACTION_TOGGLE_PHANTOM"
         private const val ACTION_OPEN_APP = "com.hinnka.mycamera.phantom.ACTION_OPEN_APP"
@@ -52,7 +56,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
             val widgetTheme = prefs.widgetTheme
             val latestPhoto = withContext(Dispatchers.IO) {
                 galleryRepository.getLatestPhoto()?.apply {
-                    metadata = PhotoManager.loadMetadata(context, id)
+                    metadata = GalleryManager.loadMetadata(context, id)
                 }
             }
             for (appWidgetId in appWidgetIds) {
@@ -156,7 +160,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetId: Int,
         isActive: Boolean,
-        latestPhoto: PhotoData?,
+        latestPhoto: MediaData?,
         widgetTheme: WidgetTheme
     ) {
         val views = RemoteViews(context.packageName, R.layout.phantom_widget)
@@ -197,7 +201,7 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         views.setInt(R.id.recent_arrow, "setColorFilter", ContextCompat.getColor(context, R.color.widget_recent_accent))
         views.setInt(R.id.phantom_icon, "setColorFilter", ContextCompat.getColor(context, R.color.widget_accent))
 
-        if (DeviceUtil.isChinaFlavor) {
+        if (DeviceUtil.canShowPhantom) {
             views.setViewVisibility(R.id.btn_frames, View.GONE)
             views.setViewVisibility(R.id.btn_phantom, View.VISIBLE)
         } else {
@@ -223,16 +227,20 @@ class PhantomWidgetProvider : AppWidgetProvider() {
             providerScope.launch {
                 val bitmap = withContext(Dispatchers.IO) {
                     try {
-                        val contextResolver = context.contentResolver
-                        val inputStream = contextResolver.openInputStream(latestPhoto.thumbnailUri)
-                        val input = android.graphics.BitmapFactory.decodeStream(inputStream)
-                        latestPhoto.metadata?.let {
-                            ContentRepository.getInstance(context).photoProcessor.processBitmap(
-                                context,
-                                null,
-                                input,
-                                it,
-                            )
+                        val input = decodeWidgetBitmap(context, latestPhoto)
+                        if (input == null) {
+                            PLog.w(TAG, "Widget preview decode returned null for ${latestPhoto.thumbnailUri}")
+                            null
+                        } else {
+                            val processed = latestPhoto.metadata?.let {
+                                ContentRepository.getInstance(context).photoProcessor.processBitmap(
+                                    context,
+                                    null,
+                                    input,
+                                    it,
+                                )
+                            } ?: input
+                            constrainWidgetBitmap(processed)
                         }
                     } catch (e: Exception) {
                         PLog.e(TAG, "Failed to process photo", e)
@@ -261,6 +269,81 @@ class PhantomWidgetProvider : AppWidgetProvider() {
         }
 
         appWidgetManager.updateAppWidget(appWidgetId, views)
+    }
+
+    private fun decodeWidgetBitmap(context: Context, latestPhoto: MediaData): Bitmap? {
+        val uri = latestPhoto.thumbnailUri
+        val options = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+
+        if (!decodeBitmapBounds(context, uri, options)) {
+            return null
+        }
+
+        if (options.outWidth <= 0 || options.outHeight <= 0) {
+            PLog.w(TAG, "Widget preview bounds unavailable for $uri")
+            return null
+        }
+
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = calculateInSampleSize(options, WIDGET_BITMAP_MAX_EDGE, WIDGET_BITMAP_MAX_EDGE)
+        }
+        return decodeBitmap(context, uri, decodeOptions)
+    }
+
+    private fun decodeBitmapBounds(context: Context, uri: Uri, options: BitmapFactory.Options): Boolean {
+        return when (uri.scheme) {
+            "file" -> {
+                BitmapFactory.decodeFile(uri.path, options) != null || options.outWidth > 0
+            }
+            else -> {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input, null, options)
+                } != null || options.outWidth > 0
+            }
+        }
+    }
+
+    private fun decodeBitmap(context: Context, uri: Uri, options: BitmapFactory.Options): Bitmap? {
+        return when (uri.scheme) {
+            "file" -> BitmapFactory.decodeFile(uri.path, options)
+            else -> context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.decodeStream(input, null, options)
+            }
+        }
+    }
+
+    private fun constrainWidgetBitmap(bitmap: Bitmap): Bitmap {
+        val largestEdge = maxOf(bitmap.width, bitmap.height)
+        if (largestEdge <= WIDGET_BITMAP_MAX_EDGE) {
+            return bitmap
+        }
+
+        val scale = WIDGET_BITMAP_MAX_EDGE.toFloat() / largestEdge.toFloat()
+        val targetWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val targetHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        if (scaledBitmap != bitmap && !bitmap.isRecycled) {
+            bitmap.recycle()
+        }
+        return scaledBitmap
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val height = options.outHeight
+        val width = options.outWidth
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            var halfHeight = height / 2
+            var halfWidth = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+
+        return inSampleSize
     }
 
     private fun getPendingSelfIntent(context: Context, action: String): PendingIntent {

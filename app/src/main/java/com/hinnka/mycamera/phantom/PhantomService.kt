@@ -5,9 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.database.ContentObserver
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
-import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -16,12 +20,10 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
-import android.graphics.Rect
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -29,27 +31,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.collectAsState
@@ -67,13 +62,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.platform.compositionContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -92,46 +85,62 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.Routes
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.screencapture.ScreenCaptureForegroundServiceState
 import com.hinnka.mycamera.screencapture.ScreenCapturePipState
 import com.hinnka.mycamera.screencapture.ScreenCaptureRenderConfigStore
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.gallery.ExifWriter
-import com.hinnka.mycamera.gallery.PhotoManager
-import com.hinnka.mycamera.gallery.PhotoManager.loadMetadata
-import com.hinnka.mycamera.gallery.PhotoManager.saveMetadata
+import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.GalleryManager.loadMetadata
+import com.hinnka.mycamera.gallery.GalleryManager.saveMetadata
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
+import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.model.ColorPaletteState
+import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.EffectParams
+import com.hinnka.mycamera.ui.camera.LutIntensitySlider
+import com.hinnka.mycamera.ui.components.ColorRecipePanel
+import com.hinnka.mycamera.ui.components.CurveChannel
+import com.hinnka.mycamera.ui.components.EffectsPanel
+import com.hinnka.mycamera.ui.components.LutSelectorWithRecipeAction
 import com.hinnka.mycamera.utils.PLog
-import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.roundToInt
 import kotlin.io.copyTo
 import kotlin.io.inputStream
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.use
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryOwner {
 
     private companion object {
         const val TAG = "GhostService"
         const val MIN_IMPORT_SIZE = 1024 * 1024L
+        const val MIN_PHANTOM_SHORT_SIDE = 1080
+    }
+
+    private data class ImageResolution(
+        val width: Int,
+        val height: Int
+    ) {
+        val shortSide: Int = min(width, height)
     }
 
     data class ProcessingInfo(
@@ -166,11 +175,15 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
     private val userPreferencesRepository = UserPreferencesRepository(context)
 
-    private val processPhotoTaskMap = mutableMapOf<String, Deferred<*>>()
+    private val processPhotoTaskMap = mutableMapOf<String, Job>()
+    private val activePhotoProcessPaths = mutableSetOf<String>()
 
     private var processingInfo: ProcessingInfo? by mutableStateOf(null)
     private var expanded by mutableStateOf(false)
     private var showFilterPicker by mutableStateOf(false)
+    private var showRecipeEditor by mutableStateOf(false)
+    private var showEffectsEditor by mutableStateOf(false)
+    private var floatingWindowYBeforeEditor: Int? = null
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
@@ -186,6 +199,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 MediaStore.MediaColumns.IS_PENDING,
                 MediaStore.MediaColumns.IS_TRASHED,
                 MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.WIDTH,
+                MediaStore.MediaColumns.HEIGHT,
             )
 
             try {
@@ -200,6 +215,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     val isTrashedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.IS_TRASHED)
                     val relativePathIndex =
                         cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                    val widthIndex = cursor.getColumnIndex(MediaStore.MediaColumns.WIDTH)
+                    val heightIndex = cursor.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
 
                     val name = if (nameIndex != -1) cursor.getString(nameIndex) else "Unknown"
                     val isPending = if (pendingIndex != -1) cursor.getInt(pendingIndex) else 0
@@ -209,6 +226,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     val isTrashed = if (isTrashedIndex != -1) cursor.getInt(isTrashedIndex) else 0
                     val relativePath =
                         if (relativePathIndex != -1) cursor.getString(relativePathIndex) else ""
+                    val width = if (widthIndex != -1) cursor.getInt(widthIndex) else 0
+                    val height = if (heightIndex != -1) cursor.getInt(heightIndex) else 0
 
                     if (isPending != 0) return
                     if (isTrashed != 0) return
@@ -225,11 +244,33 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                         val dir = File(Environment.getExternalStorageDirectory(), relativePath)
                         File(dir, name).absolutePath
                     }
-                    PLog.d(TAG, "Content changed detected: ${uri.lastPathSegment} $name size=$size")
+                    PLog.d(
+                        TAG,
+                        "Content changed detected: ${uri.lastPathSegment} $name size=$size resolution=${width}x${height}"
+                    )
+                    if (activePhotoProcessPaths.contains(path)) {
+                        PLog.d(TAG, "Ignore change for $path because phantom export is already running")
+                        return
+                    }
                     processPhotoTaskMap[path]?.cancel()
-                    processPhotoTaskMap[path] = lifecycleScope.async {
-                        delay(200L)
-                        if (isActive) {
+                    processPhotoTaskMap[path] = lifecycleScope.launch {
+                        var exportStarted = false
+                        try {
+                            delay(200L)
+                            if (!isActive) return@launch
+
+                            val resolution = withContext(Dispatchers.IO) {
+                                resolveImageResolution(uri, width, height)
+                            }
+                            if (!isActive) return@launch
+                            if (resolution != null && resolution.shortSide <= MIN_PHANTOM_SHORT_SIDE) {
+                                PLog.d(
+                                    TAG,
+                                    "Ignore change for $path because short side ${resolution.shortSide}px <= ${MIN_PHANTOM_SHORT_SIDE}px (${resolution.width}x${resolution.height})"
+                                )
+                                return@launch
+                            }
+
                             // 在延迟后再次检查，此时上一个任务可能已经更新了 processingInfo
                             val info = processingInfo
                             if (info != null
@@ -238,7 +279,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 && info.size >= size
                             ) {
                                 PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
-                                return@async
+                                return@launch
                             }
                             if (info != null
                                 && info.relativePath == relativePath
@@ -246,9 +287,16 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 && info.newSize >= size
                             ) {
                                 PLog.d(TAG, "Ignore change for $path as it matches current state (size $size)")
-                                return@async
+                                return@launch
                             }
+
+                            activePhotoProcessPaths += path
+                            exportStarted = true
                             photoProcessTask(uri, name, size, relativePath)
+                        } finally {
+                            if (exportStarted) {
+                                activePhotoProcessPaths -= path
+                            }
                             processPhotoTaskMap.remove(path)
                         }
                     }
@@ -256,6 +304,34 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             } catch (e: Exception) {
                 PLog.e(TAG, "Error querying content: $uri", e)
             }
+        }
+    }
+
+    private fun resolveImageResolution(
+        uri: Uri,
+        mediaStoreWidth: Int,
+        mediaStoreHeight: Int
+    ): ImageResolution? {
+        if (mediaStoreWidth > 0 && mediaStoreHeight > 0) {
+            return ImageResolution(mediaStoreWidth, mediaStoreHeight)
+        }
+
+        return try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream, null, options)
+            }
+            if (options.outWidth > 0 && options.outHeight > 0) {
+                ImageResolution(options.outWidth, options.outHeight)
+            } else {
+                PLog.d(TAG, "Image resolution unavailable for $uri")
+                null
+            }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to read image resolution: $uri", e)
+            null
         }
     }
 
@@ -372,22 +448,56 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         size: Long,
         relativePath: String
     ) = withContext(Dispatchers.IO) {
+        var shouldNotifyGallery = false
         val userPreferencesRepository =
             ContentRepository.getInstance(context).userPreferencesRepository
         val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
         val photoProcessor = ContentRepository.getInstance(context).photoProcessor
         val preferences = userPreferencesRepository.userPreferences.firstOrNull()
-        val lutId = preferences?.lutId ?: availableLutList.firstOrNull { it.isDefault }?.id
+        val lutId = preferences?.lutId
+            ?: availableLutList.firstOrNull { it.isDefault }?.id
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val photoId =
-            PhotoManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
+            GalleryManager.importPhoto(context, uri, lutId, computationalAperture, existingPhotoId) ?: run {
                 return@withContext
-            }
-        val metadata = PhotoManager.loadMetadata(context, photoId) ?: run {
-            return@withContext
         }
+        val phantomBaselineLutId = preferences?.phantomBaselineLutId
+        val baselineTarget = if (phantomBaselineLutId != null) BaselineColorCorrectionTarget.PHANTOM else null
+        val baselineLutId = phantomBaselineLutId
+        val baselineColorRecipeParams = phantomBaselineLutId?.let {
+            ContentRepository.getInstance(context).lutManager.loadColorRecipeParams(it, BaselineColorCorrectionTarget.PHANTOM)
+        }
+        val creativeColorRecipeParams = lutId?.let {
+            ContentRepository.getInstance(context).lutManager.loadColorRecipeParams(it)
+        } ?: ColorRecipeParams.DEFAULT
+        val effectiveCreativeColorRecipeParams = preferences
+            ?.activeEffectParams
+            ?.applyTo(creativeColorRecipeParams)
+            ?: creativeColorRecipeParams
+        val metadataCreativeColorRecipeParams = effectiveCreativeColorRecipeParams
+            .takeUnless { it.isDefault() }
+
+        val updatedMetadata = GalleryManager.updateMetadata(context, photoId) { current ->
+            if (baselineTarget != null) {
+                current.copy(
+                    lutId = lutId,
+                    colorRecipeParams = metadataCreativeColorRecipeParams,
+                    baselineTarget = baselineTarget,
+                    baselineLutId = baselineLutId,
+                    baselineColorRecipeParams = baselineColorRecipeParams,
+                )
+            } else {
+                current.copy(
+                    lutId = lutId,
+                    colorRecipeParams = metadataCreativeColorRecipeParams,
+                    baselineTarget = null,
+                    baselineLutId = null,
+                    baselineColorRecipeParams = null,
+                )
+            }
+        } ?: return@withContext
         if (!isActive) return@withContext
 
         if (uri != processingInfo?.uri) {
@@ -406,21 +516,25 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         try {
             // 读取照片
             val processedBitmap = photoProcessor.process(
-                context, photoId, metadata,
+                context, photoId, updatedMetadata,
                 0f, 0f, 0f
             ) ?: return@withContext
 
-            val videoFile = PhotoManager.getVideoFile(context, photoId)
-            val photoFile = PhotoManager.getPhotoFile(context, photoId)
+            val videoFile = GalleryManager.getVideoFile(context, photoId)
+            val photoFile = GalleryManager.getPhotoFile(context, photoId)
+
+            val exportedWidth = processedBitmap.width
+            val exportedHeight = processedBitmap.height
+            val thumbnail = createOverlayThumbnail(processedBitmap)
 
             FileOutputStream(tempExportFile).use { outputStream ->
                 processedBitmap.compress(Bitmap.CompressFormat.JPEG, 97, outputStream)
             }
 
             ExifWriter.writeExif(
-                tempExportFile, metadata.toCaptureInfo().copy(
-                    imageWidth = processedBitmap.width,
-                    imageHeight = processedBitmap.height
+                tempExportFile, updatedMetadata.toCaptureInfo().copy(
+                    imageWidth = exportedWidth,
+                    imageHeight = exportedHeight
                 )
             )
 
@@ -429,7 +543,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
             val writeUri = if (saveAsNew) {
                 val lutName =
-                    metadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
+                    updatedMetadata.lutId?.let { ContentRepository.getInstance(context).lutManager.getLutInfo(it)?.getName() }
                 var withSuffix = ""
                 lutName?.let {
                     withSuffix += ".$lutName"
@@ -470,7 +584,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     } else null
 
                     // 重新从磁盘加载最新元数据，以获取可能刚写回的 presentationTimestampUs
-                    val latestMetadata = loadMetadata(context, photoId) ?: metadata
+                    val latestMetadata = GalleryManager.loadMetadata(context, photoId) ?: updatedMetadata
                     val success = MotionPhotoWriter.write(
                         tempExportFile.absolutePath,
                         videoFile.absolutePath,
@@ -534,27 +648,61 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             }
 
             // Save exported URI to metadata
-            val currentMetadata = loadMetadata(context, photoId) ?: metadata
-            val updatedMetadata = currentMetadata.copy(
-                exportedUris = currentMetadata.exportedUris + writeUri.toString()
-            )
-            saveMetadata(context, photoId, updatedMetadata)
+            GalleryManager.updateMetadata(context, photoId) { current ->
+                current.copy(
+                    exportedUris = current.exportedUris + writeUri.toString()
+                )
+            }
+            shouldNotifyGallery = true
             PLog.d(TAG, "Exported URI saved: ${writeUri.lastPathSegment} $newName $newSize for photo $photoId")
 
-            val thumbnail = ThumbnailUtils.extractThumbnail(processedBitmap, 512, 512)
             processingInfo = processingInfo?.copy(
                 thumbnail = thumbnail,
                 newUri = writeUri,
                 newName = newName,
                 newSize = newSize
             )
+        } catch (e: CancellationException) {
+            PLog.d(TAG, "Phantom export cancelled for $name")
+            throw e
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to export photo", e)
         } finally {
             tempExportFile.delete()
         }
         MyCameraApplication.updateWidgets(context)
+        if (shouldNotifyGallery) {
+            GalleryManager.notifyPhotoLibraryChanged()
+        }
         delay(200L)
+    }
+
+    private fun createOverlayThumbnail(source: Bitmap): Bitmap? {
+        if (source.isRecycled || source.width <= 0 || source.height <= 0) return null
+
+        return try {
+            val thumbnailSize = 512
+            val scale = max(
+                thumbnailSize.toFloat() / source.width.toFloat(),
+                thumbnailSize.toFloat() / source.height.toFloat()
+            )
+            val scaledWidth = source.width * scale
+            val scaledHeight = source.height * scale
+            val left = (thumbnailSize - scaledWidth) / 2f
+            val top = (thumbnailSize - scaledHeight) / 2f
+            val output = Bitmap.createBitmap(thumbnailSize, thumbnailSize, Bitmap.Config.ARGB_8888)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            Canvas(output).drawBitmap(
+                source,
+                null,
+                RectF(left, top, left + scaledWidth, top + scaledHeight),
+                paint
+            )
+            output
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to create overlay thumbnail", e)
+            null
+        }
     }
 
     private fun initWindowParams() {
@@ -573,13 +721,28 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     }
 
     private fun updateWindowParams(hidden: Boolean) {
+        val editorVisible = showRecipeEditor || showEffectsEditor
         if (hidden) {
             windowParams.width = 1
             windowParams.height = 1
             windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             windowParams.alpha = 0f
         } else {
+            if (editorVisible) {
+                if (floatingWindowYBeforeEditor == null) {
+                    floatingWindowYBeforeEditor = windowParams.y
+                }
+                windowParams.gravity = Gravity.BOTTOM or Gravity.END
+                windowParams.y = 0
+            } else {
+                windowParams.gravity = Gravity.TOP or Gravity.END
+                floatingWindowYBeforeEditor?.let {
+                    windowParams.y = it
+                    floatingWindowYBeforeEditor = null
+                }
+            }
             windowParams.width = when {
+                editorVisible -> getOverlayDisplayBounds().width()
                 showFilterPicker -> WindowManager.LayoutParams.WRAP_CONTENT
                 expanded -> WindowManager.LayoutParams.WRAP_CONTENT
                 else -> WindowManager.LayoutParams.WRAP_CONTENT
@@ -588,9 +751,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             windowParams.flags =
                 windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
             windowParams.alpha = 1f
-        }
-        if (showFilterPicker) {
-            windowParams.height = (getOverlayDisplayBounds().height() * 0.6f).toInt()
         }
     }
 
@@ -620,6 +780,23 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
                 val scope = rememberCoroutineScope()
                 val processingInfo = processingInfo
+                val currentLutIdFlow = remember {
+                    userPreferencesRepository.userPreferences.map {
+                        it.lutId
+                    }
+                }
+                val currentLutId by currentLutIdFlow.collectAsState(initial = null)
+                val currentEffectParamsFlow = remember {
+                    userPreferencesRepository.userPreferences.map {
+                        it.activeEffectParams
+                    }
+                }
+                val currentEffectParams by currentEffectParamsFlow.collectAsState(
+                    initial = EffectParams.DEFAULT
+                )
+                var recipePreviewParams by remember(currentLutId) {
+                    mutableStateOf<ColorRecipeParams?>(null)
+                }
                 LaunchedEffect(expanded, processingInfo, showFilterPicker) {
                     if (expanded && !showFilterPicker) {
                         delay(2000L)
@@ -627,71 +804,79 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .padding(4.dp)
-                        .onSizeChanged {
-                            composeView?.let { view ->
-                                if (view.isAttachedToWindow) {
-                                    updateWindowParams(false)
-                                    windowManager.updateViewLayout(view, windowParams)
+                if (!showRecipeEditor && !showEffectsEditor) {
+                    Row(
+                        modifier = Modifier
+                            .padding(4.dp)
+                            .onSizeChanged {
+                                composeView?.let { view ->
+                                    if (view.isAttachedToWindow) {
+                                        updateWindowParams(false)
+                                        windowManager.updateViewLayout(view, windowParams)
+                                    }
                                 }
                             }
-                        }
-                        .background(Color(0xFF1A1C1E).copy(alpha = 0.8f), RoundedCornerShape(24.dp))
-                        .padding(4.dp)
-                        .pointerInput(Unit) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    windowParams.y += dragAmount.y.toInt()
-                                    windowManager.updateViewLayout(this@apply, windowParams)
+                            .background(Color(0xFF1A1C1E).copy(alpha = 0.8f), RoundedCornerShape(24.dp))
+                            .padding(4.dp)
+                            .pointerInput(Unit) {
+                                detectDragGestures(
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        windowParams.y += dragAmount.y.toInt()
+                                        windowManager.updateViewLayout(this@apply, windowParams)
+                                    }
+                                )
+                            }
+                            .clip(RoundedCornerShape(24.dp))
+                            .clickable {
+                                if (!expanded) {
+                                    expanded = true
+                                } else {
+                                    context.startActivity(
+                                        Intent(
+                                            context,
+                                            MainActivity::class.java
+                                        ).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            if (processingInfo?.thumbnail?.isRecycled == false) {
+                                                val photoId = processingInfo.photoId
+                                                putExtra("photoId", photoId)
+                                                putExtra("route", Routes.photoDetail(photoId = photoId))
+                                            }
+                                        })
                                 }
-                            )
-                        }
-                        .clip(RoundedCornerShape(24.dp))
-                        .clickable {
-                            if (!expanded) {
-                                expanded = true
+                            },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (!showFilterPicker) {
+                            val thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled }
+                            if (thumbnail != null) {
+                                Image(
+                                    bitmap = thumbnail.asImageBitmap(),
+                                    contentDescription = stringResource(R.string.app_name),
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                )
                             } else {
-                                context.startActivity(
-                                    Intent(
-                                        context,
-                                        MainActivity::class.java
-                                    ).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        if (processingInfo?.thumbnail != null) {
-                                            val photoId = processingInfo.photoId
-                                            putExtra("photoId", photoId)
-                                            putExtra("route", Routes.photoDetail(photoId = photoId))
-                                        }
-                                    })
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF252525)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                                        contentDescription = stringResource(R.string.app_name),
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
-                        },
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (!showFilterPicker) {
-                        if (processingInfo?.thumbnail != null) {
-                            Image(
-                                bitmap = processingInfo.thumbnail.asImageBitmap(),
-                                contentDescription = stringResource(R.string.app_name),
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                            )
-                        } else {
-                            Image(
-                                painter = painterResource(id = R.mipmap.ic_launcher_round),
-                                contentDescription = stringResource(R.string.app_name),
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                            )
                         }
-                    }
 
-                    if (expanded) {
-                        if (showFilterPicker) {
+                        if (expanded) {
+                            if (showFilterPicker) {
                             val sortedLutsFlow = remember {
                                 ContentRepository.getInstance(context).availableLuts.combine(
                                     userPreferencesRepository.userPreferences.map {
@@ -712,195 +897,63 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             )
                             val availableLuts = sortedLutData.first
                             val categoryOrder = sortedLutData.second
-                            val currentLutIdFlow = remember {
-                                userPreferencesRepository.userPreferences.map { it.lutId }
-                            }
-                            val currentLutId by currentLutIdFlow.collectAsState(initial = null)
-                            val listState = rememberLazyListState()
-                            val builtInText = stringResource(R.string.built_in)
-                            val customText = stringResource(R.string.custom)
-                            val uncategorizedText = stringResource(R.string.uncategorized)
-                            val groupedLuts = remember(
-                                availableLuts,
-                                categoryOrder,
-                                builtInText,
-                                customText,
-                                uncategorizedText
-                            ) {
-                                val grouped = availableLuts.groupBy { lut ->
-                                        when {
-                                            lut.category.isNotEmpty() -> lut.category
-                                            lut.isBuiltIn -> builtInText
-                                            !lut.isBuiltIn -> customText
-                                            else -> uncategorizedText
-                                        }
-                                    }
-                                grouped.entries.sortedWith(
-                                    compareBy<Map.Entry<String, List<com.hinnka.mycamera.lut.LutInfo>>> { entry ->
-                                        val title = entry.key
-                                        when (title) {
-                                            builtInText -> -2
-                                            customText -> -1
-                                            uncategorizedText -> Int.MAX_VALUE - 1
-                                            else -> {
-                                                val index = categoryOrder.indexOf(title)
-                                                if (index == -1) Int.MAX_VALUE else index
-                                            }
-                                        }
-                                    }.thenBy { it.key }
-                                )
-                            }
-                            val selectedIndex = remember(groupedLuts, currentLutId) {
-                                var runningIndex = 0
-                                groupedLuts.forEach { (_, luts) ->
-                                    runningIndex += 1
-                                    val localIndex = luts.indexOfFirst { it.id == currentLutId }
-                                    if (localIndex >= 0) {
-                                        return@remember runningIndex + localIndex
-                                    }
-                                    runningIndex += luts.size
-                                }
-                                -1
-                            }
-
-                            LaunchedEffect(showFilterPicker, selectedIndex) {
-                                if (!showFilterPicker || selectedIndex < 0) return@LaunchedEffect
-                                listState.scrollToItem((selectedIndex - 1).coerceAtLeast(0))
-                            }
-                            Column(
+                            Box(
                                 modifier = Modifier
-                                    .heightIn(max = 450.dp)
-                                    .width(220.dp)
+                                    .heightIn(max = 220.dp)
+                                    .width(340.dp)
                                     .padding(8.dp)
                             ) {
-                                // Header
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(bottom = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.AutoAwesome,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFF6B35),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.filter_management_title),
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp
-                                        ),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    IconButton(
-                                        onClick = {
-                                            showFilterPicker = false
+                                fun closeFilterPicker() {
+                                    showFilterPicker = false
+                                    updateWindowParams(false)
+                                    composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                                }
+
+                                LutSelectorWithRecipeAction(
+                                    availableLuts = availableLuts,
+                                    currentLutId = currentLutId,
+                                    thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled },
+                                    onLutSelected = { lutId ->
+                                        scope.launch {
+                                            userPreferencesRepository.saveLutConfig(lutId)
+                                            syncScreenCaptureRenderConfig(lutId)
+                                            closeFilterPicker()
+                                        }
+                                    },
+                                    onEditRecipeClick = if (currentLutId != null) {
+                                        {
+                                            showRecipeEditor = true
                                             updateWindowParams(false)
                                             composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                                        },
-                                        modifier = Modifier.size(24.dp)
+                                        }
+                                    } else null,
+                                    onEditEffectClick = {
+                                        showEffectsEditor = true
+                                        updateWindowParams(false)
+                                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                                    },
+                                    categoryOrder = categoryOrder,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 32.dp)
+                                )
+
+                                Row(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(28.dp)
+                                        .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                                ) {
+                                    IconButton(
+                                        onClick = { closeFilterPicker() },
+                                        modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Close,
-                                            contentDescription = "Close",
-                                            tint = Color.White.copy(alpha = 0.5f),
+                                            contentDescription = stringResource(R.string.close),
+                                            tint = Color.White.copy(alpha = 0.72f),
                                             modifier = Modifier.size(16.dp)
                                         )
-                                    }
-                                }
-
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(bottom = 8.dp),
-                                    color = Color.White.copy(alpha = 0.1f)
-                                )
-
-                                LazyColumn(
-                                    state = listState,
-                                    modifier = Modifier
-                                        .weight(1f, fill = false)
-                                        .fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    groupedLuts.forEach { (groupTitle, luts) ->
-                                        stickyHeader(key = "header_$groupTitle") { _ ->
-                                            Column(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .background(Color(0xCC101010), RoundedCornerShape(8.dp))
-                                                    .padding(vertical = 4.dp),
-                                            ) {
-                                                Text(
-                                                    text = groupTitle,
-                                                    color = Color.White.copy(alpha = 0.55f),
-                                                    style = MaterialTheme.typography.labelSmall.copy(
-                                                        fontWeight = FontWeight.Medium,
-                                                        fontSize = 10.sp
-                                                    ),
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                )
-                                            }
-                                        }
-                                        items(
-                                            items = luts,
-                                            key = { it.id }
-                                        ) { lut ->
-                                                val isSelected = lut.id == currentLutId
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clip(RoundedCornerShape(12.dp))
-                                                        .background(
-                                                            if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.15f)
-                                                            else Color.White.copy(alpha = 0.05f)
-                                                        )
-                                                        .border(
-                                                            width = 1.dp,
-                                                            color = if (isSelected) Color(0xFFFF6B35).copy(alpha = 0.5f)
-                                                            else Color.Transparent,
-                                                            shape = RoundedCornerShape(12.dp)
-                                                        )
-                                                        .clickable {
-                                                            scope.launch {
-                                                                userPreferencesRepository.saveLutConfig(lut.id)
-                                                                syncScreenCaptureRenderConfig(lut.id)
-                                                                showFilterPicker = false
-                                                                updateWindowParams(false)
-                                                                composeView?.let {
-                                                                    windowManager.updateViewLayout(
-                                                                        it,
-                                                                        windowParams
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
-                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Text(
-                                                        text = lut.getName(),
-                                                        color = if (isSelected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.9f),
-                                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                            fontSize = 14.sp
-                                                        ),
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                        modifier = Modifier.weight(1f)
-                                                    )
-                                                    if (isSelected) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Check,
-                                                            contentDescription = null,
-                                                            tint = Color(0xFFFF6B35),
-                                                            modifier = Modifier.size(16.dp)
-                                                        )
-                                                    }
-                                                }
-                                        }
                                     }
                                 }
                             }
@@ -925,7 +978,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                         modifier = Modifier.size(48.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.AutoAwesome,
+                                            imageVector = AppIcons.AutoAwesome,
                                             contentDescription = "LUT",
                                             tint = Color.White
                                         )
@@ -945,14 +998,165 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                         modifier = Modifier.size(48.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Stop,
+                                            imageVector = AppIcons.Stop,
                                             contentDescription = "Stop",
                                             tint = Color.Red
                                         )
                                     }
                                 }
                             }
+                            }
                         }
+                    }
+                }
+
+                val editingLutId = currentLutId
+                if (showRecipeEditor && editingLutId != null) {
+                    var editingParams by remember(editingLutId) {
+                        mutableStateOf(ColorRecipeParams.DEFAULT)
+                    }
+                    var paletteState by remember(editingLutId) {
+                        mutableStateOf(ColorPaletteState.DEFAULT)
+                    }
+
+                    fun updateRecipeParams(params: ColorRecipeParams) {
+                        editingParams = params
+                        recipePreviewParams = params
+                        scope.launch {
+                            ContentRepository.getInstance(context).lutManager.saveColorRecipeParams(
+                                editingLutId,
+                                params
+                            )
+                            syncScreenCaptureRenderConfig(
+                                lutId = editingLutId,
+                                creativeRecipeParamsOverride = params
+                            )
+                        }
+                    }
+
+                    fun closeRecipeEditor() {
+                        showRecipeEditor = false
+                        val finalPreviewParams = recipePreviewParams
+                        recipePreviewParams = null
+                        scope.launch {
+                            if (finalPreviewParams != null) {
+                                ContentRepository.getInstance(context).lutManager.saveColorRecipeParams(
+                                    editingLutId,
+                                    finalPreviewParams
+                                )
+                            }
+                            syncScreenCaptureRenderConfig(
+                                lutId = editingLutId,
+                                creativeRecipeParamsOverride = finalPreviewParams
+                            )
+                            updateWindowParams(false)
+                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                        }
+                    }
+
+                    LaunchedEffect(editingLutId) {
+                        val params = ContentRepository.getInstance(context)
+                            .lutManager
+                            .loadColorRecipeParams(editingLutId)
+                        editingParams = params
+                        paletteState = ColorPaletteState(
+                            x = params.paletteX,
+                            y = params.paletteY,
+                            density = params.paletteDensity
+                        ).normalized()
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.88f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        PhantomEditorHeader(
+                            title = stringResource(R.string.color_recipe),
+                            onClose = { closeRecipeEditor() }
+                        )
+                        LutIntensitySlider(
+                            intensity = editingParams.lutIntensity,
+                            onIntensityChange = {
+                                updateRecipeParams(editingParams.copy(lutIntensity = it))
+                            }
+                        )
+                        ColorRecipePanel(
+                            currentParams = editingParams,
+                            paletteState = paletteState,
+                            onPaletteStateChange = { newState ->
+                                val normalizedState = newState.normalized()
+                                paletteState = normalizedState
+                                updateRecipeParams(
+                                    ColorPaletteMapper.updatePaletteState(
+                                        editingParams,
+                                        normalizedState
+                                    )
+                                )
+                            },
+                            onParamChange = { param, value ->
+                                updateRecipeParams(param.setValue(editingParams, value))
+                            },
+                            onParamsChange = { newParams ->
+                                paletteState = ColorPaletteState(
+                                    x = newParams.paletteX,
+                                    y = newParams.paletteY,
+                                    density = newParams.paletteDensity
+                                ).normalized()
+                                updateRecipeParams(newParams)
+                            },
+                            onRemarksChange = {
+                                updateRecipeParams(editingParams.copy(remarks = it))
+                            },
+                            onCurveChange = { channel, points ->
+                                updateRecipeParams(
+                                    when (channel) {
+                                        CurveChannel.MASTER -> editingParams.copy(masterCurvePoints = points)
+                                        CurveChannel.RED -> editingParams.copy(redCurvePoints = points)
+                                        CurveChannel.GREEN -> editingParams.copy(greenCurvePoints = points)
+                                        CurveChannel.BLUE -> editingParams.copy(blueCurvePoints = points)
+                                    }
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                if (showEffectsEditor) {
+                    fun closeEffectsEditor() {
+                        showEffectsEditor = false
+                        scope.launch {
+                            syncScreenCaptureRenderConfig(currentLutId)
+                            updateWindowParams(false)
+                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.88f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        PhantomEditorHeader(
+                            title = stringResource(R.string.effects_title),
+                            onClose = { closeEffectsEditor() }
+                        )
+                        EffectsPanel(
+                            currentParams = currentEffectParams,
+                            onParamsChange = { effects ->
+                                scope.launch {
+                                    userPreferencesRepository.saveActiveEffectParams(effects)
+                                    syncScreenCaptureRenderConfig(
+                                        lutId = currentLutId,
+                                        effectParamsOverride = effects
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
@@ -965,6 +1169,38 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             view.compositionContext = recomposer
             lifecycleScope.launch(AndroidUiDispatcher.Main) {
                 recomposer.runRecomposeAndApplyChanges()
+            }
+        }
+    }
+
+    @Composable
+    private fun PhantomEditorHeader(
+        title: String,
+        onClose: () -> Unit
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.close),
+                    tint = Color.White.copy(alpha = 0.72f),
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }
@@ -1007,13 +1243,22 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             isWindowShown = false
             expanded = false
             showFilterPicker = false
+            showRecipeEditor = false
+            showEffectsEditor = false
+            floatingWindowYBeforeEditor = null
         }
     }
 
-    private suspend fun syncScreenCaptureRenderConfig(lutId: String?) {
+    private suspend fun syncScreenCaptureRenderConfig(
+        lutId: String?,
+        creativeRecipeParamsOverride: ColorRecipeParams? = null,
+        effectParamsOverride: EffectParams? = null
+    ) {
         ScreenCaptureRenderConfigStore.syncFromPreferences(
             context = context,
             lutIdOverride = lutId,
+            creativeRecipeParamsOverride = creativeRecipeParamsOverride,
+            effectParamsOverride = effectParamsOverride
         )
     }
 

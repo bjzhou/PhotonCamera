@@ -1,37 +1,26 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorPaletteState
 import kotlin.math.min
 
@@ -50,7 +39,8 @@ fun ColorRecipePalettePanel(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1.68f)
+                .aspectRatio(2f)
+                .padding(horizontal = 8.dp)
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = { offset ->
@@ -159,7 +149,8 @@ fun ColorRecipePalettePanel(
                 currentOnPaletteStateChange.value(
                     currentPaletteState.value.copy(density = it)
                 )
-            }
+            },
+            modifier = Modifier.padding(horizontal = 8.dp)
         )
     }
 }
@@ -194,24 +185,6 @@ private fun PaletteDensitySlider(
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(R.string.recipe_palette_density),
-                color = Color.White,
-                fontSize = 11.sp
-            )
-            Text(
-                text = "${(value * 100).toInt()}%",
-                color = Color.White.copy(alpha = 0.75f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -219,8 +192,10 @@ private fun PaletteDensitySlider(
         ) {
             Canvas(modifier = Modifier.matchParentSize()) {
                 val trackHeight = 14.dp.toPx()
+                val thumbRadius = trackHeight * 0.62f
                 val top = (size.height - trackHeight) * 0.5f
                 val corner = CornerRadius(trackHeight / 2f, trackHeight / 2f)
+                val thumbTravelWidth = (size.width - thumbRadius * 2f).coerceAtLeast(1f)
                 drawRoundRect(
                     brush = Brush.horizontalGradient(
                         listOf(
@@ -242,16 +217,16 @@ private fun PaletteDensitySlider(
                     style = Stroke(width = 1.dp.toPx())
                 )
 
-                val thumbX = value.coerceIn(0f, 1f) * size.width
+                val thumbX = thumbRadius + value.coerceIn(0f, 1f) * thumbTravelWidth
                 val center = Offset(thumbX, size.height / 2f)
                 drawCircle(
                     color = Color.White,
-                    radius = trackHeight * 0.62f,
+                    radius = thumbRadius,
                     center = center
                 )
                 drawCircle(
                     color = Color(0xFFE95A78),
-                    radius = trackHeight * 0.62f,
+                    radius = thumbRadius,
                     center = center,
                     style = Stroke(width = 2.dp.toPx())
                 )
@@ -262,15 +237,19 @@ private fun PaletteDensitySlider(
                     .matchParentSize()
                     .pointerInput(Unit) {
                         detectTapGestures { offset ->
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-                            onValueChange((offset.x / width).coerceIn(0f, 1f))
+                            val trackHeight = 14.dp.toPx()
+                            val thumbRadius = trackHeight * 0.62f
+                            val width = (size.width.toFloat() - thumbRadius * 2f).coerceAtLeast(1f)
+                            onValueChange(((offset.x - thumbRadius) / width).coerceIn(0f, 1f))
                         }
                     }
                     .pointerInput(Unit) {
                         detectDragGestures { change, _ ->
                             change.consume()
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-                            onValueChange((change.position.x / width).coerceIn(0f, 1f))
+                            val trackHeight = 14.dp.toPx()
+                            val thumbRadius = trackHeight * 0.62f
+                            val width = (size.width.toFloat() - thumbRadius * 2f).coerceAtLeast(1f)
+                            onValueChange(((change.position.x - thumbRadius) / width).coerceIn(0f, 1f))
                         }
                     }
             )

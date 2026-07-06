@@ -2,23 +2,41 @@ package com.hinnka.mycamera.processor
 
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
-import android.media.Image
-import android.util.Log
+import android.graphics.Rect
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.utils.BitmapUtils
-import java.nio.ByteOrder
-import kotlin.math.roundToInt
+import com.hinnka.mycamera.utils.LargeDirectBuffer
 
 data class RawStackResult(
-    val stackedRgbBuffer: ByteBuffer,
-    val fusedBayerBuffer: ByteBuffer,
+    var fusedBayerBuffer: ByteBuffer?,
     val width: Int,
     val height: Int,
     val isNormalizedSensorData: Boolean,
+    val blackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
+    val fusedBayerUsesNativeAllocator: Boolean = false,
+    val profileGainTableMap: DngProfileGainTableMap? = null,
+)
+
+data class RawHdrStackFrame(
+    val image: SafeImage,
+    val exposureProduct: Double,
+)
+
+enum class YuvHdrStackFrameRole {
+    ZERO_EV,
+    HIGH_EV,
+    LOW_EV,
+}
+
+data class YuvHdrStackFrame(
+    val image: SafeImage,
+    val exposureProduct: Float,
+    val role: YuvHdrStackFrameRole,
 )
 
 /**
@@ -44,13 +62,13 @@ object MultiFrameStacker {
      * @param images List of captured Images (YUV_420_888).
      * @return Stacked Bitmap (ARGB_8888), or null if failed.
      */
+    @Synchronized
     fun processBurst(
         images: List<SafeImage>,
         rotation: Int,
         aspectRatio: AspectRatio?,
-        outputPath: String? = null,
         enableSuperResolution: Boolean = false,
-        useVulkan: Boolean = true,
+        useGpuAcceleration: Boolean = true,
         colorSpace: ColorSpace,
     ): Bitmap? {
         if (images.isEmpty()) return null
@@ -60,47 +78,42 @@ object MultiFrameStacker {
 
         val scale = if (enableSuperResolution) 2 else 1
         val startTime = System.currentTimeMillis()
+        val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
+        val targetW = dimensions.width() * scale
+        val targetH = dimensions.height() * scale
 
-        if (useVulkan) {
+        val inputFormat = images[0].format
+        if (useGpuAcceleration) {
+            if (enableSuperResolution) {
+                PLog.w(TAG, "GLES streaming stacker does not support SR yet; GPU fallback disabled")
+                images.forEach { it.close() }
+                return null
+            }
+            if (!GlesYuvStacker.supportsImageFormat(inputFormat)) {
+                PLog.w(TAG, "GLES streaming stacker does not support image format=$inputFormat; GPU fallback disabled")
+                images.forEach { it.close() }
+                return null
+            }
             PLog.i(
                 TAG,
-                "Starting Vulkan stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
+                "Starting GLES streaming stacking process for ${images.size} frames ($width x $height)"
             )
-            val stackerPtr = createVulkanStackerNative(width, height, enableSuperResolution)
-            if (stackerPtr != 0L) {
-                try {
-                    for (image in images) {
-                        image.use {
-                            val hardwareBuffer = it.image.hardwareBuffer
-                            if (hardwareBuffer != null) {
-                                addVulkanFrameNative(stackerPtr, hardwareBuffer)
-                            } else {
-                                PLog.w(TAG, "Image has no hardware buffer, skipping")
-                            }
-                        }
-                    }
-                    PLog.d(TAG, "Stack frames processed")
-
-                    val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
-                    val targetW = dimensions.width() * scale
-                    val targetH = dimensions.height() * scale
-                    val previewBitmap = try {
-                        createBitmap(targetW, targetH, colorSpace = colorSpace)
-                    } catch (e: OutOfMemoryError) {
-                        PLog.e(TAG, "OOM creating Vulkan stack bitmap ($targetW x $targetH)", e)
-                        return null
-                    }
-
-                    processVulkanStackNative(stackerPtr, previewBitmap, rotation)
-
-                    PLog.i(TAG, "Vulkan stacking completed in ${System.currentTimeMillis() - startTime}ms")
-                    return previewBitmap
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Error during Vulkan stacking", e)
-                } finally {
-                    releaseVulkanStackerNative(stackerPtr)
-                }
+            val glesBitmap = GlesYuvStacker(
+                width = width,
+                height = height,
+                outputWidth = targetW,
+                outputHeight = targetH,
+                rotation = rotation,
+                colorSpace = colorSpace,
+                inputFormat = inputFormat,
+            ).process(images)
+            if (glesBitmap != null) {
+                images.forEach { it.close() }
+                return glesBitmap
             }
+            PLog.w(TAG, "GLES streaming stacker failed; GPU fallback disabled")
+            images.forEach { it.close() }
+            return null
         }
 
         // Fallback or legacy path
@@ -131,9 +144,6 @@ object MultiFrameStacker {
             }
             clearStagedFramesNative(stackerPtr)
 
-            val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
-            val targetW = dimensions.width() * scale
-            val targetH = dimensions.height() * scale
             val previewBitmap = try {
                 createBitmap(targetW, targetH, colorSpace = colorSpace)
             } catch (e: OutOfMemoryError) {
@@ -146,8 +156,7 @@ object MultiFrameStacker {
                 previewBitmap,
                 rotation,
                 aspectRatio?.widthRatio ?: width,
-                aspectRatio?.heightRatio ?: height,
-                outputPath
+                aspectRatio?.heightRatio ?: height
             )
 
             PLog.i(TAG, "Legacy stacking completed in ${System.currentTimeMillis() - startTime}ms")
@@ -157,12 +166,115 @@ object MultiFrameStacker {
         }
     }
 
+    @Synchronized
+    fun processHdrBurstYuv(
+        frames: List<YuvHdrStackFrame>,
+        fusionExposureProducts: FloatArray?,
+        rotation: Int,
+        aspectRatio: AspectRatio?,
+        useGpuAcceleration: Boolean = true,
+        colorSpace: ColorSpace,
+    ): Bitmap? {
+        if (frames.size < 3) return null
+        val images = frames.map { it.image }
+        val width = images[0].width
+        val height = images[0].height
+        val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
+        val inputFormat = images[0].format
+
+        if (!useGpuAcceleration) {
+            PLog.w(TAG, "YUV HDR denoise stack requires GLES; GPU acceleration setting is ignored")
+        }
+        if (!GlesYuvStacker.supportsImageFormat(inputFormat)) {
+            PLog.w(TAG, "GLES HDR YUV stacker does not support image format=$inputFormat")
+            images.forEach { it.close() }
+            return null
+        }
+
+        val result = try {
+            GlesYuvStacker(
+                width = width,
+                height = height,
+                outputWidth = dimensions.width(),
+                outputHeight = dimensions.height(),
+                rotation = rotation,
+                colorSpace = colorSpace,
+                inputFormat = inputFormat,
+            ).processHdr(
+                frames = frames.map {
+                    GlesYuvStacker.HdrInputFrame(
+                        image = it.image,
+                        exposureProduct = it.exposureProduct,
+                        role = when (it.role) {
+                            YuvHdrStackFrameRole.ZERO_EV -> GlesYuvStacker.HdrFrameRole.ZERO_EV
+                            YuvHdrStackFrameRole.HIGH_EV -> GlesYuvStacker.HdrFrameRole.HIGH_EV
+                            YuvHdrStackFrameRole.LOW_EV -> GlesYuvStacker.HdrFrameRole.LOW_EV
+                        },
+                    )
+                },
+                exposureProducts = fusionExposureProducts,
+            )
+        } finally {
+            images.forEach { it.close() }
+        }
+        return result
+    }
+
+    @Synchronized
+    fun processHdrBurstRaw(
+        shortFrame: RawHdrStackFrame,
+        normalFrames: List<RawHdrStackFrame>,
+        cfaPattern: Int,
+        useGpuAcceleration: Boolean = true,
+        masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
+        whiteLevel: Int = 1023,
+        noiseModel: FloatArray = floatArrayOf(0f, 0f),
+        lensShading: FloatArray? = null,
+        lensShadingWidth: Int = 0,
+        lensShadingHeight: Int = 0,
+        colorCorrectionMatrix: FloatArray? = null,
+        pgtmStatsBounds: Rect? = null,
+    ): RawStackResult? {
+        if (normalFrames.isEmpty()) {
+            shortFrame.image.close()
+            return null
+        }
+        val width = shortFrame.image.width
+        val height = shortFrame.image.height
+        PLog.d(
+            TAG,
+            "Starting RAW HDR stacking for short+${normalFrames.size} normal frames. " +
+                "Pattern=$cfaPattern GPU=$useGpuAcceleration BL=${masterBlackLevel.joinToString()} WL=$whiteLevel"
+        )
+        if (!useGpuAcceleration) {
+            PLog.w(TAG, "RAW HDR denoise stack requires GLES; GPU acceleration setting is ignored")
+        }
+        PLog.i(TAG, "Using GLES RAW HDR stacker")
+        return GlesRawStacker(
+            width = width,
+            height = height,
+            cfaPattern = cfaPattern,
+            blackLevel = masterBlackLevel,
+            whiteLevel = whiteLevel,
+            noiseModel = noiseModel,
+            lensShading = lensShading,
+            lensShadingWidth = lensShadingWidth,
+            lensShadingHeight = lensShadingHeight,
+            colorCorrectionMatrix = colorCorrectionMatrix,
+            pgtmStatsBounds = pgtmStatsBounds,
+        ).processHdr(
+            shortFrame = GlesRawStacker.HdrInputFrame(shortFrame.image, shortFrame.exposureProduct),
+            normalFrames = normalFrames.map { GlesRawStacker.HdrInputFrame(it.image, it.exposureProduct) },
+        )
+    }
+
+    @Synchronized
     fun processBurstRaw(
         images: List<SafeImage>,
         cfaPattern: Int,
         enableSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.5f,
-        useVulkan: Boolean = true,
+        useGpuAcceleration: Boolean = true,
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
         whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
@@ -170,98 +282,45 @@ object MultiFrameStacker {
         lensShading: FloatArray? = null,
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,
+        applyLensShadingCorrection: Boolean = true,
     ): RawStackResult? {
         val width = images[0].width
         val height = images[0].height
 
         PLog.d(
             TAG,
-            "Starting RAW stacking for ${images.size} frames. Pattern=$cfaPattern SR=$enableSuperResolution scale=$superResolutionScale Vulkan=$useVulkan WL=$whiteLevel"
+            "Starting RAW stacking for ${images.size} frames. Pattern=$cfaPattern SR=$enableSuperResolution scale=$superResolutionScale GPU=$useGpuAcceleration BL=${masterBlackLevel.joinToString()} WL=$whiteLevel"
         )
         val outputScale = if (enableSuperResolution) superResolutionScale.coerceIn(1.0f, 2.0f) else 1.0f
         val useNativeSuperResolution = outputScale > 1.0f
 
-        if (useVulkan) {
-            val vulkanStackerPtr = createVulkanRawStackerNative(
-                width, height, enableSuperResolution, outputScale,
-                masterBlackLevel, whiteLevel, whiteBalanceGains, noiseModel,
-                lensShading, lensShadingWidth, lensShadingHeight
-            )
-            if (vulkanStackerPtr != 0L) {
-                PLog.i(TAG, "Using Vulkan RAW stacker + native LibRaw demosaic")
-                try {
-                    for (image in images) {
-                        image.use {
-                            if (image.width != width || image.height != height) return@use
-                            val buffer = image.planes[0].buffer
-                            val rowStride = image.planes[0].rowStride
-                            addVulkanRawFrameNative(vulkanStackerPtr, buffer, rowStride, cfaPattern)
-                        }
-                    }
-
-                    val outWidth = (width * outputScale).roundToInt()
-                    val outHeight = (height * outputScale).roundToInt()
-                    val fusedBayerBuffer = try {
-                        ByteBuffer.allocateDirect(outWidth * outHeight * 2)
-                            .order(ByteOrder.nativeOrder())
-                    } catch (e: OutOfMemoryError) {
-                        PLog.e(TAG, "OOM allocating Vulkan fused Bayer buffer", e)
-                        return null
-                    }
-
-                    val stackedBuffer = try {
-                        ByteBuffer.allocateDirect(outWidth * outHeight * 6)
-                            .order(ByteOrder.nativeOrder())
-                    } catch (e: OutOfMemoryError) {
-                        PLog.e(TAG, "OOM allocating Vulkan stacked RGB buffer", e)
-                        return null
-                    }
-
-                    val fusedOk = processVulkanRawStackNative(vulkanStackerPtr, fusedBayerBuffer)
-                    if (fusedOk) {
-                        val demosaicOk = demosaicStackedRawWithLibRawNative(
-                            fusedBayerBuffer,
-                            outWidth,
-                            outHeight,
-                            cfaPattern,
-                            floatArrayOf(0f, 0f, 0f, 0f),
-                            65535,
-                            whiteBalanceGains,
-                            stackedBuffer
-                        )
-                        if (demosaicOk) {
-                            fusedBayerBuffer.rewind()
-                            stackedBuffer.rewind()
-                            PLog.i(TAG, "Vulkan RAW stacking and native LibRaw demosaic completed successfully")
-                            return RawStackResult(
-                                stackedRgbBuffer = stackedBuffer,
-                                fusedBayerBuffer = fusedBayerBuffer,
-                                width = outWidth,
-                                height = outHeight,
-                                isNormalizedSensorData = true
-                            )
-                        }
-                        PLog.w(TAG, "Vulkan fused Bayer demosaic failed, falling back to CPU")
-                    } else {
-                        PLog.w(TAG, "Vulkan RAW stacking failed, falling back to CPU")
-                    }
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Vulkan RAW stacking error: ${e.message}, falling back to CPU")
-                } finally {
-                    releaseVulkanRawStackerNative(vulkanStackerPtr)
-                }
-            } else {
-                PLog.w(TAG, "Failed to create Vulkan RAW stacker, falling back to CPU")
-            }
+        if (useGpuAcceleration && !enableSuperResolution) {
+            PLog.i(TAG, "Using GLES RAW stacker")
+            val stackLensShading = lensShading.takeIf { applyLensShadingCorrection }
+            return GlesRawStacker(
+                width = width,
+                height = height,
+                cfaPattern = cfaPattern,
+                blackLevel = masterBlackLevel,
+                whiteLevel = whiteLevel,
+                noiseModel = noiseModel,
+                lensShading = stackLensShading,
+                lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
+                lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
+            ).process(images)
+        } else if (useGpuAcceleration && enableSuperResolution) {
+            PLog.w(TAG, "GLES RAW stacker does not support SR; falling back to CPU RAW stacker")
         }
 
-        PLog.i(TAG, "Using CPU RAW stacker + native LibRaw demosaic")
+        PLog.i(TAG, "Using CPU RAW stacker")
         val stackerPtr = createRawStackerNative(width, height, useNativeSuperResolution)
         if (stackerPtr == 0L) {
             PLog.e(TAG, "Failed to create CPU raw stacker")
             return null
         }
 
+        var cpuFusedBayerBuffer: ByteBuffer? = null
+        var returnsCpuFusedBayer = false
         try {
             val stagedIndices = mutableListOf<Int>()
             for (image in images) {
@@ -280,52 +339,36 @@ object MultiFrameStacker {
 
             val stackedWidth = if (useNativeSuperResolution) width * 2 else width
             val stackedHeight = if (useNativeSuperResolution) height * 2 else height
-            val fusedBayerBuffer = try {
-                ByteBuffer.allocateDirect(stackedWidth * stackedHeight * 2)
-                    .order(ByteOrder.nativeOrder())
-            } catch (e: OutOfMemoryError) {
-                PLog.e(TAG, "OOM allocating fused Bayer buffer", e)
-                return null
-            }
-            processRawStackWithBufferNative(stackerPtr, fusedBayerBuffer)
+            val outputByteCount = stackedWidth.toLong() * stackedHeight.toLong() * 2L
+            cpuFusedBayerBuffer = allocateFusedBayerBuffer(outputByteCount, "CPU") ?: return null
+            processRawStackWithBufferNative(stackerPtr, cpuFusedBayerBuffer)
 
-            val stackedRgbBuffer = try {
-                ByteBuffer.allocateDirect(stackedWidth * stackedHeight * 6)
-                    .order(ByteOrder.nativeOrder())
-            } catch (e: OutOfMemoryError) {
-                PLog.e(TAG, "OOM allocating stacked RGB buffer", e)
-                return null
-            }
-
-            val success = demosaicStackedRawWithLibRawNative(
-                fusedBayerBuffer,
-                stackedWidth,
-                stackedHeight,
-                cfaPattern,
-                masterBlackLevel,
-                whiteLevel,
-                whiteBalanceGains,
-                stackedRgbBuffer
-            )
-            if (!success) {
-                PLog.e(TAG, "Native LibRaw demosaic failed")
-                return null
-            }
-
-            fusedBayerBuffer.rewind()
-            stackedRgbBuffer.rewind()
-            PLog.i(TAG, "CPU RAW stacking and native LibRaw demosaic completed successfully")
+            cpuFusedBayerBuffer.rewind()
+            PLog.i(TAG, "CPU RAW stacking completed successfully")
+            returnsCpuFusedBayer = true
             return RawStackResult(
-                stackedRgbBuffer = stackedRgbBuffer,
-                fusedBayerBuffer = fusedBayerBuffer,
+                fusedBayerBuffer = cpuFusedBayerBuffer,
                 width = stackedWidth,
                 height = stackedHeight,
-                isNormalizedSensorData = false
+                isNormalizedSensorData = false,
+                blackLevel = masterBlackLevel.copyOf(),
+                fusedBayerUsesNativeAllocator = true,
             )
 
         } finally {
             releaseRawStackerNative(stackerPtr)
+            if (!returnsCpuFusedBayer) {
+                LargeDirectBuffer.free(cpuFusedBayerBuffer)
+            }
         }
+    }
+
+    private fun allocateFusedBayerBuffer(byteCount: Long, label: String): ByteBuffer? {
+        if (byteCount <= 0L || byteCount > Int.MAX_VALUE) {
+            PLog.e(TAG, "$label fused Bayer buffer size is invalid: $byteCount")
+            return null
+        }
+        return LargeDirectBuffer.allocate(byteCount, "$label fused Bayer")
     }
 
     // --- Native Methods ---
@@ -347,52 +390,16 @@ object MultiFrameStacker {
         outBitmap: Bitmap?,
         rotation: Int,
         targetWR: Int,
-        targetHR: Int,
-        outputPath: String?
+        targetHR: Int
     )
 
     private external fun releaseStackerNative(stackerPtr: Long)
-
-    private external fun createVulkanStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
-    private external fun addVulkanFrameNative(
-        stackerPtr: Long,
-        hardwareBuffer: android.hardware.HardwareBuffer
-    ): Boolean
-
-    private external fun processVulkanStackNative(stackerPtr: Long, outBitmap: Bitmap?, rotation: Int): Boolean
-    private external fun releaseVulkanStackerNative(stackerPtr: Long)
 
     private external fun createRawStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
     private external fun stageRawFrameNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
     private external fun processRawFrameNative(stackerPtr: Long, index: Int)
     private external fun clearStagedRawFramesNative(stackerPtr: Long)
     private external fun processRawStackWithBufferNative(stackerPtr: Long, outputBuffer: ByteBuffer)
-    private external fun demosaicStackedRawWithLibRawNative(
-        fusedBayerBuffer: ByteBuffer,
-        width: Int,
-        height: Int,
-        cfaPattern: Int,
-        blackLevel: FloatArray,
-        whiteLevel: Int,
-        wbGains: FloatArray,
-        outputBuffer: ByteBuffer
-    ): Boolean
     private external fun releaseRawStackerNative(stackerPtr: Long)
 
-    // Vulkan RAW Stacker
-    private external fun createVulkanRawStackerNative(
-        width: Int, height: Int, enableSuperRes: Boolean, superResScale: Float,
-        blackLevel: FloatArray, whiteLevel: Int, wbGains: FloatArray, noiseModel: FloatArray,
-        lensShadingMap: FloatArray?, shadingMapWidth: Int, shadingMapHeight: Int
-    ): Long
-
-    private external fun addVulkanRawFrameNative(
-        stackerPtr: Long,
-        rawData: ByteBuffer,
-        rowStride: Int,
-        cfaPattern: Int
-    ): Boolean
-
-    private external fun processVulkanRawStackNative(stackerPtr: Long, outputBuffer: ByteBuffer): Boolean
-    private external fun releaseVulkanRawStackerNative(stackerPtr: Long)
 }

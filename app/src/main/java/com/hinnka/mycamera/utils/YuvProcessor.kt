@@ -61,43 +61,6 @@ object YuvProcessor {
         return previewBitmap
     }
 
-    /**
-     * 处理 YUV 图像并直接保存为高精度 JXL 文件 (FP16)，同时生成预览图
-     */
-    fun processAndSave16(
-        image: SafeImage,
-        aspectRatio: AspectRatio,
-        rotation: Int,
-        outputPath: String,
-        hdrSidecarPath: String? = null,
-        previewBitmap: Bitmap
-    ): Boolean {
-        val planes = image.planes
-
-        val yBuffer = planes[0].buffer
-        val uBuffer = planes[1].buffer
-        val vBuffer = planes[2].buffer
-
-        yBuffer.rewind()
-        uBuffer.rewind()
-        vBuffer.rewind()
-
-        val width = image.width
-        val height = image.height
-        val yRowStride = planes[0].rowStride
-        val uvRowStride = planes[1].rowStride
-        val uvPixelStride = planes[1].pixelStride
-        val format = image.format
-
-        return processAndSaveYuv(
-            yBuffer, uBuffer, vBuffer,
-            width, height,
-            yRowStride, uvRowStride, uvPixelStride,
-            rotation, aspectRatio.widthRatio, aspectRatio.heightRatio, format,
-            outputPath, hdrSidecarPath, previewBitmap
-        )
-    }
-
     fun processAndSave(
         image: SafeImage,
         rotation: Int,
@@ -162,36 +125,4 @@ object YuvProcessor {
         outputPath: String
     ): Boolean
 
-    /**
-     * Native 处理并保存方法
-     */
-    private external fun processAndSaveYuv(
-        yBuffer: ByteBuffer,
-        uBuffer: ByteBuffer,
-        vBuffer: ByteBuffer,
-        width: Int,
-        height: Int,
-        yRowStride: Int,
-        uvRowStride: Int,
-        uvPixelStride: Int,
-        rotation: Int,
-        targetWR: Int,
-        targetHR: Int,
-        format: Int,
-        outputPath: String,
-        hdrSidecarPath: String?,
-        previewBitmap: Bitmap
-    ): Boolean
-
-    /**
-     * 从文件中读取并解压缩 ARGB 数据 (16-bit)
-     */
-    external fun loadCompressedArgb(inputPath: String): ByteBuffer?
-
-    /**
-     * 将 ARGB 数据 (16-bit) 压缩并保存到文件
-     */
-    external fun saveCompressedArgb(buffer: ByteBuffer, width: Int, height: Int, outputPath: String): Boolean
-
-    external fun free(buffer: ByteBuffer)
 }

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.ColorSpace
 import java.nio.ByteBuffer
@@ -20,7 +21,7 @@ data class LutConfig(
     val byteBuffer: ByteBuffer? = null,
     val title: String = "",
     val configDataType: Int = CONFIG_DATA_TYPE_UINT8,
-    val curve: LutCurve = LutCurve.SRGB,
+    val curve: TransferCurve = TransferCurve.SRGB,
     val colorSpace: ColorSpace = ColorSpace.SRGB,
     val outputColorSpace: android.graphics.ColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB),
 ) {
@@ -107,6 +108,7 @@ data class LutInfo(
     val isDefault: Boolean = false, // 是否为默认 LUT
     val isVip: Boolean = false, // 是否为 VIP LUT
     val category: String = "", // 分类
+    val isFavorite: Boolean = false, // 是否收藏
 ) {
     /**
      * 获取显示名称（优先当前系统语言）

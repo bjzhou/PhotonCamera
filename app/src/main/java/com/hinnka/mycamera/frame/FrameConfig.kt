@@ -50,7 +50,8 @@ data class FrameTemplate(
     val nameMap: Map<String, String>,
     val version: Int = 1,
     val layout: FrameLayout,
-    val elements: List<FrameElement>
+    val elements: List<FrameElement>,
+    val elementsTop: List<FrameElement>? = null
 ) {
     fun getName(locale: java.util.Locale = java.util.Locale.getDefault()): String {
         val language = if (locale.language == "zh") "zh" else "en"
@@ -65,8 +66,16 @@ data class FrameLayout(
     val position: FramePosition = FramePosition.BOTTOM,
     val heightDp: Int = 80,
     val backgroundColor: Int = Color.WHITE,
+    val borderColor: Int = backgroundColor, // 边框颜色，默认与背景色相同
+    val lineSpacingDp: Int = 8, // 行间距
     val paddingDp: Int = 16,
     val borderWidthDp: Int = 0,  // 四周边框宽度（仅 BORDER 模式使用）
+    val photoCornerRadiusDp: Int = 0,
+    val photoShadowEnabled: Boolean = false,
+    val photoShadowRadiusDp: Int = 0,
+    val photoShadowOffsetXDp: Int = 0,
+    val photoShadowOffsetYDp: Int = 2,
+    val photoShadowColor: Int = 0xCC000000.toInt(),
     val imageResName: String? = null,  // 边框图片资源名称（仅 IMAGE 模式使用，内置资源）
     val imagePath: String? = null  // 边框图片文件路径（仅 IMAGE 模式使用，外部导入）
 )
@@ -100,6 +109,7 @@ sealed class FrameElement(
         val color: Int = Color.DKGRAY,
         val fontWeight: FontWeight = FontWeight.NORMAL,
         val fontFamily: String? = null,
+        val overrideText: String? = null,
         val format: String? = null,
         val prefix: String? = null,
         val suffix: String? = null,
@@ -111,6 +121,7 @@ sealed class FrameElement(
      */
     data class Logo(
         val logoType: LogoType,
+        val overrideSource: String? = null,
         val alignment: ElementAlignment = ElementAlignment.CENTER,
         val sizeDp: Int = 24,
         val maxWidth: Int = 0,
@@ -157,6 +168,7 @@ enum class TextType {
     FOCAL_LENGTH_35MM,     // 35mm等效焦距
     APERTURE,         // 光圈值
     RESOLUTION,       // 分辨率
+    FILTER_NAME,      // 滤镜名称
     CUSTOM,           // 自定义文本
     APP_NAME          // App 名称
 }

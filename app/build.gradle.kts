@@ -1,8 +1,21 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun String.toBuildConfigString(): String =
+    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.hinnka.mycamera"
@@ -13,8 +26,8 @@ android {
         applicationId = "com.hinnka.mycamera"
         minSdk = 30
         targetSdk = 36
-        versionCode = 55
-        versionName = "1.13.1"
+        versionCode = 122
+        versionName = "1.24.4.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -27,6 +40,17 @@ android {
                 arguments += "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
             }
         }
+
+        buildConfigField(
+            "String",
+            "BUILT_IN_API_URL",
+            "https://camera-api.hinnka.me/v1".toBuildConfigString()
+        )
+        buildConfigField(
+            "String",
+            "BUILT_IN_API_KEY",
+            localProperties.getProperty("BUILT_IN_API_KEY_GOOGLE", "").toBuildConfigString()
+        )
     }
 
     signingConfigs {
@@ -54,6 +78,7 @@ android {
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
         }
@@ -64,8 +89,16 @@ android {
         create("google") {
             dimension = "channel"
         }
-        create("china") {
+        create("default") {
             dimension = "channel"
+        }
+        create("samsung") {
+            dimension = "channel"
+            applicationId = "com.samsung.android.scan3d"
+        }
+        create("meitu") {
+            dimension = "channel"
+            applicationId = "com.meitu.meiyancamera"
         }
     }
 
@@ -81,6 +114,21 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    sourceSets {
+        getByName("samsung") {
+            java {
+                srcDir("src/default/java")
+            }
+            manifest.srcFile("src/default/AndroidManifest.xml")
+        }
+        getByName("meitu") {
+            java {
+                srcDir("src/default/java")
+            }
+            manifest.srcFile("src/default/AndroidManifest.xml")
+        }
     }
     
     externalNativeBuild {
@@ -102,12 +150,13 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.fragment.ktx)
+    implementation(libs.androidx.recyclerview)
     
     // ViewModel Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     
-    // Material Icons Extended
-    implementation(libs.androidx.material.icons.extended)
+    // Material Icons Core
+    implementation(libs.androidx.material.icons.core)
     
     // Coil for image loading
     implementation(libs.coil.compose)
@@ -120,17 +169,26 @@ dependencies {
     
     // ExifInterface for writing EXIF metadata
     implementation(libs.androidx.exifinterface)
+
+    // HEIC export through the platform image encoder
+    implementation(libs.androidx.heifwriter)
     
     // DataStore for user preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation(libs.androidx.animation.core)
     implementation(libs.androidx.lifecycle.process)
+    implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     implementation(libs.okhttp)
     implementation(libs.gson)
 
-    // Bugly for china flavor
-    "chinaImplementation"("com.tencent.bugly:crashreport:latest.release")
+    // Bugly for default flavor
+    "defaultImplementation"("com.tencent.bugly:crashreport:latest.release")
+    "samsungImplementation"("com.tencent.bugly:crashreport:latest.release")
+    "meituImplementation"("com.tencent.bugly:crashreport:latest.release")
 
     // Billing for google flavor
     "googleImplementation"(libs.google.billing)
@@ -139,9 +197,11 @@ dependencies {
     // Reorderable for drag-and-drop list reordering
     implementation("sh.calvin.reorderable:reorderable:2.4.3")
 
-    // Media3 for video playback
+    // Media3 for video playback and export
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+    implementation(libs.media3.effect)
+    implementation(libs.media3.transformer)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

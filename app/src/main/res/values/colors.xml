@@ -28,4 +28,5 @@
     <color name="widget_button_secondary_dark">#1C242E</color>
     <color name="widget_text_primary_dark">#FFFFFF</color>
     <color name="widget_text_secondary_dark">#80FFFFFF</color>
+    <color name="splash_background">#252525</color>
 </resources>

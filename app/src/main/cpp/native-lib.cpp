@@ -5,10 +5,14 @@
  */
 #include <algorithm>
 #include <android/bitmap.h>
+#include <array>
 #include <cmath>
+#include <chrono>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <jni.h>
+#include <limits>
 #include <map>
 #include <omp.h>
 #include <string>
@@ -16,13 +20,13 @@
 #include <vector>
 
 #include "common.h"
-#include "jxl_utils.h"
+#include "dng_bottlenecks.h"
+#include "dng_lossless_jpeg.h"
+#include "dng_memory.h"
+#include "dng_memory_stream.h"
 #include "libraw/libraw.h"
 #include "math_utils.h"
 #include "stacking_utils.h"
-#include "vulkan_raw_stacker.h"
-#include "vulkan_stacker.h"
-#include <android/hardware_buffer_jni.h>
 
 #ifndef LOG_TAG
 #define LOG_TAG "native-lib"
@@ -425,6 +429,278 @@ static float sampleDngGainMapBilinear(const DngGainMap &gainMap, float x, float 
   return top + (bottom - top) * ty;
 }
 
+static int quadChannelIndexForPattern(int cfaPattern, int col, int row) {
+  const int pattern = cfaPattern >= 8 ? cfaPattern - 8
+                                      : (cfaPattern >= 4 ? cfaPattern - 4 : cfaPattern);
+  const int blockSize = cfaPattern >= 8 ? 4 : 2;
+  const int blockCol = (col / blockSize) & 1;
+  const int blockRow = (row / blockSize) & 1;
+  if (pattern == 0) { // Quad RGGB
+    return blockRow == 0 ? (blockCol == 0 ? 0 : 1) : (blockCol == 0 ? 2 : 3);
+  }
+  if (pattern == 1) { // Quad GRBG
+    return blockRow == 0 ? (blockCol == 0 ? 1 : 0) : (blockCol == 0 ? 3 : 2);
+  }
+  if (pattern == 2) { // Quad GBRG
+    return blockRow == 0 ? (blockCol == 0 ? 2 : 3) : (blockCol == 0 ? 0 : 1);
+  }
+  return blockRow == 0 ? (blockCol == 0 ? 3 : 2) : (blockCol == 0 ? 1 : 0);
+}
+
+static int gcdInt(int a, int b) {
+  a = std::abs(a);
+  b = std::abs(b);
+  while (b != 0) {
+    const int t = a % b;
+    a = b;
+    b = t;
+  }
+  return a == 0 ? 1 : a;
+}
+
+static bool computeQuadDngBlackLevels(LibRaw &rawProcessor, int cfaPattern,
+                                      int left, int top, float out[4]) {
+  if (cfaPattern < 4 || cfaPattern > 11)
+    return false;
+
+  const auto &levels = rawProcessor.imgdata.color.dng_levels;
+  const int cols = static_cast<int>(levels.dng_cblack[4]);
+  const int rows = static_cast<int>(levels.dng_cblack[5]);
+  const int repeatCount = cols * rows;
+  if (cols <= 0 || rows <= 0 || repeatCount > LIBRAW_CBLACK_SIZE - 7) {
+    const float scalarBlack =
+        levels.dng_fblack > 0.0f ? levels.dng_fblack : static_cast<float>(levels.dng_black);
+    if (scalarBlack <= 0.0f)
+      return false;
+    for (int i = 0; i < 4; ++i)
+      out[i] = scalarBlack;
+    return true;
+  }
+
+  const int cfaPeriod = cfaPattern >= 8 ? 8 : 4;
+  const int periodX = (cfaPeriod / gcdInt(cfaPeriod, cols)) * cols;
+  const int periodY = (cfaPeriod / gcdInt(cfaPeriod, rows)) * rows;
+  double sums[4] = {0.0, 0.0, 0.0, 0.0};
+  int counts[4] = {0, 0, 0, 0};
+  bool hasRepeatValue = false;
+
+  for (int y = 0; y < periodY; ++y) {
+    for (int x = 0; x < periodX; ++x) {
+      const int channel = quadChannelIndexForPattern(cfaPattern, x, y);
+      const int blackRow = ((top + y) % rows + rows) % rows;
+      const int blackCol = ((left + x) % cols + cols) % cols;
+      const float repeatBlack = levels.dng_fcblack[6 + blackRow * cols + blackCol];
+      hasRepeatValue = hasRepeatValue || std::abs(repeatBlack) > 1e-6f;
+      sums[channel] += static_cast<double>(levels.dng_fblack + repeatBlack);
+      counts[channel] += 1;
+    }
+  }
+
+  if (!hasRepeatValue && std::abs(levels.dng_fblack) <= 1e-6f)
+    return false;
+
+  for (int i = 0; i < 4; ++i) {
+    if (counts[i] <= 0)
+      return false;
+    out[i] = static_cast<float>(sums[i] / static_cast<double>(counts[i]));
+  }
+  return true;
+}
+
+static void computeEffectiveBlackLevels(LibRaw &rawProcessor, int cfaPattern,
+                                        int left, int top, float out[4]) {
+  if (computeQuadDngBlackLevels(rawProcessor, cfaPattern, left, top, out))
+    return;
+
+  const float base = static_cast<float>(rawProcessor.imgdata.color.black);
+  const unsigned cols = rawProcessor.imgdata.color.cblack[4];
+  const unsigned rows = rawProcessor.imgdata.color.cblack[5];
+  for (int ch = 0; ch < 4; ++ch) {
+    float total = base + static_cast<float>(rawProcessor.imgdata.color.cblack[ch]);
+    // Add the repeat pattern contribution for this CFA channel.
+    if (cols > 0 && rows > 0) {
+      float sum = 0.0f;
+      int count = 0;
+      for (unsigned r = 0; r < rows; ++r) {
+        for (unsigned c = 0; c < cols; ++c) {
+          if (rawProcessor.FC(r, c) == ch) {
+            sum += static_cast<float>(
+                rawProcessor.imgdata.color.cblack[6 + r * cols + c]);
+            ++count;
+          }
+        }
+      }
+      if (count > 0) {
+        total += sum / static_cast<float>(count);
+      }
+    }
+    out[ch] = total;
+  }
+}
+
+struct DngRawTagInfo {
+  bool hasActiveArea = false;
+  int activeArea[4] = {0, 0, 0, 0}; // top, left, bottom, right
+  bool hasDefaultCropOrigin = false;
+  double defaultCropOrigin[2] = {0.0, 0.0}; // horizontal, vertical; relative to ActiveArea
+  bool hasDefaultCropSize = false;
+  double defaultCropSize[2] = {0.0, 0.0}; // horizontal, vertical
+  bool hasAsShotWhiteXY = false;
+  float asShotWhiteXY[2] = {0.0f, 0.0f};
+  bool hasShadowScale = false;
+  float shadowScale = 1.0f;
+  int maskedAreaCount = 0;
+  int blackRepeatRows = 0;
+  int blackRepeatCols = 0;
+  std::vector<double> blackLevel;
+  std::vector<double> blackDeltaH;
+  std::vector<double> blackDeltaV;
+};
+
+static int bayerBlackLevelIndexForPattern(int cfaPattern, int col, int row) {
+  const int r = row & 1;
+  const int c = col & 1;
+  if (cfaPattern == 0) { // RGGB
+    return r == 0 ? (c == 0 ? 0 : 1) : (c == 0 ? 2 : 3);
+  }
+  if (cfaPattern == 1) { // GRBG
+    return r == 0 ? (c == 0 ? 1 : 0) : (c == 0 ? 3 : 2);
+  }
+  if (cfaPattern == 2) { // GBRG
+    return r == 0 ? (c == 0 ? 2 : 3) : (c == 0 ? 0 : 1);
+  }
+  return r == 0 ? (c == 0 ? 3 : 2) : (c == 0 ? 1 : 0);
+}
+
+static void mapLibRawBlackLevelsForGpu(LibRaw &rawProcessor, int cfaPattern,
+                                       int left, int top,
+                                       const float librawBlackLevels[4],
+                                       float active2x2[4],
+                                       float exportedRggb[4]) {
+  for (int i = 0; i < 4; ++i) {
+    active2x2[i] = 0.0f;
+    exportedRggb[i] = librawBlackLevels[i];
+  }
+
+  active2x2[0] = librawBlackLevels[rawProcessor.FC(top, left)];
+  active2x2[1] = librawBlackLevels[rawProcessor.FC(top, left + 1)];
+  active2x2[2] = librawBlackLevels[rawProcessor.FC(top + 1, left)];
+  active2x2[3] = librawBlackLevels[rawProcessor.FC(top + 1, left + 1)];
+
+  bool filled[4] = {false, false, false, false};
+  const int period = cfaPattern >= 4 ? (cfaPattern >= 8 ? 8 : 4) : 2;
+  for (int row = 0; row < period; ++row) {
+    for (int col = 0; col < period; ++col) {
+      const int srcChannel = rawProcessor.FC(top + row, left + col);
+      if (srcChannel < 0 || srcChannel > 3)
+        continue;
+      const int dstChannel = cfaPattern >= 4
+                                 ? quadChannelIndexForPattern(cfaPattern, col, row)
+                                 : bayerBlackLevelIndexForPattern(cfaPattern, col, row);
+      if (dstChannel >= 0 && dstChannel < 4) {
+        exportedRggb[dstChannel] = librawBlackLevels[srcChannel];
+        filled[dstChannel] = true;
+      }
+    }
+  }
+
+  for (int i = 0; i < 4; ++i) {
+    if (!filled[i]) {
+      exportedRggb[i] = active2x2[std::min(i, 3)];
+    }
+  }
+}
+
+static bool applyDngBlackLevelDeltas(LibRaw &rawProcessor,
+                                     const DngRawTagInfo &rawTags) {
+  if (rawTags.blackDeltaH.empty() && rawTags.blackDeltaV.empty()) {
+    return false;
+  }
+  if (!rawProcessor.imgdata.rawdata.raw_image) {
+    return false;
+  }
+
+  const int rawWidth = rawProcessor.imgdata.sizes.raw_width;
+  const int rawHeight = rawProcessor.imgdata.sizes.raw_height;
+  const int rawPitch = rawProcessor.imgdata.sizes.raw_pitch > 0
+                           ? rawProcessor.imgdata.sizes.raw_pitch / static_cast<int>(sizeof(ushort))
+                           : rawWidth;
+  int activeTop = rawTags.hasActiveArea ? rawTags.activeArea[0]
+                                        : static_cast<int>(rawProcessor.imgdata.sizes.top_margin);
+  int activeLeft = rawTags.hasActiveArea ? rawTags.activeArea[1]
+                                         : static_cast<int>(rawProcessor.imgdata.sizes.left_margin);
+  int activeBottom = rawTags.hasActiveArea
+                         ? rawTags.activeArea[2]
+                         : activeTop + static_cast<int>(rawProcessor.imgdata.sizes.height);
+  int activeRight = rawTags.hasActiveArea
+                        ? rawTags.activeArea[3]
+                        : activeLeft + static_cast<int>(rawProcessor.imgdata.sizes.width);
+  activeTop = std::clamp(activeTop, 0, rawHeight);
+  activeBottom = std::clamp(activeBottom, activeTop, rawHeight);
+  activeLeft = std::clamp(activeLeft, 0, rawWidth);
+  activeRight = std::clamp(activeRight, activeLeft, rawWidth);
+
+  const int activeWidth = activeRight - activeLeft;
+  const int activeHeight = activeBottom - activeTop;
+  if (activeWidth <= 0 || activeHeight <= 0) {
+    return false;
+  }
+  if (!rawTags.blackDeltaH.empty() &&
+      rawTags.blackDeltaH.size() != static_cast<size_t>(activeWidth)) {
+    LOGI("dng black delta: skip H count=%zu activeWidth=%d",
+         rawTags.blackDeltaH.size(), activeWidth);
+    return false;
+  }
+  if (!rawTags.blackDeltaV.empty() &&
+      rawTags.blackDeltaV.size() != static_cast<size_t>(activeHeight)) {
+    LOGI("dng black delta: skip V count=%zu activeHeight=%d",
+         rawTags.blackDeltaV.size(), activeHeight);
+    return false;
+  }
+
+  bool hasNonZeroDelta = false;
+  for (double value : rawTags.blackDeltaH) {
+    if (std::abs(value) > 1e-9) {
+      hasNonZeroDelta = true;
+      break;
+    }
+  }
+  for (double value : rawTags.blackDeltaV) {
+    if (std::abs(value) > 1e-9) {
+      hasNonZeroDelta = true;
+      break;
+    }
+  }
+  if (!hasNonZeroDelta) {
+    return false;
+  }
+
+  auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
+  for (int y = activeTop; y < activeBottom; ++y) {
+    const double rowDelta = rawTags.blackDeltaV.empty()
+                                ? 0.0
+                                : rawTags.blackDeltaV[static_cast<size_t>(y - activeTop)];
+    for (int x = activeLeft; x < activeRight; ++x) {
+      const double colDelta = rawTags.blackDeltaH.empty()
+                                  ? 0.0
+                                  : rawTags.blackDeltaH[static_cast<size_t>(x - activeLeft)];
+      const double delta = rowDelta + colDelta;
+      if (std::abs(delta) <= 1e-9) {
+        continue;
+      }
+      const int index = y * rawPitch + x;
+      const double corrected = static_cast<double>(rawImage[index]) - delta;
+      rawImage[index] = static_cast<ushort>(
+          std::clamp(static_cast<int>(std::lround(corrected)), 0, 65535));
+    }
+  }
+  return true;
+}
+
+
+// Metadata-based black level calculation is now handled by computeEffectiveBlackLevels.
+
+
 static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLevels[4]) {
   if (!rawProcessor.imgdata.rawdata.raw_image || !rawProcessor.imgdata.idata.filters) {
     return false;
@@ -480,26 +756,34 @@ static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLev
                            : rawWidth;
   auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
 
-  const float colScale = static_cast<float>(gainMaps[0].mapPointsH - 1) /
-                         std::max(1, rawWidth);
-  const float rowScale = static_cast<float>(gainMaps[0].mapPointsV - 1) /
-                         std::max(1, rawHeight);
-
   const DngGainMap *mapByParity[2][2] = {};
   for (const auto &gainMap : gainMaps) {
     mapByParity[gainMap.top & 1u][gainMap.left & 1u] = &gainMap;
   }
 
+  const int activeWidth = std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.width));
+  const int activeHeight = std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.height));
+  const int leftMargin = static_cast<int>(rawProcessor.imgdata.sizes.left_margin);
+  const int topMargin = static_cast<int>(rawProcessor.imgdata.sizes.top_margin);
+
   for (int y = 0; y < rawHeight; ++y) {
-    const float ys = static_cast<float>(y) * rowScale;
     const float rowBlack[2] = {blackLevels[rawProcessor.FC(y, 0)], blackLevels[rawProcessor.FC(y, 1)]};
-    float xs = 0.0f;
-    for (int x = 0; x < rawWidth; ++x, xs += colScale) {
+    const float normY = (static_cast<float>(y - topMargin) + 0.5f) / static_cast<float>(activeHeight);
+
+    for (int x = 0; x < rawWidth; ++x) {
       const DngGainMap *gainMap = mapByParity[y & 1][x & 1];
       if (!gainMap) {
         continue;
       }
-      const float gain = sampleDngGainMapBilinear(*gainMap, xs, ys);
+
+      const float normX = (static_cast<float>(x - leftMargin) + 0.5f) / static_cast<float>(activeWidth);
+
+      const float spacingH = static_cast<float>(gainMap->mapSpacingH);
+      const float spacingV = static_cast<float>(gainMap->mapSpacingV);
+      const float mapX = spacingH > 0.0f ? (normX - static_cast<float>(gainMap->mapOriginH)) / spacingH : 0.0f;
+      const float mapY = spacingV > 0.0f ? (normY - static_cast<float>(gainMap->mapOriginV)) / spacingV : 0.0f;
+
+      const float gain = sampleDngGainMapBilinear(*gainMap, mapX, mapY);
       const float black = rowBlack[x & 1];
       float corrected = (static_cast<float>(rawImage[y * rawPitch + x]) - black) * gain + black;
       corrected = std::max(corrected, 0.0f);
@@ -510,6 +794,209 @@ static bool applySupportedDngGainMaps(LibRaw &rawProcessor, const float blackLev
   LOGI("dng gain map: applied 4 maps size=%ux%u grid=%ux%u",
        rawWidth, rawHeight, gainMaps[0].mapPointsH, gainMaps[0].mapPointsV);
   return true;
+}
+
+static jfloatArray buildDngLensShadingArray(JNIEnv *env, LibRaw &rawProcessor,
+                                            int cfaPattern, int activeLeft, int activeTop,
+                                            int &outWidth, int &outHeight,
+                                            float outGrid[8]) {
+  outWidth = 0;
+  outHeight = 0;
+  outGrid[0] = 0.0f;
+  outGrid[1] = 0.0f;
+  outGrid[2] = 1.0f;
+  outGrid[3] = 1.0f;
+  outGrid[4] = 0.0f;
+  outGrid[5] = 0.0f;
+  outGrid[6] = static_cast<float>(std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.width)));
+  outGrid[7] = static_cast<float>(std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.height)));
+
+  std::vector<DngGainMap> gainMaps;
+  if (!parseDngGainMaps(rawProcessor.imgdata.color.dng_levels.rawopcodes[1], gainMaps) ||
+      gainMaps.size() != 4) {
+    return nullptr;
+  }
+
+  const uint32_t mapWidth = gainMaps[0].mapPointsH;
+  const uint32_t mapHeight = gainMaps[0].mapPointsV;
+  if (mapWidth == 0 || mapHeight == 0) {
+    return nullptr;
+  }
+
+  unsigned check = 0;
+  for (const auto &gainMap : gainMaps) {
+    if (gainMap.mapPointsH != mapWidth || gainMap.mapPointsV != mapHeight ||
+        gainMap.rowPitch != 2 || gainMap.colPitch != 2 ||
+        gainMap.mapPlanes != 1 || gainMap.mapGain.empty() ||
+        gainMap.mapGain.size() != static_cast<size_t>(gainMap.mapPointsV) *
+                                     static_cast<size_t>(gainMap.mapPointsH) *
+                                     static_cast<size_t>(gainMap.mapPlanes)) {
+      LOGI("dng gain map export: incompatible map layout");
+      return nullptr;
+    }
+    if (std::abs(gainMap.mapOriginH - gainMaps[0].mapOriginH) > 1e-9 ||
+        std::abs(gainMap.mapOriginV - gainMaps[0].mapOriginV) > 1e-9 ||
+        std::abs(gainMap.mapSpacingH - gainMaps[0].mapSpacingH) > 1e-9 ||
+        std::abs(gainMap.mapSpacingV - gainMaps[0].mapSpacingV) > 1e-9) {
+      LOGI("dng gain map export: per-channel grid differs");
+      return nullptr;
+    }
+    if ((gainMap.top & 1u) == 0u) {
+      check += ((gainMap.left & 1u) == 0u) ? 1u : 2u;
+    } else {
+      check += ((gainMap.left & 1u) == 0u) ? 4u : 8u;
+    }
+  }
+  if (check != 15u) {
+    LOGI("dng gain map export: unsupported CFA parity combination check=%u", check);
+    return nullptr;
+  }
+
+  const bool isQuadBayer = cfaPattern >= 4 && cfaPattern <= 11;
+  std::vector<float> packed(static_cast<size_t>(mapWidth) * mapHeight * 4, 1.0f);
+  for (const auto &gainMap : gainMaps) {
+    int outChannel;
+    if (isQuadBayer) {
+      const int relX = static_cast<int>(gainMap.left) - activeLeft;
+      const int relY = static_cast<int>(gainMap.top) - activeTop;
+      outChannel = quadChannelIndexForPattern(cfaPattern, relX, relY);
+    } else {
+      int cfa = rawProcessor.FC(gainMap.top, gainMap.left);
+      if (cfa == 0) {
+        outChannel = 0; // R
+      } else if (cfa == 1) {
+        outChannel = 1; // Gr
+      } else if (cfa == 2) {
+        outChannel = 3; // B in LibRaw CFA order, packed as A
+      } else {
+        outChannel = 2; // Gb
+      }
+    }
+
+    for (uint32_t y = 0; y < mapHeight; ++y) {
+      for (uint32_t x = 0; x < mapWidth; ++x) {
+        const size_t src = static_cast<size_t>(y) * mapWidth + x;
+        const size_t dst = src * 4 + static_cast<size_t>(outChannel);
+        packed[dst] = gainMap.mapGain[src];
+      }
+    }
+  }
+
+  outWidth = static_cast<int>(mapWidth);
+  outHeight = static_cast<int>(mapHeight);
+  outGrid[0] = static_cast<float>(gainMaps[0].mapOriginH);
+  outGrid[1] = static_cast<float>(gainMaps[0].mapOriginV);
+  outGrid[2] = static_cast<float>(gainMaps[0].mapSpacingH);
+  outGrid[3] = static_cast<float>(gainMaps[0].mapSpacingV);
+  outGrid[4] = 0.0f;
+  outGrid[5] = 0.0f;
+  outGrid[6] = static_cast<float>(std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.width)));
+  outGrid[7] = static_cast<float>(std::max(1, static_cast<int>(rawProcessor.imgdata.sizes.height)));
+  jfloatArray result = env->NewFloatArray(static_cast<jsize>(packed.size()));
+  if (!result) {
+    return nullptr;
+  }
+  env->SetFloatArrayRegion(result, 0, static_cast<jsize>(packed.size()), packed.data());
+  LOGI("dng gain map export: %dx%d origin=(%f,%f) spacing=(%f,%f) bounds=(%f,%f,%f,%f) mode=%s",
+       outWidth, outHeight, outGrid[0], outGrid[1], outGrid[2], outGrid[3],
+       outGrid[4], outGrid[5], outGrid[6], outGrid[7],
+       isQuadBayer ? "quad-parity" : "dng-parity");
+  return result;
+}
+
+static bool estimateRawAutoWhiteBalance(LibRaw &rawProcessor, const float blackLevels[4],
+                                        float outUserMul[4], int &sampleCount) {
+  sampleCount = 0;
+  if (!rawProcessor.imgdata.rawdata.raw_image || !rawProcessor.imgdata.idata.filters) {
+    return false;
+  }
+
+  const int rawWidth = rawProcessor.imgdata.sizes.raw_width;
+  const int rawHeight = rawProcessor.imgdata.sizes.raw_height;
+  const int rawPitch = rawProcessor.imgdata.sizes.raw_pitch > 0
+                           ? rawProcessor.imgdata.sizes.raw_pitch / static_cast<int>(sizeof(ushort))
+                           : rawWidth;
+  const int left = std::max(0, static_cast<int>(rawProcessor.imgdata.sizes.left_margin));
+  const int top = std::max(0, static_cast<int>(rawProcessor.imgdata.sizes.top_margin));
+  const int right = std::min(rawWidth - 1, left + static_cast<int>(rawProcessor.imgdata.sizes.width) - 1);
+  const int bottom = std::min(rawHeight - 1, top + static_cast<int>(rawProcessor.imgdata.sizes.height) - 1);
+  if (right <= left + 1 || bottom <= top + 1) {
+    return false;
+  }
+
+  float whiteLevel = static_cast<float>(rawProcessor.imgdata.color.dng_levels.dng_whitelevel[0]);
+  if (whiteLevel <= 0.0f) {
+    whiteLevel = static_cast<float>(rawProcessor.imgdata.color.maximum);
+  }
+  if (whiteLevel <= 0.0f) {
+    whiteLevel = 65535.0f;
+  }
+
+  double sums[4] = {0.0, 0.0, 0.0, 0.0};
+  auto *rawImage = rawProcessor.imgdata.rawdata.raw_image;
+  const int step = 4;
+  for (int y = top; y + 1 <= bottom; y += step) {
+    for (int x = left; x + 1 <= right; x += step) {
+      float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+      bool seen[4] = {false, false, false, false};
+      for (int dy = 0; dy < 2; ++dy) {
+        for (int dx = 0; dx < 2; ++dx) {
+          const int yy = y + dy;
+          const int xx = x + dx;
+          int c = rawProcessor.FC(yy, xx);
+          if (c < 0 || c > 3) {
+            continue;
+          }
+          const float black = blackLevels[c];
+          const float range = std::max(1.0f, whiteLevel - black);
+          const float raw = static_cast<float>(rawImage[yy * rawPitch + xx]);
+          v[c] = std::clamp((raw - black) / range, 0.0f, 1.0f);
+          seen[c] = true;
+        }
+      }
+
+      if (!seen[0] || !seen[1] || !seen[2]) {
+        continue;
+      }
+      if (!seen[3]) {
+        v[3] = v[1];
+      }
+
+      const float g = 0.5f * (v[1] + v[3]);
+      const float minValue = std::min(std::min(v[0], v[1]), std::min(v[2], v[3]));
+      const float maxValue = std::max(std::max(v[0], v[1]), std::max(v[2], v[3]));
+      const float luma = 0.25f * (v[0] + v[1] + v[2] + v[3]);
+      if (luma < 0.025f || luma > 0.82f || minValue < 0.004f || maxValue > 0.96f) {
+        continue;
+      }
+      if (maxValue / std::max(minValue, 0.004f) > 3.0f || g <= 0.0f) {
+        continue;
+      }
+
+      sums[0] += v[0];
+      sums[1] += v[1];
+      sums[2] += v[2];
+      sums[3] += v[3];
+      ++sampleCount;
+    }
+  }
+
+  if (sampleCount < 512 || sums[0] <= 0.0 || sums[1] <= 0.0 ||
+      sums[2] <= 0.0 || sums[3] <= 0.0) {
+    return false;
+  }
+
+  const float r = static_cast<float>(sums[0] / sampleCount);
+  const float gr = static_cast<float>(sums[1] / sampleCount);
+  const float b = static_cast<float>(sums[2] / sampleCount);
+  const float gb = static_cast<float>(sums[3] / sampleCount);
+  const float g = 0.5f * (gr + gb);
+  outUserMul[0] = std::clamp(g / std::max(r, 1e-4f), 0.5f, 4.0f);
+  outUserMul[1] = 1.0f;
+  outUserMul[2] = std::clamp(g / std::max(b, 1e-4f), 0.5f, 4.0f);
+  outUserMul[3] = std::clamp(g / std::max(gb, 1e-4f), 0.75f, 1.33f);
+  return std::isfinite(outUserMul[0]) && std::isfinite(outUserMul[2]) &&
+         std::isfinite(outUserMul[3]);
 }
 
 static float illuminantToTemp(int illuminant) {
@@ -559,6 +1046,652 @@ static float illuminantToTemp(int illuminant) {
   }
 }
 
+static bool hasMatrixSignal(const Matrix3x3 &matrix) {
+  float sum = 0.0f;
+  for (float value : matrix.m) {
+    sum += std::abs(value);
+  }
+  return sum > 0.01f;
+}
+
+static std::array<float, 3> multiplyMatrixVector(const Matrix3x3 &matrix,
+                                                 const std::array<float, 3> &v) {
+  return {matrix.m[0] * v[0] + matrix.m[1] * v[1] + matrix.m[2] * v[2],
+          matrix.m[3] * v[0] + matrix.m[4] * v[1] + matrix.m[5] * v[2],
+          matrix.m[6] * v[0] + matrix.m[7] * v[1] + matrix.m[8] * v[2]};
+}
+
+static bool xyzToXy(const std::array<float, 3> &xyz,
+                    std::array<float, 2> &xy) {
+  const float sum = xyz[0] + xyz[1] + xyz[2];
+  if (sum <= 1e-6f || !std::isfinite(sum)) {
+    return false;
+  }
+  xy = {xyz[0] / sum, xyz[1] / sum};
+  return std::isfinite(xy[0]) && std::isfinite(xy[1]);
+}
+
+static bool xyToXyz(const std::array<float, 2> &xy,
+                    std::array<float, 3> &xyz) {
+  if (!std::isfinite(xy[0]) || !std::isfinite(xy[1]) || xy[0] <= 0.0f ||
+      xy[1] <= 0.0f || xy[0] + xy[1] >= 1.0f) {
+    return false;
+  }
+  xyz = {xy[0] / xy[1], 1.0f, (1.0f - xy[0] - xy[1]) / xy[1]};
+  return std::isfinite(xyz[0]) && std::isfinite(xyz[1]) &&
+         std::isfinite(xyz[2]);
+}
+
+static float xyCoordToTemperature(const std::array<float, 2> &xy) {
+  struct TempEntry {
+    double reciprocal;
+    double u;
+    double v;
+    double slope;
+  };
+  static constexpr TempEntry table[] = {
+      {0.0, 0.18006, 0.26352, -0.24341},
+      {10.0, 0.18066, 0.26589, -0.25479},
+      {20.0, 0.18133, 0.26846, -0.26876},
+      {30.0, 0.18208, 0.27119, -0.28539},
+      {40.0, 0.18293, 0.27407, -0.30470},
+      {50.0, 0.18388, 0.27709, -0.32675},
+      {60.0, 0.18494, 0.28021, -0.35156},
+      {70.0, 0.18611, 0.28342, -0.37915},
+      {80.0, 0.18740, 0.28668, -0.40955},
+      {90.0, 0.18880, 0.28997, -0.44278},
+      {100.0, 0.19032, 0.29326, -0.47888},
+      {125.0, 0.19462, 0.30141, -0.58204},
+      {150.0, 0.19962, 0.30921, -0.70471},
+      {175.0, 0.20525, 0.31647, -0.84901},
+      {200.0, 0.21142, 0.32312, -1.0182},
+      {225.0, 0.21807, 0.32909, -1.2168},
+      {250.0, 0.22511, 0.33439, -1.4512},
+      {275.0, 0.23247, 0.33904, -1.7298},
+      {300.0, 0.24010, 0.34308, -2.0637},
+      {325.0, 0.24702, 0.34655, -2.4681},
+      {350.0, 0.25591, 0.34951, -2.9641},
+      {375.0, 0.26400, 0.35200, -3.5814},
+      {400.0, 0.27218, 0.35407, -4.3633},
+      {425.0, 0.28039, 0.35577, -5.3762},
+      {450.0, 0.28863, 0.35714, -6.7262},
+      {475.0, 0.29685, 0.35823, -8.5955},
+      {500.0, 0.30505, 0.35907, -11.324},
+      {525.0, 0.31320, 0.35968, -15.628},
+      {550.0, 0.32129, 0.36011, -23.325},
+      {575.0, 0.32931, 0.36038, -40.770},
+      {600.0, 0.33724, 0.36051, -116.45},
+  };
+
+  const double denominator = 1.5 - xy[0] + 6.0 * xy[1];
+  if (!std::isfinite(denominator) || std::abs(denominator) < 1e-12) {
+    return 5000.0f;
+  }
+  const double u = 2.0 * xy[0] / denominator;
+  const double v = 3.0 * xy[1] / denominator;
+
+  double lastDistance = 0.0;
+  for (int index = 1; index < 31; ++index) {
+    double du = 1.0;
+    double dv = table[index].slope;
+    const double length = std::sqrt(1.0 + dv * dv);
+    du /= length;
+    dv /= length;
+
+    const double uu = u - table[index].u;
+    const double vv = v - table[index].v;
+    double distance = -uu * dv + vv * du;
+    if (distance <= 0.0 || index == 30) {
+      if (distance > 0.0) {
+        distance = 0.0;
+      }
+      const double dt = -distance;
+      const double fraction = index == 1 ? 0.0 : dt / (lastDistance + dt);
+      const double reciprocal = table[index - 1].reciprocal * fraction +
+                                table[index].reciprocal * (1.0 - fraction);
+      return std::clamp(static_cast<float>(1.0e6 / reciprocal), 1000.0f,
+                        100000.0f);
+    }
+    lastDistance = distance;
+  }
+  return 5000.0f;
+}
+
+static float calculateTemperatureInterpolationWeight(
+    int illuminant1, int illuminant2, const std::array<float, 2> &whiteXy) {
+  const float t1 = illuminantToTemp(illuminant1);
+  const float t2 = illuminantToTemp(illuminant2);
+  if (t1 <= 0.0f || t2 <= 0.0f || std::abs(t1 - t2) < 1.0f) {
+    return 1.0f;
+  }
+
+  const float whiteTemp = xyCoordToTemperature(whiteXy);
+  const float low = std::min(t1, t2);
+  const float high = std::max(t1, t2);
+  float mix;
+  if (whiteTemp <= low) {
+    mix = 1.0f;
+  } else if (whiteTemp >= high) {
+    mix = 0.0f;
+  } else {
+    const float invT = 1.0f / whiteTemp;
+    mix = (invT - (1.0f / high)) / ((1.0f / low) - (1.0f / high));
+  }
+  mix = std::clamp(mix, 0.0f, 1.0f);
+  return t1 > t2 ? 1.0f - mix : mix;
+}
+
+static Matrix3x3 interpolateMatrix(const Matrix3x3 &m1, const Matrix3x3 &m2,
+                                   float weight) {
+  Matrix3x3 result;
+  for (int i = 0; i < 9; ++i) {
+    result.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
+  }
+  return result;
+}
+
+static bool findXyzToCamera(const std::array<float, 2> &whiteXy,
+                            const Matrix3x3 &colorMatrix1, bool hasColor1,
+                            const Matrix3x3 &colorMatrix2, bool hasColor2,
+                            int illuminant1, int illuminant2,
+                            Matrix3x3 &xyzToCamera) {
+  if (hasColor1 && hasColor2) {
+    const float weight =
+        calculateTemperatureInterpolationWeight(illuminant1, illuminant2, whiteXy);
+    xyzToCamera = interpolateMatrix(colorMatrix1, colorMatrix2, weight);
+    return true;
+  }
+  if (hasColor1) {
+    xyzToCamera = colorMatrix1;
+    return true;
+  }
+  if (hasColor2) {
+    xyzToCamera = colorMatrix2;
+    return true;
+  }
+  return false;
+}
+
+static bool neutralToXy(const std::array<float, 3> &neutral,
+                        const Matrix3x3 &colorMatrix1, bool hasColor1,
+                        const Matrix3x3 &colorMatrix2, bool hasColor2,
+                        int illuminant1, int illuminant2,
+                        std::array<float, 2> &whiteXy) {
+  std::array<float, 2> lastXy = {0.3457f, 0.3585f};
+  for (int pass = 0; pass < 30; ++pass) {
+    Matrix3x3 xyzToCamera;
+    if (!findXyzToCamera(lastXy, colorMatrix1, hasColor1, colorMatrix2,
+                         hasColor2, illuminant1, illuminant2, xyzToCamera)) {
+      return false;
+    }
+    const Matrix3x3 cameraToXyz = xyzToCamera.invert();
+    const std::array<float, 3> nextXyz =
+        multiplyMatrixVector(cameraToXyz, neutral);
+    std::array<float, 2> nextXy;
+    if (!xyzToXy(nextXyz, nextXy)) {
+      return false;
+    }
+
+    if (std::abs(nextXy[0] - lastXy[0]) + std::abs(nextXy[1] - lastXy[1]) <
+        1e-7f) {
+      whiteXy = nextXy;
+      return true;
+    }
+    if (pass == 29) {
+      whiteXy = {(lastXy[0] + nextXy[0]) * 0.5f,
+                 (lastXy[1] + nextXy[1]) * 0.5f};
+      return true;
+    }
+    lastXy = nextXy;
+  }
+  whiteXy = lastXy;
+  return true;
+}
+
+static float calculateRatioInterpolationWeight(int illuminant1, int illuminant2,
+                                               const float wb[4]) {
+  const float t1 = illuminantToTemp(illuminant1);
+  const float t2 = illuminantToTemp(illuminant2);
+  const float currentRatio = wb[0] / std::max(wb[2], 1e-4f);
+  constexpr float rWarm = 0.5f;
+  constexpr float rCool = 1.6f;
+  auto getTargetRatio = [&](float temp) {
+    if (temp <= 2856.0f)
+      return rWarm;
+    if (temp >= 6504.0f)
+      return rCool;
+    return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
+  };
+  const float r1 = getTargetRatio(t1);
+  const float r2 = getTargetRatio(t2);
+  if (std::abs(r1 - r2) <= 0.01f) {
+    return 0.5f;
+  }
+  return std::clamp((currentRatio - r2) / (r1 - r2), 0.0f, 1.0f);
+}
+
+static float calculateDngReferenceInterpolationWeight(
+    int illuminant1, int illuminant2, const float wb[4],
+    const Matrix3x3 &colorMatrix1, bool hasColor1,
+    const Matrix3x3 &colorMatrix2, bool hasColor2) {
+  if (illuminant1 == 0 || illuminant2 == 0) {
+    return 0.5f;
+  }
+
+  const float green = std::max(wb[1], 1e-6f);
+  const std::array<float, 3> neutral = {
+      green / std::max(wb[0], 1e-6f),
+      1.0f,
+      green / std::max(wb[2], 1e-6f),
+  };
+  std::array<float, 2> whiteXy;
+  if (neutralToXy(neutral, colorMatrix1, hasColor1, colorMatrix2, hasColor2,
+                  illuminant1, illuminant2, whiteXy)) {
+    return calculateTemperatureInterpolationWeight(illuminant1, illuminant2,
+                                                   whiteXy);
+  }
+  return calculateRatioInterpolationWeight(illuminant1, illuminant2, wb);
+}
+
+static Matrix3x3 diagonalMatrix3x3(const std::array<float, 3> &values) {
+  Matrix3x3 result;
+  result.m[0] = values[0];
+  result.m[4] = values[1];
+  result.m[8] = values[2];
+  return result;
+}
+
+static float maxVectorEntry(const std::array<float, 3> &values) {
+  float result = values[0];
+  result = std::max(result, values[1]);
+  result = std::max(result, values[2]);
+  return std::isfinite(result) ? result : 0.0f;
+}
+
+static float normalizeDngBaselineExposure(const libraw_dng_levels_t &levels) {
+  constexpr float missingBaselineExposure = -999.0f;
+  return std::isfinite(levels.baseline_exposure) &&
+                 levels.baseline_exposure > missingBaselineExposure
+             ? levels.baseline_exposure
+             : 0.0f;
+}
+
+static Matrix3x3 normalizeDngColorMatrix(Matrix3x3 matrix) {
+  static constexpr std::array<float, 3> pcsToXyz = {0.9642957f, 1.0f,
+                                                    0.8251046f};
+  const std::array<float, 3> coord = multiplyMatrixVector(matrix, pcsToXyz);
+  const float maxCoord = maxVectorEntry(coord);
+  if (maxCoord > 0.0f && (maxCoord < 0.99f || maxCoord > 1.01f)) {
+    const float scale = 1.0f / maxCoord;
+    for (float &value : matrix.m) {
+      value *= scale;
+    }
+  }
+  for (float &value : matrix.m) {
+    value = std::round(value * 10000.0f) / 10000.0f;
+  }
+  return matrix;
+}
+
+static Matrix3x3 normalizeDngForwardMatrix(Matrix3x3 matrix) {
+  static constexpr std::array<float, 3> pcsToXyz = {0.9642957f, 1.0f,
+                                                    0.8251046f};
+  for (int row = 0; row < 3; ++row) {
+    const float rowSum = matrix.m[row * 3] + matrix.m[row * 3 + 1] +
+                         matrix.m[row * 3 + 2];
+    const float scale = std::abs(rowSum) > 1e-6f ? pcsToXyz[row] / rowSum : 1.0f;
+    matrix.m[row * 3] *= scale;
+    matrix.m[row * 3 + 1] *= scale;
+    matrix.m[row * 3 + 2] *= scale;
+  }
+  return matrix;
+}
+
+static Matrix3x3 dngMapWhiteMatrix(const std::array<float, 2> &white1,
+                                   const std::array<float, 2> &white2) {
+  Matrix3x3 mb;
+  const float mbValues[9] = {0.8951f,  0.2664f, -0.1614f,
+                             -0.7502f, 1.7135f, 0.0367f,
+                             0.0389f,  -0.0685f, 1.0296f};
+  std::memcpy(mb.m, mbValues, sizeof(mbValues));
+
+  std::array<float, 3> xyz1;
+  std::array<float, 3> xyz2;
+  if (!xyToXyz(white1, xyz1) || !xyToXyz(white2, xyz2)) {
+    return Matrix3x3::identity();
+  }
+  std::array<float, 3> w1 = multiplyMatrixVector(mb, xyz1);
+  std::array<float, 3> w2 = multiplyMatrixVector(mb, xyz2);
+  for (int index = 0; index < 3; ++index) {
+    w1[index] = std::max(w1[index], 0.0f);
+    w2[index] = std::max(w2[index], 0.0f);
+  }
+
+  Matrix3x3 adaptation = diagonalMatrix3x3({
+      std::clamp(w1[0] > 0.0f ? w2[0] / w1[0] : 10.0f, 0.1f, 10.0f),
+      std::clamp(w1[1] > 0.0f ? w2[1] / w1[1] : 10.0f, 0.1f, 10.0f),
+      std::clamp(w1[2] > 0.0f ? w2[2] / w1[2] : 10.0f, 0.1f, 10.0f),
+  });
+  return mb.invert().multiply(adaptation).multiply(mb);
+}
+
+struct DngSdkPreparedColor {
+  float temperature1 = 5000.0f;
+  float temperature2 = 5000.0f;
+  Matrix3x3 colorMatrix1 = Matrix3x3::identity();
+  Matrix3x3 colorMatrix2 = Matrix3x3::identity();
+  Matrix3x3 forwardMatrix1;
+  Matrix3x3 forwardMatrix2;
+  bool hasForward1 = false;
+  bool hasForward2 = false;
+  Matrix3x3 cameraCalibration1 = Matrix3x3::identity();
+  Matrix3x3 cameraCalibration2 = Matrix3x3::identity();
+  std::array<float, 3> analogBalance = {1.0f, 1.0f, 1.0f};
+};
+
+struct DngSdkMatrixForWhite {
+  Matrix3x3 colorMatrix = Matrix3x3::identity();
+  Matrix3x3 forwardMatrix;
+  bool hasForwardMatrix = false;
+  Matrix3x3 cameraCalibration = Matrix3x3::identity();
+};
+
+static Matrix3x3 applyDngCameraCalibration(const Matrix3x3 &colorMatrix,
+                                           const Matrix3x3 &cameraCalibration,
+                                           const Matrix3x3 &analogMatrix) {
+  return analogMatrix.multiply(cameraCalibration).multiply(colorMatrix);
+}
+
+static bool prepareDngSdkColor(const Matrix3x3 &colorMatrix1, bool hasColor1,
+                               const Matrix3x3 &colorMatrix2, bool hasColor2,
+                               const Matrix3x3 &forwardMatrix1,
+                               bool hasForward1,
+                               const Matrix3x3 &forwardMatrix2,
+                               bool hasForward2, int illuminant1,
+                               int illuminant2,
+                               const Matrix3x3 &cameraCalibration1,
+                               const Matrix3x3 &cameraCalibration2,
+                               const std::array<float, 3> &analogBalance,
+                               DngSdkPreparedColor &prepared) {
+  Matrix3x3 matrix1 = colorMatrix1;
+  Matrix3x3 matrix2 = colorMatrix2;
+  int ill1 = illuminant1;
+  int ill2 = illuminant2;
+  bool validColor1 = hasColor1;
+  bool validColor2 = hasColor2;
+  Matrix3x3 calibration1 = cameraCalibration1;
+  Matrix3x3 calibration2 = cameraCalibration2;
+
+  if (!validColor1 && validColor2) {
+    matrix1 = matrix2;
+    calibration1 = calibration2;
+    ill1 = ill2;
+    validColor1 = true;
+    validColor2 = false;
+  }
+  if (!validColor1) {
+    return false;
+  }
+
+  const Matrix3x3 analogMatrix = diagonalMatrix3x3(analogBalance);
+  prepared.analogBalance = analogBalance;
+  prepared.temperature1 = illuminantToTemp(ill1);
+  prepared.temperature2 = illuminantToTemp(ill2);
+  prepared.colorMatrix1 =
+      applyDngCameraCalibration(normalizeDngColorMatrix(matrix1), calibration1,
+                                analogMatrix);
+  prepared.cameraCalibration1 = calibration1;
+  prepared.forwardMatrix1 = normalizeDngForwardMatrix(forwardMatrix1);
+  prepared.hasForward1 = hasForward1;
+
+  if (!validColor2 || prepared.temperature1 <= 0.0f ||
+      prepared.temperature2 <= 0.0f ||
+      std::abs(prepared.temperature1 - prepared.temperature2) < 1e-6f) {
+    prepared.temperature1 = 5000.0f;
+    prepared.temperature2 = 5000.0f;
+    prepared.colorMatrix2 = prepared.colorMatrix1;
+    prepared.forwardMatrix2 = prepared.forwardMatrix1;
+    prepared.hasForward2 = prepared.hasForward1;
+    prepared.cameraCalibration2 = prepared.cameraCalibration1;
+    return true;
+  }
+
+  prepared.colorMatrix2 =
+      applyDngCameraCalibration(normalizeDngColorMatrix(matrix2), calibration2,
+                                analogMatrix);
+  prepared.cameraCalibration2 = calibration2;
+  prepared.forwardMatrix2 = normalizeDngForwardMatrix(forwardMatrix2);
+  prepared.hasForward2 = hasForward2;
+
+  if (prepared.temperature1 > prepared.temperature2) {
+    std::swap(prepared.temperature1, prepared.temperature2);
+    std::swap(prepared.colorMatrix1, prepared.colorMatrix2);
+    std::swap(prepared.forwardMatrix1, prepared.forwardMatrix2);
+    std::swap(prepared.hasForward1, prepared.hasForward2);
+    std::swap(prepared.cameraCalibration1, prepared.cameraCalibration2);
+  }
+  return true;
+}
+
+static DngSdkMatrixForWhite
+dngSdkFindXyzToCamera(const DngSdkPreparedColor &prepared,
+                      const std::array<float, 2> &whiteXy) {
+  const float whiteTemperature = xyCoordToTemperature(whiteXy);
+  float weight;
+  if (whiteTemperature <= prepared.temperature1) {
+    weight = 1.0f;
+  } else if (whiteTemperature >= prepared.temperature2) {
+    weight = 0.0f;
+  } else if (std::abs(prepared.temperature1 - prepared.temperature2) < 1e-6f) {
+    weight = 1.0f;
+  } else {
+    const float invWhite = 1.0f / whiteTemperature;
+    weight = (invWhite - (1.0f / prepared.temperature2)) /
+             ((1.0f / prepared.temperature1) -
+              (1.0f / prepared.temperature2));
+    weight = std::clamp(weight, 0.0f, 1.0f);
+  }
+
+  DngSdkMatrixForWhite result;
+  result.colorMatrix =
+      interpolateMatrix(prepared.colorMatrix1, prepared.colorMatrix2, weight);
+  result.cameraCalibration = interpolateMatrix(prepared.cameraCalibration1,
+                                               prepared.cameraCalibration2,
+                                               weight);
+  if (prepared.hasForward1 && prepared.hasForward2) {
+    result.forwardMatrix =
+        interpolateMatrix(prepared.forwardMatrix1, prepared.forwardMatrix2,
+                          weight);
+    result.hasForwardMatrix = true;
+  } else if (prepared.hasForward1) {
+    result.forwardMatrix = prepared.forwardMatrix1;
+    result.hasForwardMatrix = true;
+  } else if (prepared.hasForward2) {
+    result.forwardMatrix = prepared.forwardMatrix2;
+    result.hasForwardMatrix = true;
+  }
+  return result;
+}
+
+static bool dngSdkNeutralToXy(const DngSdkPreparedColor &prepared,
+                              const std::array<float, 3> &neutral,
+                              std::array<float, 2> &whiteXy) {
+  std::array<float, 2> lastXy = {0.3457f, 0.3585f};
+  for (int pass = 0; pass < 30; ++pass) {
+    const DngSdkMatrixForWhite matrices =
+        dngSdkFindXyzToCamera(prepared, lastXy);
+    const Matrix3x3 cameraToXyz = matrices.colorMatrix.invert();
+    const std::array<float, 3> nextXyz =
+        multiplyMatrixVector(cameraToXyz, neutral);
+    std::array<float, 2> nextXy;
+    if (!xyzToXy(nextXyz, nextXy)) {
+      return false;
+    }
+    if (std::abs(nextXy[0] - lastXy[0]) +
+            std::abs(nextXy[1] - lastXy[1]) <
+        1e-7f) {
+      whiteXy = nextXy;
+      return true;
+    }
+    if (pass == 29) {
+      whiteXy = {(lastXy[0] + nextXy[0]) * 0.5f,
+                 (lastXy[1] + nextXy[1]) * 0.5f};
+      return true;
+    }
+    lastXy = nextXy;
+  }
+  whiteXy = lastXy;
+  return true;
+}
+
+static bool dngSdkCameraToPcsForWhite(const DngSdkPreparedColor &prepared,
+                                      const std::array<float, 2> &whiteXy,
+                                      Matrix3x3 &cameraToPcs) {
+  static constexpr std::array<float, 2> d50Xy = {0.3457f, 0.3585f};
+  static constexpr std::array<float, 3> pcsToXyz = {0.9642957f, 1.0f,
+                                                    0.8251046f};
+  const DngSdkMatrixForWhite matrices =
+      dngSdkFindXyzToCamera(prepared, whiteXy);
+
+  std::array<float, 3> whiteXyz;
+  if (!xyToXyz(whiteXy, whiteXyz)) {
+    return false;
+  }
+  std::array<float, 3> cameraWhite =
+      multiplyMatrixVector(matrices.colorMatrix, whiteXyz);
+  const float whiteScale =
+      1.0f / std::max(maxVectorEntry(cameraWhite), 1e-6f);
+  for (float &value : cameraWhite) {
+    value = std::clamp(value * whiteScale, 0.001f, 1.0f);
+  }
+
+  Matrix3x3 pcsToCamera =
+      matrices.colorMatrix.multiply(dngMapWhiteMatrix(d50Xy, whiteXy));
+  const std::array<float, 3> pcsWhite =
+      multiplyMatrixVector(pcsToCamera, pcsToXyz);
+  const float pcsScale = 1.0f / std::max(maxVectorEntry(pcsWhite), 1e-6f);
+  for (float &value : pcsToCamera.m) {
+    value *= pcsScale;
+  }
+
+  if (matrices.hasForwardMatrix) {
+    const Matrix3x3 individualToReference =
+        diagonalMatrix3x3(prepared.analogBalance)
+            .multiply(matrices.cameraCalibration)
+            .invert();
+    const std::array<float, 3> referenceCameraWhite =
+        multiplyMatrixVector(individualToReference, cameraWhite);
+    if (referenceCameraWhite[0] <= 1e-6f ||
+        referenceCameraWhite[1] <= 1e-6f ||
+        referenceCameraWhite[2] <= 1e-6f) {
+      return false;
+    }
+    const Matrix3x3 inverseWhite = diagonalMatrix3x3({
+        1.0f / referenceCameraWhite[0],
+        1.0f / referenceCameraWhite[1],
+        1.0f / referenceCameraWhite[2],
+    });
+    cameraToPcs =
+        matrices.forwardMatrix.multiply(inverseWhite).multiply(individualToReference);
+    return true;
+  }
+
+  cameraToPcs = pcsToCamera.invert();
+  return true;
+}
+
+static bool computeDngSdkCameraToPcsD50(
+    const Matrix3x3 &colorMatrix1, bool hasColor1,
+    const Matrix3x3 &colorMatrix2, bool hasColor2,
+    const Matrix3x3 &forwardMatrix1, bool hasForward1,
+    const Matrix3x3 &forwardMatrix2, bool hasForward2, int illuminant1,
+    int illuminant2, const float wb[4], const Matrix3x3 &cameraCalibration1,
+    const Matrix3x3 &cameraCalibration2,
+    const std::array<float, 3> &analogBalance, Matrix3x3 &cameraToPcs,
+    std::array<float, 2> *outWhiteXy = nullptr) {
+  DngSdkPreparedColor prepared;
+  if (!prepareDngSdkColor(colorMatrix1, hasColor1, colorMatrix2, hasColor2,
+                          forwardMatrix1, hasForward1, forwardMatrix2,
+                          hasForward2, illuminant1, illuminant2,
+                          cameraCalibration1, cameraCalibration2,
+                          analogBalance, prepared)) {
+    return false;
+  }
+
+  const float greenOdd = wb[3] > 0.0f ? wb[3] : wb[1];
+  const float green = std::max((wb[1] + greenOdd) * 0.5f, 1e-6f);
+  const std::array<float, 3> neutral = {
+      green / std::max(wb[0], 1e-6f),
+      1.0f,
+      green / std::max(wb[2], 1e-6f),
+  };
+  std::array<float, 2> whiteXy;
+  if (!dngSdkNeutralToXy(prepared, neutral, whiteXy)) {
+    return false;
+  }
+  if (outWhiteXy) {
+    *outWhiteXy = whiteXy;
+  }
+  return dngSdkCameraToPcsForWhite(prepared, whiteXy, cameraToPcs);
+}
+
+static bool computeWbFromDngAsShotWhiteXY(const LibRaw &rawProcessor,
+                                          const DngRawTagInfo &rawTags,
+                                          float outWb[4]) {
+  if (!rawTags.hasAsShotWhiteXY) {
+    return false;
+  }
+
+  const std::array<float, 2> whiteXy = {
+      rawTags.asShotWhiteXY[0],
+      rawTags.asShotWhiteXY[1],
+  };
+  std::array<float, 3> whiteXyz;
+  if (!xyToXyz(whiteXy, whiteXyz)) {
+    return false;
+  }
+
+  Matrix3x3 colorMatrix1;
+  Matrix3x3 colorMatrix2;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      colorMatrix1.m[i * 3 + j] =
+          rawProcessor.imgdata.color.dng_color[0].colormatrix[i][j];
+      colorMatrix2.m[i * 3 + j] =
+          rawProcessor.imgdata.color.dng_color[1].colormatrix[i][j];
+    }
+  }
+
+  Matrix3x3 xyzToCamera;
+  const bool hasColor1 = hasMatrixSignal(colorMatrix1);
+  const bool hasColor2 = hasMatrixSignal(colorMatrix2);
+  if (!findXyzToCamera(
+          whiteXy, colorMatrix1, hasColor1, colorMatrix2, hasColor2,
+          rawProcessor.imgdata.color.dng_color[0].illuminant,
+          rawProcessor.imgdata.color.dng_color[1].illuminant, xyzToCamera)) {
+    return false;
+  }
+
+  const std::array<float, 3> cameraWhite =
+      multiplyMatrixVector(xyzToCamera, whiteXyz);
+  if (cameraWhite[0] <= 1e-6f || cameraWhite[1] <= 1e-6f ||
+      cameraWhite[2] <= 1e-6f || !std::isfinite(cameraWhite[0]) ||
+      !std::isfinite(cameraWhite[1]) || !std::isfinite(cameraWhite[2])) {
+    return false;
+  }
+
+  outWb[0] = 1.0f / cameraWhite[0];
+  outWb[1] = 1.0f / cameraWhite[1];
+  outWb[2] = 1.0f / cameraWhite[2];
+  outWb[3] = outWb[1];
+  const float green = outWb[1] > 0.0f ? outWb[1] : 1.0f;
+  for (int i = 0; i < 4; ++i) {
+    outWb[i] /= green;
+  }
+  return std::isfinite(outWb[0]) && std::isfinite(outWb[1]) &&
+         std::isfinite(outWb[2]) && std::isfinite(outWb[3]);
+}
+
 static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
                                       float xb, float yb, float xw, float yw) {
 
@@ -579,16 +1712,16 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   float sG = invS.m[3] * Xw + invS.m[4] * Yw + invS.m[5] * Zw;
   float sB = invS.m[6] * Xw + invS.m[7] * Yw + invS.m[8] * Zw;
 
-  Matrix3x3 gamutToXYZD65;
-  gamutToXYZD65.m[0] = mS.m[0] * sR;
-  gamutToXYZD65.m[1] = mS.m[1] * sG;
-  gamutToXYZD65.m[2] = mS.m[2] * sB;
-  gamutToXYZD65.m[3] = mS.m[3] * sR;
-  gamutToXYZD65.m[4] = mS.m[4] * sG;
-  gamutToXYZD65.m[5] = mS.m[5] * sB;
-  gamutToXYZD65.m[6] = mS.m[6] * sR;
-  gamutToXYZD65.m[7] = mS.m[7] * sG;
-  gamutToXYZD65.m[8] = mS.m[8] * sB;
+  Matrix3x3 gamutToXYZNative;
+  gamutToXYZNative.m[0] = mS.m[0] * sR;
+  gamutToXYZNative.m[1] = mS.m[1] * sG;
+  gamutToXYZNative.m[2] = mS.m[2] * sB;
+  gamutToXYZNative.m[3] = mS.m[3] * sR;
+  gamutToXYZNative.m[4] = mS.m[4] * sG;
+  gamutToXYZNative.m[5] = mS.m[5] * sB;
+  gamutToXYZNative.m[6] = mS.m[6] * sR;
+  gamutToXYZNative.m[7] = mS.m[7] * sG;
+  gamutToXYZNative.m[8] = mS.m[8] * sB;
 
   float BRADFORD_D65_TO_D50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
                                   0.0295424f,  0.9904844f, -0.0170491f,
@@ -597,74 +1730,34 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
   for (int i = 0; i < 9; i++)
     bMat.m[i] = BRADFORD_D65_TO_D50[i];
 
-  Matrix3x3 gamutToXYZD50 = bMat.multiply(gamutToXYZD65);
+  const bool isD50WhitePoint = std::abs(xw - 0.3457f) < 0.002f &&
+                               std::abs(yw - 0.3585f) < 0.002f;
+  Matrix3x3 gamutToXYZD50 =
+      isD50WhitePoint ? gamutToXYZNative : bMat.multiply(gamutToXYZNative);
   return gamutToXYZD50.invert();
-}
-
-static inline float hlgToLinear(float value) {
-  constexpr float kHlgA = 0.17883277f;
-  constexpr float kHlgB = 0.28466892f;
-  constexpr float kHlgC = 0.55991073f;
-  constexpr float kHdrReferenceScale = 6.0f;
-
-  const float v = std::max(0.0f, value);
-  const float linear = (v <= 0.5f)
-                           ? (v * v) / 3.0f
-                           : static_cast<float>(
-                                 (std::exp((v - kHlgC) / kHlgA) + kHlgB) /
-                                 12.0f);
-  return linear * kHdrReferenceScale;
-}
-
-static void copyJavaFloatArray(JNIEnv *env, jfloatArray src, float *dst,
-                               size_t count, float defaultValue) {
-  for (size_t i = 0; i < count; ++i) {
-    dst[i] = defaultValue;
-  }
-
-  if (!src) {
-    return;
-  }
-
-  const jsize length = std::min<jsize>(env->GetArrayLength(src),
-                                       static_cast<jsize>(count));
-  if (length <= 0) {
-    return;
-  }
-
-  jfloat *elements = env->GetFloatArrayElements(src, nullptr);
-  if (!elements) {
-    return;
-  }
-
-  std::memcpy(dst, elements, static_cast<size_t>(length) * sizeof(float));
-  env->ReleaseFloatArrayElements(src, elements, JNI_ABORT);
 }
 
 static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
   switch (cfaPattern) {
   case 0:
+  case 4:
+  case 8:
     return LIBRAW_OPENBAYER_RGGB;
   case 1:
+  case 5:
+  case 9:
     return LIBRAW_OPENBAYER_GRBG;
   case 2:
+  case 6:
+  case 10:
     return LIBRAW_OPENBAYER_GBRG;
   case 3:
+  case 7:
+  case 11:
     return LIBRAW_OPENBAYER_BGGR;
   default:
     return 0;
   }
-}
-
-static void mapProjectRggbToLibRawRgbg(const float src[4], float dst[4]) {
-  dst[0] = src[0];
-  dst[1] = src[1];
-  dst[2] = src[3];
-  dst[3] = src[2];
-}
-
-static int roundNonNegative(float value) {
-  return static_cast<int>(std::lround(std::max(0.0f, value)));
 }
 
 extern "C" {
@@ -749,102 +1842,29 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_clearStagedFramesNative(
 JNIEXPORT void JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_processStackNative(
     JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
-    jint rotation, jint targetWR, jint targetHR, jstring outputPath) {
+    jint rotation, jint targetWR, jint targetHR) {
 
   auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker)
+  if (!stacker || !outBitmap)
     return;
-
-  const char *path = nullptr;
-  if (outputPath) {
-    path = env->GetStringUTFChars(outputPath, nullptr);
-  }
 
   AndroidBitmapInfo info;
   void *bitmapPixels = nullptr;
-  if (outBitmap &&
-      (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
-       AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0)) {
-    if (path)
-      env->ReleaseStringUTFChars(outputPath, path);
+  if (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
+      AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0) {
     return;
   }
 
   stacker->writeResult(static_cast<uint32_t *>(bitmapPixels), info.width,
-                       info.height, rotation, targetWR, targetHR, path);
+                       info.height, rotation, targetWR, targetHR);
 
-  if (outBitmap) {
-    AndroidBitmap_unlockPixels(env, outBitmap);
-  }
-  if (path) {
-    env->ReleaseStringUTFChars(outputPath, path);
-  }
+  AndroidBitmap_unlockPixels(env, outBitmap);
 }
 
 JNIEXPORT void JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
     JNIEnv *env, jobject /* this */, jlong stackerPtr) {
   auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  delete stacker;
-}
-
-/**
- * Vulkan Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  auto *stacker = new VulkanImageStacker(width, height, enableSuperRes);
-  return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addVulkanFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject hardwareBuffer) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
-  if (!stacker || !hardwareBuffer)
-    return JNI_FALSE;
-
-  AHardwareBuffer *buffer =
-      AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
-  if (!buffer)
-    return JNI_FALSE;
-
-  bool success = stacker->addFrame(buffer);
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processVulkanStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
-    jint rotation) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-
-  AndroidBitmapInfo info;
-  void *bitmapPixels = nullptr;
-  if (outBitmap &&
-      (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
-       AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0)) {
-    return JNI_FALSE;
-  }
-
-  bool success =
-      stacker->processStack(static_cast<uint32_t *>(bitmapPixels), info.width,
-                            info.height, info.stride, rotation);
-
-  if (outBitmap) {
-    AndroidBitmap_unlockPixels(env, outBitmap);
-  }
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanStackerNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<VulkanImageStacker *>(stackerPtr);
   delete stacker;
 }
 
@@ -929,452 +1949,11 @@ Java_com_hinnka_mycamera_processor_MultiFrameStacker_processRawStackWithBufferNa
   }
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_demosaicStackedRawWithLibRawNative(
-    JNIEnv *env, jobject /* this */, jobject fusedBayerBuffer, jint width,
-    jint height, jint cfaPattern, jfloatArray blackLevelArray, jint whiteLevel,
-    jfloatArray wbGainsArray, jobject outputBuffer) {
-  if (!fusedBayerBuffer || !outputBuffer || width <= 0 || height <= 0) {
-    LOGE("demosaicStackedRawWithLibRawNative: invalid arguments");
-    return JNI_FALSE;
-  }
-
-  auto *fusedBayerData = static_cast<unsigned char *>(
-      env->GetDirectBufferAddress(fusedBayerBuffer));
-  auto *outputData =
-      static_cast<unsigned char *>(env->GetDirectBufferAddress(outputBuffer));
-  if (!fusedBayerData || !outputData) {
-    LOGE("demosaicStackedRawWithLibRawNative: failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  const size_t inputBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) *
-      sizeof(uint16_t);
-  const size_t outputBytes =
-      static_cast<size_t>(width) * static_cast<size_t>(height) * 3 *
-      sizeof(uint16_t);
-  const jlong inputCapacity = env->GetDirectBufferCapacity(fusedBayerBuffer);
-  const jlong outputCapacity = env->GetDirectBufferCapacity(outputBuffer);
-  if (inputCapacity < static_cast<jlong>(inputBytes) ||
-      outputCapacity < static_cast<jlong>(outputBytes)) {
-    LOGE("demosaicStackedRawWithLibRawNative: buffer too small in=%ld/%ld out=%ld/%ld",
-         static_cast<long>(inputCapacity), static_cast<long>(inputBytes),
-         static_cast<long>(outputCapacity), static_cast<long>(outputBytes));
-    return JNI_FALSE;
-  }
-
-  const unsigned char libRawPattern = mapCfaPatternToLibRaw(cfaPattern);
-  if (libRawPattern == 0) {
-    LOGE("demosaicStackedRawWithLibRawNative: unsupported CFA pattern %d",
-         cfaPattern);
-    return JNI_FALSE;
-  }
-
-  float projectBlackLevel[4];
-  float projectWbGains[4];
-  float libRawWbGains[4];
-  int libRawBlackLevels[4];
-  int libRawBlackResiduals[4];
-  copyJavaFloatArray(env, blackLevelArray, projectBlackLevel, 4, 0.0f);
-  copyJavaFloatArray(env, wbGainsArray, projectWbGains, 4, 1.0f);
-  mapProjectRggbToLibRawRgbg(projectWbGains, libRawWbGains);
-  for (int i = 0; i < 4; ++i) {
-    if (libRawWbGains[i] <= 0.0f) {
-      libRawWbGains[i] = 1.0f;
-    }
-  }
-
-  float projectBlackLevelOrdered[4];
-  mapProjectRggbToLibRawRgbg(projectBlackLevel, projectBlackLevelOrdered);
-  for (int i = 0; i < 4; ++i) {
-    libRawBlackLevels[i] = roundNonNegative(projectBlackLevelOrdered[i]);
-  }
-
-  const int commonBlack =
-      *std::min_element(std::begin(libRawBlackLevels), std::end(libRawBlackLevels));
-  for (int i = 0; i < 4; ++i) {
-    libRawBlackResiduals[i] = libRawBlackLevels[i] - commonBlack;
-  }
-
-  const int effectiveWhiteLevel =
-      whiteLevel > commonBlack ? whiteLevel : 65535;
-
-  LibRaw rawProcessor;
-  int ret = rawProcessor.open_bayer(
-      fusedBayerData, static_cast<unsigned>(inputBytes),
-      static_cast<ushort>(width), static_cast<ushort>(height), 0, 0, 0, 0, 0,
-      libRawPattern, 0, 0, static_cast<unsigned>(commonBlack));
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: open_bayer failed ret=%d err=%s",
-         ret, libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  rawProcessor.imgdata.params.output_bps = 16;
-  rawProcessor.imgdata.params.gamm[0] = 1.0;
-  rawProcessor.imgdata.params.gamm[1] = 1.0;
-  rawProcessor.imgdata.params.no_auto_bright = 1;
-  rawProcessor.imgdata.params.use_camera_wb = 0;
-  rawProcessor.imgdata.params.use_auto_wb = 0;
-  rawProcessor.imgdata.params.output_color = 0;
-  rawProcessor.imgdata.params.user_qual = 14;
-  rawProcessor.imgdata.params.fbdd_noiserd = 0;
-  rawProcessor.imgdata.params.threshold = 0;
-  rawProcessor.imgdata.params.med_passes = 0;
-  rawProcessor.imgdata.params.user_black = commonBlack;
-  rawProcessor.imgdata.params.user_sat = effectiveWhiteLevel;
-  for (int i = 0; i < 4; ++i) {
-    rawProcessor.imgdata.params.user_mul[i] = libRawWbGains[i];
-    rawProcessor.imgdata.params.user_cblack[i] = libRawBlackResiduals[i];
-  }
-
-  ret = rawProcessor.unpack();
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: unpack failed ret=%d err=%s", ret,
-         libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  ret = rawProcessor.dcraw_process();
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: dcraw_process failed ret=%d err=%s",
-         ret, libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  libraw_processed_image_t *image = rawProcessor.dcraw_make_mem_image(&ret);
-  if (!image || ret != LIBRAW_SUCCESS) {
-    LOGE("demosaicStackedRawWithLibRawNative: dcraw_make_mem_image failed ret=%d err=%s",
-         ret, libraw_strerror(ret));
-    return JNI_FALSE;
-  }
-
-  const bool validImage = image->type == LIBRAW_IMAGE_BITMAP &&
-                          image->colors == 3 && image->bits == 16 &&
-                          image->width == width && image->height == height &&
-                          image->data_size >= outputBytes;
-  if (!validImage) {
-    LOGE("demosaicStackedRawWithLibRawNative: unexpected image type=%d colors=%d bits=%d size=%u %dx%d",
-         image->type, image->colors, image->bits, image->data_size,
-         image->width, image->height);
-    LibRaw::dcraw_clear_mem(image);
-    return JNI_FALSE;
-  }
-
-  std::memcpy(outputData, image->data, outputBytes);
-  LibRaw::dcraw_clear_mem(image);
-  return JNI_TRUE;
-}
-
-/**
- * Vulkan Raw Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createVulkanRawStackerNative(
-    JNIEnv *env, jobject, jint width, jint height, jboolean enableSuperRes,
-    jfloat superResScale,
-    jfloatArray blackLevel, jint whiteLevel, jfloatArray wbGains,
-    jfloatArray noiseModel, jfloatArray lensShadingMap, jint lscWidth,
-    jint lscHeight) {
-
-  float bl[4] = {0, 0, 0, 0};
-  if (blackLevel) {
-    jfloat *body = env->GetFloatArrayElements(blackLevel, nullptr);
-    memcpy(bl, body, 4 * sizeof(float));
-    env->ReleaseFloatArrayElements(blackLevel, body, 0);
-  }
-
-  float wb[4] = {1, 1, 1, 1};
-  if (wbGains) {
-    jfloat *body = env->GetFloatArrayElements(wbGains, nullptr);
-    memcpy(wb, body, 4 * sizeof(float));
-    env->ReleaseFloatArrayElements(wbGains, body, 0);
-  }
-
-  float noise[2] = {0, 0};
-  if (noiseModel) {
-    jfloat *body = env->GetFloatArrayElements(noiseModel, nullptr);
-    memcpy(noise, body, 2 * sizeof(float));
-    env->ReleaseFloatArrayElements(noiseModel, body, 0);
-  }
-
-  float *lsc = nullptr;
-  if (lensShadingMap && lscWidth > 0 && lscHeight > 0) {
-    lsc = env->GetFloatArrayElements(lensShadingMap, nullptr);
-  }
-
-  auto *stacker = new VulkanRawStacker(width, height, enableSuperRes,
-                                       superResScale, bl,
-                                       (float)whiteLevel, wb, noise, lsc,
-                                       (uint32_t)lscWidth, (uint32_t)lscHeight);
-
-  if (lsc) {
-    env->ReleaseFloatArrayElements(lensShadingMap, lsc, 0);
-  }
-
-  return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addVulkanRawFrameNative(
-    JNIEnv *env, jobject, jlong stackerPtr, jobject rawData, jint rowStride,
-    jint cfaPattern) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-
-  auto *data = static_cast<uint16_t *>(env->GetDirectBufferAddress(rawData));
-  if (!data) {
-    LOGE("addVulkanRawFrameNative: Failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  bool success = stacker->addFrame(data, rowStride, cfaPattern);
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processVulkanRawStackNative(
-    JNIEnv *env, jobject, jlong stackerPtr, jobject outputBuffer) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  if (!stacker)
-    return JNI_FALSE;
-
-  auto *outData =
-      static_cast<uint16_t *>(env->GetDirectBufferAddress(outputBuffer));
-  if (!outData) {
-    LOGE("processVulkanRawStackNative: Failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  jlong capacity = env->GetDirectBufferCapacity(outputBuffer);
-  bool success = stacker->processStack(outData, (size_t)capacity);
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseVulkanRawStackerNative(
-    JNIEnv *env, jobject, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<VulkanRawStacker *>(stackerPtr);
-  delete stacker;
-}
-
 JNIEXPORT void JNICALL
 Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseRawStackerNative(
     JNIEnv *env, jobject /* this */, jlong stackerPtr) {
   auto *stacker = reinterpret_cast<RawStacker *>(stackerPtr);
   delete stacker;
-}
-
-/**
- * 处理 YUV_420_888 或 P010 图像：旋转、裁切、转换为 RGBA16
- */
-/**
- * 处理 YUV_420_888 或 P010 图像：旋转、裁切，并直接保存为 FP16 格式的 JPEG XL
- */
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_utils_YuvProcessor_processAndSaveYuv(
-    JNIEnv *env, jobject /* this */, jobject yBuffer, jobject uBuffer,
-    jobject vBuffer, jint width, jint height, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint rotation, jint targetWR, jint targetHR,
-    jint format, jstring outputPath, jstring hdrSidecarPath, jobject outBitmap8) {
-  const char *path = env->GetStringUTFChars(outputPath, nullptr);
-  const char *hdrPath =
-      hdrSidecarPath ? env->GetStringUTFChars(hdrSidecarPath, nullptr) : nullptr;
-
-  // 1. 锁定 Bitmap 地址 (8-bit) 用于预览
-  void *bitmapPixels;
-  if (AndroidBitmap_lockPixels(env, outBitmap8, &bitmapPixels) < 0) {
-    env->ReleaseStringUTFChars(outputPath, path);
-    if (hdrPath)
-      env->ReleaseStringUTFChars(hdrSidecarPath, hdrPath);
-    return JNI_FALSE;
-  }
-  auto *ptr8 = static_cast<uint32_t *>(bitmapPixels);
-  AndroidBitmapInfo info;
-  AndroidBitmap_getInfo(env, outBitmap8, &info);
-
-  // 获取 buffer 指针
-  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
-  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
-  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
-
-  if (yData == nullptr || uData == nullptr || vData == nullptr) {
-    LOGE("Failed to get buffer addresses");
-    AndroidBitmap_unlockPixels(env, outBitmap8);
-    env->ReleaseStringUTFChars(outputPath, path);
-    if (hdrPath)
-      env->ReleaseStringUTFChars(hdrSidecarPath, hdrPath);
-    return JNI_FALSE;
-  }
-
-  bool isP010 = (format == 0x36);
-  int rotatedWidth = (rotation == 90 || rotation == 270) ? height : width;
-  int rotatedHeight = (rotation == 90 || rotation == 270) ? width : height;
-
-  // === 裁切计算 ===
-  bool currentIsLandscape = (rotatedWidth >= rotatedHeight);
-  int tw, th;
-  if (currentIsLandscape) {
-    tw = (targetWR >= targetHR) ? targetWR : targetHR;
-    th = (targetWR >= targetHR) ? targetHR : targetWR;
-  } else {
-    tw = (targetWR >= targetHR) ? targetHR : targetWR;
-    th = (targetWR >= targetHR) ? targetWR : targetHR;
-  }
-
-  int finalWidth, finalHeight;
-  if ((long long)rotatedWidth * th > (long long)tw * rotatedHeight) {
-    finalHeight = (rotatedHeight / 2) * 2;
-    finalWidth = (int)(((long long)finalHeight * tw / th) / 2) * 2;
-  } else {
-    finalWidth = (rotatedWidth / 2) * 2;
-    finalHeight = (int)(((long long)finalWidth * th / tw) / 2) * 2;
-  }
-  finalWidth = std::min(finalWidth, (rotatedWidth / 2) * 2);
-  finalHeight = std::min(finalHeight, (rotatedHeight / 2) * 2);
-  if (finalWidth > (int)info.width || finalHeight > (int)info.height) {
-    LOGI("processAndSaveYuv clamping output from %dx%d to bitmap bounds %ux%u",
-         finalWidth, finalHeight, info.width, info.height);
-  }
-  finalWidth = std::min(finalWidth, (int)info.width);
-  finalHeight = std::min(finalHeight, (int)info.height);
-
-  int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
-  int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
-
-  // === 转换并存储为 RGB ===
-  std::vector<uint16_t> fp16Pixels(finalWidth * finalHeight * 4);
-  std::vector<uint16_t> hdrReferencePixels;
-  if (isP010 && hdrPath) {
-    hdrReferencePixels.resize(finalWidth * finalHeight * 4);
-  }
-
-#pragma omp parallel for num_threads(4)
-  for (int y = 0; y < finalHeight; y++) {
-    for (int x = 0; x < finalWidth; x++) {
-      int rx = x + cropX;
-      int ry = y + cropY;
-
-      int sx, sy;
-      if (rotation == 90) {
-        sx = ry;
-        sy = height - 1 - rx;
-      } else if (rotation == 180) {
-        sx = width - 1 - rx;
-        sy = height - 1 - ry;
-      } else if (rotation == 270) {
-        sx = width - 1 - ry;
-        sy = rx;
-      } else { // 0
-        sx = rx;
-        sy = ry;
-      }
-
-      float Y_val, U_val, V_val;
-      if (isP010) {
-        Y_val = (float)readValue<uint16_t>(yData + sy * yRowStride + sx * 2,
-                                           false) /
-                65535.0f;
-        int uv_sx = sx / 2;
-        int uv_sy = sy / 2;
-        U_val =
-            (static_cast<float>(readValue<uint16_t>(
-                 uData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false)) -
-             32768.0f) /
-            65535.0f;
-        V_val =
-            (static_cast<float>(readValue<uint16_t>(
-                 vData + uv_sy * uvRowStride + uv_sx * uvPixelStride, false)) -
-             32768.0f) /
-            65535.0f;
-      } else {
-        Y_val = (float)yData[sy * yRowStride + sx] / 255.0f;
-        int uv_sx = sx / 2;
-        int uv_sy = sy / 2;
-        U_val = (static_cast<float>(
-                     uData[uv_sy * uvRowStride + uv_sx * uvPixelStride]) -
-                 128.0f) /
-                255.0f;
-        V_val = (static_cast<float>(
-                     vData[uv_sy * uvRowStride + uv_sx * uvPixelStride]) -
-                 128.0f) /
-                255.0f;
-      }
-
-      float hdrRInput, hdrGInput, hdrBInput;
-      if (isP010) {
-        hdrRInput = Y_val + 1.4746f * V_val;
-        hdrGInput = Y_val - 0.16455f * U_val - 0.57135f * V_val;
-        hdrBInput = Y_val + 1.8814f * U_val;
-      } else {
-        hdrRInput = Y_val + 1.402f * V_val;
-        hdrGInput = Y_val - 0.344136f * U_val - 0.714136f * V_val;
-        hdrBInput = Y_val + 1.772f * U_val;
-      }
-
-      const float R = std::max(0.0f, std::min(1.0f, hdrRInput));
-      const float G = std::max(0.0f, std::min(1.0f, hdrGInput));
-      const float B = std::max(0.0f, std::min(1.0f, hdrBInput));
-
-      int idx = y * finalWidth + x;
-
-      if (!hdrReferencePixels.empty()) {
-        const float hdrR = hlgToLinear(hdrRInput);
-        const float hdrG = hlgToLinear(hdrGInput);
-        const float hdrB = hlgToLinear(hdrBInput);
-        const int hdrIdx = idx * 4;
-        hdrReferencePixels[hdrIdx + 0] = floatToHalf(hdrR);
-        hdrReferencePixels[hdrIdx + 1] = floatToHalf(hdrG);
-        hdrReferencePixels[hdrIdx + 2] = floatToHalf(hdrB);
-        hdrReferencePixels[hdrIdx + 3] = floatToHalf(1.0f);
-      }
-
-      // --- 输出 A: UINT16 (保存到本地) ---
-      int idx16 = idx * 4;
-      fp16Pixels[idx16 + 0] = static_cast<uint16_t>(R * 65535.0f);
-      fp16Pixels[idx16 + 1] = static_cast<uint16_t>(G * 65535.0f);
-      fp16Pixels[idx16 + 2] = static_cast<uint16_t>(B * 65535.0f);
-      fp16Pixels[idx16 + 3] = 65535; // Alpha
-
-      // --- 输出 B: 8-bit (预览) ---
-      uint32_t r8 = static_cast<uint32_t>(R * 255.0f);
-      uint32_t g8 = static_cast<uint32_t>(G * 255.0f);
-      uint32_t b8 = static_cast<uint32_t>(B * 255.0f);
-      uint32_t a8 = 255;
-      ptr8[idx] = (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
-    }
-  }
-
-  AndroidBitmap_unlockPixels(env, outBitmap8);
-
-  // 保存为 JXL
-  bool success = saveJxl(
-      fp16Pixels.data(), finalWidth, finalHeight, JXL_TYPE_UINT16, path,
-      isP010 ? JxlEncodingProfile::BT2100_HLG : JxlEncodingProfile::ORIGINAL);
-
-  if (success && isP010 && hdrPath) {
-    std::ofstream hdrOut(hdrPath, std::ios::binary);
-    if (!hdrOut) {
-      LOGE("Failed to open HDR sidecar path: %s", hdrPath);
-      success = false;
-    } else {
-      hdrOut.write(reinterpret_cast<const char *>(hdrReferencePixels.data()),
-                   static_cast<std::streamsize>(hdrReferencePixels.size() *
-                                                sizeof(uint16_t)));
-      hdrOut.close();
-      if (!hdrOut.good()) {
-        LOGE("Failed to write HDR sidecar: %s", hdrPath);
-        success = false;
-      }
-    }
-  }
-
-  env->ReleaseStringUTFChars(outputPath, path);
-  if (hdrPath)
-    env->ReleaseStringUTFChars(hdrSidecarPath, hdrPath);
-  return success ? JNI_TRUE : JNI_FALSE;
 }
 
 /**
@@ -1654,73 +2233,13 @@ Java_com_hinnka_mycamera_utils_YuvProcessor_processToBitmap(
   AndroidBitmap_unlockPixels(env, outBitmap8);
 }
 
-/**
- * 从文件中读取并解压缩 RGBA 数据 (FP16)
- */
-JNIEXPORT jobject JNICALL
-Java_com_hinnka_mycamera_utils_YuvProcessor_loadCompressedArgb(
-    JNIEnv *env, jobject /* this */, jstring inputPath) {
-
-  const char *path = env->GetStringUTFChars(inputPath, nullptr);
-  int32_t width, height;
-  size_t dataSize = 0;
-
-  // 使用 JXL_TYPE_FLOAT16 读取数据，以便于 OpenGL GLES 3.0 处理
-  void *pixels = loadJxlRaw(path, width, height, JXL_TYPE_FLOAT16, dataSize);
-  env->ReleaseStringUTFChars(inputPath, path);
-
-  if (pixels == nullptr) {
-    return nullptr;
-  }
-
-  // 直接返回像素数据，不再添加 4 字节宽高头，以保持与旧版本兼容
-  return env->NewDirectByteBuffer(pixels, dataSize);
-}
-
-/**
- * 将 RGBA 数据 (FP16) 压缩并保存到文件
- * 注意：输入 buffer 应该直接包含像素数据，不含宽高头
- */
-JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_utils_YuvProcessor_saveCompressedArgb(
-    JNIEnv *env, jobject /* this */, jobject buffer, jint width, jint height,
-    jstring outputPath) {
-
-  if (buffer == nullptr || outputPath == nullptr)
-    return JNI_FALSE;
-
-  void *pixels = env->GetDirectBufferAddress(buffer);
-  if (pixels == nullptr) {
-    LOGE("saveCompressedArgb: Failed to get buffer address");
-    return JNI_FALSE;
-  }
-
-  const char *path = env->GetStringUTFChars(outputPath, nullptr);
-  bool success = saveJxl(pixels, width, height, JXL_TYPE_FLOAT16, path);
-  env->ReleaseStringUTFChars(outputPath, path);
-
-  return success ? JNI_TRUE : JNI_FALSE;
-}
-
-/**
- * 释放内存
- */
-JNIEXPORT void JNICALL Java_com_hinnka_mycamera_utils_YuvProcessor_free(
-    JNIEnv *env, jobject /* this */, jobject buffer) {
-  if (buffer == nullptr)
-    return;
-  void *nativePtr = env->GetDirectBufferAddress(buffer);
-  if (nativePtr != nullptr) {
-    free(nativePtr);
-  }
-}
-
 struct ExifData {
   int iso = 0;
   float noiseProfile[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   bool hasNoiseProfile = false;
   int subjectLocation[4] = {0, 0, 0, 0};
   int subjectLocationLen = 0;
+  int rotation = 0;
 };
 
 static int sget2(unsigned int ord, LibRaw_abstract_datastream *stream) {
@@ -1747,6 +2266,539 @@ static int sget4(unsigned int ord, LibRaw_abstract_datastream *stream) {
     return (s[3] << 24) | (s[2] << 16) | (s[1] << 8) | s[0];
 }
 
+struct DngCfaInfo {
+  int repeatRows = 0;
+  int repeatCols = 0;
+  std::array<unsigned char, 64> pattern{};
+  int patternLen = 0;
+  std::array<unsigned char, 4> planeColor{{0, 1, 2, 3}};
+  int planeColorLen = 0;
+};
+
+static uint16_t tiffReadU16(const unsigned char *data, bool littleEndian) {
+  if (littleEndian)
+    return static_cast<uint16_t>(data[0] | (data[1] << 8));
+  return static_cast<uint16_t>((data[0] << 8) | data[1]);
+}
+
+static uint32_t tiffReadU32(const unsigned char *data, bool littleEndian) {
+  if (littleEndian) {
+    return static_cast<uint32_t>(data[0]) |
+           (static_cast<uint32_t>(data[1]) << 8) |
+           (static_cast<uint32_t>(data[2]) << 16) |
+           (static_cast<uint32_t>(data[3]) << 24);
+  }
+  return (static_cast<uint32_t>(data[0]) << 24) |
+         (static_cast<uint32_t>(data[1]) << 16) |
+         (static_cast<uint32_t>(data[2]) << 8) |
+         static_cast<uint32_t>(data[3]);
+}
+
+static uint64_t tiffReadU64(const unsigned char *data, bool littleEndian) {
+  uint64_t value = 0;
+  if (littleEndian) {
+    for (int i = 7; i >= 0; --i) {
+      value = (value << 8) | data[i];
+    }
+  } else {
+    for (int i = 0; i < 8; ++i) {
+      value = (value << 8) | data[i];
+    }
+  }
+  return value;
+}
+
+static int16_t tiffReadI16(const unsigned char *data, bool littleEndian) {
+  return static_cast<int16_t>(tiffReadU16(data, littleEndian));
+}
+
+static int32_t tiffReadI32(const unsigned char *data, bool littleEndian) {
+  return static_cast<int32_t>(tiffReadU32(data, littleEndian));
+}
+
+static bool tiffReadAt(std::ifstream &file, uint32_t offset, unsigned char *dst,
+                       size_t size) {
+  file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+  if (!file.good())
+    return false;
+  file.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(size));
+  return file.gcount() == static_cast<std::streamsize>(size);
+}
+
+static int tiffTypeSize(uint16_t type) {
+  switch (type) {
+  case 1:  // BYTE
+  case 2:  // ASCII
+  case 6:  // SBYTE
+  case 7:  // UNDEFINED
+    return 1;
+  case 3:  // SHORT
+  case 8:  // SSHORT
+    return 2;
+  case 4:  // LONG
+  case 9:  // SLONG
+  case 11: // FLOAT
+    return 4;
+  case 5:  // RATIONAL
+  case 10: // SRATIONAL
+  case 12: // DOUBLE
+    return 8;
+  default:
+    return 0;
+  }
+}
+
+static bool tiffEntryData(std::ifstream &file, const unsigned char entry[12],
+                          bool littleEndian, uint16_t type, uint32_t count,
+                          std::vector<unsigned char> &out) {
+  const int typeSize = tiffTypeSize(type);
+  if (typeSize <= 0 || count == 0)
+    return false;
+  const uint64_t byteCount = static_cast<uint64_t>(typeSize) * count;
+  if (byteCount > 1024 * 1024)
+    return false;
+
+  out.assign(static_cast<size_t>(byteCount), 0);
+  if (byteCount <= 4) {
+    memcpy(out.data(), entry + 8, static_cast<size_t>(byteCount));
+    return true;
+  }
+
+  const uint32_t offset = tiffReadU32(entry + 8, littleEndian);
+  return tiffReadAt(file, offset, out.data(), out.size());
+}
+
+static int tiffReadValueAt(const std::vector<unsigned char> &data, uint16_t type,
+                           uint32_t index, bool littleEndian) {
+  const int typeSize = tiffTypeSize(type);
+  const size_t offset = static_cast<size_t>(index) * static_cast<size_t>(typeSize);
+  if (typeSize <= 0 || offset + static_cast<size_t>(typeSize) > data.size())
+    return 0;
+  if (type == 3 || type == 8)
+    return tiffReadU16(data.data() + offset, littleEndian);
+  if (type == 4 || type == 9)
+    return static_cast<int>(tiffReadU32(data.data() + offset, littleEndian));
+  return data[offset];
+}
+
+static double tiffReadRealAt(const std::vector<unsigned char> &data, uint16_t type,
+                             uint32_t index, bool littleEndian) {
+  const int typeSize = tiffTypeSize(type);
+  const size_t offset = static_cast<size_t>(index) * static_cast<size_t>(typeSize);
+  if (typeSize <= 0 || offset + static_cast<size_t>(typeSize) > data.size())
+    return 0.0;
+  const unsigned char *ptr = data.data() + offset;
+  switch (type) {
+  case 3:
+    return static_cast<double>(tiffReadU16(ptr, littleEndian));
+  case 4:
+    return static_cast<double>(tiffReadU32(ptr, littleEndian));
+  case 5: {
+    const uint32_t num = tiffReadU32(ptr, littleEndian);
+    const uint32_t den = tiffReadU32(ptr + 4, littleEndian);
+    return den == 0 ? 0.0 : static_cast<double>(num) / static_cast<double>(den);
+  }
+  case 8:
+    return static_cast<double>(tiffReadI16(ptr, littleEndian));
+  case 9:
+    return static_cast<double>(tiffReadI32(ptr, littleEndian));
+  case 10: {
+    const int32_t num = tiffReadI32(ptr, littleEndian);
+    const int32_t den = tiffReadI32(ptr + 4, littleEndian);
+    return den == 0 ? 0.0 : static_cast<double>(num) / static_cast<double>(den);
+  }
+  case 11: {
+    const uint32_t bits = tiffReadU32(ptr, littleEndian);
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return static_cast<double>(value);
+  }
+  case 12: {
+    const uint64_t bits = tiffReadU64(ptr, littleEndian);
+    double value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+  }
+  default:
+    return static_cast<double>(tiffReadValueAt(data, type, index, littleEndian));
+  }
+}
+
+static void parseDngCfaIfd(std::ifstream &file, bool littleEndian,
+                           uint32_t ifdOffset, DngCfaInfo &info, int depth) {
+  if (ifdOffset == 0 || depth > 8)
+    return;
+
+  unsigned char countBytes[2];
+  if (!tiffReadAt(file, ifdOffset, countBytes, sizeof(countBytes)))
+    return;
+  const uint16_t entryCount = tiffReadU16(countBytes, littleEndian);
+  if (entryCount == 0 || entryCount > 1024)
+    return;
+
+  std::vector<uint32_t> childIfds;
+  for (uint16_t entryIndex = 0; entryIndex < entryCount; ++entryIndex) {
+    unsigned char entry[12];
+    const uint32_t entryOffset =
+        ifdOffset + 2u + static_cast<uint32_t>(entryIndex) * 12u;
+    if (!tiffReadAt(file, entryOffset, entry, sizeof(entry)))
+      return;
+
+    const uint16_t tag = tiffReadU16(entry, littleEndian);
+    const uint16_t type = tiffReadU16(entry + 2, littleEndian);
+    const uint32_t count = tiffReadU32(entry + 4, littleEndian);
+    std::vector<unsigned char> data;
+
+    if (tag == 0x828d && type == 3 && count >= 2 &&
+        tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.repeatRows = tiffReadValueAt(data, type, 0, littleEndian);
+      info.repeatCols = tiffReadValueAt(data, type, 1, littleEndian);
+    } else if (tag == 0x828e && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.patternLen = static_cast<int>(
+          std::min<uint32_t>(count, static_cast<uint32_t>(info.pattern.size())));
+      for (int i = 0; i < info.patternLen; ++i)
+        info.pattern[i] = static_cast<unsigned char>(
+            tiffReadValueAt(data, type, static_cast<uint32_t>(i), littleEndian));
+    } else if (tag == 0xc616 && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.planeColorLen = static_cast<int>(
+          std::min<uint32_t>(count, static_cast<uint32_t>(info.planeColor.size())));
+      for (int i = 0; i < info.planeColorLen; ++i)
+        info.planeColor[i] = static_cast<unsigned char>(
+            tiffReadValueAt(data, type, static_cast<uint32_t>(i), littleEndian));
+    } else if (tag == 0x014a &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const uint32_t childCount =
+          std::min<uint32_t>(count, static_cast<uint32_t>(data.size() / std::max(1, tiffTypeSize(type))));
+      for (uint32_t i = 0; i < childCount && i < 16; ++i) {
+        const int offset = tiffReadValueAt(data, type, i, littleEndian);
+        if (offset > 0)
+          childIfds.push_back(static_cast<uint32_t>(offset));
+      }
+    }
+  }
+
+  unsigned char nextBytes[4];
+  const uint32_t nextOffsetPos = ifdOffset + 2u + static_cast<uint32_t>(entryCount) * 12u;
+  if (tiffReadAt(file, nextOffsetPos, nextBytes, sizeof(nextBytes))) {
+    const uint32_t nextIfd = tiffReadU32(nextBytes, littleEndian);
+    if (nextIfd != 0)
+      childIfds.push_back(nextIfd);
+  }
+
+  for (uint32_t child : childIfds)
+    parseDngCfaIfd(file, littleEndian, child, info, depth + 1);
+}
+
+static bool parseDngCfaInfo(const char *path, DngCfaInfo &info) {
+  if (!path)
+    return false;
+  std::ifstream file(path, std::ios::binary);
+  if (!file)
+    return false;
+
+  unsigned char header[8];
+  if (!tiffReadAt(file, 0, header, sizeof(header)))
+    return false;
+  const bool littleEndian = header[0] == 'I' && header[1] == 'I';
+  const bool bigEndian = header[0] == 'M' && header[1] == 'M';
+  if (!littleEndian && !bigEndian)
+    return false;
+  if (tiffReadU16(header + 2, littleEndian) != 42)
+    return false;
+
+  const uint32_t firstIfd = tiffReadU32(header + 4, littleEndian);
+  parseDngCfaIfd(file, littleEndian, firstIfd, info, 0);
+  return info.repeatRows > 0 && info.repeatCols > 0 && info.patternLen > 0;
+}
+
+static void parseDngRawTagIfd(std::ifstream &file, bool littleEndian,
+                              uint32_t ifdOffset, DngRawTagInfo &info, int depth) {
+  if (ifdOffset == 0 || depth > 8)
+    return;
+
+  unsigned char countBytes[2];
+  if (!tiffReadAt(file, ifdOffset, countBytes, sizeof(countBytes)))
+    return;
+  const uint16_t entryCount = tiffReadU16(countBytes, littleEndian);
+  if (entryCount == 0 || entryCount > 1024)
+    return;
+
+  std::vector<uint32_t> childIfds;
+  for (uint16_t entryIndex = 0; entryIndex < entryCount; ++entryIndex) {
+    unsigned char entry[12];
+    const uint32_t entryOffset =
+        ifdOffset + 2u + static_cast<uint32_t>(entryIndex) * 12u;
+    if (!tiffReadAt(file, entryOffset, entry, sizeof(entry)))
+      return;
+
+    const uint16_t tag = tiffReadU16(entry, littleEndian);
+    const uint16_t type = tiffReadU16(entry + 2, littleEndian);
+    const uint32_t count = tiffReadU32(entry + 4, littleEndian);
+    std::vector<unsigned char> data;
+
+    if (tag == 0xc68d && count >= 4 &&
+        tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.hasActiveArea = true;
+      for (int i = 0; i < 4; ++i) {
+        info.activeArea[i] = tiffReadValueAt(data, type, static_cast<uint32_t>(i), littleEndian);
+      }
+    } else if (tag == 0xc61f && count >= 2 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const double originH = tiffReadRealAt(data, type, 0, littleEndian);
+      const double originV = tiffReadRealAt(data, type, 1, littleEndian);
+      if (std::isfinite(originH) && std::isfinite(originV)) {
+        info.hasDefaultCropOrigin = true;
+        info.defaultCropOrigin[0] = originH;
+        info.defaultCropOrigin[1] = originV;
+      }
+    } else if (tag == 0xc620 && count >= 2 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const double sizeH = tiffReadRealAt(data, type, 0, littleEndian);
+      const double sizeV = tiffReadRealAt(data, type, 1, littleEndian);
+      if (std::isfinite(sizeH) && std::isfinite(sizeV)) {
+        info.hasDefaultCropSize = true;
+        info.defaultCropSize[0] = sizeH;
+        info.defaultCropSize[1] = sizeV;
+      }
+    } else if (tag == 0xc68e && count >= 4 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.maskedAreaCount = static_cast<int>(count / 4);
+    } else if (tag == 0xc619 && count >= 2 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.blackRepeatRows = tiffReadValueAt(data, type, 0, littleEndian);
+      info.blackRepeatCols = tiffReadValueAt(data, type, 1, littleEndian);
+    } else if (tag == 0xc61a && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const uint32_t safeCount = std::min<uint32_t>(count, 64);
+      info.blackLevel.resize(safeCount);
+      for (uint32_t i = 0; i < safeCount; ++i) {
+        info.blackLevel[i] = tiffReadRealAt(data, type, i, littleEndian);
+      }
+    } else if (tag == 0xc61b && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.blackDeltaH.resize(count);
+      for (uint32_t i = 0; i < count; ++i) {
+        info.blackDeltaH[i] = tiffReadRealAt(data, type, i, littleEndian);
+      }
+    } else if (tag == 0xc61c && count > 0 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      info.blackDeltaV.resize(count);
+      for (uint32_t i = 0; i < count; ++i) {
+        info.blackDeltaV[i] = tiffReadRealAt(data, type, i, littleEndian);
+      }
+    } else if (tag == 0xc629 && count >= 2 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const double x = tiffReadRealAt(data, type, 0, littleEndian);
+      const double y = tiffReadRealAt(data, type, 1, littleEndian);
+      if (std::isfinite(x) && std::isfinite(y) && x > 0.0 && y > 0.0 &&
+          x + y < 1.0) {
+        info.hasAsShotWhiteXY = true;
+        info.asShotWhiteXY[0] = static_cast<float>(x);
+        info.asShotWhiteXY[1] = static_cast<float>(y);
+      }
+    } else if (tag == 0xc633 && count >= 1 &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const double value = tiffReadRealAt(data, type, 0, littleEndian);
+      if (std::isfinite(value) && value > 0.0 && value <= 1.0) {
+        info.hasShadowScale = true;
+        info.shadowScale = static_cast<float>(value);
+      }
+    } else if (tag == 0x014a &&
+               tiffEntryData(file, entry, littleEndian, type, count, data)) {
+      const uint32_t childCount =
+          std::min<uint32_t>(count, static_cast<uint32_t>(data.size() / std::max(1, tiffTypeSize(type))));
+      for (uint32_t i = 0; i < childCount && i < 16; ++i) {
+        const int offset = tiffReadValueAt(data, type, i, littleEndian);
+        if (offset > 0)
+          childIfds.push_back(static_cast<uint32_t>(offset));
+      }
+    }
+  }
+
+  unsigned char nextBytes[4];
+  const uint32_t nextOffsetPos = ifdOffset + 2u + static_cast<uint32_t>(entryCount) * 12u;
+  if (tiffReadAt(file, nextOffsetPos, nextBytes, sizeof(nextBytes))) {
+    const uint32_t nextIfd = tiffReadU32(nextBytes, littleEndian);
+    if (nextIfd != 0)
+      childIfds.push_back(nextIfd);
+  }
+
+  for (uint32_t child : childIfds)
+    parseDngRawTagIfd(file, littleEndian, child, info, depth + 1);
+}
+
+static bool parseDngRawTagInfo(const char *path, DngRawTagInfo &info) {
+  if (!path)
+    return false;
+  std::ifstream file(path, std::ios::binary);
+  if (!file)
+    return false;
+
+  unsigned char header[8];
+  if (!tiffReadAt(file, 0, header, sizeof(header)))
+    return false;
+  const bool littleEndian = header[0] == 'I' && header[1] == 'I';
+  const bool bigEndian = header[0] == 'M' && header[1] == 'M';
+  if (!littleEndian && !bigEndian)
+    return false;
+  if (tiffReadU16(header + 2, littleEndian) != 42)
+    return false;
+
+  const uint32_t firstIfd = tiffReadU32(header + 4, littleEndian);
+  parseDngRawTagIfd(file, littleEndian, firstIfd, info, 0);
+  return info.hasActiveArea || info.hasDefaultCropOrigin || info.hasDefaultCropSize ||
+         info.hasAsShotWhiteXY || info.hasShadowScale || !info.blackLevel.empty() ||
+         !info.blackDeltaH.empty() || !info.blackDeltaV.empty();
+}
+
+static bool computeValidDngDefaultCrop(const DngRawTagInfo &rawTags, int bufferLeft,
+                                       int bufferTop, int bufferWidth,
+                                       int bufferHeight, int outCrop[4]) {
+  if (!rawTags.hasDefaultCropOrigin || !rawTags.hasDefaultCropSize) {
+    return false;
+  }
+
+  const int activeTop = rawTags.hasActiveArea ? rawTags.activeArea[0] : bufferTop;
+  const int activeLeft = rawTags.hasActiveArea ? rawTags.activeArea[1] : bufferLeft;
+  const int activeBottom = rawTags.hasActiveArea ? rawTags.activeArea[2]
+                                                 : bufferTop + bufferHeight;
+  const int activeRight = rawTags.hasActiveArea ? rawTags.activeArea[3]
+                                                : bufferLeft + bufferWidth;
+  const int activeWidth = activeRight - activeLeft;
+  const int activeHeight = activeBottom - activeTop;
+  const double originH = rawTags.defaultCropOrigin[0];
+  const double originV = rawTags.defaultCropOrigin[1];
+  const double sizeH = rawTags.defaultCropSize[0];
+  const double sizeV = rawTags.defaultCropSize[1];
+
+  if (activeWidth <= 0 || activeHeight <= 0 || !std::isfinite(originH) ||
+      !std::isfinite(originV) || !std::isfinite(sizeH) || !std::isfinite(sizeV) ||
+      originH < 0.0 || originV < 0.0 || sizeH <= 0.0 || sizeV <= 0.0 ||
+      originH + sizeH > static_cast<double>(activeWidth) + 1e-6 ||
+      originV + sizeV > static_cast<double>(activeHeight) + 1e-6) {
+    return false;
+  }
+
+  const int cropLeftRaw = activeLeft + static_cast<int>(std::lround(originH));
+  const int cropTopRaw = activeTop + static_cast<int>(std::lround(originV));
+  const int cropRightRaw = cropLeftRaw + static_cast<int>(std::lround(sizeH));
+  const int cropBottomRaw = cropTopRaw + static_cast<int>(std::lround(sizeV));
+
+  const int cropLeft = cropLeftRaw - bufferLeft;
+  const int cropTop = cropTopRaw - bufferTop;
+  const int cropRight = cropRightRaw - bufferLeft;
+  const int cropBottom = cropBottomRaw - bufferTop;
+  if (cropLeft < 0 || cropTop < 0 || cropRight > bufferWidth ||
+      cropBottom > bufferHeight || cropRight <= cropLeft ||
+      cropBottom <= cropTop) {
+    return false;
+  }
+
+  outCrop[0] = cropLeft;
+  outCrop[1] = cropTop;
+  outCrop[2] = cropRight;
+  outCrop[3] = cropBottom;
+  return true;
+}
+
+static int dngCfaColorAt(const DngCfaInfo &info, int row, int col) {
+  if (info.repeatRows <= 0 || info.repeatCols <= 0)
+    return -1;
+  const int r = ((row % info.repeatRows) + info.repeatRows) % info.repeatRows;
+  const int c = ((col % info.repeatCols) + info.repeatCols) % info.repeatCols;
+  const int idx = r * info.repeatCols + c;
+  if (idx < 0 || idx >= info.patternLen)
+    return -1;
+  const int planeIndex = info.pattern[idx];
+  int color = planeIndex;
+  if (info.planeColorLen > 0 && planeIndex >= 0 && planeIndex < info.planeColorLen)
+    color = info.planeColor[planeIndex];
+  return color == 3 ? 1 : color;
+}
+
+static bool matchesCfa4x4(const int actual[4][4], const int expected[4][4]) {
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      if (actual[row][col] != expected[row][col])
+        return false;
+    }
+  }
+  return true;
+}
+
+static int expandedCfaColorForBasePattern(int basePattern, int col, int row,
+                                          int blockSize) {
+  const int blockCol = (col / blockSize) & 1;
+  const int blockRow = (row / blockSize) & 1;
+  int channel;
+  if (basePattern == 0) { // RGGB
+    channel = blockRow == 0 ? (blockCol == 0 ? 0 : 1) : (blockCol == 0 ? 2 : 3);
+  } else if (basePattern == 1) { // GRBG
+    channel = blockRow == 0 ? (blockCol == 0 ? 1 : 0) : (blockCol == 0 ? 3 : 2);
+  } else if (basePattern == 2) { // GBRG
+    channel = blockRow == 0 ? (blockCol == 0 ? 2 : 3) : (blockCol == 0 ? 0 : 1);
+  } else { // BGGR
+    channel = blockRow == 0 ? (blockCol == 0 ? 3 : 2) : (blockCol == 0 ? 1 : 0);
+  }
+  return channel == 0 ? 0 : (channel == 3 ? 2 : 1);
+}
+
+static bool matchesExpandedCfa(const DngCfaInfo &info, int left, int top,
+                               int blockSize, int basePattern) {
+  const int period = blockSize * 2;
+  for (int row = 0; row < period; ++row) {
+    for (int col = 0; col < period; ++col) {
+      const int actual = dngCfaColorAt(info, top + row, left + col);
+      const int expected = expandedCfaColorForBasePattern(basePattern, col, row, blockSize);
+      if (actual != expected)
+        return false;
+    }
+  }
+  return true;
+}
+
+static int identifyQuadCfaFromDng(const DngCfaInfo &info, int left, int top,
+                                  int out4x4[4][4]) {
+  for (int row = 0; row < 4; ++row) {
+    for (int col = 0; col < 4; ++col)
+      out4x4[row][col] = dngCfaColorAt(info, top + row, left + col);
+  }
+
+  for (int basePattern = 0; basePattern < 4; ++basePattern) {
+    if (matchesExpandedCfa(info, left, top, 4, basePattern))
+      return 8 + basePattern;
+  }
+
+  const int quadRggb[4][4] = {{0, 0, 1, 1},
+                              {0, 0, 1, 1},
+                              {1, 1, 2, 2},
+                              {1, 1, 2, 2}};
+  const int quadGrbg[4][4] = {{1, 1, 0, 0},
+                              {1, 1, 0, 0},
+                              {2, 2, 1, 1},
+                              {2, 2, 1, 1}};
+  const int quadGbrg[4][4] = {{1, 1, 2, 2},
+                              {1, 1, 2, 2},
+                              {0, 0, 1, 1},
+                              {0, 0, 1, 1}};
+  const int quadBggr[4][4] = {{2, 2, 1, 1},
+                              {2, 2, 1, 1},
+                              {1, 1, 0, 0},
+                              {1, 1, 0, 0}};
+
+  if (matchesCfa4x4(out4x4, quadRggb))
+    return 4;
+  if (matchesCfa4x4(out4x4, quadGrbg))
+    return 5;
+  if (matchesCfa4x4(out4x4, quadGbrg))
+    return 6;
+  if (matchesCfa4x4(out4x4, quadBggr))
+    return 7;
+  return -1;
+}
+
 static void exif_callback(void *datap, int tag, int type, int len,
                           unsigned int ord, void *ifp, long long offset) {
   auto *ed = static_cast<ExifData *>(datap);
@@ -1765,6 +2817,20 @@ static void exif_callback(void *datap, int tag, int type, int len,
         ed->iso = sget2(ord, stream);
       else if (type == 4)
         ed->iso = sget4(ord, stream);
+    }
+  } else if (actual_tag == 0x0112) { // Orientation
+    if (len > 0) {
+      int orientation = 0;
+      if (type == 3)
+        orientation = sget2(ord, stream);
+      else if (type == 4)
+        orientation = sget4(ord, stream);
+      
+      if (orientation == 3) ed->rotation = 180;
+      else if (orientation == 6) ed->rotation = 90;
+      else if (orientation == 8) ed->rotation = 270;
+      else ed->rotation = 0;
+      LOGI("processDngNative: EXIF orientation parsed tag 0x0112 = %d -> rotation = %d", orientation, ed->rotation);
     }
   } else if (actual_tag == 0xC635 || actual_tag == 0xC761) { // NoiseProfile
     if (len > 0) {
@@ -1807,7 +2873,8 @@ static void exif_callback(void *datap, int tag, int type, int len,
 JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     JNIEnv *env, jobject /* this */, jstring filePath, jfloat xr, jfloat yr,
-    jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw) {
+    jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw,
+    jboolean useRawAutoWhiteBalanceEstimate) {
 
   const char *path = env->GetStringUTFChars(filePath, nullptr);
   if (path == nullptr) {
@@ -1817,6 +2884,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   LibRaw RawProcessor;
   ExifData ed;
+  RawProcessor.imgdata.rawparams.use_dngsdk = 0;
   RawProcessor.set_exifparser_handler(exif_callback, &ed);
 
   int ret = RawProcessor.open_file(path);
@@ -1834,7 +2902,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   }
 
   jobject embeddedPreviewBitmap = nullptr;
-  ret = RawProcessor.unpack_thumb();
+  /*ret = RawProcessor.unpack_thumb();
   if (ret == LIBRAW_SUCCESS) {
     libraw_processed_image_t *thumb = RawProcessor.dcraw_make_mem_thumb(&ret);
     if (thumb && ret == LIBRAW_SUCCESS) {
@@ -1864,15 +2932,196 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   } else {
     LOGI("processDngNative: unpack_thumb failed ret=%d err=%s", ret,
          libraw_strerror(ret));
+  }*/
+
+  const bool hasBayerRaw = RawProcessor.imgdata.rawdata.raw_image != nullptr;
+  const bool hasLinearRawColor3 = RawProcessor.imgdata.rawdata.color3_image != nullptr;
+  const bool hasLinearRawColor4 =
+      RawProcessor.imgdata.rawdata.color4_image != nullptr &&
+      RawProcessor.imgdata.idata.filters == 0 &&
+      RawProcessor.imgdata.idata.colors >= 3;
+  const bool hasLinearRawImage =
+      RawProcessor.imgdata.image != nullptr &&
+      RawProcessor.imgdata.idata.filters == 0 &&
+      RawProcessor.imgdata.idata.colors >= 3;
+  if (!hasBayerRaw && !hasLinearRawColor3 && !hasLinearRawColor4 && !hasLinearRawImage) {
+    LOGE("processDngNative: raw_image/color3_image/color4_image/image is null after unpack");
+    env->ReleaseStringUTFChars(filePath, path);
+    return nullptr;
   }
 
-  float dngBlackLevels[4] = {};
-  for (int i = 0; i < 4; ++i) {
-    dngBlackLevels[i] = static_cast<float>(RawProcessor.imgdata.color.dng_levels.dng_cblack[6 + i]);
+  int left = RawProcessor.imgdata.sizes.left_margin;
+  int top = RawProcessor.imgdata.sizes.top_margin;
+  int width = RawProcessor.imgdata.sizes.width;
+  int height = RawProcessor.imgdata.sizes.height;
+  int rawWidth = RawProcessor.imgdata.sizes.raw_width;
+  int rawPitch = RawProcessor.imgdata.sizes.raw_pitch;
+  const bool useLinearRawRgb =
+      !hasBayerRaw && (hasLinearRawColor3 || hasLinearRawColor4 || hasLinearRawImage);
+  const jint samplesPerPixel = useLinearRawRgb ? 3 : 1;
+
+  DngRawTagInfo dngRawTagInfo;
+  parseDngRawTagInfo(path, dngRawTagInfo);
+  jint cfaPattern = 0;
+
+  // 判定 CFA 模式。LibRaw COLOR()/FC() folds DNG CFAPattern into the dcraw
+  // 2-column filters representation, so Quad Bayer must be detected from the
+  // original DNG CFARepeatPatternDim/CFAPattern tags.
+  if (useLinearRawRgb) {
+    const int color3RowPixels =
+        hasLinearRawColor3 && rawPitch > 0
+            ? rawPitch / (3 * static_cast<int>(sizeof(unsigned short)))
+            : rawWidth;
+    LOGI("processDngNative: LinearRaw RGB unpacked "
+         "active=%dx%d margin=%d,%d raw=%dx%d rawPitch=%d rowPixels=%d color3=%d color4=%d image=%d",
+         width, height, left, top, rawWidth, RawProcessor.imgdata.sizes.raw_height,
+         rawPitch, color3RowPixels, hasLinearRawColor3 ? 1 : 0,
+         hasLinearRawColor4 ? 1 : 0, hasLinearRawImage ? 1 : 0);
+  } else {
+    int libRawCfa4x4[4][4];
+    for (int row = 0; row < 4; ++row) {
+      for (int col = 0; col < 4; ++col) {
+        libRawCfa4x4[row][col] = RawProcessor.COLOR(top + row, left + col);
+      }
+    }
+    int dngCfa4x4[4][4] = {{-1, -1, -1, -1},
+                           {-1, -1, -1, -1},
+                           {-1, -1, -1, -1},
+                           {-1, -1, -1, -1}};
+    int c00 = libRawCfa4x4[0][0];
+    int c01 = libRawCfa4x4[0][1];
+    int c10 = libRawCfa4x4[1][0];
+    int c11 = libRawCfa4x4[1][1];
+    cfaPattern = -1;
+    auto normalizedColor = [](int c) { return (c == 3) ? 1 : c; };
+    auto isG = [&](int c) { return normalizedColor(c) == 1; };
+
+    DngCfaInfo dngCfaInfo;
+    const bool hasDngCfaInfo = parseDngCfaInfo(path, dngCfaInfo);
+    if (hasDngCfaInfo) {
+      cfaPattern = identifyQuadCfaFromDng(dngCfaInfo, left, top, dngCfa4x4);
+      LOGI("processDngNative: DNG CFA tags repeat=%dx%d patternLen=%d "
+           "planeColorLen=%d active4x4=[%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d] expandedPattern=%d",
+           dngCfaInfo.repeatRows, dngCfaInfo.repeatCols, dngCfaInfo.patternLen,
+           dngCfaInfo.planeColorLen,
+           dngCfa4x4[0][0], dngCfa4x4[0][1], dngCfa4x4[0][2], dngCfa4x4[0][3],
+           dngCfa4x4[1][0], dngCfa4x4[1][1], dngCfa4x4[1][2], dngCfa4x4[1][3],
+           dngCfa4x4[2][0], dngCfa4x4[2][1], dngCfa4x4[2][2], dngCfa4x4[2][3],
+           dngCfa4x4[3][0], dngCfa4x4[3][1], dngCfa4x4[3][2], dngCfa4x4[3][3],
+           cfaPattern);
+    }
+
+    if (cfaPattern == -1) {
+      if (c00 == 0 && isG(c01) && isG(c10) && c11 == 2) {
+        cfaPattern = 0; // RGGB
+      } else if (isG(c00) && c01 == 0 && c10 == 2 && isG(c11)) {
+        cfaPattern = 1; // GRBG
+      } else if (isG(c00) && c01 == 2 && c10 == 0 && isG(c11)) {
+        cfaPattern = 2; // GBRG
+      } else if (c00 == 2 && isG(c01) && isG(c10) && c11 == 0) {
+        cfaPattern = 3; // BGGR
+      }
+    }
+    if (cfaPattern == -1) {
+      LOGW("processDngNative: Unknown CFA matrix (%d,%d,%d,%d), fallback to RGGB(0) to avoid GPU out-of-bounds crash", c00, c01, c10, c11);
+      cfaPattern = 0;
+    }
+    LOGI("processDngNative: CFA pattern identified from pixel [%d,%d] "
+         "libraw2x2=(%d,%d,%d,%d) libraw4x4=[%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d/%d,%d,%d,%d] -> %d",
+         top, left, c00, c01, c10, c11,
+         libRawCfa4x4[0][0], libRawCfa4x4[0][1], libRawCfa4x4[0][2], libRawCfa4x4[0][3],
+         libRawCfa4x4[1][0], libRawCfa4x4[1][1], libRawCfa4x4[1][2], libRawCfa4x4[1][3],
+         libRawCfa4x4[2][0], libRawCfa4x4[2][1], libRawCfa4x4[2][2], libRawCfa4x4[2][3],
+         libRawCfa4x4[3][0], libRawCfa4x4[3][1], libRawCfa4x4[3][2], libRawCfa4x4[3][3],
+         cfaPattern);
   }
-  const bool appliedDngGainMap = applySupportedDngGainMaps(RawProcessor, dngBlackLevels);
-  LOGI("dng gain map: opcode2_len=%u applied=%d", RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
-       appliedDngGainMap ? 1 : 0);
+
+  const auto &levels = RawProcessor.imgdata.color.dng_levels;
+  LOGI("dng black metadata: color.black=%d cblack=%d,%d,%d,%d repeat=%d,%d "
+       "dng_black=%d dng_fblack=%f dng_cblack_repeat=%d,%d",
+       static_cast<int>(RawProcessor.imgdata.color.black),
+       static_cast<int>(RawProcessor.imgdata.color.cblack[0]),
+       static_cast<int>(RawProcessor.imgdata.color.cblack[1]),
+       static_cast<int>(RawProcessor.imgdata.color.cblack[2]),
+       static_cast<int>(RawProcessor.imgdata.color.cblack[3]),
+       static_cast<int>(RawProcessor.imgdata.color.cblack[4]),
+       static_cast<int>(RawProcessor.imgdata.color.cblack[5]),
+       static_cast<int>(levels.dng_black), levels.dng_fblack,
+       static_cast<int>(levels.dng_cblack[4]),
+       static_cast<int>(levels.dng_cblack[5]));
+
+  const bool blackDeltaApplied =
+      useLinearRawRgb ? false : applyDngBlackLevelDeltas(RawProcessor, dngRawTagInfo);
+
+  // Read the TOTAL effective black level per LibRaw channel.
+  // LibRaw stores it as: color.black + cblack[channel] + repeat_pattern[position].
+  float librawBlackLevels[4] = {};
+  float activeBlackLevels[4] = {};
+  float exportedBlackLevels[4] = {};
+  if (!useLinearRawRgb) {
+    computeEffectiveBlackLevels(RawProcessor, cfaPattern, left, top, librawBlackLevels);
+    mapLibRawBlackLevelsForGpu(RawProcessor, cfaPattern, left, top,
+                               librawBlackLevels, activeBlackLevels,
+                               exportedBlackLevels);
+  }
+  const double blackPreview0 = !dngRawTagInfo.blackLevel.empty()
+                                   ? dngRawTagInfo.blackLevel[0]
+                                   : exportedBlackLevels[0];
+  const double blackPreview1 = dngRawTagInfo.blackLevel.size() > 1
+                                   ? dngRawTagInfo.blackLevel[1]
+                                   : exportedBlackLevels[1];
+  const double blackPreview2 = dngRawTagInfo.blackLevel.size() > 2
+                                   ? dngRawTagInfo.blackLevel[2]
+                                   : exportedBlackLevels[2];
+  const double blackPreview3 = dngRawTagInfo.blackLevel.size() > 3
+                                   ? dngRawTagInfo.blackLevel[3]
+                                   : exportedBlackLevels[3];
+  LOGI("dng black delta tags: active=%d,%d,%d,%d,%d maskedAreas=%d repeat=%dx%d "
+       "blackCount=%zu blackPreview=%f,%f,%f,%f deltaH=%zu[%f,%f] "
+       "deltaV=%zu[%f,%f] shadowScale=%f(%d) applied=%d",
+       dngRawTagInfo.hasActiveArea ? 1 : 0,
+       dngRawTagInfo.hasActiveArea ? dngRawTagInfo.activeArea[0] : top,
+       dngRawTagInfo.hasActiveArea ? dngRawTagInfo.activeArea[1] : left,
+       dngRawTagInfo.hasActiveArea ? dngRawTagInfo.activeArea[2] : top + height,
+       dngRawTagInfo.hasActiveArea ? dngRawTagInfo.activeArea[3] : left + width,
+       dngRawTagInfo.maskedAreaCount,
+       dngRawTagInfo.blackRepeatRows,
+       dngRawTagInfo.blackRepeatCols,
+       dngRawTagInfo.blackLevel.size(),
+       blackPreview0, blackPreview1, blackPreview2, blackPreview3,
+       dngRawTagInfo.blackDeltaH.size(),
+       dngRawTagInfo.blackDeltaH.empty() ? 0.0 : dngRawTagInfo.blackDeltaH.front(),
+       dngRawTagInfo.blackDeltaH.empty() ? 0.0 : dngRawTagInfo.blackDeltaH.back(),
+       dngRawTagInfo.blackDeltaV.size(),
+       dngRawTagInfo.blackDeltaV.empty() ? 0.0 : dngRawTagInfo.blackDeltaV.front(),
+       dngRawTagInfo.blackDeltaV.empty() ? 0.0 : dngRawTagInfo.blackDeltaV.back(),
+       dngRawTagInfo.shadowScale,
+       dngRawTagInfo.hasShadowScale ? 1 : 0,
+       blackDeltaApplied ? 1 : 0);
+  LOGI("dng black levels: librawChannels=%f,%f,%f,%f active2x2=%f,%f,%f,%f "
+       "exportedRGGB=%f,%f,%f,%f",
+       librawBlackLevels[0], librawBlackLevels[1], librawBlackLevels[2], librawBlackLevels[3],
+       activeBlackLevels[0], activeBlackLevels[1], activeBlackLevels[2], activeBlackLevels[3],
+       exportedBlackLevels[0], exportedBlackLevels[1], exportedBlackLevels[2], exportedBlackLevels[3]);
+  int exportedLscWidth = 0;
+  int exportedLscHeight = 0;
+  float exportedLscGrid[8] = {
+      0.0f, 0.0f, 1.0f, 1.0f,
+      0.0f, 0.0f, static_cast<float>(std::max(1, width)), static_cast<float>(std::max(1, height))};
+  jfloatArray exportedLscArray = nullptr;
+  if (!useLinearRawRgb) {
+    exportedLscArray = buildDngLensShadingArray(
+        env, RawProcessor, cfaPattern, left, top, exportedLscWidth,
+        exportedLscHeight, exportedLscGrid);
+  }
+  jfloatArray exportedLscGridArray = nullptr;
+  if (exportedLscArray) {
+    exportedLscGridArray = env->NewFloatArray(8);
+    env->SetFloatArrayRegion(exportedLscGridArray, 0, 8, exportedLscGrid);
+  }
+  LOGI("dng gain map: opcode2_len=%u native_apply=0 exported=%d",
+       RawProcessor.imgdata.color.dng_levels.rawopcodes[1].len,
+       exportedLscArray ? 1 : 0);
 
   RawProcessor.imgdata.params.output_bps = 16;
   RawProcessor.imgdata.params.gamm[0] = 1.0; // Linear
@@ -1885,36 +3134,143 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   RawProcessor.imgdata.params.threshold = 0;
   RawProcessor.imgdata.params.med_passes = 0;
 
-  ret = RawProcessor.dcraw_process();
-  if (ret != LIBRAW_SUCCESS) {
-    LOGE("processDngNative: Failed to process %s, ret=%d", path, ret);
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
+  float selectedWb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  float cameraWb[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  bool hasCameraWb = true;
+  for (int i = 0; i < 4; i++) {
+    const float val = RawProcessor.imgdata.color.cam_mul[i];
+    cameraWb[i] = val;
+    if (i < 3 && !(val > 0.0f && std::isfinite(val))) {
+      hasCameraWb = false;
+    }
+    selectedWb[i] = val > 0.0f && std::isfinite(val) ? val : 1.0f;
+  }
+  if (selectedWb[3] <= 0.0f || !std::isfinite(selectedWb[3])) {
+    selectedWb[3] = selectedWb[1];
+  }
+  const char *selectedWbSource = hasCameraWb ? "cam_mul" : "unity";
+  if (!hasCameraWb &&
+      computeWbFromDngAsShotWhiteXY(RawProcessor, dngRawTagInfo, selectedWb)) {
+    selectedWbSource = "AsShotWhiteXY";
+  }
+  float selectedBase = selectedWb[1] > 0.0f ? selectedWb[1] : 1.0f;
+  for (int i = 0; i < 4; i++) {
+    selectedWb[i] /= selectedBase;
+  }
+  LOGI("dng wb metadata: source=%s cam_mul=%f,%f,%f,%f "
+       "hasAsShotWhiteXY=%d xy=%f,%f selected=%f,%f,%f,%f",
+       selectedWbSource, cameraWb[0], cameraWb[1], cameraWb[2], cameraWb[3],
+       dngRawTagInfo.hasAsShotWhiteXY ? 1 : 0, dngRawTagInfo.asShotWhiteXY[0],
+       dngRawTagInfo.asShotWhiteXY[1], selectedWb[0], selectedWb[1],
+       selectedWb[2], selectedWb[3]);
+
+  if (useRawAutoWhiteBalanceEstimate == JNI_TRUE && !useLinearRawRgb) {
+    float estimatedWb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    int awbSamples = 0;
+    if (estimateRawAutoWhiteBalance(RawProcessor, librawBlackLevels, estimatedWb, awbSamples)) {
+      RawProcessor.imgdata.params.use_camera_wb = 0;
+      RawProcessor.imgdata.params.use_auto_wb = 0;
+      for (int i = 0; i < 4; ++i) {
+        RawProcessor.imgdata.params.user_mul[i] = estimatedWb[i];
+        selectedWb[i] = estimatedWb[i];
+      }
+      LOGI("raw awb estimate: enabled samples=%d wb=%f,%f,%f,%f", awbSamples,
+           selectedWb[0], selectedWb[1], selectedWb[2], selectedWb[3]);
+    } else {
+      LOGI("raw awb estimate: enabled but insufficient samples, using camera wb");
+    }
+  } else if (useLinearRawRgb) {
+    LOGI("raw awb estimate: disabled for LinearRaw RGB input");
+  } else {
+    LOGI("raw awb estimate: disabled, using camera wb");
   }
 
-  // 获取处理后的图像
-  libraw_processed_image_t *image = RawProcessor.dcraw_make_mem_image(&ret);
-  if (!image || ret != 0) {
-    LOGE("processDngNative: Failed to make mem image, ret=%d", ret);
-    env->ReleaseStringUTFChars(filePath, path);
-    return nullptr;
-  }
-
-  // 准备返回结果
-  size_t outputSize = (size_t)image->width * image->height * 3 * 2;
+  // 准备返回结果：仅拷贝有效像素区域，避免把传感器 padding 传回 Kotlin。
+  jint rowStride = width * samplesPerPixel * 2;
+  size_t outputSize = static_cast<size_t>(rowStride) * height;
   void *outData = malloc(outputSize);
-  memcpy(outData, image->data, outputSize);
+  if (!outData) {
+    LOGE("processDngNative: Out of memory");
+    env->ReleaseStringUTFChars(filePath, path);
+    return nullptr;
+  }
+
+  unsigned short *dst = (unsigned short *)outData;
+  if (useLinearRawRgb) {
+    if (hasLinearRawColor3) {
+      unsigned short(*src3)[3] = RawProcessor.imgdata.rawdata.color3_image;
+      const int color3RowPixels =
+          rawPitch > 0 ? rawPitch / (3 * static_cast<int>(sizeof(unsigned short)))
+                       : rawWidth;
+      if (color3RowPixels <= 0 || left + width > color3RowPixels) {
+        LOGE("processDngNative: invalid LinearRaw RGB pitch: rowPixels=%d left=%d width=%d rawPitch=%d",
+             color3RowPixels, left, width, rawPitch);
+        free(outData);
+        env->ReleaseStringUTFChars(filePath, path);
+        return nullptr;
+      }
+      for (int y = 0; y < height; y++) {
+        unsigned short(*srcRow)[3] = src3 + (y + top) * color3RowPixels + left;
+        memcpy(dst + static_cast<size_t>(y) * width * 3, srcRow,
+               static_cast<size_t>(width) * 3 * sizeof(unsigned short));
+      }
+    } else if (hasLinearRawColor4) {
+      unsigned short(*src4)[4] = RawProcessor.imgdata.rawdata.color4_image;
+      const int color4RowPixels =
+          rawPitch > 0 ? rawPitch / (4 * static_cast<int>(sizeof(unsigned short)))
+                       : rawWidth;
+      if (color4RowPixels <= 0 || left + width > color4RowPixels) {
+        LOGE("processDngNative: invalid LinearRaw RGB color4 pitch: rowPixels=%d left=%d width=%d rawPitch=%d",
+             color4RowPixels, left, width, rawPitch);
+        free(outData);
+        env->ReleaseStringUTFChars(filePath, path);
+        return nullptr;
+      }
+      for (int y = 0; y < height; y++) {
+        unsigned short(*srcRow)[4] = src4 + static_cast<size_t>(y + top) * color4RowPixels + left;
+        unsigned short *dstRow = dst + static_cast<size_t>(y) * width * 3;
+        for (int x = 0; x < width; x++) {
+          dstRow[x * 3 + 0] = srcRow[x][0];
+          dstRow[x * 3 + 1] = srcRow[x][1];
+          dstRow[x * 3 + 2] = srcRow[x][2];
+        }
+      }
+    } else {
+      unsigned short(*src4)[4] = RawProcessor.imgdata.image;
+      if (rawWidth <= 0 || left + width > rawWidth) {
+        LOGE("processDngNative: invalid LinearRaw image pitch: rawWidth=%d left=%d width=%d",
+             rawWidth, left, width);
+        free(outData);
+        env->ReleaseStringUTFChars(filePath, path);
+        return nullptr;
+      }
+      for (int y = 0; y < height; y++) {
+        unsigned short(*srcRow)[4] = src4 + static_cast<size_t>(y + top) * rawWidth + left;
+        unsigned short *dstRow = dst + static_cast<size_t>(y) * width * 3;
+        for (int x = 0; x < width; x++) {
+          dstRow[x * 3 + 0] = srcRow[x][0];
+          dstRow[x * 3 + 1] = srcRow[x][1];
+          dstRow[x * 3 + 2] = srcRow[x][2];
+        }
+      }
+    }
+  } else {
+    unsigned short *src = RawProcessor.imgdata.rawdata.raw_image;
+    for (int y = 0; y < height; y++) {
+      memcpy(dst + y * width, src + (y + top) * rawWidth + left, width * 2);
+    }
+  }
   jobject rawDataBuffer = env->NewDirectByteBuffer(outData, outputSize);
 
   // 提取元数据
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIF[F[F[F[FIIF[FIIFIJF[I[FLandroid/graphics/Bitmap;)V");
+                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[FIIFF[FII[FFIJF[I[I[FLandroid/graphics/Bitmap;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
-    float val = dngBlackLevels[i];
+    float val = exportedBlackLevels[i];
     env->SetFloatArrayRegion(blackLevelArray, i, 1, &val);
   }
 
@@ -1931,11 +3287,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   float wb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
   for (int i = 0; i < 4; i++)
-    wb[i] = RawProcessor.imgdata.color.cam_mul[i];
-  float base = wb[1];
-  for (int i = 0; i < 4; i++) {
-    wb[i] = wb[i] / base;
-  }
+    wb[i] = selectedWb[i];
   LOGI("wb: %f, %f, %f, %f", wb[0], wb[1], wb[2], wb[3]); // RGB0 or RGBG
   LOGI("cam_xyz: %f", RawProcessor.imgdata.color.cam_xyz[0][0]);
   LOGI("ccm: %f", RawProcessor.imgdata.color.ccm[0][0]);
@@ -1951,129 +3303,101 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   }
   env->SetFloatArrayRegion(wbArray, 3, 1, &wb[2]);
 
-  // CCM (从 DNG ForwardMatrix 转换为目标色域)
+  // CCM: DNG color specification semantics. WB is encoded in CameraToPCS.
   Matrix3x3 targetTransform =
       computeXYZD50ToGamut(xr, yr, xg, yg, xb, yb, xw, yw);
-  Matrix3x3 m1 = Matrix3x3::identity();
-  Matrix3x3 m2 = Matrix3x3::identity();
-  bool hasM1 = false, hasM2 = false;
+  Matrix3x3 colorMatrix1 = Matrix3x3::identity();
+  Matrix3x3 colorMatrix2 = Matrix3x3::identity();
+  Matrix3x3 forwardMatrix1 = Matrix3x3::identity();
+  Matrix3x3 forwardMatrix2 = Matrix3x3::identity();
+  Matrix3x3 cameraCalibration1 = Matrix3x3::identity();
+  Matrix3x3 cameraCalibration2 = Matrix3x3::identity();
 
-  auto getMatrix = [&](int index, Matrix3x3 &m) {
-    float sumFM = 0.0f;
+  auto readDngColorMatrix = [&](int index, Matrix3x3 &matrix) {
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
-        m.m[i * 3 + j] =
-            RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
-        sumFM += std::abs(m.m[i * 3 + j]);
-      }
-    }
-    if (sumFM > 0.01f)
-      return true;
-
-    float sumCM = 0.0f;
-    Matrix3x3 xyzToCam;
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        xyzToCam.m[i * 3 + j] =
+        matrix.m[i * 3 + j] =
             RawProcessor.imgdata.color.dng_color[index].colormatrix[i][j];
-        sumCM += std::abs(xyzToCam.m[i * 3 + j]);
       }
     }
-    if (sumCM > 0.01f) {
-      // 1. 确定参考光源的 XYZ 白点 (根据 DNG 规范)
-      float lx, ly, lz;
-      int ill = RawProcessor.imgdata.color.dng_color[index].illuminant;
-
-      if (ill == 17) { // Standard Light A
-        lx = 1.0985f;
-        ly = 1.0000f;
-        lz = 0.3558f;
-      } else { // Assume D65
-        lx = 0.9504f;
-        ly = 1.0000f;
-        lz = 1.0888f;
-      }
-
-      // 2. 计算相机对该光源的响应 (Camera Neutral / White Balance)
-      // 这是 ColorMatrix 作用于光源 XYZ 的结果
-      float cameraNeutral[3];
-      for (int i = 0; i < 3; i++) {
-        cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
-                           xyzToCam.m[i * 3 + 1] * ly +
-                           xyzToCam.m[i * 3 + 2] * lz;
-      }
-
-      // 3. 构造中间矩阵：ColorMatrix * ReferenceDiagonal
-      // 在 DNG 逻辑中，我们需要对 ColorMatrix 的每一列乘以对应的 CameraNeutral
-      // 分量 这样做的目的是为了让矩阵在处理该光源下的“白点”时，输出为 [1, 1, 1]
-      Matrix3x3 referenceMatrix = xyzToCam;
-      for (int col = 0; col < 3; col++) {
-        // 这一步非常关键：为了求逆后能还原，这里其实是预补偿白平衡
-        referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
-        referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
-        referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
-      }
-
-      // 4. 求逆：从 Camera 空间转回该光源下的 XYZ 空间
-      // 现在 m 是从 Camera (White Balanced) -> XYZ (Illuminant Relative)
-      m = referenceMatrix.invert();
-
-      // 5. 应用色度适应 (Chromatic Adaptation) 映射到 D50
-      // ForwardMatrix 必须映射到 D50 空间
-      Matrix3x3 adapt;
-      if (ill == 17) { // A to D50 (Bradford Transform)
-        float a2d50[9] = {0.8924f,  -0.0157f, 0.0529f,  -0.1111f, 1.0505f,
-                          -0.0151f, 0.0522f,  -0.0077f, 2.2396f};
-        memcpy(adapt.m, a2d50, 9 * sizeof(float));
-      } else { // D65 to D50 (Bradford Transform)
-        float d652d50[9] = {1.0478f,  0.0229f,  -0.0501f, 0.0295f, 0.9905f,
-                            -0.0170f, -0.0092f, 0.0150f,  0.7521f};
-        memcpy(adapt.m, d652d50, 9 * sizeof(float));
-      }
-      m = adapt.multiply(m);
-      return true;
-    }
-    return false;
+    return hasMatrixSignal(matrix);
   };
 
-  hasM1 = getMatrix(0, m1);
-  hasM2 = getMatrix(1, m2);
+  auto readDngForwardMatrix = [&](int index, Matrix3x3 &matrix) {
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        matrix.m[i * 3 + j] =
+            RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
+      }
+    }
+    return hasMatrixSignal(matrix);
+  };
 
-  LOGI("hasM1 = %d hasM2 = %d", hasM1, hasM2);
+  auto readDngCameraCalibration = [&](int index, Matrix3x3 &matrix) {
+    matrix = Matrix3x3::identity();
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j) {
+        const float value =
+            RawProcessor.imgdata.color.dng_color[index].calibration[i][j];
+        if (std::isfinite(value) && std::abs(value) > 1e-6f) {
+          matrix.m[i * 3 + j] = value;
+        }
+      }
+    }
+  };
 
-  float weight = 0.5f;
-  if (hasM1 && hasM2) {
-    float t1 =
-        illuminantToTemp(RawProcessor.imgdata.color.dng_color[0].illuminant);
-    float t2 =
-        illuminantToTemp(RawProcessor.imgdata.color.dng_color[1].illuminant);
-    float currentRatio = wb[0] / wb[2]; // R/B
-    float rWarm = 0.5f, rCool = 1.6f;
-    auto getTargetRatio = [&](float temp) {
-      if (temp <= 2856.0f)
-        return rWarm;
-      if (temp >= 6504.0f)
-        return rCool;
-      return rWarm + (rCool - rWarm) * (temp - 2856.0f) / (6504.0f - 2856.0f);
-    };
-    float r1 = getTargetRatio(t1), r2 = getTargetRatio(t2);
-    if (std::abs(r1 - r2) > 0.01f) {
-      weight = (currentRatio - r2) / (r1 - r2);
-      weight = std::max(0.0f, std::min(1.0f, weight));
+  const bool hasColor1 = readDngColorMatrix(0, colorMatrix1);
+  const bool hasColor2 = readDngColorMatrix(1, colorMatrix2);
+  const bool hasForward1 = readDngForwardMatrix(0, forwardMatrix1);
+  const bool hasForward2 = readDngForwardMatrix(1, forwardMatrix2);
+  readDngCameraCalibration(0, cameraCalibration1);
+  readDngCameraCalibration(1, cameraCalibration2);
+
+  std::array<float, 3> analogBalance = {1.0f, 1.0f, 1.0f};
+  for (int i = 0; i < 3; ++i) {
+    const float analog = RawProcessor.imgdata.color.dng_levels.analogbalance[i];
+    if (analog > 0.0f && std::isfinite(analog)) {
+      analogBalance[i] = analog;
     }
   }
 
-  Matrix3x3 camToXYZ;
-  if (hasM1 && hasM2) {
-    for (int i = 0; i < 9; i++)
-      camToXYZ.m[i] = m1.m[i] * weight + m2.m[i] * (1.0f - weight);
-  } else if (hasM1)
-    camToXYZ = m1;
-  else if (hasM2)
-    camToXYZ = m2;
-  else {
-    // 没有任何 DNG ForwardMatrix。
-    // Bradford 变换 (D65 to D50)
+  LOGI("dng color metadata: color1=%d color2=%d forward1=%d forward2=%d "
+       "ill=%d,%d analog=%f,%f,%f",
+       hasColor1 ? 1 : 0, hasColor2 ? 1 : 0, hasForward1 ? 1 : 0,
+       hasForward2 ? 1 : 0,
+       RawProcessor.imgdata.color.dng_color[0].illuminant,
+       RawProcessor.imgdata.color.dng_color[1].illuminant, analogBalance[0],
+       analogBalance[1], analogBalance[2]);
+
+  Matrix3x3 camToXYZ = Matrix3x3::identity();
+  std::array<float, 2> sdkWhiteXy = {0.3457f, 0.3585f};
+  bool hasSdkMatrix = computeDngSdkCameraToPcsD50(
+      colorMatrix1, hasColor1, colorMatrix2, hasColor2, forwardMatrix1,
+      hasForward1, forwardMatrix2, hasForward2,
+      RawProcessor.imgdata.color.dng_color[0].illuminant,
+      RawProcessor.imgdata.color.dng_color[1].illuminant, wb,
+      cameraCalibration1, cameraCalibration2, analogBalance, camToXYZ,
+      &sdkWhiteXy);
+  if (hasSdkMatrix) {
+    LOGI("Using DNG color spec path: whiteXY=%f,%f", sdkWhiteXy[0],
+         sdkWhiteXy[1]);
+  } else {
+    Matrix3x3 identity = Matrix3x3::identity();
+    std::array<float, 3> unityAnalog = {1.0f, 1.0f, 1.0f};
+    auto computeSingleColorFallback = [&](const Matrix3x3 &xyzToCam,
+                                          const char *sourceName) {
+      std::array<float, 2> fallbackWhiteXy = {0.3457f, 0.3585f};
+      if (computeDngSdkCameraToPcsD50(
+              xyzToCam, true, identity, false, identity, false, identity,
+              false, 21, 0, wb, identity, identity, unityAnalog, camToXYZ,
+              &fallbackWhiteXy)) {
+        LOGI("Using %s fallback via DNG ColorMatrix path: whiteXY=%f,%f",
+             sourceName, fallbackWhiteXy[0], fallbackWhiteXy[1]);
+        return true;
+      }
+      return false;
+    };
+
     float d652d50[9] = {1.0478112f,  0.0228866f, -0.0501270f,
                         0.0295424f,  0.9904844f, -0.0170491f,
                         -0.0092345f, 0.0150436f, 0.7521316f};
@@ -2092,33 +3416,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       }
     }
 
-    if (hasCamXYZ) {
-      // 1. 视为 D65 下的 XYZ-to-Camera 矩阵进行标准化 (同 ColorMatrix 处理方式)
-      float lx = 0.9504f, ly = 1.0000f, lz = 1.0888f; // D65
-      float cameraNeutral[3];
-      for (int i = 0; i < 3; i++) {
-        cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
-                           xyzToCam.m[i * 3 + 1] * ly +
-                           xyzToCam.m[i * 3 + 2] * lz;
-      }
-      Matrix3x3 referenceMatrix = xyzToCam;
-      for (int col = 0; col < 3; col++) {
-        if (std::abs(cameraNeutral[0]) > 0.001f)
-          referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
-        if (std::abs(cameraNeutral[1]) > 0.001f)
-          referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
-        if (std::abs(cameraNeutral[2]) > 0.001f)
-          referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
-      }
-      // 2. 求逆得到 Camera-to-XYZ
-      camToXYZ = referenceMatrix.invert();
-      // 3. 应用色度适应 D65 -> D50
-      camToXYZ = adapt.multiply(camToXYZ);
-      LOGI(
-          "Using LibRaw cam_xyz (treated as ColorMatrix) converted to XYZ D50");
+    if (hasCamXYZ && computeSingleColorFallback(xyzToCam, "LibRaw cam_xyz")) {
+      // camToXYZ set by fallback.
     } else {
-      // 2. 尝试通过 LibRaw 的 ccm 反算。
-      // 当 output_color = 0 时，ccm 通常仍然是针对默认 sRGB (D65) 的矩阵。
       Matrix3x3 camToSRGB;
       bool hasCCM = false;
       for (int i = 0; i < 3; i++) {
@@ -2136,9 +3436,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
         Matrix3x3 mSRGB2XYZ;
         memcpy(mSRGB2XYZ.m, srgb2xyz, 9 * sizeof(float));
         camToXYZ = adapt.multiply(mSRGB2XYZ.multiply(camToSRGB));
-        LOGI("Using LibRaw ccm converted to XYZ D50");
+        LOGI("Using LibRaw ccm legacy fallback converted to XYZ D50");
       } else {
-        // 3. 最后尝试 cmatrix (XYZ D65 to Camera)
         Matrix3x3 xyzToCam;
         bool hasCMatrix = false;
         for (int i = 0; i < 3; i++) {
@@ -2149,27 +3448,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
           }
         }
 
-        if (hasCMatrix) {
-          float lx = 0.9504f, ly = 1.0000f, lz = 1.0888f;
-          float cameraNeutral[3];
-          for (int i = 0; i < 3; i++) {
-            cameraNeutral[i] = xyzToCam.m[i * 3 + 0] * lx +
-                               xyzToCam.m[i * 3 + 1] * ly +
-                               xyzToCam.m[i * 3 + 2] * lz;
-          }
-          Matrix3x3 referenceMatrix = xyzToCam;
-          for (int col = 0; col < 3; col++) {
-            if (std::abs(cameraNeutral[0]) > 0.001f)
-              referenceMatrix.m[0 * 3 + col] /= cameraNeutral[0];
-            if (std::abs(cameraNeutral[1]) > 0.001f)
-              referenceMatrix.m[1 * 3 + col] /= cameraNeutral[1];
-            if (std::abs(cameraNeutral[2]) > 0.001f)
-              referenceMatrix.m[2 * 3 + col] /= cameraNeutral[2];
-          }
-          camToXYZ = referenceMatrix.invert();
-          camToXYZ = adapt.multiply(camToXYZ);
-          LOGI("Using cmatrix fallback converted to XYZ D50");
-        } else {
+        if (!hasCMatrix ||
+            !computeSingleColorFallback(xyzToCam, "LibRaw cmatrix")) {
           camToXYZ = Matrix3x3::identity();
           LOGE("No color metadata found at all, using identity");
         }
@@ -2186,17 +3466,18 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
        finalCCM.m[5], finalCCM.m[6], finalCCM.m[7], finalCCM.m[8]);
 
   // 其它
-  jint width = image->width;
-  jint height = image->height;
-  jint rowStride = width * 6; // RGB16
   jfloat whiteLevel =
       (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
-  if (whiteLevel <= 0)
+  if (whiteLevel <= 0 && useLinearRawRgb)
+    whiteLevel = 65535.0f;
+  else if (whiteLevel <= 0)
     whiteLevel = (jfloat)RawProcessor.imgdata.color.maximum;
-  jint cfaPattern = -1; // CFA_LINEAR_RGB
 
-  jfloat baselineExposure =
-      RawProcessor.imgdata.color.dng_levels.baseline_exposure;
+  jfloat rawBaselineExposure = levels.baseline_exposure;
+  const bool hasDngBaselineExposure =
+      std::isfinite(rawBaselineExposure) && rawBaselineExposure > -999.0f;
+  jfloat baselineExposure = normalizeDngBaselineExposure(levels);
+  jfloat shadowScale = dngRawTagInfo.hasShadowScale ? dngRawTagInfo.shadowScale : 1.0f;
   jfloat exposureBias =
       RawProcessor.imgdata.makernotes.common.ExposureCalibrationShift;
   int iso = RawProcessor.imgdata.other.iso_speed;
@@ -2208,9 +3489,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jfloat aperture = RawProcessor.imgdata.other.aperture;
 
   LOGI("iso = %d, shutterSpeed = %lld aperture = %f baselineExposure = %f "
-       "exposureBias = %f",
+       "rawBaselineExposure = %f hasBaselineExposure = %d exposureBias = %f",
        iso, (long long)shutterSpeedLong, aperture, baselineExposure,
-       exposureBias);
+       rawBaselineExposure, hasDngBaselineExposure ? 1 : 0, exposureBias);
 
   // ActiveArray: use margins to define the actual active sensor area
   jintArray activeArray = env->NewIntArray(4);
@@ -2224,6 +3505,25 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   // LOGI("aa: %d, %d, %d, %d", aa[0], aa[1], aa[2], aa[3]);
 
+  int defaultCrop[4] = {0, 0, 0, 0};
+  const bool hasDefaultCrop = computeValidDngDefaultCrop(
+      dngRawTagInfo, left, top, width, height, defaultCrop);
+  LOGI("dng default crop tags: origin=%d(%f,%f) size=%d(%f,%f) "
+       "valid=%d crop=%d,%d,%d,%d buffer=%d,%d,%d,%d",
+       dngRawTagInfo.hasDefaultCropOrigin ? 1 : 0,
+       dngRawTagInfo.defaultCropOrigin[0], dngRawTagInfo.defaultCropOrigin[1],
+       dngRawTagInfo.hasDefaultCropSize ? 1 : 0,
+       dngRawTagInfo.defaultCropSize[0], dngRawTagInfo.defaultCropSize[1],
+       hasDefaultCrop ? 1 : 0, defaultCrop[0], defaultCrop[1],
+       defaultCrop[2], defaultCrop[3], left, top, width, height);
+  jintArray defaultCropArray = nullptr;
+  if (hasDefaultCrop) {
+    defaultCropArray = env->NewIntArray(4);
+    jint dc[4] = {(jint)defaultCrop[0], (jint)defaultCrop[1],
+                  (jint)defaultCrop[2], (jint)defaultCrop[3]};
+    env->SetIntArrayRegion(defaultCropArray, 0, 4, dc);
+  }
+
   jfloatArray afRegions = nullptr;
   jfloatArray noiseProfileArray = nullptr;
   if (ed.hasNoiseProfile) {
@@ -2233,13 +3533,13 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   jobject dngData = env->NewObject(
       dngDataClass, constructor, rawDataBuffer, width, height, rowStride,
-      whiteLevel, blackLevelArray, preMulArray, wbArray, colorMatrixArray,
-      cfaPattern, 0, baselineExposure, nullptr, 0, 0, exposureBias, iso,
-      shutterSpeedLong, aperture, activeArray, noiseProfileArray,
+      samplesPerPixel, whiteLevel, blackLevelArray, preMulArray, wbArray, colorMatrixArray,
+      cfaPattern, ed.rotation, baselineExposure, shadowScale, exportedLscArray, exportedLscWidth, exportedLscHeight,
+      exportedLscGridArray, exposureBias, iso,
+      shutterSpeedLong, aperture, activeArray, defaultCropArray, noiseProfileArray,
       embeddedPreviewBitmap);
 
   // 释放资源
-  LibRaw::dcraw_clear_mem(image);
   env->ReleaseStringUTFChars(filePath, path);
 
   return dngData;
@@ -2256,6 +3556,262 @@ JNIEXPORT void JNICALL Java_com_hinnka_mycamera_raw_DngRawData_freeNativeBuffer(
   if (nativePtr != nullptr) {
     LOGI("Freeing DNG RAW data native buffer: %p", nativePtr);
     free(nativePtr);
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_ml_DnCNNDenoiseEstimator_preprocessNative(
+    JNIEnv *env, jobject, jobject bitmap, jint x, jint y, jint w, jint h,
+    jobject outBuffer, jboolean isRgb, jboolean channelsFirst) {
+
+  AndroidBitmapInfo info;
+  void *pixels = nullptr;
+  if (AndroidBitmap_getInfo(env, bitmap, &info) < 0 ||
+      AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) {
+    LOGE("DnCNN preprocess: failed to lock bitmap");
+    return;
+  }
+
+  auto *out = static_cast<float *>(env->GetDirectBufferAddress(outBuffer));
+  if (!out || w <= 0 || h <= 0 || info.width <= 0 || info.height <= 0) {
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return;
+  }
+
+  const int stride = static_cast<int>(info.stride / 4);
+  const auto *src = static_cast<const uint32_t *>(pixels);
+  const bool rgb = isRgb == JNI_TRUE;
+  const bool nchw = channelsFirst == JNI_TRUE;
+  const int pixelCount = w * h;
+
+#pragma omp parallel for num_threads(8)
+  for (int py = 0; py < h; ++py) {
+    for (int px = 0; px < w; ++px) {
+      const int sx = std::clamp(static_cast<int>(x + px), 0,
+                                static_cast<int>(info.width) - 1);
+      const int sy = std::clamp(static_cast<int>(y + py), 0,
+                                static_cast<int>(info.height) - 1);
+      const uint32_t pixel = src[sy * stride + sx];
+      const float r = static_cast<float>((pixel >> 0) & 0xFF) / 255.0f;
+      const float g = static_cast<float>((pixel >> 8) & 0xFF) / 255.0f;
+      const float b = static_cast<float>((pixel >> 16) & 0xFF) / 255.0f;
+      const int base = py * w + px;
+
+      if (rgb) {
+        if (nchw) {
+          out[base] = r;
+          out[pixelCount + base] = g;
+          out[pixelCount * 2 + base] = b;
+        } else {
+          const int outIdx = base * 3;
+          out[outIdx] = r;
+          out[outIdx + 1] = g;
+          out[outIdx + 2] = b;
+        }
+      } else {
+        out[base] = 0.299f * r + 0.587f * g + 0.114f * b;
+      }
+    }
+  }
+
+  AndroidBitmap_unlockPixels(env, bitmap);
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_ml_DnCNNDenoiseEstimator_postprocessNative(
+    JNIEnv *env, jobject, jobject inBuffer, jobject srcBitmap, jobject dstBitmap,
+    jint patchX, jint patchY, jint srcX, jint srcY, jint dstX, jint dstY,
+    jint w, jint h, jint patchW, jint patchH, jfloat strength, jboolean isRgb,
+    jboolean channelsFirst) {
+
+  AndroidBitmapInfo srcInfo, dstInfo;
+  void *srcPixels = nullptr;
+  void *dstPixels = nullptr;
+  if (AndroidBitmap_getInfo(env, srcBitmap, &srcInfo) < 0 ||
+      AndroidBitmap_lockPixels(env, srcBitmap, &srcPixels) < 0) {
+    LOGE("DnCNN postprocess: failed to lock source bitmap");
+    return;
+  }
+  if (AndroidBitmap_getInfo(env, dstBitmap, &dstInfo) < 0 ||
+      AndroidBitmap_lockPixels(env, dstBitmap, &dstPixels) < 0) {
+    AndroidBitmap_unlockPixels(env, srcBitmap);
+    LOGE("DnCNN postprocess: failed to lock destination bitmap");
+    return;
+  }
+
+  auto *in = static_cast<float *>(env->GetDirectBufferAddress(inBuffer));
+  if (!in || w <= 0 || h <= 0 || patchW <= 0 || patchH <= 0 ||
+      srcInfo.width <= 0 || srcInfo.height <= 0 || dstInfo.width <= 0 ||
+      dstInfo.height <= 0) {
+    AndroidBitmap_unlockPixels(env, srcBitmap);
+    AndroidBitmap_unlockPixels(env, dstBitmap);
+    return;
+  }
+
+  const int srcStride = static_cast<int>(srcInfo.stride / 4);
+  const int dstStride = static_cast<int>(dstInfo.stride / 4);
+  const auto *src = static_cast<const uint32_t *>(srcPixels);
+  auto *dst = static_cast<uint32_t *>(dstPixels);
+  const bool rgb = isRgb == JNI_TRUE;
+  const bool nchw = channelsFirst == JNI_TRUE;
+  const float blend = std::clamp(static_cast<float>(strength), 0.0f, 1.0f);
+  const float invBlend = 1.0f - blend;
+  const int patchPixelCount = patchW * patchH;
+
+#pragma omp parallel for num_threads(8)
+  for (int py = 0; py < h; ++py) {
+    for (int px = 0; px < w; ++px) {
+      const int srcPx = std::clamp(static_cast<int>(srcX + px), 0,
+                                   static_cast<int>(srcInfo.width) - 1);
+      const int srcPy = std::clamp(static_cast<int>(srcY + py), 0,
+                                   static_cast<int>(srcInfo.height) - 1);
+      const int dstPx = static_cast<int>(dstX + px);
+      const int dstPy = static_cast<int>(dstY + py);
+      if (dstPx < 0 || dstPy < 0 || dstPx >= static_cast<int>(dstInfo.width) ||
+          dstPy >= static_cast<int>(dstInfo.height)) {
+        continue;
+      }
+
+      const int patchPx = std::clamp(static_cast<int>(patchX + px), 0,
+                                     static_cast<int>(patchW) - 1);
+      const int patchPy = std::clamp(static_cast<int>(patchY + py), 0,
+                                     static_cast<int>(patchH) - 1);
+      const int patchBase = patchPy * patchW + patchPx;
+      const uint32_t pixel = src[srcPy * srcStride + srcPx];
+      const float origR = static_cast<float>((pixel >> 0) & 0xFF);
+      const float origG = static_cast<float>((pixel >> 8) & 0xFF);
+      const float origB = static_cast<float>((pixel >> 16) & 0xFF);
+
+      float r;
+      float g;
+      float b;
+      if (rgb) {
+        float denR;
+        float denG;
+        float denB;
+        if (nchw) {
+          denR = in[patchBase] * 255.0f;
+          denG = in[patchPixelCount + patchBase] * 255.0f;
+          denB = in[patchPixelCount * 2 + patchBase] * 255.0f;
+        } else {
+          const int inIdx = patchBase * 3;
+          denR = in[inIdx] * 255.0f;
+          denG = in[inIdx + 1] * 255.0f;
+          denB = in[inIdx + 2] * 255.0f;
+        }
+
+        r = origR * invBlend + denR * blend;
+        g = origG * invBlend + denG * blend;
+        b = origB * invBlend + denB * blend;
+      } else {
+        const float cb =
+            -0.1687f * origR - 0.3313f * origG + 0.5f * origB + 128.0f;
+        const float cr =
+            0.5f * origR - 0.4187f * origG - 0.0813f * origB + 128.0f;
+        const float originalY = 0.299f * origR + 0.587f * origG + 0.114f * origB;
+        const float denoisedY = in[patchBase] * 255.0f;
+        const float newY = originalY * invBlend + denoisedY * blend;
+
+        r = newY + 1.402f * (cr - 128.0f);
+        g = newY - 0.344136f * (cb - 128.0f) - 0.714136f * (cr - 128.0f);
+        b = newY + 1.772f * (cb - 128.0f);
+      }
+
+      const auto resR = static_cast<uint32_t>(std::clamp(r, 0.0f, 255.0f));
+      const auto resG = static_cast<uint32_t>(std::clamp(g, 0.0f, 255.0f));
+      const auto resB = static_cast<uint32_t>(std::clamp(b, 0.0f, 255.0f));
+      dst[dstPy * dstStride + dstPx] =
+          0xFF000000u | (resB << 16) | (resG << 8) | resR;
+    }
+  }
+
+  AndroidBitmap_unlockPixels(env, srcBitmap);
+  AndroidBitmap_unlockPixels(env, dstBitmap);
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferAllocator_allocateNative(
+    JNIEnv *env, jobject, jlong capacity) {
+  void* ptr = malloc(capacity);
+  if (!ptr) {
+    LOGE("Failed to allocate %lld bytes", (long long)capacity);
+    return nullptr;
+  }
+  return env->NewDirectByteBuffer(ptr, capacity);
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_hinnka_mycamera_utils_SuperResolutionDngWriter_encodeLosslessJpegNative(
+    JNIEnv *env, jobject, jobject rawBuffer, jint width, jint height,
+    jint samplesPerPixel, jint bitsPerSample, jint rowStep, jint colStep) {
+  if (!rawBuffer || width <= 0 || height <= 0 || samplesPerPixel <= 0 ||
+      samplesPerPixel > 4 || bitsPerSample <= 0 || bitsPerSample > 16 ||
+      rowStep <= 0 || colStep <= 0) {
+    LOGE("encodeLosslessJpegNative: invalid args w=%d h=%d spp=%d bps=%d rowStep=%d colStep=%d",
+         width, height, samplesPerPixel, bitsPerSample, rowStep, colStep);
+    return nullptr;
+  }
+
+  void *rawPtr = env->GetDirectBufferAddress(rawBuffer);
+  jlong capacity = env->GetDirectBufferCapacity(rawBuffer);
+  const jlong requiredBytes =
+      static_cast<jlong>(height - 1) * rowStep * 2 +
+      static_cast<jlong>(width - 1) * colStep * 2 +
+      static_cast<jlong>(samplesPerPixel) * 2;
+  if (!rawPtr || capacity < requiredBytes) {
+    LOGE("encodeLosslessJpegNative: buffer invalid ptr=%p capacity=%lld required=%lld",
+         rawPtr, static_cast<long long>(capacity),
+         static_cast<long long>(requiredBytes));
+    return nullptr;
+  }
+
+  try {
+    dng_memory_stream stream(gDefaultDNGMemoryAllocator);
+    DoEncodeLosslessJPEG(reinterpret_cast<const uint16 *>(rawPtr),
+                         static_cast<uint32>(height),
+                         static_cast<uint32>(width),
+                         static_cast<uint32>(samplesPerPixel),
+                         static_cast<uint32>(bitsPerSample),
+                         static_cast<int32>(rowStep),
+                         static_cast<int32>(colStep),
+                         stream);
+    AutoPtr<dng_memory_block> block(
+        stream.AsMemoryBlock(gDefaultDNGMemoryAllocator));
+    if (!block.Get() || block->LogicalSize() == 0) {
+      LOGE("encodeLosslessJpegNative: DNG SDK returned empty JPEG stream");
+      return nullptr;
+    }
+    if (block->LogicalSize() > static_cast<uint32>(std::numeric_limits<jsize>::max())) {
+      LOGE("encodeLosslessJpegNative: JPEG stream too large: %u",
+           block->LogicalSize());
+      return nullptr;
+    }
+    auto size = static_cast<jsize>(block->LogicalSize());
+    jbyteArray result = env->NewByteArray(size);
+    if (!result) {
+      LOGE("encodeLosslessJpegNative: failed to allocate result byte array");
+      return nullptr;
+    }
+    env->SetByteArrayRegion(
+        result, 0, size,
+        reinterpret_cast<const jbyte *>(block->Buffer()));
+    return result;
+  } catch (const std::exception &e) {
+    LOGE("encodeLosslessJpegNative: exception: %s", e.what());
+    return nullptr;
+  } catch (...) {
+    LOGE("encodeLosslessJpegNative: unknown exception");
+    return nullptr;
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferAllocator_freeNative(
+    JNIEnv *env, jobject, jobject buffer) {
+  if (!buffer) return;
+  void* ptr = env->GetDirectBufferAddress(buffer);
+  if (ptr) {
+    free(ptr);
   }
 }
 

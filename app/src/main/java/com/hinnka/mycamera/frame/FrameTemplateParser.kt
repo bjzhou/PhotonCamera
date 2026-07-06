@@ -2,6 +2,7 @@ package com.hinnka.mycamera.frame
 
 import android.content.Context
 import android.graphics.Color
+import androidx.compose.runtime.snapshots.toInt
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -135,20 +136,143 @@ object FrameTemplateParser {
             nameMap = parseNameMap(obj.opt("name")),
             version = obj.optInt("version", 1),
             layout = parseLayout(obj.getJSONObject("layout")),
-            elements = parseElements(obj.getJSONArray("elements"))
+            elements = parseElements(obj.getJSONArray("elements")),
+            elementsTop = obj.optJSONArray("elementsTop")?.let { parseElements(it) }
         )
+    }
+
+    /**
+     * 将模板序列化为 JSON，保持与解析器字段定义对称。
+     */
+    fun serializeTemplate(template: FrameTemplate): String {
+        val obj = JSONObject().apply {
+            put("id", template.id)
+            put("name", JSONObject().apply {
+                template.nameMap.forEach { (lang, value) ->
+                    put(lang, value)
+                }
+            })
+            put("version", template.version)
+            put("layout", JSONObject().apply {
+                put("position", template.layout.position.name)
+                put("height", template.layout.heightDp)
+                put("backgroundColor", colorToHex(template.layout.backgroundColor))
+                put("borderColor", colorToHex(template.layout.borderColor))
+                put("lineSpacing", template.layout.lineSpacingDp)
+                put("padding", template.layout.paddingDp)
+                if (template.layout.borderWidthDp > 0) {
+                    put("borderWidth", template.layout.borderWidthDp)
+                }
+                if (template.layout.photoCornerRadiusDp > 0) {
+                    put("photoCornerRadius", template.layout.photoCornerRadiusDp)
+                }
+                if (template.layout.photoShadowEnabled) {
+                    put("photoShadowEnabled", true)
+                }
+                if (template.layout.photoShadowRadiusDp > 0) {
+                    put("photoShadowRadius", template.layout.photoShadowRadiusDp)
+                }
+                if (template.layout.photoShadowOffsetXDp != 0) {
+                    put("photoShadowOffsetX", template.layout.photoShadowOffsetXDp)
+                }
+                if (template.layout.photoShadowOffsetYDp != 2) {
+                    put("photoShadowOffsetY", template.layout.photoShadowOffsetYDp)
+                }
+                if (template.layout.photoShadowColor != 0xCC000000.toInt()) {
+                    put("photoShadowColor", colorToHex(template.layout.photoShadowColor))
+                }
+                template.layout.imageResName?.let { put("imageResName", it) }
+                template.layout.imagePath?.let { put("imagePath", it) }
+            })
+            put("elements", JSONArray().apply {
+                template.elements.forEach { element ->
+                    put(serializeElement(element))
+                }
+            })
+            template.elementsTop?.let { elementsTop ->
+                put("elementsTop", JSONArray().apply {
+                    elementsTop.forEach { element ->
+                        put(serializeElement(element))
+                    }
+                })
+            }
+        }
+        return obj.toString(2)
+    }
+
+    fun validateTemplate(template: FrameTemplate): List<String> {
+        val errors = mutableListOf<String>()
+
+        if (template.getName().isBlank()) {
+            errors += "name"
+        }
+
+        if (template.layout.heightDp < 0) errors += "layout.height"
+        if (template.layout.paddingDp < 0) errors += "layout.padding"
+        if (template.layout.borderWidthDp < 0) errors += "layout.borderWidth"
+        if (template.layout.photoCornerRadiusDp < 0) errors += "layout.photoCornerRadius"
+        if (template.layout.photoShadowRadiusDp < 0) errors += "layout.photoShadowRadius"
+        if (template.layout.position == FramePosition.IMAGE &&
+            template.layout.imageResName.isNullOrBlank() &&
+            template.layout.imagePath.isNullOrBlank()
+        ) {
+            errors += "layout.imageSource"
+        }
+
+        template.elements.forEachIndexed { index, element ->
+            validateElement(element, "elements[$index]", errors)
+        }
+
+        template.elementsTop?.forEachIndexed { index, element ->
+            validateElement(element, "elementsTop[$index]", errors)
+        }
+
+        return errors
+    }
+
+    private fun validateElement(element: FrameElement, path: String, errors: MutableList<String>) {
+        when (element) {
+            is FrameElement.Text -> {
+                if (element.fontSizeSp < 0) errors += "$path.fontSize"
+            }
+
+            is FrameElement.Logo -> {
+                if (element.sizeDp < 0) errors += "$path.size"
+                if (element.maxWidth < 0) errors += "$path.maxWidth"
+                if (element.marginDp < 0) errors += "$path.margin"
+            }
+
+            is FrameElement.Divider -> {
+                if (element.lengthDp < 0) errors += "$path.length"
+                if (element.thicknessDp < 0) errors += "$path.thickness"
+                if (element.marginDp < 0) errors += "$path.margin"
+            }
+
+            is FrameElement.Spacer -> {
+                if (element.widthDp < 0) errors += "$path.width"
+            }
+        }
     }
     
     /**
      * 解析布局配置
      */
     private fun parseLayout(obj: JSONObject): FrameLayout {
+        val backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF"))
         return FrameLayout(
             position = FramePosition.valueOf(obj.optString("position", "BOTTOM")),
             heightDp = obj.optInt("height", 80),
-            backgroundColor = parseColor(obj.optString("backgroundColor", "#FFFFFF")),
+            backgroundColor = backgroundColor,
+            borderColor = parseColor(obj.optString("borderColor", colorToHex(backgroundColor))),
+            lineSpacingDp = obj.optInt("lineSpacing", 8),
             paddingDp = obj.optInt("padding", 16),
             borderWidthDp = obj.optInt("borderWidth", 0),
+            photoCornerRadiusDp = obj.optInt("photoCornerRadius", 0),
+            photoShadowEnabled = obj.optBoolean("photoShadowEnabled", false),
+            photoShadowRadiusDp = obj.optInt("photoShadowRadius", 0),
+            photoShadowOffsetXDp = obj.optInt("photoShadowOffsetX", 0),
+            photoShadowOffsetYDp = obj.optInt("photoShadowOffsetY", 2),
+            photoShadowColor = parseColor(obj.optString("photoShadowColor", "#CC000000")),
             imageResName = obj.optString("imageResName").takeIf { it.isNotEmpty() },
             imagePath = obj.optString("imagePath").takeIf { it.isNotEmpty() }
         )
@@ -183,6 +307,66 @@ object FrameTemplateParser {
             else -> null
         }
     }
+
+    private fun serializeElement(element: FrameElement): JSONObject {
+        return when (element) {
+            is FrameElement.Text -> JSONObject().apply {
+                put("type", "text")
+                put("textType", element.textType.name)
+                put("alignment", element.alignment.name)
+                put("fontSize", element.fontSizeSp)
+                put("color", colorToHex(element.color))
+                put("fontWeight", element.fontWeight.name)
+                element.fontFamily?.let { put("fontFamily", it) }
+                element.overrideText?.let { put("overrideText", it) }
+                element.format?.let { put("format", it) }
+                element.prefix?.let { put("prefix", it) }
+                element.suffix?.let { put("suffix", it) }
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+
+            is FrameElement.Logo -> JSONObject().apply {
+                put("type", "logo")
+                put("logoType", element.logoType.name)
+                element.overrideSource?.let { put("overrideSource", it) }
+                put("alignment", element.alignment.name)
+                put("size", element.sizeDp)
+                if (element.maxWidth > 0) {
+                    put("maxWidth", element.maxWidth)
+                }
+                if (element.light) {
+                    put("light", true)
+                }
+                put("margin", element.marginDp)
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+
+            is FrameElement.Divider -> JSONObject().apply {
+                put("type", "divider")
+                put("orientation", element.orientation.name)
+                put("alignment", element.alignment.name)
+                put("length", element.lengthDp)
+                put("thickness", element.thicknessDp)
+                put("color", colorToHex(element.color))
+                put("margin", element.marginDp)
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+
+            is FrameElement.Spacer -> JSONObject().apply {
+                put("type", "spacer")
+                put("width", element.widthDp)
+                if (element.line != 0) {
+                    put("line", element.line)
+                }
+            }
+        }
+    }
     
     /**
      * 解析文本元素
@@ -195,6 +379,7 @@ object FrameTemplateParser {
             color = parseColor(obj.optString("color", "#333333")),
             fontWeight = FontWeight.valueOf(obj.optString("fontWeight", "NORMAL")),
             fontFamily = obj.optString("fontFamily").takeIf { it.isNotEmpty() },
+            overrideText = obj.optString("overrideText").takeIf { it.isNotEmpty() },
             format = obj.optString("format").takeIf { it.isNotEmpty() },
             prefix = obj.optString("prefix").takeIf { it.isNotEmpty() },
             suffix = obj.optString("suffix").takeIf { it.isNotEmpty() },
@@ -208,6 +393,7 @@ object FrameTemplateParser {
     private fun parseLogoElement(obj: JSONObject): FrameElement.Logo {
         return FrameElement.Logo(
             logoType = LogoType.valueOf(obj.getString("logoType")),
+            overrideSource = obj.optString("overrideSource").takeIf { it.isNotEmpty() },
             alignment = ElementAlignment.valueOf(obj.optString("alignment", "CENTER")),
             sizeDp = obj.optInt("size", 24),
             maxWidth = obj.optInt("maxWidth", 0),
@@ -250,6 +436,14 @@ object FrameTemplateParser {
             Color.parseColor(colorStr)
         } catch (e: Exception) {
             Color.BLACK
+        }
+    }
+
+    private fun colorToHex(color: Int): String {
+        return if ((color ushr 24) == 0xFF) {
+            String.format("#%06X", color and 0xFFFFFF)
+        } else {
+            String.format("#%08X", color)
         }
     }
 }

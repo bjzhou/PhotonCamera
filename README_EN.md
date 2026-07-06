@@ -1,6 +1,6 @@
 # Photon Camera
 
-[简体中文](./README.md) | [English](./README_EN.md)
+[English](./README.md) | [简体中文](./README_CN.md)
 
 [![Google Play](https://img.shields.io/badge/Google%20Play-Get%20it%20on-green?logo=google-play&logoColor=white)](https://play.google.com/store/apps/details?id=com.hinnka.mycamera)
 
@@ -35,6 +35,12 @@ A professional-grade color adjustment system allowing fine-tuning across multipl
 * **AI-Driven**: Integrates the **midas-v2** depth detection local AI model, optimized for Qualcomm chips.
 * **Precise Depth**: Offers accurate depth sensing for natural background blur transitions (ongoing refinements).
 
+Depth Anything V3 is also supported.
+
+Usage:
+1. Download the TFLite version from https://huggingface.co/qualcomm/Depth-Anything-V3 and place it in `assets`.
+2. In `DepthBokehProcessor`, initialize `depthEstimator` with `DepthEstimator(appContext, DepthEstimator.MODEL_DEPTH_ANYTHING)`.
+
 ### 7. Phantom Mode
 * **Raw Quality**: Directly bridges with the system camera for image capture while applying Photon Camera's LUT engine. This bypasses the typical "bad image quality" and "over-sharpening" issues found in standard third-party camera APIs.
 
@@ -49,7 +55,9 @@ A professional-grade color adjustment system allowing fine-tuning across multipl
 ## 🤝 Contribution & Feedback
 Contributions of any kind are welcome! If you have questions or suggestions, please open an Issue.
 
-## 💰 Donation
-If you find this project helpful, feel free to buy the author a coffee!
+## 📄 License
+Except for third-party components, models, fonts, LUTs, and other assets that carry their own license notices in this repository, Photon Camera source code is licensed under the [Apache License 2.0](./LICENSE).
 
-<img src="./doc/alipay_qr.webp" width="300" alt="Alipay QR Code">
+## Contact
+
+Telegram: https://t.me/photoncameraapp

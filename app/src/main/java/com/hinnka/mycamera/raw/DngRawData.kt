@@ -13,14 +13,20 @@ import java.nio.ByteBuffer
  * @param width 图像宽度
  * @param height 图像高度
  * @param rowStride 行跨度（字节）
+ * @param samplesPerPixel 每像素样本数：1=CFA，3=LinearRaw RGB
  * @param whiteLevel 白电平值
  * @param blackLevel 黑电平值数组 [R, Gr, Gb, B]
  * @param whiteBalance 白平衡增益 [R, Gr, Gb, B]
  * @param colorMatrix 色彩校正矩阵 (3x3 = 9个元素，行主序)
  * @param rotation 旋转角度 (0, 90, 180, 270)
+ * @param shadowScale DNG ShadowScale，用于 Adobe DefaultBlackRender Auto 的暗部黑点计算
  * @param lensShadingMap Lens Shading Map (LSC) 增益表，null表示无LSC数据
  * @param lensShadingMapWidth LSC 表宽度
  * @param lensShadingMapHeight LSC 表高度
+ * @param lensShadingMapGrid DNG GainMap 参数
+ * [originH, originV, spacingH, spacingV, boundsLeft, boundsTop, boundsRight, boundsBottom]，
+ * null 表示按 Camera2 UV 采样
+ * @param defaultCrop DNG DefaultCrop [left, top, right, bottom]，相对于 rawData 有效区
  */
 @Keep
 data class DngRawData @Keep constructor(
@@ -28,22 +34,26 @@ data class DngRawData @Keep constructor(
     val width: Int,
     val height: Int,
     val rowStride: Int,
+    val samplesPerPixel: Int = 1,
     val whiteLevel: Float,
     val blackLevel: FloatArray,
     val preMul: FloatArray,
     val whiteBalance: FloatArray,
     val colorMatrix: FloatArray,
-    val cfaPattern: Int, // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+    val cfaPattern: Int, // 0..3=Bayer, 4..7=4x4 expanded Bayer, 8..11=8x8 expanded Bayer
     val rotation: Int,
     val baselineExposure: Float,
+    val shadowScale: Float = 1.0f,
     val lensShadingMap: FloatArray?,
     val lensShadingMapWidth: Int,
     val lensShadingMapHeight: Int,
+    val lensShadingMapGrid: FloatArray?,
     val exposureBias: Float,
     val iso: Int,
     val shutterSpeed: Long,
     val aperture: Float,
     val activeArray: IntArray?, // [left, top, right, bottom]
+    val defaultCrop: IntArray?, // [left, top, right, bottom] relative to rawData
     val noiseProfile: FloatArray?, // NoiseProfile [S1, O1, S2, O2, ...]
     val embeddedPreview: Bitmap? = null,
 ) : AutoCloseable {
@@ -83,6 +93,7 @@ data class DngRawData @Keep constructor(
         if (width != other.width) return false
         if (height != other.height) return false
         if (rowStride != other.rowStride) return false
+        if (samplesPerPixel != other.samplesPerPixel) return false
         if (whiteLevel != other.whiteLevel) return false
         if (!blackLevel.contentEquals(other.blackLevel)) return false
         if (!preMul.contentEquals(other.preMul)) return false
@@ -91,12 +102,21 @@ data class DngRawData @Keep constructor(
         if (cfaPattern != other.cfaPattern) return false
         if (rotation != other.rotation) return false
         if (baselineExposure != other.baselineExposure) return false
+        if (shadowScale != other.shadowScale) return false
         if (lensShadingMap != null) {
             if (other.lensShadingMap == null) return false
             if (!lensShadingMap.contentEquals(other.lensShadingMap)) return false
         } else if (other.lensShadingMap != null) return false
         if (lensShadingMapWidth != other.lensShadingMapWidth) return false
         if (lensShadingMapHeight != other.lensShadingMapHeight) return false
+        if (lensShadingMapGrid != null) {
+            if (other.lensShadingMapGrid == null) return false
+            if (!lensShadingMapGrid.contentEquals(other.lensShadingMapGrid)) return false
+        } else if (other.lensShadingMapGrid != null) return false
+        if (defaultCrop != null) {
+            if (other.defaultCrop == null) return false
+            if (!defaultCrop.contentEquals(other.defaultCrop)) return false
+        } else if (other.defaultCrop != null) return false
         if (embeddedPreview != null) {
             if (other.embeddedPreview == null) return false
             if (!embeddedPreview.sameAs(other.embeddedPreview)) return false
@@ -110,6 +130,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + width
         result = 31 * result + height
         result = 31 * result + rowStride
+        result = 31 * result + samplesPerPixel
         result = 31 * result + whiteLevel.hashCode()
         result = 31 * result + blackLevel.contentHashCode()
         result = 31 * result + preMul.contentHashCode()
@@ -118,9 +139,12 @@ data class DngRawData @Keep constructor(
         result = 31 * result + cfaPattern
         result = 31 * result + rotation
         result = 31 * result + baselineExposure.hashCode()
+        result = 31 * result + shadowScale.hashCode()
         result = 31 * result + (lensShadingMap?.contentHashCode() ?: 0)
         result = 31 * result + lensShadingMapWidth
         result = 31 * result + lensShadingMapHeight
+        result = 31 * result + (lensShadingMapGrid?.contentHashCode() ?: 0)
+        result = 31 * result + (defaultCrop?.contentHashCode() ?: 0)
         result = 31 * result + (embeddedPreview?.hashCode() ?: 0)
         return result
     }

@@ -11,12 +11,8 @@ local.properties
 app/*/release
 app/release.jks
 .gradle-home
-MGC/MGC_9.6.080_V24_MGC/build
-MGC/MGC_9.6.080_V24_MGC/dist
-MGC/MGC_9.6.080_V24_MGC/classes*.dex
-MGC/MGC_9.6.080_V24_MGC/assets
-MGC/MGC_9.6.080_V24_MGC/lib
-MGC/MGC_9.6.080_V24_MGC/original
-MGC/MGC_9.6.080_V24_MGC/unknown
-MGC/jadx_decompile_src
-MGC/MGC_9.6.080_V24_MGC.apk
+/MGC
+/AGC
+/agc-photon-lut
+/third_party
+/third_party

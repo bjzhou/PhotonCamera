@@ -1,0 +1,79 @@
+{
+  "id": "leica",
+  "name": {
+    "en": "Leica",
+    "zh": "徕卡经典"
+  },
+  "version": 1,
+  "editable": true,
+  "layout": {
+    "position": "BORDER",
+    "height": 64,
+    "backgroundColor": "#FFFFFF",
+    "padding": 8,
+    "borderWidth": 4
+  },
+  "elements": [
+    {
+      "type": "logo",
+      "logoType": "BRAND",
+      "overrideSource": "leica",
+      "alignment": "START",
+      "size": 32,
+      "maxWidth": 128,
+      "margin": 8,
+      "line": -1
+    },
+    {
+      "type": "text",
+      "textType": "CUSTOM",
+      "format": "CAPTURED WITH",
+      "alignment": "START",
+      "fontSize": 12,
+      "color": "#666666",
+      "line": 0
+    },
+    {
+      "type": "text",
+      "textType": "DEVICE_MODEL",
+      "alignment": "START",
+      "fontSize": 16,
+      "color": "#000000",
+      "fontWeight": "BOLD",
+      "line": 1
+    },
+    {
+      "type": "text",
+      "textType": "APERTURE",
+      "alignment": "END",
+      "fontSize": 14,
+      "color": "#666666",
+      "line": 0
+    },
+    {
+      "type": "text",
+      "textType": "SHUTTER_SPEED",
+      "alignment": "END",
+      "fontSize": 14,
+      "color": "#666666",
+      "line": 0
+    },
+    {
+      "type": "text",
+      "textType": "ISO",
+      "alignment": "END",
+      "fontSize": 14,
+      "color": "#666666",
+      "line": 0
+    },
+    {
+      "type": "text",
+      "textType": "FILTER_NAME",
+      "alignment": "END",
+      "fontSize": 16,
+      "color": "#333333",
+      "fontWeight": "BOLD",
+      "line": 1
+    }
+  ]
+}

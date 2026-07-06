@@ -3,6 +3,13 @@
 
     <style name="Theme.MyCamera" parent="android:Theme.Material.Light.NoActionBar" />
 
+    <style name="Theme.MyCamera.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="splashScreenIconSize">240dp</item>
+        <item name="postSplashScreenTheme">@style/Theme.MyCamera</item>
+    </style>
+
     <style name="Theme.MyCamera.Transparent" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>

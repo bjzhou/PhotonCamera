@@ -15,6 +15,7 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.Shaders
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.VideoEncoderColorConfig
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -30,7 +31,8 @@ class HardwareLutVideoRenderer(
     private val width: Int,
     private val height: Int,
     lutConfig: LutConfig?, // 保留参数以兼容现有调用
-    colorRecipeParams: ColorRecipeParams? // 保留参数
+    colorRecipeParams: ColorRecipeParams?, // 保留参数
+    private val encoderColorConfig: VideoEncoderColorConfig = VideoEncoderColorConfig.sdrDisplay()
 ) {
     companion object {
         private const val TAG = "HardwareLutVideoRenderer"
@@ -45,6 +47,8 @@ class HardwareLutVideoRenderer(
     private var shaderProgram: Int = 0
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
+    private var horizontalMirrorTexCoordBuffer: FloatBuffer? = null
+    private var verticalMirrorTexCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
 
     // Cached locations
@@ -88,24 +92,13 @@ class HardwareLutVideoRenderer(
             return
         }
 
-        val configAttribs = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8,
-            EGL14.EGL_GREEN_SIZE, 8,
-            EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_ALPHA_SIZE, 8,
-            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-            0x3142, 1, // EGL_RECORDABLE_ANDROID
-            EGL14.EGL_NONE
-        )
-        val configs = arrayOfNulls<EGLConfig>(1)
-        val numConfigs = IntArray(1)
-        if (!EGL14.eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, 1, numConfigs, 0)) {
-            PLog.e(TAG, "eglChooseConfig failed")
+        val eglConfig = chooseRecordableConfig() ?: run {
+            PLog.e(TAG, "Failed to choose EGL config for ${encoderColorConfig.debugName}")
             return
         }
 
         eglContext = EGL14.eglCreateContext(
-            eglDisplay, configs[0], sharedContext,
+            eglDisplay, eglConfig, sharedContext,
             intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0
         )
         if (eglContext == EGL14.EGL_NO_CONTEXT) {
@@ -115,7 +108,7 @@ class HardwareLutVideoRenderer(
         }
 
         eglSurface = EGL14.eglCreateWindowSurface(
-            eglDisplay, configs[0], surface,
+            eglDisplay, eglConfig, surface,
             intArrayOf(EGL14.EGL_NONE), 0
         )
         if (eglSurface == EGL14.EGL_NO_SURFACE) {
@@ -130,7 +123,59 @@ class HardwareLutVideoRenderer(
         
         initGL()
         isInitialized = true
-        PLog.d(TAG, "EGL initialized successfully. Using Shared Display: ${sharedDisplay != EGL14.EGL_NO_DISPLAY}")
+        PLog.d(
+            TAG,
+            "EGL initialized successfully. sharedDisplay=${sharedDisplay != EGL14.EGL_NO_DISPLAY}, " +
+                "surfaceConfig=${encoderColorConfig.debugName}, prefer10Bit=${encoderColorConfig.prefer10BitInputSurface}"
+        )
+    }
+
+    private fun chooseRecordableConfig(): EGLConfig? {
+        if (encoderColorConfig.prefer10BitInputSurface) {
+            chooseConfig(buildRecordableConfigAttribs(redSize = 10, greenSize = 10, blueSize = 10, alphaSize = 2))
+                ?.also {
+                    PLog.i(TAG, "Using 10-bit EGL config for ${encoderColorConfig.debugName}")
+                    return it
+                }
+            PLog.w(TAG, "10-bit EGL config unavailable, falling back to 8-bit recordable surface")
+        }
+        return chooseConfig(buildRecordableConfigAttribs(redSize = 8, greenSize = 8, blueSize = 8, alphaSize = 8))
+    }
+
+    private fun chooseConfig(configAttribs: IntArray): EGLConfig? {
+        val configs = arrayOfNulls<EGLConfig>(1)
+        val numConfigs = IntArray(1)
+        val success = EGL14.eglChooseConfig(
+            eglDisplay,
+            configAttribs,
+            0,
+            configs,
+            0,
+            1,
+            numConfigs,
+            0
+        )
+        if (!success || numConfigs[0] <= 0) {
+            return null
+        }
+        return configs[0]
+    }
+
+    private fun buildRecordableConfigAttribs(
+        redSize: Int,
+        greenSize: Int,
+        blueSize: Int,
+        alphaSize: Int
+    ): IntArray {
+        return intArrayOf(
+            EGL14.EGL_RED_SIZE, redSize,
+            EGL14.EGL_GREEN_SIZE, greenSize,
+            EGL14.EGL_BLUE_SIZE, blueSize,
+            EGL14.EGL_ALPHA_SIZE, alphaSize,
+            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+            0x3142, 1, // EGL_RECORDABLE_ANDROID
+            EGL14.EGL_NONE
+        )
     }
 
     private fun makeCurrent(): Boolean {
@@ -175,6 +220,12 @@ class HardwareLutVideoRenderer(
         texCoordBuffer = ByteBuffer.allocateDirect(Shaders.TEXTURE_COORDS.size * 4).run {
             order(ByteOrder.nativeOrder()).asFloatBuffer().put(Shaders.TEXTURE_COORDS).apply { position(0) }
         }
+        horizontalMirrorTexCoordBuffer = ByteBuffer.allocateDirect(HORIZONTAL_MIRROR_TEXTURE_COORDS.size * 4).run {
+            order(ByteOrder.nativeOrder()).asFloatBuffer().put(HORIZONTAL_MIRROR_TEXTURE_COORDS).apply { position(0) }
+        }
+        verticalMirrorTexCoordBuffer = ByteBuffer.allocateDirect(VERTICAL_MIRROR_TEXTURE_COORDS.size * 4).run {
+            order(ByteOrder.nativeOrder()).asFloatBuffer().put(VERTICAL_MIRROR_TEXTURE_COORDS).apply { position(0) }
+        }
         indexBuffer = ByteBuffer.allocateDirect(Shaders.DRAW_ORDER.size * 2).run {
             order(ByteOrder.nativeOrder()).asShortBuffer().put(Shaders.DRAW_ORDER).apply { position(0) }
         }
@@ -184,19 +235,20 @@ class HardwareLutVideoRenderer(
      * 渲染一帧
      * @param textureId 2D 纹理 ID (GL_TEXTURE_2D)
      */
-    fun renderFrame(textureId: Int, stMatrix: FloatArray, timestampUs: Long) {
+    fun renderFrame(
+        textureId: Int,
+        stMatrix: FloatArray,
+        timestampUs: Long,
+        mirrorHorizontally: Boolean = false,
+        mirrorVertically: Boolean = false
+    ) {
         if (!isInitialized || textureId == 0 || shaderProgram == 0) return
-
-        val oldDisplay = EGL14.eglGetCurrentDisplay()
-        val oldDrawSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
-        val oldReadSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_READ)
-        val oldContext = EGL14.eglGetCurrentContext()
 
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
             val currentContext = EGL14.eglGetCurrentContext()
             if (currentContext != eglContext) {
                 if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
-                    // Fail silently but log periodically or once
+                    PLog.e(TAG, "eglMakeCurrent failed before render: 0x${Integer.toHexString(EGL14.eglGetError())}")
                     return
                 }
             }
@@ -226,12 +278,6 @@ class HardwareLutVideoRenderer(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         if (uCameraTextureLoc != -1) GLES30.glUniform1i(uCameraTextureLoc, 0)
-        
-        // 即使出错也打印一次，避免日志爆炸
-        val err = GLES30.glGetError()
-        if (err != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "GL Error during bind: 0x${Integer.toHexString(err)} for texture $textureId")
-        }
 
         // 绘制
         if (aPositionLoc != -1) {
@@ -239,8 +285,13 @@ class HardwareLutVideoRenderer(
             GLES30.glVertexAttribPointer(aPositionLoc, 2, GLES30.GL_FLOAT, false, 0, vertexBuffer)
         }
         if (aTexCoordLoc != -1) {
+            val textureCoordinates = when {
+                mirrorHorizontally -> horizontalMirrorTexCoordBuffer
+                mirrorVertically -> verticalMirrorTexCoordBuffer
+                else -> texCoordBuffer
+            }
             GLES30.glEnableVertexAttribArray(aTexCoordLoc)
-            GLES30.glVertexAttribPointer(aTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, texCoordBuffer)
+            GLES30.glVertexAttribPointer(aTexCoordLoc, 2, GLES30.GL_FLOAT, false, 0, textureCoordinates)
         }
 
         indexBuffer?.let {
@@ -258,26 +309,6 @@ class HardwareLutVideoRenderer(
                 PLog.e(TAG, "eglSwapBuffers failed: 0x${Integer.toHexString(error)}")
             }
         }
-
-        restorePreviousEglContext(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
-    }
-
-    private fun restorePreviousEglContext(
-        oldDisplay: EGLDisplay,
-        oldDrawSurface: EGLSurface,
-        oldReadSurface: EGLSurface,
-        oldContext: EGLContext
-    ) {
-        if (oldDisplay == EGL14.EGL_NO_DISPLAY) {
-            EGL14.eglMakeCurrent(
-                EGL14.EGL_NO_DISPLAY,
-                EGL14.EGL_NO_SURFACE,
-                EGL14.EGL_NO_SURFACE,
-                EGL14.EGL_NO_CONTEXT
-            )
-            return
-        }
-        EGL14.eglMakeCurrent(oldDisplay, oldDrawSurface, oldReadSurface, oldContext)
     }
 
     fun release() {
@@ -294,3 +325,17 @@ class HardwareLutVideoRenderer(
     }
 
 }
+
+private val HORIZONTAL_MIRROR_TEXTURE_COORDS = floatArrayOf(
+    1.0f, 0.0f,
+    0.0f, 0.0f,
+    1.0f, 1.0f,
+    0.0f, 1.0f
+)
+
+private val VERTICAL_MIRROR_TEXTURE_COORDS = floatArrayOf(
+    0.0f, 1.0f,
+    1.0f, 1.0f,
+    0.0f, 0.0f,
+    1.0f, 0.0f
+)

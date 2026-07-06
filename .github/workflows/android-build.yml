@@ -22,21 +22,34 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Create local.properties
+        env:
+          BUILT_IN_API_KEY: ${{ secrets.BUILT_IN_API_KEY }}
+          BUILT_IN_API_KEY_GOOGLE: ${{ secrets.BUILT_IN_API_KEY_GOOGLE }}
+        run: |
+          {
+            printf 'BUILT_IN_API_KEY=%s\n' "$BUILT_IN_API_KEY"
+            printf 'BUILT_IN_API_KEY_GOOGLE=%s\n' "$BUILT_IN_API_KEY_GOOGLE"
+          } > local.properties
+
       - name: Decode Keystore
         run: echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 --decode > app/release.keystore
 
-      - name: Build China Release APK
+      - name: Build Release APKs
         run: |
-          ./gradlew assembleChinaRelease \
+          ./gradlew assembleDefaultRelease assembleSamsungRelease assembleMeituRelease \
             -PRELEASE_STORE_FILE=release.keystore \
             -PRELEASE_STORE_PASSWORD=${{ secrets.RELEASE_STORE_PASSWORD }} \
             -PRELEASE_KEY_ALIAS=${{ secrets.RELEASE_KEY_ALIAS }} \
             -PRELEASE_KEY_PASSWORD=${{ secrets.RELEASE_KEY_PASSWORD }}
 
-      - name: Upload China Release APK to GitHub Release
+      - name: Upload Release APKs to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: app/build/outputs/apk/china/release/*.apk
+          files: |
+            app/build/outputs/apk/default/release/*.apk
+            app/build/outputs/apk/samsung/release/*.apk
+            app/build/outputs/apk/meitu/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -95,9 +95,11 @@ std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
                                     int levels);
 
 // Compute tile-based alignment
+// tileSize: grid cell size in pixels (default 32; use 16 for super-res)
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
-                                   int maxShift);
+                                   int maxShift,
+                                   int tileSize = 32);
 
 class ImageStacker {
 public:
@@ -119,8 +121,7 @@ public:
   // Write the result to an ARGB8888 bitmap buffer with rotation and cropping
   void writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
                    int rotation, int targetWR, int targetHR,
-                   const char *outputPath = nullptr, int *outFinalW = nullptr,
-                   int *outFinalH = nullptr);
+                   int *outFinalW = nullptr, int *outFinalH = nullptr);
 
   // Getter for the current scale
   int getScale() const { return scale; }
@@ -168,7 +169,7 @@ public:
 
   // Add a raw frame to the stack
   // rawData: 16-bit single channel Bayer data
-  // cfaPattern: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+  // cfaPattern: 0..3=Bayer, 4..7=4x4 expanded Bayer, 8..11=8x8 expanded Bayer
   void addFrame(const uint16_t *rawData, int rowStride, int cfaPattern);
 
   // New methods for faster image closing

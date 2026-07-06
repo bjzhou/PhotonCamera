@@ -17,7 +17,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -55,6 +54,7 @@ import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.hinnka.mycamera.ui.icons.AppIcons
 
 class ScreenCapturePipActivity : ComponentActivity() {
 
@@ -320,14 +320,18 @@ private fun ScreenCapturePipContent(
                 glSurfaceView.setLensFacing(1)
                 glSurfaceView.setDeviceRotation(0)
                 glSurfaceView.setCalibrationOffset(0)
-                glSurfaceView.setLut(renderConfig.lutConfig)
-                glSurfaceView.setLutEnabled(renderConfig.lutConfig != null)
-                glSurfaceView.setColorRecipeEnabled(!renderConfig.colorRecipeParams.isDefault())
+                glSurfaceView.setBaselineLut(renderConfig.baselineLutConfig)
+                glSurfaceView.setBaselineLutEnabled(renderConfig.baselineLutConfig != null)
+                glSurfaceView.setBaselineColorRecipeEnabled(!renderConfig.baselineColorRecipeParams.isDefault())
+                glSurfaceView.setBaselineParams(renderConfig.baselineColorRecipeParams)
+                glSurfaceView.setLut(renderConfig.creativeLutConfig)
+                glSurfaceView.setLutEnabled(renderConfig.creativeLutConfig != null)
+                glSurfaceView.setColorRecipeEnabled(!renderConfig.creativeColorRecipeParams.isDefault())
                 // MediaProjection feeds the SurfaceTexture with a vertically flipped source space.
                 // Map the user-selected crop from display coordinates into projection coordinates here.
                 glSurfaceView.setSourceCrop(renderConfig.crop.flipVertically())
                 glSurfaceView.setParams(
-                    params = renderConfig.colorRecipeParams,
+                    params = renderConfig.creativeColorRecipeParams,
                     aperture = 0f
                 )
                 glSurfaceView.getRenderSurface()?.let { surface ->
@@ -373,7 +377,7 @@ private fun ScreenCapturePipContent(
                     .padding(top = 48.dp, end = 16.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Default.PictureInPictureAlt,
+                    imageVector = AppIcons.PictureInPictureAlt,
                     contentDescription = stringResource(R.string.screen_capture_return_to_pip)
                 )
             }

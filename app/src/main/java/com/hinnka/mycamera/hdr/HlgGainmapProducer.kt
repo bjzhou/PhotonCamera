@@ -4,12 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Gainmap
 import android.os.Build
 import java.nio.ByteBuffer
-import kotlin.math.ln
-import kotlin.math.pow
 
 class HlgGainmapProducer : GainmapProducer {
 
-    override suspend fun build(source: GainmapSourceSet): GainmapResult? {
+    override suspend fun build(source: GainmapSourceSet, strength: Float): GainmapResult? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
         if (source.sourceKind != SourceKind.HLG_CAPTURE) return null
 
@@ -23,7 +21,8 @@ class HlgGainmapProducer : GainmapProducer {
             hdrReference
         }
 
-        val gainmapBitmap = createGainmapBitmap(sdrBase, alignedHdr) ?: return null
+        val fullHdrRatio = source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO
+        val gainmapBitmap = createGainmapBitmap(sdrBase, alignedHdr, fullHdrRatio, strength) ?: return null
         val gainmap = Gainmap(gainmapBitmap).apply {
             setRatioMin(MIN_GAIN_RATIO, MIN_GAIN_RATIO, MIN_GAIN_RATIO)
             setRatioMax(MAX_GAIN_RATIO, MAX_GAIN_RATIO, MAX_GAIN_RATIO)
@@ -31,7 +30,7 @@ class HlgGainmapProducer : GainmapProducer {
             setEpsilonSdr(EPSILON, EPSILON, EPSILON)
             setEpsilonHdr(EPSILON, EPSILON, EPSILON)
             setMinDisplayRatioForHdrTransition(1.0f)
-            setDisplayRatioForFullHdr(1.45f)
+            setDisplayRatioForFullHdr(fullHdrRatio)
         }
 
         return GainmapResult(
@@ -41,12 +40,17 @@ class HlgGainmapProducer : GainmapProducer {
         )
     }
 
-    private fun createGainmapBitmap(sdrBase: Bitmap, hdrReference: Bitmap): Bitmap? {
+    private fun createGainmapBitmap(
+        sdrBase: Bitmap,
+        hdrReference: Bitmap,
+        fullHdrRatio: Float,
+        strength: Float
+    ): Bitmap? {
+        val displayMapper = HlgDisplayMapper(fullHdrRatio)
         val width = (sdrBase.width / DOWNSAMPLE).coerceAtLeast(1)
         val height = (sdrBase.height / DOWNSAMPLE).coerceAtLeast(1)
         val contents = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
         val pixels = ByteArray(width * height)
-        val logRatioSpan = ln(MAX_GAIN_RATIO / MIN_GAIN_RATIO)
 
         var index = 0
         for (y in 0 until height) {
@@ -54,33 +58,40 @@ class HlgGainmapProducer : GainmapProducer {
             for (x in 0 until width) {
                 val srcX = ((x + 0.5f) * sdrBase.width / width).toInt().coerceIn(0, sdrBase.width - 1)
 
-                val sdrLuma = sampleSdrLuma(sdrBase, srcX, srcY)
-                val hdrLuma = sampleHdrLuma(hdrReference, srcX, srcY)
+                val sdrSample = ProgressiveGainmapMath.sampleSdr(sdrBase, srcX, srcY)
+                val hdrSceneLuma = sampleHdrLuma(hdrReference, srcX, srcY)
+                val hdrDisplayLuma = displayMapper.mapSceneLinearToDisplayLuma(hdrSceneLuma)
 
-                val rawRatio = (hdrLuma / (sdrLuma + EPSILON)).coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
-                val hdrEligibility = smoothstep(HDR_ELIGIBILITY_START, HDR_ELIGIBILITY_END, hdrLuma)
-                val deltaMask = smoothstep(DELTA_START, DELTA_END, hdrLuma - sdrLuma)
-                val selectiveWeight = (hdrEligibility * deltaMask).pow(WEIGHT_POWER)
-                val targetRatio = (1.0f + (rawRatio - 1.0f) * selectiveWeight)
+                val toneRatio = ProgressiveGainmapMath.progressiveToneRatio(
+                    sample = sdrSample,
+                    fullHdrRatio = fullHdrRatio,
+                    maxGainRatio = MAX_GAIN_RATIO
+                )
+                val referenceRatio = (hdrDisplayLuma / (sdrSample.luma + EPSILON))
                     .coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
-                val encoded = ((ln(targetRatio / MIN_GAIN_RATIO) / logRatioSpan) * 255.0f)
-                    .toInt()
-                    .coerceIn(0, 255)
+                val referenceWeight = ProgressiveGainmapMath.referenceBlendWeight(
+                    sample = sdrSample,
+                    hdrSceneLuma = hdrSceneLuma,
+                    hdrDisplayLuma = hdrDisplayLuma
+                )
+                val targetRatio = ProgressiveGainmapMath.mergeReferenceRatio(
+                    toneRatio = toneRatio,
+                    referenceRatio = referenceRatio,
+                    referenceWeight = referenceWeight
+                )
+                    .coerceIn(MIN_GAIN_RATIO, MAX_GAIN_RATIO)
+                    .let {
+                        HdrGainmapStrength.applyToRatio(it, MIN_GAIN_RATIO, MAX_GAIN_RATIO, strength)
+                    }
+                val encoded = ProgressiveGainmapMath.encodeRatio(targetRatio, MIN_GAIN_RATIO, MAX_GAIN_RATIO)
 
                 pixels[index++] = encoded.toByte()
             }
         }
 
-        contents.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
+        val blurred = ProgressiveGainmapMath.blurGainmap(pixels, width, height, BLUR_RADIUS)
+        contents.copyPixelsFromBuffer(ByteBuffer.wrap(blurred))
         return contents
-    }
-
-    private fun sampleSdrLuma(bitmap: Bitmap, x: Int, y: Int): Float {
-        val c = bitmap.getColor(x, y)
-        val r = srgbToLinear(c.red())
-        val g = srgbToLinear(c.green())
-        val b = srgbToLinear(c.blue())
-        return 0.2126f * r + 0.7152f * g + 0.0722f * b
     }
 
     private fun sampleHdrLuma(bitmap: Bitmap, x: Int, y: Int): Float {
@@ -88,29 +99,12 @@ class HlgGainmapProducer : GainmapProducer {
         return (0.2627f * c.red() + 0.6780f * c.green() + 0.0593f * c.blue()).coerceAtLeast(0f)
     }
 
-    private fun srgbToLinear(value: Float): Float {
-        return if (value <= 0.04045f) {
-            value / 12.92f
-        } else {
-            ((value + 0.055f) / 1.055f).pow(2.4f)
-        }
-    }
-
-    private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
-        if (edge0 == edge1) return if (x >= edge1) 1.0f else 0.0f
-        val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0.0f, 1.0f)
-        return t * t * (3.0f - 2.0f * t)
-    }
-
     companion object {
         private const val DOWNSAMPLE = 4
         private const val MIN_GAIN_RATIO = 1.0f
         private const val MAX_GAIN_RATIO = 3.5f
         private const val EPSILON = 1e-4f
-        private const val HDR_ELIGIBILITY_START = 1.0f
-        private const val HDR_ELIGIBILITY_END = 1.8f
-        private const val DELTA_START = 0.03f
-        private const val DELTA_END = 0.30f
-        private const val WEIGHT_POWER = 1.2f
+        private const val BLUR_RADIUS = 3
+        private const val DEFAULT_FULL_HDR_RATIO = 1.45f
     }
 }

@@ -2,4 +2,6 @@
 <paths>
     <files-path name="my_photos" path="photos/" />
     <cache-path name="shared_images" path="shared/" />
+    <cache-path name="updates" path="updates/" />
+    <external-files-path name="downloaded_updates" path="Download/updates/" />
 </paths>

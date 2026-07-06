@@ -2,42 +2,27 @@
     <string name="app_name">Photon Camera</string>
     
     <!-- Camera Controls -->
-    <string name="capture">Ambil</string>
     <string name="switch_camera">Ganti Kamera</string>
     <string name="settings">Pengaturan</string>
     <string name="flash">Lampu Kilat</string>
     <string name="timer">Timer</string>
     <string name="histogram">Histogram</string>
-    <string name="grid">Kisi</string>
     <string name="back">Kembali</string>
     
     <!-- Exposure Controls -->
-    <string name="exposure_compensation">EV</string>
-    <string name="iso">ISO</string>
-    <string name="shutter_speed">Rana</string>
-    <string name="auto">AUTO</string>
     
     <!-- Focus -->
-    <string name="focus">Fokus</string>
-    <string name="tap_to_focus">Ketuk untuk fokus</string>
     
     <!-- Aspect Ratio -->
     <string name="aspect_ratio">Rasio Aspek</string>
-    <string name="ratio_3_2">3:2</string>
-    <string name="ratio_4_3">4:3</string>
-    <string name="ratio_16_9">16:9</string>
-    <string name="ratio_1_1">1:1</string>
     
     <!-- Permissions -->
     <string name="camera_permission_required">Izin Kamera dan Mikrofon diperlukan</string>
     <string name="grant_permission">Berikan Izin</string>
     
     <!-- Zoom -->
-    <string name="zoom">Zoom</string>
     
     <!-- Gallery -->
-    <string name="gallery">Galeri</string>
-    <string name="photo_detail">Detail Foto</string>
     <string name="share">Bagikan</string>
     <string name="delete">Hapus</string>
     <string name="export">Ekspor</string>
@@ -47,20 +32,15 @@
     <string name="select_all">Pilih Semua</string>
     <string name="cancel">Batal</string>
     <string name="save">Simpan</string>
-    <string name="rotate">Putar</string>
     <string name="crop">Pangkas</string>
-    <string name="brightness">Kecerahan</string>
     <string name="delete_confirm">Hapus foto ini?</string>
     <string name="delete_multiple_confirm">Hapus %d foto?</string>
-    <string name="delete_exported_photos">Hapus juga dari galeri sistem</string>
+    <string name="delete_exported_videos_count">Hapus juga %d video yang diekspor</string>
     <string name="no_photos">Belum ada foto</string>
     <string name="photo_info">Info Foto</string>
     <string name="filter">LUT</string>
-    <string name="intensity">Intensitas</string>
-    <string name="original">Asli</string>
     <string name="export_confirm">Ekspor foto dengan LUT yang diterapkan?</string>
     <string name="items_selected">%d Terpilih</string>
-    <string name="not_selected">Tidak terpilih</string>
     <string name="selected">Terpilih</string>
     <string name="imported">Diimpor</string>
     <string name="photo_info_date">Tanggal</string>
@@ -75,9 +55,7 @@
     <string name="frame">Bingkai</string>
     <string name="none">Tidak ada</string>
     <string name="show_app_branding">Tampilkan Branding Aplikasi</string>
-    <string name="export_with_frame_confirm">Ekspor foto dengan tanda air bingkai?</string>
     <string name="import_photo">Impor</string>
-    <string name="adjust_watermark">Sesuaikan Tanda Air</string>
     <string name="watermark_adjustment">Penyesuaian Tanda Air</string>
     <string name="logo">LOGO</string>
     <string name="text_content">Konten Teks</string>
@@ -94,23 +72,16 @@
     <!-- Settings -->
     <string name="settings_title">Pengaturan</string>
     <string name="settings_section_capture">Tangkap</string>
-    <string name="settings_section_display">Tampilan</string>
     <string name="settings_use_raw">Tangkapan RAW</string>
-    <string name="settings_use_raw_description">Tangkap foto dalam format RAW (DNG) untuk kualitas lebih tinggi. Matikan untuk menggunakan format YUV.</string>
+    <string name="settings_use_raw_description">Tangkap foto dalam format RAW (DNG) untuk kualitas lebih tinggi.</string>
     <string name="settings_level_indicator">Level Horizontal</string>
     <string name="settings_level_description">Tampilkan indikator level horizontal saat memotret</string>
     <string name="settings_grid_lines">Garis Kisi</string>
     <string name="settings_grid_description">Tampilkan garis kisi untuk komposisi</string>
     <string name="settings_use_multi_frame">Penumpukan Multi-Frame</string>
-    <string name="settings_use_multi_frame_description">Tangkap beberapa frame dan tumpuk untuk kualitas yang lebih baik dan lebih sedikit noise.</string>
     <string name="settings_multi_frame_count">Jumlah Multi-frame</string>
     <string name="settings_multi_frame_count_description">Jumlah frame untuk penumpukan multi-frame (lebih banyak frame = kualitas lebih baik tetapi lebih lambat).</string>
     <string name="settings_use_super_resolution">Resolusi Super</string>
-    <string name="settings_use_super_resolution_description">Gunakan resolusi super multi-frame 2x untuk lebih banyak detail. (Memerlukan Penumpukan Multi-Frame)</string>
-    <string name="settings_raw_engine">Mesin Pemrosesan RAW</string>
-    <string name="settings_raw_engine_description">Pilih mesin untuk pemrosesan data RAW</string>
-    <string name="settings_raw_engine_native">Native</string>
-    <string name="settings_raw_engine_self_developed">Dikembangkan sendiri</string>
     <string name="settings_use_live_photo">Foto Live</string>
     <string name="settings_use_live_photo_description">Tangkap klip video pendek bersama foto Anda untuk efek foto live yang dinamis.</string>
     <string name="settings_use_gpu_acceleration">Akselerasi GPU</string>
@@ -118,13 +89,15 @@
     <string name="settings_section_frame">Tanda Air Bingkai</string>
     <string name="settings_frame_style">Gaya Bingkai</string>
     <string name="settings_frame_description">Tambahkan bingkai dekoratif dan tanda air ke foto</string>
-    <string name="settings_section_operation">Operasi</string>
-    <string name="settings_section_image_processing">Pemrosesan Gambar</string>
     <string name="settings_section_software_processing">Fine Tuning</string>
     <string name="settings_shutter_sound">Suara Rana</string>
     <string name="settings_shutter_sound_description">Mainkan suara saat mengambil foto</string>
     <string name="settings_vibration">Getaran</string>
     <string name="settings_vibration_description">Bergetar saat mengambil foto</string>
+    <string name="settings_keep_screen_on">Layar Tetap Menyala</string>
+    <string name="settings_keep_screen_on_description">Menjaga layar tetap aktif saat menggunakan kamera. Perekaman video selalu membuatnya tetap aktif.</string>
+    <string name="settings_window_screen_brightness">Kecerahan Layar</string>
+    <string name="settings_window_screen_brightness_description">Atur kecerahan layar untuk jendela aplikasi ini. Matikan untuk memakai bawaan sistem.</string>
     <string name="settings_volume_key_action">Aksi Tombol Volume</string>
     <string name="settings_volume_key_action_description">Pilih aksi tombol volume saat pengambilan</string>
     <string name="settings_volume_key_action_none">Kontrol Volume</string>
@@ -157,10 +130,6 @@
     
     <!-- LUT -->
     <string name="filter_intensity">Intensitas LUT</string>
-    <string name="lut_intensity_none">Tidak ada</string>
-    <string name="lut_intensity_low">Rendah</string>
-    <string name="lut_intensity_medium">Sedang</string>
-    <string name="lut_intensity_high">Tinggi</string>
     <string name="filters_panel">LUT</string>
     <string name="toggle_display_mode">Alihkan Mode Tampilan</string>
     
@@ -178,19 +147,7 @@
     
     <!-- Custom Import -->
     <string name="custom_tag">KUSTOM</string>
-    <string name="settings_section_custom">Impor Kustom</string>
-    <string name="settings_custom_import">Impor Konten Kustom</string>
-    <string name="import_lut">Impor LUT</string>
-    <string name="import_frame">Impor Bingkai</string>
-    <string name="import_image_frame">Impor Bingkai Gambar</string>
-    <string name="settings_import_description">Impor filter LUT kustom (.cube) atau templat bingkai (.png/.webp)</string>
-    <string name="custom_content_management">Konten Diimpor</string>
-    <string name="lut_type">Filter LUT</string>
-    <string name="frame_type">Templat Bingkai</string>
     <string name="delete_confirm_title">Konfirmasi Hapus</string>
-    <string name="delete_custom_content_confirm">Hapus \"%s\"?</string>
-    <string name="importing">Mengimpor...</string>
-    <string name="edit_name">Edit Nama</string>
     <string name="name">Nama</string>
     <string name="confirm">Konfirmasi</string>
     
@@ -210,23 +167,20 @@
     <string name="recipe_param_film_grain">Grain</string>
     <string name="recipe_param_vignette">Vinyet</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
+    <string name="recipe_param_bloom">Bloom</string>
+    <string name="recipe_param_soft_light">Cahaya Lembut</string>
     <string name="recipe_param_halation">Halasi</string>
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
-    <string name="recipe_tab_basic">Dasar</string>
     <string name="recipe_tab_color">Warna</string>
     <string name="recipe_tab_light">Cahaya</string>
     <string name="recipe_tab_texture">Tekstur</string>
     <string name="recipe_tab_post">Pasca</string>
     
     <!-- Post-Processing Parameters (Capture/Edit only) -->
-    <string name="recipe_param_sharpening">Penajaman</string>
-    <string name="recipe_param_noise_reduction">Reduksi Noise</string>
-    <string name="recipe_param_chroma_noise_reduction">Chroma NR</string>
     
     <!-- Developer Options -->
-    <string name="settings_section_developer">Opsi Pengembang</string>
     <string name="settings_log_viewer">Penampil Log</string>
     <string name="settings_log_viewer_description">Lihat dan ekspor log aplikasi untuk diagnostik</string>
     <string name="logs">Log</string>
@@ -239,14 +193,11 @@
     <string name="settings_frame_management_description">Kelola bingkai, setel default, urutkan ulang</string>
     <string name="filter_management_title">Manajemen LUT</string>
     <string name="frame_management_title">Manajemen Bingkai</string>
-    <string name="category_all">Semua</string>
     <string name="category_custom">Kustom</string>
-    <string name="set_as_default">Setel sebagai Default</string>
     <string name="current_default">Default</string>
     <string name="rename">Ganti Nama</string>
     <string name="import_filter">Impor LUT</string>
     <string name="import_frame_json">Impor Konfig Bingkai</string>
-    <string name="import_frame_image">Impor Bingkai Gambar</string>
     <string name="delete_filter_confirm_message">Hapus LUT \"%s\"?</string>
     <string name="delete_frame_confirm_message">Hapus bingkai \"%s\"?</string>
     <string name="rename_dialog_title">Ganti Nama</string>
@@ -255,7 +206,6 @@
     <string name="copy_suffix"> (Salinan)</string>
     <string name="edit_category">Edit Kategori</string>
     <string name="batch_edit_category">Edit Kategori Massal</string>
-    <string name="sort_categories">Urutkan Kategori</string>
     <string name="drag_to_reorder_categories">Tarik pegangan untuk mengatur ulang tab</string>
     <string name="selected_count">%d Terpilih</string>
     <string name="category">Kategori</string>
@@ -270,15 +220,9 @@
     <string name="delete_category_message">Apakah Anda yakin ingin menghapus kategori \"%s\"? LUT di bawah kategori ini akan diatur ulang ke tidak berkategori.</string>
     <string name="built_in">Bawaan</string>
     <string name="custom">Kustom</string>
-    <string name="no_filters">Tidak ada LUT kustom</string>
-    <string name="no_frames">Tidak ada bingkai kustom</string>
     <string name="input_curve">Kurva Input</string>
     
     <!-- Frame Import Help -->
-    <string name="help">Bantuan</string>
-    <string name="got_it">Mengerti</string>
-    <string name="frame_import_help_title">Panduan Impor Bingkai</string>
-    <string name="frame_import_help_message">Format yang didukung: PNG, WebP\n\nPersyaratan:\n• Gambar harus memiliki area transparan (saluran alfa)\n• Foto Anda akan diletakkan di belakang bingkai, terlihat melalui wilayah transparan\n\nTips: Desain bingkai Anda dengan potongan transparan di tempat Anda ingin foto muncul.</string>
     
     <!-- Camera Calibration -->
     <string name="settings_section_calibration">Kalibrasi Kamera</string>
@@ -294,7 +238,6 @@
     <string name="current_camera">Kamera Saat Ini</string>
     
     <!-- About & Donation -->
-    <string name="settings_section_about">Tentang</string>
     <string name="settings_donation">Donasi</string>
     <string name="settings_donation_description">Dukung pengembangan Photon Camera</string>
     <string name="settings_default_focal_length">Panjang Fokus Default</string>
@@ -302,19 +245,11 @@
     <string name="refresh">Segarkan</string>
     <string name="refresh_success">Pratinjau disegarkan</string>
     <string name="refresh_failed">Gagal menyegarkan pratinjau</string>
-    <string name="settings_raw_restore_lut">LUT Restorasi RAW</string>
-    <string name="settings_raw_restore_lut_description">Pilih LUT yang digunakan untuk restorasi warna RAW. Gunakan "None" untuk output log.</string>
     <string name="settings_dro_mode">Pengoptimal Rentang Dinamis RAW (DRO)</string>
-    <string name="settings_dro_mode_description">Mengoptimalkan detail bayangan dan kompresi sorotan dengan memanfaatkan headroom kurva Log. Nilai yang lebih tinggi mempertahankan lebih banyak sorotan tetapi mungkin membutuhkan lebih banyak cahaya.</string>
     <string name="settings_dro_off">Mati</string>
-    <string name="settings_dro_low">Rendah</string>
-    <string name="settings_dro_high">Tinggi</string>
-    <string name="settings_apply_ultra_hdr">Strategi Eksposur Ultra HDR</string>
-    <string name="settings_apply_ultra_hdr_description">Berdasarkan penumpukan multi-frame dan analisis histogram, secara otomatis mengurangi eksposur untuk melindungi sorotan saat cahaya cukup. Efektif hanya jika RAW dan Multi-Frame diaktifkan.</string>
-    <string name="settings_color_space">Ruang Warna RAW</string>
-    <string name="settings_color_space_description">Pilih ruang warna target untuk pemrosesan RAW.</string>
-    <string name="settings_log_curve">Gamma RAW</string>
-    <string name="settings_log_curve_description">Pilih fungsi transfer untuk pemrosesan RAW (Kurva Log).</string>
+    <string name="settings_dro_dr100">DR100</string>
+    <string name="settings_dro_dr200">DR200</string>
+    <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Aktifkan output YUV 10-bit untuk presisi data gambar yang lebih baik. Efektif pada perangkat yang didukung saat RAW dinonaktifkan.</string>
 </resources>

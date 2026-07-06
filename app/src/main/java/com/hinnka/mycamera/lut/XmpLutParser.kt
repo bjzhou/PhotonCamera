@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import java.io.ByteArrayOutputStream
@@ -31,11 +32,84 @@ object XmpLutParser {
         }
     }
 
+    fun parseName(inputStream: InputStream): String? {
+        return try {
+            val factory = DocumentBuilderFactory.newInstance()
+            factory.isNamespaceAware = true
+            val builder = factory.newDocumentBuilder()
+            val doc = builder.parse(inputStream)
+
+            val crsNs = "http://ns.adobe.com/camera-raw-settings/1.0/"
+            val descriptions = doc.getElementsByTagNameNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "Description")
+
+            var name: String? = null
+            for (i in 0 until descriptions.length) {
+                val desc = descriptions.item(i) as org.w3c.dom.Element
+
+                // 1. Try crs:Name attribute with namespace
+                if (desc.hasAttributeNS(crsNs, "Name")) {
+                    val value = desc.getAttributeNS(crsNs, "Name")
+                    if (value.isNotEmpty()) {
+                        name = value
+                        break
+                    }
+                }
+
+                // 2. Try Name attribute without namespace
+                if (desc.hasAttribute("Name")) {
+                    val value = desc.getAttribute("Name")
+                    if (value.isNotEmpty()) {
+                        name = value
+                        break
+                    }
+                }
+
+                // 3. Try crs:Name attribute directly
+                if (desc.hasAttribute("crs:Name")) {
+                    val value = desc.getAttribute("crs:Name")
+                    if (value.isNotEmpty()) {
+                        name = value
+                        break
+                    }
+                }
+
+                // 4. Try crs:LookName attribute as fallback
+                if (desc.hasAttributeNS(crsNs, "LookName")) {
+                    val value = desc.getAttributeNS(crsNs, "LookName")
+                    if (value.isNotEmpty()) {
+                        name = value
+                        break
+                    }
+                }
+            }
+
+            // 5. Try crs:Name element
+            if (name.isNullOrBlank()) {
+                val nameElements = doc.getElementsByTagNameNS(crsNs, "Name")
+                if (nameElements.length > 0) {
+                    name = nameElements.item(0).textContent?.trim()
+                }
+            }
+
+            if (name.isNullOrBlank()) {
+                val nameElements = doc.getElementsByTagName("crs:Name")
+                if (nameElements.length > 0) {
+                    name = nameElements.item(0).textContent?.trim()
+                }
+            }
+
+            name?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            PLog.e("XmpLutParser", "Failed to parse Name from XMP", e)
+            null
+        }
+    }
+
     fun parse(
         inputStream: InputStream,
         outputStream: OutputStream,
         colorSpace: ColorSpace = ColorSpace.SRGB,
-        curve: LutCurve = LutCurve.SRGB
+        curve: TransferCurve = TransferCurve.SRGB
     ): Boolean {
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
@@ -97,11 +171,11 @@ object XmpLutParser {
         return writePlutFile(outputStream, lutData, colorSpace, curve)
     }
 
-    private fun resampleLut(lutData: LutData, curve: LutCurve): LutData {
+    private fun resampleLut(lutData: LutData, curve: TransferCurve): LutData {
         val size = lutData.divisions
         // 尝试使用 Native 优化
         val nativeData = try {
-            LutProcessor.resampleLutNative(lutData.samples, size, curve.ordinal)
+            LutProcessor.resampleLutNative(lutData.samples, size, curve.storageId)
         } catch (e: Throwable) {
             null
         }
@@ -120,13 +194,13 @@ object XmpLutParser {
                     val g = gIdx * step
                     val b = bIdx * step
 
-                    val rLin = LutCurve.SRGB.toLinear(r)
-                    val gLin = LutCurve.SRGB.toLinear(g)
-                    val bLin = LutCurve.SRGB.toLinear(b)
+                    val rLin = TransferCurve.SRGB.logToLinear(r)
+                    val gLin = TransferCurve.SRGB.logToLinear(g)
+                    val bLin = TransferCurve.SRGB.logToLinear(b)
 
-                    val rLog = curve.fromLinear(rLin)
-                    val gLog = curve.fromLinear(gLin)
-                    val bLog = curve.fromLinear(bLin)
+                    val rLog = curve.linearToLog(rLin)
+                    val gLog = curve.linearToLog(gLin)
+                    val bLog = curve.linearToLog(bLin)
 
                     val interpolated = trilinearSample(lutData, rLog, gLog, bLog)
 
@@ -334,7 +408,7 @@ object XmpLutParser {
         outputStream: OutputStream,
         lut: LutData,
         colorSpace: ColorSpace,
-        curve: LutCurve
+        curve: TransferCurve
     ): Boolean {
         val size = lut.divisions
         val count = size * size * size * 3
@@ -345,7 +419,7 @@ object XmpLutParser {
         buffer.putInt(3) // version
         buffer.putInt(size)
         buffer.putInt(1) // dataType: 1 = UINT16
-        buffer.putInt(curve.ordinal)
+        buffer.putInt(curve.storageId)
         buffer.putInt(colorSpace.ordinal)
 
         for (s in lut.samples) {

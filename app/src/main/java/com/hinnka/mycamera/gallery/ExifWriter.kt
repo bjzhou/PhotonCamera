@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.gallery
 
+import android.graphics.Bitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.utils.PLog
@@ -63,6 +64,57 @@ object ExifWriter {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to write EXIF to FileDescriptor", e)
         }
+    }
+
+    fun buildExifBlock(cacheDir: File, captureInfo: CaptureInfo): ByteArray? {
+        val tempFile = File(cacheDir, "temp_exif_${System.nanoTime()}.jpg")
+        return try {
+            val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+            try {
+                tempFile.outputStream().use { output ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)
+                }
+            } finally {
+                bitmap.recycle()
+            }
+            writeExif(tempFile, captureInfo)
+            extractJpegExifBlock(tempFile.readBytes())
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to build EXIF block", e)
+            null
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    private fun extractJpegExifBlock(jpegBytes: ByteArray): ByteArray? {
+        var offset = 2
+        if (jpegBytes.size < offset || jpegBytes[0] != 0xFF.toByte() || jpegBytes[1] != 0xD8.toByte()) {
+            return null
+        }
+
+        while (offset + 4 <= jpegBytes.size) {
+            if (jpegBytes[offset] != 0xFF.toByte()) return null
+            val marker = jpegBytes[offset + 1].toInt() and 0xFF
+            if (marker == 0xDA || marker == 0xD9) return null
+
+            val segmentLength = ((jpegBytes[offset + 2].toInt() and 0xFF) shl 8) or
+                    (jpegBytes[offset + 3].toInt() and 0xFF)
+            if (segmentLength < 2 || offset + 2 + segmentLength > jpegBytes.size) return null
+
+            val payloadOffset = offset + 4
+            val payloadLength = segmentLength - 2
+            if (marker == 0xE1 && payloadLength >= EXIF_HEADER.size) {
+                val hasExifHeader = EXIF_HEADER.indices.all { index ->
+                    jpegBytes[payloadOffset + index] == EXIF_HEADER[index]
+                }
+                if (hasExifHeader) {
+                    return jpegBytes.copyOfRange(payloadOffset, payloadOffset + payloadLength)
+                }
+            }
+            offset += 2 + segmentLength
+        }
+        return null
     }
 
     /**
@@ -198,4 +250,13 @@ object ExifWriter {
         }
         return if (x == 0) 1 else x
     }
+
+    private val EXIF_HEADER = byteArrayOf(
+        'E'.code.toByte(),
+        'x'.code.toByte(),
+        'i'.code.toByte(),
+        'f'.code.toByte(),
+        0,
+        0
+    )
 }

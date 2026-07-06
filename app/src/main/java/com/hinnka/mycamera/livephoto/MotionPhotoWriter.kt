@@ -16,8 +16,30 @@ import java.nio.charset.StandardCharsets
 object MotionPhotoWriter {
     private const val TAG = "MotionPhotoWriter"
 
+    private const val JPEG_SOI = 0xFFD8     // Start of Image
     private const val JPEG_APP1 = 0xFFE1    // APP1 (EXIF/XMP)
     private const val JPEG_SOS = 0xFFDA     // Start of Scan
+    private const val JPEG_EOI = 0xFFD9     // End of Image
+
+    private val xmpItemTagRegex = "<(?:[A-Za-z_][\\w.-]*:)?Item\\b([^>]*)/?>".toRegex()
+    private val xmpAttributeRegex =
+        "(?:[A-Za-z_][\\w.-]*:)?([A-Za-z_][\\w.-]*)\\s*=\\s*\"([^\"]*)\"".toRegex()
+
+    private data class XmpContainerItem(
+        val mime: String?,
+        val semantic: String?,
+        val length: Long?
+    )
+
+    private data class XmpVideoInfo(
+        val containerLength: Long,
+        val videoLength: Long
+    )
+
+    private data class EmbeddedVideoRange(
+        val offset: Long,
+        val length: Long
+    )
 
     /**
      * 获取适合当前设备的创建器
@@ -102,32 +124,7 @@ object MotionPhotoWriter {
             }
 
             // 3. Check standard XMP / Oppo XMP
-            val jpegData = file.readBytes()
-            var pos = 2
-            while (pos < jpegData.size - 1) {
-                val marker = ((jpegData[pos].toInt() and 0xFF) shl 8) or (jpegData[pos + 1].toInt() and 0xFF)
-                if (marker == JPEG_SOS) break
-                if (marker == JPEG_APP1) {
-                    val length = ((jpegData[pos + 2].toInt() and 0xFF) shl 8) or (jpegData[pos + 3].toInt() and 0xFF)
-                    val segmentData = jpegData.copyOfRange(pos + 4, minOf(pos + 4 + length - 2, jpegData.size))
-                    val segmentString = String(segmentData, StandardCharsets.UTF_8)
-                    
-                    val regexes = listOf(
-                        """MicroVideoOffset="(\d+)"""".toRegex(),
-                        """VideoLength="(\d+)"""".toRegex()
-                    )
-                    for (regex in regexes) {
-                        val match = regex.find(segmentString)
-                        if (match != null) return match.groupValues[1].toLongOrNull() ?: 0L
-                    }
-                    pos += 2 + length
-                } else if (marker in 0xFFE0..0xFFEF || marker == 0xFFFE) {
-                    val length = ((jpegData[pos + 2].toInt() and 0xFF) shl 8) or (jpegData[pos + 3].toInt() and 0xFF)
-                    pos += 2 + length
-                } else {
-                    pos++
-                }
-            }
+            parseXmpVideoInfo(file)?.let { return it.videoLength }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to parse video length", e)
         }
@@ -156,26 +153,18 @@ object MotionPhotoWriter {
             }
 
             // Check standard XMP / Oppo XMP
-            // To be efficient, we check for common markers in the first 64KB
             val jpegData = file.readBytes()
-            var pos = 2
-            while (pos < jpegData.size - 1) {
-                val marker = ((jpegData[pos].toInt() and 0xFF) shl 8) or (jpegData[pos + 1].toInt() and 0xFF)
-                if (marker == JPEG_SOS) break
-                if (marker == JPEG_APP1) {
-                    val length = ((jpegData[pos + 2].toInt() and 0xFF) shl 8) or (jpegData[pos + 3].toInt() and 0xFF)
-                    val segmentData = jpegData.copyOfRange(pos + 4, minOf(pos + 4 + length - 2, jpegData.size))
-                    val segmentString = String(segmentData, StandardCharsets.UTF_8)
-                    if (segmentString.contains("MicroVideo=\"1\"") || 
-                        segmentString.contains("MotionPhoto=\"1\"")) return true
-                    pos += 2 + length
-                } else if (marker in 0xFFE0..0xFFEF || marker == 0xFFFE) {
-                    val length = ((jpegData[pos + 2].toInt() and 0xFF) shl 8) or (jpegData[pos + 3].toInt() and 0xFF)
-                    pos += 2 + length
+            val isXmpMotionPhoto = findInApp1Segments(jpegData) { segmentString ->
+                if (segmentString.contains("MicroVideo=\"1\"") ||
+                    segmentString.contains("MotionPhoto=\"1\"") ||
+                    parseXmpVideoInfo(segmentString) != null
+                ) {
+                    true
                 } else {
-                    pos++
+                    null
                 }
-            }
+            } ?: false
+            if (isXmpMotionPhoto) return true
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to check Motion Photo", e)
         }
@@ -193,32 +182,16 @@ object MotionPhotoWriter {
         try {
             val file = File(filePath)
             val jpegData = file.readBytes()
-            var pos = 2
-            while (pos < jpegData.size - 1) {
-                val marker = ((jpegData[pos].toInt() and 0xFF) shl 8) or (jpegData[pos + 1].toInt() and 0xFF)
-                if (marker == JPEG_SOS) break
-                if (marker == JPEG_APP1) {
-                    val length = ((jpegData[pos + 2].toInt() and 0xFF) shl 8) or (jpegData[pos + 3].toInt() and 0xFF)
-                    val segmentData = jpegData.copyOfRange(pos + 4, minOf(pos + 4 + length - 2, jpegData.size))
-                    val segmentString = String(segmentData, StandardCharsets.UTF_8)
-                    
-                    val regexes = listOf(
-                        """MicroVideoPresentationTimestampUs="(\d+)"""".toRegex(),
-                        """MotionPhotoPresentationTimestampUs="(\d+)"""".toRegex(),
-                        """MotionPhotoPrimaryPresentationTimestampUs="(\d+)"""".toRegex()
+            return findInApp1Segments(jpegData) { segmentString ->
+                findFirstLongAttribute(
+                    segmentString,
+                    listOf(
+                        "MicroVideoPresentationTimestampUs",
+                        "MotionPhotoPresentationTimestampUs",
+                        "MotionPhotoPrimaryPresentationTimestampUs"
                     )
-                    for (regex in regexes) {
-                        val match = regex.find(segmentString)
-                        if (match != null) return match.groupValues[1].toLongOrNull() ?: -1L
-                    }
-                    pos += 2 + length
-                } else if (marker in 0xFFE0..0xFFEF || marker == 0xFFFE) {
-                    val length = ((jpegData[pos + 2].toInt() and 0xFF) shl 8) or (jpegData[pos + 3].toInt() and 0xFF)
-                    pos += 2 + length
-                } else {
-                    pos++
-                }
-            }
+                )
+            } ?: -1L
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to get timestamp", e)
         }
@@ -240,24 +213,15 @@ object MotionPhotoWriter {
                 return false
             }
 
-            val videoLength = getVideoLength(motionPhotoPath)
-            if (videoLength <= 0) return false
-
             val file = File(motionPhotoPath)
-            val fileLength = file.length()
-            
-            val hasLegacyMarker = checkLegacyMarker(motionPhotoPath)
-            val offset = if (hasLegacyMarker) {
-                fileLength - videoLength - 20
-            } else {
-                fileLength - videoLength
-            }
+            val videoRange = resolveEmbeddedVideoRange(file) ?: return false
 
+            var copiedCompletely = false
             FileInputStream(file).use { input ->
-                input.skip(offset)
+                input.channel.position(videoRange.offset)
                 FileOutputStream(outputVideoPath).use { output ->
                     val buffer = ByteArray(8192)
-                    var lenRemaining = videoLength
+                    var lenRemaining = videoRange.length
                     while (lenRemaining > 0) {
                         val toRead = minOf(buffer.size.toLong(), lenRemaining).toInt()
                         val bytesRead = input.read(buffer, 0, toRead)
@@ -265,7 +229,12 @@ object MotionPhotoWriter {
                         output.write(buffer, 0, bytesRead)
                         lenRemaining -= bytesRead
                     }
+                    copiedCompletely = lenRemaining == 0L
                 }
+            }
+            if (!copiedCompletely) {
+                File(outputVideoPath).delete()
+                return false
             }
             return true
         } catch (e: Exception) {
@@ -274,18 +243,158 @@ object MotionPhotoWriter {
         }
     }
 
-    private fun checkLegacyMarker(filePath: String): Boolean {
-        val file = File(filePath)
-        if (file.length() < 20) return false
+    private fun parseXmpVideoInfo(file: File): XmpVideoInfo? {
+        return findInApp1Segments(file.readBytes(), ::parseXmpVideoInfo)
+    }
+
+    private fun parseXmpVideoInfo(segmentString: String): XmpVideoInfo? {
+        val containerItemLength = parseContainerMotionPhotoLength(segmentString)
+        val microVideoOffset = findLongAttribute(segmentString, "MicroVideoOffset")
+        val legacyVideoLengthAttribute = findLongAttribute(segmentString, "VideoLength")
+            ?.takeUnless { containerItemLength != null && isOppoLivePhotoV2(segmentString) }
+
+        val containerLength = listOfNotNull(
+            containerItemLength,
+            microVideoOffset,
+            legacyVideoLengthAttribute
+        ).firstOrNull { it > 0L } ?: return null
+
+        return XmpVideoInfo(
+            containerLength = containerLength,
+            videoLength = containerLength
+        )
+    }
+
+    private fun isOppoLivePhotoV2(segmentString: String): Boolean {
+        return findLongAttribute(segmentString, "OLivePhotoVersion")?.let { it >= 2L } == true ||
+            segmentString.contains("http://ns.oplus.com/photos/1.0/camera/")
+    }
+
+    private fun parseContainerMotionPhotoLength(segmentString: String): Long? {
+        val items = xmpItemTagRegex.findAll(segmentString)
+            .map { match ->
+                val attributes = xmpAttributeRegex.findAll(match.groupValues[1])
+                    .associate { attribute ->
+                        attribute.groupValues[1].lowercase() to attribute.groupValues[2]
+                    }
+
+                XmpContainerItem(
+                    mime = attributes["mime"],
+                    semantic = attributes["semantic"],
+                    length = attributes["length"]?.toLongOrNull()
+                )
+            }
+            .filter { (it.length ?: 0L) > 0L }
+            .toList()
+
+        return items.firstOrNull { it.isMotionPhotoSemantic() && it.isVideoMime() }?.length
+            ?: items.firstOrNull { it.isMotionPhotoSemantic() }?.length
+            ?: items.firstOrNull { it.isVideoMime() }?.length
+    }
+
+    private fun XmpContainerItem.isMotionPhotoSemantic(): Boolean {
+        val value = semantic ?: return false
+        return value.contains("MotionPhoto", ignoreCase = true) ||
+            value.contains("MicroVideo", ignoreCase = true) ||
+            value.contains("LivePhoto", ignoreCase = true)
+    }
+
+    private fun XmpContainerItem.isVideoMime(): Boolean {
+        val value = mime ?: return false
+        return value.startsWith("video/", ignoreCase = true) ||
+            value.equals("application/mp4", ignoreCase = true)
+    }
+
+    private fun findFirstLongAttribute(segmentString: String, names: List<String>): Long? {
+        for (name in names) {
+            findLongAttribute(segmentString, name)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findLongAttribute(segmentString: String, name: String): Long? {
+        val regex = "(?:[A-Za-z_][\\w.-]*:)?${Regex.escape(name)}\\s*=\\s*\"(\\d+)\"".toRegex()
+        return regex.find(segmentString)?.groupValues?.get(1)?.toLongOrNull()
+    }
+
+    private fun resolveEmbeddedVideoRange(file: File): EmbeddedVideoRange? {
+        readLegacyVideoLength(file)?.let { videoLength ->
+            val offset = file.length() - videoLength - 20L
+            if (offset >= 0L && videoLength > 0L) {
+                return EmbeddedVideoRange(offset = offset, length = videoLength)
+            }
+        }
+
+        val xmpInfo = parseXmpVideoInfo(file) ?: return null
+        val offset = file.length() - xmpInfo.containerLength
+        if (offset < 0L || xmpInfo.videoLength <= 0L) return null
+
+        val availableLength = file.length() - offset
+        return EmbeddedVideoRange(
+            offset = offset,
+            length = minOf(xmpInfo.videoLength, availableLength)
+        )
+    }
+
+    private fun readLegacyVideoLength(file: File): Long? {
+        if (file.length() <= 20) return null
         return try {
             FileInputStream(file).use { fis ->
                 fis.skip(file.length() - 20)
                 val buffer = ByteArray(20)
                 fis.read(buffer)
-                String(buffer, StandardCharsets.UTF_8).contains("LIVE_")
+                val marker = String(buffer, StandardCharsets.UTF_8).trim()
+                if (marker.startsWith("LIVE_")) {
+                    marker.substring(5).toLongOrNull()?.takeIf { it > 0L }
+                } else {
+                    null
+                }
             }
         } catch (e: Exception) {
-            false
+            null
         }
+    }
+
+    private fun <T> findInApp1Segments(jpegData: ByteArray, parser: (String) -> T?): T? {
+        if (jpegData.size < 4) return null
+        val soi = ((jpegData[0].toInt() and 0xFF) shl 8) or (jpegData[1].toInt() and 0xFF)
+        if (soi != JPEG_SOI) return null
+
+        var pos = 2
+        while (pos < jpegData.size - 1) {
+            if ((jpegData[pos].toInt() and 0xFF) != 0xFF) {
+                pos++
+                continue
+            }
+
+            while (pos < jpegData.size && (jpegData[pos].toInt() and 0xFF) == 0xFF) {
+                pos++
+            }
+            if (pos >= jpegData.size) break
+
+            val marker = 0xFF00 or (jpegData[pos].toInt() and 0xFF)
+            pos++
+
+            if (marker == JPEG_SOS || marker == JPEG_EOI) break
+            if (marker == 0xFF01 || marker in 0xFFD0..0xFFD7) continue
+            if (pos + 1 >= jpegData.size) break
+
+            val length = ((jpegData[pos].toInt() and 0xFF) shl 8) or (jpegData[pos + 1].toInt() and 0xFF)
+            if (length < 2) break
+
+            val segmentStart = pos + 2
+            val segmentEnd = minOf(segmentStart + length - 2, jpegData.size)
+            if (marker == JPEG_APP1 && segmentStart <= segmentEnd) {
+                val segmentString = String(
+                    jpegData.copyOfRange(segmentStart, segmentEnd),
+                    StandardCharsets.UTF_8
+                )
+                parser(segmentString)?.let { return it }
+            }
+
+            pos += length
+        }
+
+        return null
     }
 }

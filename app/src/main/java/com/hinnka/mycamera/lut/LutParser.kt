@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 import android.content.Context
 import android.util.Log
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import org.json.JSONObject
@@ -50,8 +51,8 @@ object LutParser {
         val version = buffer.int
         val size = buffer.int
         val dataType = buffer.int
-        val curveOrdinal = if (version >= 2) buffer.int else LutCurve.SRGB.ordinal
-        val curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB }
+        val curveStorageId = if (version >= 2) buffer.int else TransferCurve.SRGB.storageId
+        val curve = TransferCurve.fromStorageId(curveStorageId)
         
         val colorSpaceOrdinal = if (version >= 3) buffer.int else ColorSpace.SRGB.ordinal
         val colorSpace = ColorSpace.entries.getOrElse(colorSpaceOrdinal) { ColorSpace.SRGB }
@@ -117,7 +118,8 @@ object LutParser {
                 val nameObj = lutObj.getJSONObject("name")
                 val isDefault = lutObj.optBoolean("isDefault", false)
                 val isVip = lutObj.getBoolean("isVip")
-                val category = lutObj.optString("category", "Built-in")
+                val category = lutObj.optString("category", "").trim()
+                val isFavorite = lutObj.optBoolean("isFavorite", false)
 
                 // 读取多语言名称
                 val nameMap = mutableMapOf<String, String>()
@@ -133,7 +135,8 @@ object LutParser {
                         isBuiltIn = true,
                         isDefault = isDefault,
                         isVip = isVip,
-                        category = category
+                        category = category,
+                        isFavorite = isFavorite
                     )
                 )
             }

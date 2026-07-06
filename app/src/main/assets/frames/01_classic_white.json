@@ -10,8 +10,8 @@
     "position": "BORDER",
     "height": 80,
     "backgroundColor": "#FFFFFF",
-    "padding": 20,
-    "borderWidth": 20
+    "padding": 8,
+    "borderWidth": 8
   },
   "elements": [
     {

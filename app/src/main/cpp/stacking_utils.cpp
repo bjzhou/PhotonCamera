@@ -22,10 +22,46 @@ inline float getPixelF(const GrayImage &img, int x, int y) {
   return (float)img.data[y * img.width + x];
 }
 
+inline float sampleBilinearGrayFast(const GrayImage &img, float x, float y) {
+  int x0 = (int)std::floor(x);
+  int y0 = (int)std::floor(y);
+  float fx = x - x0;
+  float fy = y - y0;
+
+  const uint8_t *row0 = &img.data[y0 * img.width];
+  const uint8_t *row1 = row0 + img.width;
+  float v00 = (float)row0[x0];
+  float v10 = (float)row0[x0 + 1];
+  float v01 = (float)row1[x0];
+  float v11 = (float)row1[x0 + 1];
+
+  return (1.0f - fx) * (1.0f - fy) * v00 + fx * (1.0f - fy) * v10 +
+         (1.0f - fx) * fy * v01 + fx * fy * v11;
+}
+
+inline float sampleBilinearGrayFastConstFrac(const GrayImage &img, int x0,
+                                             int y0, float fx, float fy) {
+  const uint8_t *row0 = &img.data[(size_t)y0 * img.width];
+  const uint8_t *row1 = row0 + img.width;
+  float v00 = (float)row0[x0];
+  float v10 = (float)row0[x0 + 1];
+  float v01 = (float)row1[x0];
+  float v11 = (float)row1[x0 + 1];
+
+  float w00 = (1.0f - fx) * (1.0f - fy);
+  float w10 = fx * (1.0f - fy);
+  float w01 = (1.0f - fx) * fy;
+  float w11 = fx * fy;
+  return w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+}
+
 // Bilinear interpolation on grayscale image for LK optical flow
 inline float sampleBilinearGray(const GrayImage &img, float x, float y) {
   int x0 = (int)std::floor(x);
   int y0 = (int)std::floor(y);
+  if (x0 >= 0 && x0 + 1 < img.width && y0 >= 0 && y0 + 1 < img.height) {
+    return sampleBilinearGrayFast(img, x, y);
+  }
   float fx = x - x0;
   float fy = y - y0;
 
@@ -72,8 +108,6 @@ inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
   float dy = y - yInt;
 
   float sum = 0.0f;
-  float weightSum = 0.0f;
-
   // 4x4 邻域采样
   for (int j = -1; j <= 2; ++j) {
     int sy = std::max(0, std::min(height - 1, yInt + j));
@@ -85,8 +119,6 @@ inline float sampleBicubic(const std::vector<uint16_t> &data, int width,
 
       float weight = wx * wy;
       sum += (float)data[sy * width + sx] * weight;
-      // Bicubic 权重之和理论为 1，但为了浮点稳定性可以除以 weightSum
-      // weightSum += weight;
     }
   }
 
@@ -122,6 +154,101 @@ inline float computeLocalVariance(const std::vector<uint16_t> &data, int width,
   if (std::isnan(variance) || variance < 0.0f)
     return 0.0f;
   return variance;
+}
+
+struct ReferenceLkTileCache {
+  int startX = 0;
+  int endX = 0;
+  int startY = 0;
+  int endY = 0;
+  int pointCount = 0;
+  float sumIxIx = 0.0f;
+  float sumIyIy = 0.0f;
+  float sumIxIy = 0.0f;
+  float det = 0.0f;
+};
+
+struct ReferenceLkCache {
+  const uint8_t *refDataPtr = nullptr;
+  int width = 0;
+  int height = 0;
+  int tileSize = 0;
+  int gridW = 0;
+  int gridH = 0;
+  int lkHalfWin = 0;
+  std::vector<float> gradX;
+  std::vector<float> gradY;
+  std::vector<ReferenceLkTileCache> tiles;
+};
+
+ReferenceLkCache &getReferenceLkCache(const GrayImage &refL0, int tileSize,
+                                      int gridW, int gridH, int lkHalfWin) {
+  static ReferenceLkCache cache;
+  const uint8_t *refPtr = refL0.data.empty() ? nullptr : refL0.data.data();
+  bool needsRebuild = cache.refDataPtr != refPtr || cache.width != refL0.width ||
+                      cache.height != refL0.height ||
+                      cache.tileSize != tileSize || cache.gridW != gridW ||
+                      cache.gridH != gridH || cache.lkHalfWin != lkHalfWin;
+  if (!needsRebuild) {
+    return cache;
+  }
+
+  cache = {};
+  cache.refDataPtr = refPtr;
+  cache.width = refL0.width;
+  cache.height = refL0.height;
+  cache.tileSize = tileSize;
+  cache.gridW = gridW;
+  cache.gridH = gridH;
+  cache.lkHalfWin = lkHalfWin;
+  cache.gradX.assign((size_t)refL0.width * refL0.height, 0.0f);
+  cache.gradY.assign((size_t)refL0.width * refL0.height, 0.0f);
+  cache.tiles.resize((size_t)gridW * gridH);
+
+#pragma omp parallel for num_threads(4)
+  for (int y = 1; y < refL0.height - 1; ++y) {
+    const uint8_t *row = &refL0.data[(size_t)y * refL0.width];
+    const uint8_t *rowAbove = row - refL0.width;
+    const uint8_t *rowBelow = row + refL0.width;
+    float *gradXRow = &cache.gradX[(size_t)y * refL0.width];
+    float *gradYRow = &cache.gradY[(size_t)y * refL0.width];
+    for (int x = 1; x < refL0.width - 1; ++x) {
+      gradXRow[x] = ((float)row[x + 1] - (float)row[x - 1]) * 0.5f;
+      gradYRow[x] = ((float)rowBelow[x] - (float)rowAbove[x]) * 0.5f;
+    }
+  }
+
+#pragma omp parallel for collapse(2) num_threads(4)
+  for (int ty = 0; ty < gridH; ++ty) {
+    for (int tx = 0; tx < gridW; ++tx) {
+      int cx = tx * tileSize + tileSize / 2;
+      int cy = ty * tileSize + tileSize / 2;
+
+      ReferenceLkTileCache tileCache;
+      tileCache.startX = std::max(1, cx - lkHalfWin);
+      tileCache.endX = std::min(refL0.width - 1, cx + lkHalfWin);
+      tileCache.startY = std::max(1, cy - lkHalfWin);
+      tileCache.endY = std::min(refL0.height - 1, cy + lkHalfWin);
+
+      for (int ry = tileCache.startY; ry < tileCache.endY; ++ry) {
+        const float *gradXRow = &cache.gradX[(size_t)ry * refL0.width];
+        const float *gradYRow = &cache.gradY[(size_t)ry * refL0.width];
+        for (int rx = tileCache.startX; rx < tileCache.endX; ++rx) {
+          float Ix = gradXRow[rx];
+          float Iy = gradYRow[rx];
+          tileCache.sumIxIx += Ix * Ix;
+          tileCache.sumIyIy += Iy * Iy;
+          tileCache.sumIxIy += Ix * Iy;
+          tileCache.pointCount++;
+        }
+      }
+      tileCache.det =
+          tileCache.sumIxIx * tileCache.sumIyIy - tileCache.sumIxIy * tileCache.sumIxIy;
+      cache.tiles[(size_t)ty * gridW + tx] = tileCache;
+    }
+  }
+
+  return cache;
 }
 
 std::vector<GrayImage> buildPyramid(const uint8_t *src, int width, int height,
@@ -198,6 +325,7 @@ long long computeSAD(const GrayImage &ref, const GrayImage &target, int dx,
   uint64_t totalSad = 0;
   int width_to_process = endX - startX;
 
+#pragma omp parallel for reduction(+ : totalSad) num_threads(4)
   for (int y = startY; y < endY; ++y) {
     const uint8_t *pRef = &ref.data[y * ref.width + startX];
     const uint8_t *pTgt = &target.data[(y + dy) * target.width + (startX + dx)];
@@ -238,6 +366,7 @@ long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
   }
 
   uint32_t totalSad = 0;
+
   for (int y = 0; y < h; ++y) {
     const uint8_t *pRef = &ref.data[(refY + y) * ref.width + refX];
     const uint8_t *pTgt =
@@ -270,9 +399,9 @@ long long computeBlockSAD(const GrayImage &ref, const GrayImage &target,
 
 TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
                                    const std::vector<GrayImage> &targetPyramid,
-                                   int maxShift) {
+                                   int maxShift,
+                                   int tileSize) {
   TIME_START(computeTileAlignment);
-  const int tileSize = 32; // Increased from 16 to 32 for performance
   int width = refPyramid[0].width;
   int height = refPyramid[0].height;
 
@@ -292,7 +421,6 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   Point globalOffset = {0, 0};
   int currentDx = 0;
   int currentDy = 0;
-
   for (int i = refPyramid.size() - 1; i >= 1; --i) {
     currentDx *= 2;
     currentDy *= 2;
@@ -321,6 +449,8 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   // 2. Refine per tile at Level 1
   const GrayImage &refL1 = refPyramid[1];
   const GrayImage &tgtL1 = targetPyramid[1];
+  const GrayImage &refL0 = refPyramid[0];
+  const GrayImage &tgtL0 = targetPyramid[0];
 
   // Grid step at L1 is tileSize/2 (16 pixels)
   int stepL1 = tileSize / 2;
@@ -332,13 +462,25 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
   float gDxL1 = globalOffset.x; // Already at L1 scale from loop above
   float gDyL1 = globalOffset.y;
 
-  // Temporary buffer for raw vectors
+  // Use a sparser control grid for small tiles, then interpolate back to the
+  // dense output grid. This cuts the expensive LK solves by roughly 4x while
+  // keeping a dense flow field for later fusion.
+  int controlStrideTiles =
+      (tileSize <= 16 && gridW >= 4 && gridH >= 4) ? 2 : 1;
+  int controlGridW = (gridW + controlStrideTiles - 1) / controlStrideTiles;
+  int controlGridH = (gridH + controlStrideTiles - 1) / controlStrideTiles;
+  std::vector<Point> controlOffsets((size_t)controlGridW * controlGridH);
   std::vector<Point> rawOffsets(gridW * gridH);
+  const int lkHalfWin = 12;
+  const int lkMargin = lkHalfWin + 2;
+  const ReferenceLkCache &referenceLkCache =
+      getReferenceLkCache(refL0, tileSize, gridW, gridH, lkHalfWin);
 
 #pragma omp parallel for collapse(2) num_threads(4)
-  for (int ty = 0; ty < gridH; ++ty) {
-    for (int tx = 0; tx < gridW; ++tx) {
-
+  for (int cty = 0; cty < controlGridH; ++cty) {
+    for (int ctx = 0; ctx < controlGridW; ++ctx) {
+      int tx = std::min(ctx * controlStrideTiles, gridW - 1);
+      int ty = std::min(cty * controlStrideTiles, gridH - 1);
       int refX = tx * stepL1;
       int refY = ty * stepL1;
 
@@ -347,8 +489,6 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
       int baseDy = (int)std::round(gDyL1);
       int bestDx = baseDx;
       int bestDy = baseDy;
-      float bestDx_f = 0.0f;
-      float bestDy_f = 0.0f;
 
       // Local search: Reduced range to 3x3 for performance
       for (int dy = -1; dy <= 1; ++dy) {
@@ -384,67 +524,84 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
 
       // 4. Lucas-Kanade refinement at L0 for sub-pixel accuracy
       // Scale L1 result to L0 as initial estimate
-      const GrayImage &refL0 = refPyramid[0];
-      const GrayImage &tgtL0 = targetPyramid[0];
       float lkDx = (float)(bestDx + subDx) * 2.0f;
       float lkDy = (float)(bestDy + subDy) * 2.0f;
 
       int cx = tx * tileSize + tileSize / 2;
       int cy = ty * tileSize + tileSize / 2;
 
-      int lkHalfWin = 12;
-
       // Pre-compute spatial gradients (Ix, Iy) and the Hessian matrix (sumIxIx,
       // sumIyIy, sumIxIy) These are static for the reference frame and DO NOT
       // change across iterations!
-      float sumIxIx = 0, sumIyIy = 0, sumIxIy = 0;
-
       const int maxPts = 600;
       float Ixs[maxPts], Iys[maxPts], Tvals[maxPts];
       int ptsx[maxPts], ptsy[maxPts];
+      const ReferenceLkTileCache &tileCache =
+          referenceLkCache.tiles[(size_t)ty * gridW + tx];
       int ptCount = 0;
-
-      for (int wy = -lkHalfWin; wy < lkHalfWin; ++wy) {
-        for (int wx = -lkHalfWin; wx < lkHalfWin; ++wx) {
-          int rx = cx + wx;
-          int ry = cy + wy;
-          if (rx < 1 || rx >= width - 1 || ry < 1 || ry >= height - 1)
-            continue;
-
-          float Ix =
-              (getPixelF(refL0, rx + 1, ry) - getPixelF(refL0, rx - 1, ry)) *
-              0.5f;
-          float Iy =
-              (getPixelF(refL0, rx, ry + 1) - getPixelF(refL0, rx, ry - 1)) *
-              0.5f;
-
-          sumIxIx += Ix * Ix;
-          sumIyIy += Iy * Iy;
-          sumIxIy += Ix * Iy;
-
-          if (ptCount < maxPts) {
-            Ixs[ptCount] = Ix;
-            Iys[ptCount] = Iy;
-            Tvals[ptCount] = getPixelF(refL0, rx, ry);
-            ptsx[ptCount] = rx;
-            ptsy[ptCount] = ry;
-            ptCount++;
-          }
+      for (int ry = tileCache.startY; ry < tileCache.endY; ++ry) {
+        const float *gradXRow =
+            &referenceLkCache.gradX[(size_t)ry * width];
+        const float *gradYRow =
+            &referenceLkCache.gradY[(size_t)ry * width];
+        const uint8_t *refRow = &refL0.data[(size_t)ry * width];
+        for (int rx = tileCache.startX; rx < tileCache.endX; ++rx) {
+          if (ptCount >= maxPts)
+            break;
+          Ixs[ptCount] = gradXRow[rx];
+          Iys[ptCount] = gradYRow[rx];
+          Tvals[ptCount] = (float)refRow[rx];
+          ptsx[ptCount] = rx;
+          ptsy[ptCount] = ry;
+          ptCount++;
         }
       }
+      float sumIxIx = tileCache.sumIxIx;
+      float sumIyIy = tileCache.sumIyIy;
+      float sumIxIy = tileCache.sumIxIy;
+      float det = tileCache.det;
 
-      float det = sumIxIx * sumIyIy - sumIxIy * sumIxIy;
+      // More iterations for smaller tiles to reach sub-pixel convergence
+      int lkIters = (tileSize <= 16) ? 5 : 3;
+      float convergenceThresh = (tileSize <= 16) ? 0.00005f : 0.0001f;
+      bool refWindowInside =
+          (cx - lkMargin >= 0) && (cx + lkMargin < width) &&
+          (cy - lkMargin >= 0) && (cy + lkMargin < height);
 
       if (std::abs(det) > 1e-6f) { // Only iterate if the patch has texture
-        for (int iter = 0; iter < 3; ++iter) { // Reduced from 6 to 3
+        for (int iter = 0; iter < lkIters; ++iter) {
           float sumIxIt = 0, sumIyIt = 0;
+          bool targetWindowInside =
+              (lkDx >= (float)(-cx + lkMargin)) &&
+              (lkDx <= (float)(width - 1 - cx - lkMargin)) &&
+              (lkDy >= (float)(-cy + lkMargin)) &&
+              (lkDy <= (float)(height - 1 - cy - lkMargin));
+          bool useFastBilinear = refWindowInside && targetWindowInside;
+          int baseDxInt = 0;
+          int baseDyInt = 0;
+          float fracX = 0.0f;
+          float fracY = 0.0f;
+          if (useFastBilinear) {
+            baseDxInt = (int)std::floor(lkDx);
+            baseDyInt = (int)std::floor(lkDy);
+            fracX = lkDx - (float)baseDxInt;
+            fracY = lkDy - (float)baseDyInt;
+          }
 
           // Only compute the temporal difference It = I(x+p) - T(x) inside the
           // loop
           for (int p = 0; p < ptCount; ++p) {
-            float It =
-                sampleBilinearGray(tgtL0, ptsx[p] + lkDx, ptsy[p] + lkDy) -
-                Tvals[p];
+            float targetValue;
+            if (useFastBilinear) {
+              targetValue = sampleBilinearGrayFastConstFrac(
+                  tgtL0, ptsx[p] + baseDxInt, ptsy[p] + baseDyInt, fracX,
+                  fracY);
+            } else {
+              float sampleX = ptsx[p] + lkDx;
+              float sampleY = ptsy[p] + lkDy;
+              targetValue = sampleBilinearGray(tgtL0, sampleX, sampleY);
+            }
+            float It = targetValue - Tvals[p];
             sumIxIt += Ixs[p] * It;
             sumIyIt += Iys[p] * It;
           }
@@ -459,7 +616,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
           lkDx -= dvx;
           lkDy -= dvy;
 
-          if (dvx * dvx + dvy * dvy < 0.0001f)
+          if (dvx * dvx + dvy * dvy < convergenceThresh)
             break; // Early convergence
         }
       }
@@ -469,21 +626,58 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
         lkDy = (float)(bestDy + subDy) * 2.0f;
       }
 
-      rawOffsets[ty * gridW + tx] = {lkDx, lkDy};
+      controlOffsets[(size_t)cty * controlGridW + ctx] = {lkDx, lkDy};
+    }
+  }
+
+  if (controlStrideTiles == 1) {
+    rawOffsets = controlOffsets;
+  } else {
+#pragma omp parallel for collapse(2) num_threads(4)
+    for (int y = 0; y < gridH; ++y) {
+      for (int x = 0; x < gridW; ++x) {
+        float gx = (float)x / (float)controlStrideTiles;
+        float gy = (float)y / (float)controlStrideTiles;
+        int x0 = (int)std::floor(gx);
+        int y0 = (int)std::floor(gy);
+        int x1 = std::min(x0 + 1, controlGridW - 1);
+        int y1 = std::min(y0 + 1, controlGridH - 1);
+        x0 = std::max(0, std::min(x0, controlGridW - 1));
+        y0 = std::max(0, std::min(y0, controlGridH - 1));
+        float fx = gx - (float)x0;
+        float fy = gy - (float)y0;
+
+        const Point &p00 = controlOffsets[(size_t)y0 * controlGridW + x0];
+        const Point &p10 = controlOffsets[(size_t)y0 * controlGridW + x1];
+        const Point &p01 = controlOffsets[(size_t)y1 * controlGridW + x0];
+        const Point &p11 = controlOffsets[(size_t)y1 * controlGridW + x1];
+
+        rawOffsets[(size_t)y * gridW + x] = {
+            (1.0f - fx) * (1.0f - fy) * p00.x + fx * (1.0f - fy) * p10.x +
+                (1.0f - fx) * fy * p01.x + fx * fy * p11.x,
+            (1.0f - fx) * (1.0f - fy) * p00.y + fx * (1.0f - fy) * p10.y +
+                (1.0f - fx) * fy * p01.y + fx * fy * p11.y};
+      }
     }
   }
 
   // 4. Edge-Preserving Flow Smoothing (Bilateral by flow consistency)
   // Only smooth with neighbors that have similar flow vectors.
   // This preserves motion boundaries while stabilizing flat regions.
+  // With smaller tiles (e.g. 16px for SR), LK already provides good sub-pixel
+  // estimates, so use a higher center weight to preserve precision.
+  float centerWeight = (tileSize <= 16) ? 8.0f : 4.0f;
+  float bilateralSigma = (tileSize <= 16) ? 0.3f : 0.5f;
+  float bilateralDenom = 2.0f * bilateralSigma * bilateralSigma;
+
 #pragma omp parallel for collapse(2) num_threads(4)
   for (int y = 0; y < gridH; ++y) {
     for (int x = 0; x < gridW; ++x) {
 
       Point center = rawOffsets[y * gridW + x];
-      float sumX = center.x * 4.0f; // Strong center weight
-      float sumY = center.y * 4.0f;
-      float wSum = 4.0f;
+      float sumX = center.x * centerWeight;
+      float sumY = center.y * centerWeight;
+      float wSum = centerWeight;
 
       // 3x3 neighborhood with flow-similarity weighting
       for (int dy = -1; dy <= 1; ++dy) {
@@ -502,10 +696,7 @@ TileAlignment computeTileAlignment(const std::vector<GrayImage> &refPyramid,
               !std::isfinite(neighbor.y))
             continue;
 
-          // Bilateral weight: exponential decay with flow difference
-          // sigma = 0.5px: neighbors with >1px flow difference get very low
-          // weight
-          float w = std::exp(-distSq / (2.0f * 0.5f * 0.5f));
+          float w = std::exp(-distSq / bilateralDenom);
           if (!std::isfinite(w))
             w = 0.01f;
 
@@ -960,12 +1151,9 @@ void ImageStacker::processFrame(int index) {
 
 #include "yuv_utils.h"
 
-#include "jxl_utils.h"
-
 void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
                                int rotation, int targetWR, int targetHR,
-                               const char *outputPath, int *outFinalW,
-                               int *outFinalH) {
+                               int *outFinalW, int *outFinalH) {
   // Use current scaled dimensions
   int currentW = width * scale;
   int currentH = height * scale;
@@ -1005,7 +1193,7 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   RotatePlane16(iU.data(), rU.data(), uvWidth, uvHeight, rotation);
   RotatePlane16(iV.data(), rV.data(), uvWidth, uvHeight, rotation);
 
-  // 3. Cropping Calculation (same as processAndSaveYuv)
+  // 3. Cropping Calculation
   bool currentIsLandscape = (rotatedWidth >= rotatedHeight);
   int tw, th;
   if (currentIsLandscape) {
@@ -1038,12 +1226,7 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
   int cropX = ((rotatedWidth - finalWidth) / 4) * 2;
   int cropY = ((rotatedHeight - finalHeight) / 4) * 2;
 
-  // 4. Convert and write to outBitmap and optionally to JXL (FP16)
-  std::vector<uint16_t> fp16Pixels;
-  if (outputPath) {
-    fp16Pixels.resize(finalWidth * finalHeight * 4);
-  }
-
+  // 4. Convert and write to outBitmap
   // Ensure we don't write out of the provided bitmap bounds
   int drawWidth = std::min(finalWidth, outWidth);
   int drawHeight = std::min(finalHeight, outHeight);
@@ -1076,23 +1259,7 @@ void ImageStacker::writeResult(uint32_t *outBitmap, int outWidth, int outHeight,
             (0xFF << 24) | (b8 << 16) | (g8 << 8) | r8;
       }
 
-      // --- Storage: 16-bit JXL ---
-      if (outputPath) {
-        int idx16 = (y * finalWidth + x) * 4;
-        fp16Pixels[idx16 + 0] =
-            static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, R)) * 65535.0f);
-        fp16Pixels[idx16 + 1] =
-            static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, G)) * 65535.0f);
-        fp16Pixels[idx16 + 2] =
-            static_cast<uint16_t>(std::max(0.0f, std::min(1.0f, B)) * 65535.0f);
-        fp16Pixels[idx16 + 3] = 65535; // Alpha
-      }
     }
-  }
-
-  if (outputPath) {
-    saveJxl(fp16Pixels.data(), finalWidth, finalHeight, JXL_TYPE_UINT16,
-            outputPath);
   }
 }
 
@@ -1107,12 +1274,22 @@ RawStacker::RawStacker(int width, int height, bool enableSuperRes)
 }
 
 int RawStacker::getPlaneIndex(int x, int y, int cfaPattern) const {
-  // cfaPattern: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+  // cfaPattern: 0..3=Bayer, 4..7=4x4 expanded Bayer, 8..11=8x8 expanded Bayer
   // Row 0, Col 0 maps to: R, G, G, B respectively
   // We want output indices 0..3 for R, Gr, Gb, B
 
-  // x%2, y%2 -> 00, 10, 01, 11
-  int offset = (y % 2) * 2 + (x % 2);
+  int pattern = cfaPattern;
+  int blockSize = 1;
+  if (cfaPattern >= 8) {
+    pattern = cfaPattern - 8;
+    blockSize = 4;
+  } else if (cfaPattern >= 4) {
+    pattern = cfaPattern - 4;
+    blockSize = 2;
+  }
+
+  // x/y block parity -> 00, 10, 01, 11
+  int offset = ((y / blockSize) & 1) * 2 + ((x / blockSize) & 1);
 
   // Mapping table based on pattern
   static const int map[4][4] = {
@@ -1122,7 +1299,7 @@ int RawStacker::getPlaneIndex(int x, int y, int cfaPattern) const {
       {3, 2, 1, 0}  // BGGR
   };
 
-  return map[cfaPattern][offset];
+  return map[std::max(0, std::min(3, pattern))][offset];
 }
 
 // 辅助函数：安全地计算 RAW 的自动曝光缩放因子
@@ -1218,23 +1395,27 @@ void RawStacker::stageFrame(const uint16_t *rawData, int rowStride,
       uint16_t p01 = pRow1[ox];
       uint16_t p11 = pRow1[ox + 1];
 
-      uint16_t g1, g2;
-      if (cfaPattern == 1 || cfaPattern == 2) {
-        g1 = p00;
-        g2 = p11;
+      float avgG;
+      if (cfaPattern >= 4) {
+        avgG = static_cast<float>(p00 + p10 + p01 + p11) * 0.25f;
       } else {
-        g1 = p10;
-        g2 = p01;
+        uint16_t g1, g2;
+        if (cfaPattern == 1 || cfaPattern == 2) {
+          g1 = p00;
+          g2 = p11;
+        } else {
+          g1 = p10;
+          g2 = p01;
+        }
+        avgG = static_cast<float>(g1 + g2) * 0.5f;
       }
-
-      float avgG = (float)(g1 + g2) * 0.5f;
       frame.proxy.data[y * proxyW + x] =
           (uint8_t)std::max(0.0f, std::min(255.0f, avgG * byteScale));
 
-      frame.planes[getPlaneIndex(ox, 0, cfaPattern)][y * proxyW + x] = p00;
-      frame.planes[getPlaneIndex(ox + 1, 0, cfaPattern)][y * proxyW + x] = p10;
-      frame.planes[getPlaneIndex(ox, 1, cfaPattern)][y * proxyW + x] = p01;
-      frame.planes[getPlaneIndex(ox + 1, 1, cfaPattern)][y * proxyW + x] = p11;
+      frame.planes[getPlaneIndex(ox, y * 2, cfaPattern)][y * proxyW + x] = p00;
+      frame.planes[getPlaneIndex(ox + 1, y * 2, cfaPattern)][y * proxyW + x] = p10;
+      frame.planes[getPlaneIndex(ox, y * 2 + 1, cfaPattern)][y * proxyW + x] = p01;
+      frame.planes[getPlaneIndex(ox + 1, y * 2 + 1, cfaPattern)][y * proxyW + x] = p11;
     }
   }
 

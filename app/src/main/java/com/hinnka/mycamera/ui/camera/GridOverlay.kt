@@ -5,8 +5,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import com.hinnka.mycamera.camera.AspectRatio
 
 /**
  * 网格线覆盖层
@@ -14,7 +12,7 @@ import com.hinnka.mycamera.camera.AspectRatio
  */
 @Composable
 fun GridOverlay(
-    aspectRatio: AspectRatio,
+    aspectRatio: Float,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
@@ -25,7 +23,7 @@ fun GridOverlay(
         val containerRatio = 3f / 4f
         
         // 获取目标画面比例
-        val targetRatio = aspectRatio.getValue(isLandscape = false)  // 竖屏模式
+        val targetRatio = aspectRatio  // 竖屏模式
         
         // 计算有效绘制区域
         val (drawWidth, drawHeight, offsetX, offsetY) = if (targetRatio > containerRatio) {

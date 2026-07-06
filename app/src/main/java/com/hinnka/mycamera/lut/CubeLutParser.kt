@@ -1,11 +1,8 @@
 package com.hinnka.mycamera.lut
 
-import android.content.Context
-import android.util.Log
+import com.hinnka.mycamera.utils.BoundedTextLineReader
 import com.hinnka.mycamera.utils.PLog
-import java.io.BufferedReader
 import java.io.InputStream
-import java.io.InputStreamReader
 
 /**
  * Adobe .cube LUT 文件解析器
@@ -39,7 +36,7 @@ object CubeLutParser {
         val tempDataList = mutableListOf<FloatArray>()
 
         inputStream.bufferedReader().use { reader ->
-            reader.forEachLine { line ->
+            BoundedTextLineReader.forEachLine(reader) { line ->
                 val trimmedLine = line.trim()
 
                 // 跳过空行和注释

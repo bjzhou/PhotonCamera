@@ -4,15 +4,17 @@
 #include <omp.h>
 #include <vector>
 
-enum class LutCurve {
-  SRGB,
-  LINEAR,
-  V_LOG,
-  S_LOG3,
-  F_LOG2,
-  LOG_C,
-  APPLE_LOG,
-  HLG
+enum class TransferCurve {
+  SRGB = 0,
+  LINEAR = 1,
+  VLOG = 2,
+  SLOG3 = 3,
+  FLOG2 = 4,
+  LOGC4 = 5,
+  APPLE_LOG = 6,
+  HLG = 7,
+  ACES_CCT = 8,
+  LEICA_LLOG = 11
 };
 
 inline float clamp(float v, float min, float max) {
@@ -23,37 +25,36 @@ inline float clamp(float v, float min, float max) {
   return v;
 }
 
-float fromLinear(float linear, LutCurve curve) {
+float fromLinear(float linear, TransferCurve curve) {
   linear = clamp(linear, 0.0f, 1.0f);
   switch (curve) {
-  case LutCurve::SRGB:
+  case TransferCurve::SRGB:
     return (linear <= 0.0031308f)
                ? 12.92f * linear
                : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
-  case LutCurve::LINEAR:
+  case TransferCurve::LINEAR:
     return linear;
-  case LutCurve::V_LOG:
+  case TransferCurve::VLOG:
     return (linear < 0.01f)
                ? 5.6f * linear + 0.125f
                : 0.241514f * std::log10(linear + 0.00873f) + 0.598206f;
-  case LutCurve::S_LOG3:
+  case TransferCurve::SLOG3:
     return (linear < 0.01125f)
                ? (linear * (171.2102946929f - 95.0f) / 0.01125f + 95.0f) /
                      1023.0f
                : (420.0f +
                   std::log10((linear + 0.01f) / (0.18f + 0.01f)) * 261.5f) /
                      1023.0f;
-  case LutCurve::F_LOG2:
+  case TransferCurve::FLOG2:
     return (linear < 0.000889f)
                ? 8.799461f * linear + 0.092864f
                : 0.245281f * std::log10(5.555556f * linear + 0.064829f) +
                      0.384316f;
-  case LutCurve::LOG_C:
-    return (linear > 0.010591f)
-               ? 0.247190f * std::log10(5.555556f * linear + 0.052272f) +
-                     0.385537f
-               : 5.367655f * linear + 0.092809f;
-  case LutCurve::APPLE_LOG:
+  case TransferCurve::LOGC4:
+    return (linear < -0.018057f)
+               ? 8.80302f * linear + 0.158957f
+               : 0.21524584f * std::log10(2231.8263f * linear + 64.0f) - 0.29590839f;
+  case TransferCurve::APPLE_LOG:
     // Apple Log formula from Apple Log Profile White Paper (September 2023)
     if (linear >= 0.01f) {
       return 0.08550479f * std::log2(linear + 0.00964052f) + 0.69336945f;
@@ -62,49 +63,56 @@ float fromLinear(float linear, LutCurve curve) {
     } else {
       return 0.0f;
     }
-  case LutCurve::HLG: {
+  case TransferCurve::HLG: {
     const float a = 0.17883277f;
     const float b = 1.0f - 4.0f * a;
     const float c = 0.5f - a * std::log(4.0f * a);
     return (linear <= 1.0f / 12.0f) ? std::sqrt(3.0f * linear)
                                     : a * std::log(12.0f * linear - b) + c;
   }
+  case TransferCurve::ACES_CCT:
+    return (linear < 0.0078125f)
+               ? 10.540237f * linear + 0.072905536f
+               : 0.18955931f * std::log10(std::max(linear, 1e-6f)) + 0.5547945f;
+  case TransferCurve::LEICA_LLOG:
+    return (linear <= 0.006f)
+               ? 8.0f * linear + 0.09f
+               : 0.27f * std::log10(1.3f * linear + 0.0115f) + 0.6f;
   }
   return linear;
 }
 
-float toLinear(float value, LutCurve curve) {
+float toLinear(float value, TransferCurve curve) {
   value = clamp(value, 0.0f, 1.0f);
   switch (curve) {
-  case LutCurve::SRGB:
+  case TransferCurve::SRGB:
     return (value <= 0.04045f) ? value / 12.92f
                                : std::pow((value + 0.055f) / 1.055f, 2.4f);
-  case LutCurve::LINEAR:
+  case TransferCurve::LINEAR:
     return value;
-  case LutCurve::V_LOG:
+  case TransferCurve::VLOG:
     return (value < 0.181f)
                ? (value - 0.125f) / 5.6f
                : std::pow(10.0f, (value - 0.598206f) / 0.241514f) - 0.00873f;
-  case LutCurve::S_LOG3:
+  case TransferCurve::SLOG3:
     return (value < 171.2102946929f / 1023.0f)
                ? (value * 1023.0f - 95.0f) * 0.01125f /
                      (171.2102946929f - 95.0f)
                : std::pow(10.0f, (value * 1023.0f - 420.0f) / 261.5f) *
                          (0.18f + 0.01f) -
                      0.01f;
-  case LutCurve::F_LOG2:
+  case TransferCurve::FLOG2:
     return (value < 0.100686685370811f)
                ? (value - 0.092864f) / 8.799461f
                : (std::pow(10.0f, (value - 0.384316f) / 0.245281f) -
                   0.064829f) /
                      5.555556f;
-  case LutCurve::LOG_C:
-    return (value > 0.149658f)
-               ? (std::pow(10.0f, (value - 0.385537f) / 0.247190f) -
-                  0.052272f) /
-                     5.555556f
-               : (value - 0.092809f) / 5.367655f;
-  case LutCurve::APPLE_LOG: {
+  case TransferCurve::LOGC4:
+    return (value < 0.0f)
+               ? (value - 0.158957f) / 8.80302f
+               : (std::pow(10.0f, (value + 0.29590839f) / 0.21524584f) - 64.0f) /
+                     2231.8263f;
+  case TransferCurve::APPLE_LOG: {
     // Pt = c * (Rt - R0)^2 = 47.28711236 * (0.01 + 0.05641088)^2 ≈ 0.2088
     const float pt = 0.20883119f;
     if (value >= pt) {
@@ -115,13 +123,21 @@ float toLinear(float value, LutCurve curve) {
       return -0.05641088f;
     }
   }
-  case LutCurve::HLG: {
+  case TransferCurve::HLG: {
     const float a = 0.17883277f;
     const float b = 1.0f - 4.0f * a;
     const float c = 0.5f - a * std::log(4.0f * a);
     return (value <= 0.5f) ? (value * value) / 3.0f
                            : (std::exp((value - c) / a) + b) / 12.0f;
   }
+  case TransferCurve::ACES_CCT:
+    return (value < 0.15525114f)
+               ? (value - 0.072905536f) / 10.540237f
+               : std::pow(10.0f, (value - 0.5547945f) / 0.18955931f);
+  case TransferCurve::LEICA_LLOG:
+    return (value <= 0.138f)
+               ? (value - 0.09f) / 8.0f
+               : (std::pow(10.0f, (value - 0.6f) / 0.27f) - 0.0115f) / 1.3f;
   }
   return value;
 }
@@ -178,7 +194,7 @@ Java_com_hinnka_mycamera_lut_LutProcessor_resampleLutNative(
   jshort *dst = env->GetShortArrayElements(result_data, nullptr);
   uint16_t *dst_u16 = reinterpret_cast<uint16_t *>(dst);
 
-  LutCurve curve = static_cast<LutCurve>(curve_type);
+  TransferCurve curve = static_cast<TransferCurve>(curve_type);
   float step = 1.0f / (size - 1);
 
 #pragma omp parallel for collapse(2)
@@ -190,9 +206,9 @@ Java_com_hinnka_mycamera_lut_LutProcessor_resampleLutNative(
         float b = bIdx * step;
 
         // 1. sRGB to Linear
-        float rLin = toLinear(r, LutCurve::SRGB);
-        float gLin = toLinear(g, LutCurve::SRGB);
-        float bLin = toLinear(b, LutCurve::SRGB);
+        float rLin = toLinear(r, TransferCurve::SRGB);
+        float gLin = toLinear(g, TransferCurve::SRGB);
+        float bLin = toLinear(b, TransferCurve::SRGB);
 
         // 2. Linear to Target Log
         float rLog = fromLinear(rLin, curve);
