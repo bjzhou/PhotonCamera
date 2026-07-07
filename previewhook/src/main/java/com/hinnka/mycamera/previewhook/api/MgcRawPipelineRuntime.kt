@@ -45,7 +45,6 @@ object MgcRawPipelineRuntime {
             changed = true
         }
 
-        MgcJpegOutputController.setDefaultJpegSuppressed(photonGalleryPackage != null)
         if (changed) {
             editor.apply()
             Log.d(TAG, "Configured MGC RAW output for Photon handoff gallery=$photonGalleryPackage")

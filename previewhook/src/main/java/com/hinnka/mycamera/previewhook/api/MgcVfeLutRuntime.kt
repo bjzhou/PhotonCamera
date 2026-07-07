@@ -10,27 +10,13 @@ import com.hinnka.mycamera.lut.Shaders
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.raw.ColorSpace
-import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Runtime bridge for the real LUT VFE stage.
- *
- * The lowest practical insertion point in MGC is the VFE `nrm` stage.
- * This object exposes the full shader/config snapshot that a custom low-level
- * stage needs, without forcing that stage to depend on app-side state classes.
+ * Runtime bridge for MGC preview color state.
  */
 object MgcVfeLutRuntime {
-    private val identityMatrix4 = floatArrayOf(
-        1f, 0f, 0f, 0f,
-        0f, 1f, 0f, 0f,
-        0f, 0f, 1f, 0f,
-        0f, 0f, 0f, 1f,
-    )
-
-    private val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
-
     private val previewShaderVariant = PreviewColorShaderVariant(
         textureSource = PreviewColorTextureSource.EXTERNAL_OES,
         includeHlgInput = false,
@@ -202,56 +188,7 @@ object MgcVfeLutRuntime {
     fun getVertexShaderSource(): String = Shaders.VERTEX_SHADER.removePrefix("\uFEFF").trimStart()
 
     @JvmStatic
-    fun getVfeVertexShaderSource(): String = MgcVfeShaderAdapters.getVfeVertexShaderSource()
-
-    @JvmStatic
-    fun getIdentityMatrix4(): FloatArray = identityMatrix4
-
-    @JvmStatic
-    fun getFullCropRect(): FloatArray = fullCropRect
-
-    @JvmStatic
     fun getFragmentShaderSource(): String = previewFragmentShader.removePrefix("\uFEFF").trimStart()
-
-    @JvmStatic
-    fun getPackedAtlasFragmentShaderSource(): String =
-        MgcVfeShaderAdapters.buildPackedLutFragmentShader(previewFragmentShader)
-
-    @JvmStatic
-    fun buildPackedLutAtlas(): MgcVfePackedLutAtlas? =
-        activeLutConfig?.takeIf { it.isValid() }?.let(MgcVfePackedLutAtlas::fromLutConfig)
-
-    @JvmStatic
-    fun getPackedLutAtlasPayload(): ByteArray? = buildPackedLutAtlas()?.payload
-
-    @JvmStatic
-    fun getPackedLutAtlasWidth(): Int = buildPackedLutAtlas()?.width ?: 0
-
-    @JvmStatic
-    fun getPackedLutAtlasHeight(): Int = buildPackedLutAtlas()?.height ?: 0
-
-    @JvmStatic
-    fun getPackedLutAtlasUploadDataType(): Int =
-        buildPackedLutAtlas()?.uploadDataType ?: MgcVfePackedLutAtlas.UPLOAD_DATA_TYPE_UINT8
-
-    @JvmStatic
-    fun getPackedLutAtlasUploadBuffer(): Buffer? {
-        val atlas = buildPackedLutAtlas() ?: return null
-        return when (atlas.uploadDataType) {
-            MgcVfePackedLutAtlas.UPLOAD_DATA_TYPE_FLOAT32 -> {
-                ByteBuffer.allocateDirect(atlas.payload.size)
-                    .order(ByteOrder.nativeOrder())
-                    .put(atlas.payload)
-                    .apply { position(0) }
-                    .asFloatBuffer()
-                    .apply { position(0) }
-            }
-
-            else -> ByteBuffer.allocateDirect(atlas.payload.size)
-                .put(atlas.payload)
-                .apply { position(0) }
-        }
-    }
 
     @JvmStatic
     fun getSnapshotVersion(): Int = snapshotVersion
@@ -260,12 +197,8 @@ object MgcVfeLutRuntime {
     fun buildSnapshot(): MgcVfeLutSnapshot {
         cachedSnapshot?.let { return it }
         val lutConfig = activeLutConfig
-        val packedAtlas = buildPackedLutAtlas()
         val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(activeRecipeParams)
         return MgcVfeLutSnapshot(
-            vertexShader = Shaders.VERTEX_SHADER,
-            fragmentShader = previewFragmentShader,
-            atlasFragmentShader = getPackedAtlasFragmentShaderSource(),
             lutPayload = lutConfig?.takeIf { it.isValid() }?.toByteBuffer()?.let { buffer ->
                 ByteArray(buffer.remaining()).also { bytes -> buffer.get(bytes) }
             },
@@ -273,10 +206,6 @@ object MgcVfeLutRuntime {
             lutDataType = lutConfig?.configDataType ?: LutConfig.CONFIG_DATA_TYPE_UINT8,
             lutCurveOrdinal = lutConfig?.curve?.shaderId ?: TransferCurve.SRGB.shaderId,
             lutColorSpaceOrdinal = lutConfig?.colorSpace?.ordinal ?: 0,
-            lutAtlasPayload = packedAtlas?.payload,
-            lutAtlasWidth = packedAtlas?.width ?: 0,
-            lutAtlasHeight = packedAtlas?.height ?: 0,
-            lutAtlasUploadDataType = packedAtlas?.uploadDataType ?: MgcVfePackedLutAtlas.UPLOAD_DATA_TYPE_UINT8,
             lutEnabled = lutConfig?.isValid() == true,
             lutIntensity = effectiveParams.lutIntensity,
             colorRecipeEnabled = !effectiveParams.isDefault(),
@@ -295,7 +224,6 @@ object MgcVfeLutRuntime {
             filmGrain = effectiveParams.filmGrain,
             vignette = effectiveParams.vignette,
             bleachBypass = effectiveParams.bleachBypass,
-            halation = effectiveParams.halation,
             chromaticAberration = effectiveParams.chromaticAberration,
             noise = effectiveParams.noise,
             lowRes = effectiveParams.lowRes,

@@ -5847,59 +5847,6 @@
 .method public final s([BLmla;)Lsui;
     .locals 6
 
-    const-string v1, "codex_save_chain"
-
-    const-string v2, "lwp.s"
-
-    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
-
-    if-eqz p1, :cond_codex_bypass
-
-    array-length v3, p1
-
-    new-instance v4, Ljava/lang/StringBuilder;
-
-    const-string v5, "lwp.s before helper len="
-
-    invoke-direct {v4, v5}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
-
-    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
-
-    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-
-    move-result-object v4
-
-    invoke-static {v1, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
-
-    invoke-static {v2, p1}, Lcom/hinnka/mycamera/previewhook/api/MgcCapturedJpegHook;->processJpegWithSource(Ljava/lang/String;[B)[B
-
-    move-result-object p1
-
-    if-eqz p1, :cond_codex_bypass
-
-    array-length v3, p1
-
-    new-instance v4, Ljava/lang/StringBuilder;
-
-    const-string v5, "lwp.s after helper len="
-
-    invoke-direct {v4, v5}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
-
-    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
-
-    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-
-    move-result-object v4
-
-    invoke-static {v1, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
-
-    goto/32 :goto_1
-
-    :cond_codex_bypass
-    const-string v3, "lwp.s bypass helper because jpegBytes is null"
-
-    invoke-static {v1, v3}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
-
     goto/32 :goto_1
 
     nop

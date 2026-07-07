@@ -1728,27 +1728,6 @@
 
     nop
 
-    invoke-static {v5}, Lcom/hinnka/mycamera/previewhook/api/MgcJpegOutputController;->shouldSuppressDefaultJpeg(Ljava/lang/Object;)Z
-
-    move-result v6
-
-    if-eqz v6, :cond_codex_write_mgc_default_jpeg
-
-    nop
-
-    nop
-
-    check-cast v5, Llxc;
-
-    nop
-
-    invoke-virtual {v5}, Llxc;->a()V
-
-    const-wide/16 v1, 0x0
-
-    goto/32 :goto_codex_default_jpeg_done
-
-    :cond_codex_write_mgc_default_jpeg
     invoke-static {v1, v2, v3}, Lpuq;->aX(Ljava/io/InputStream;Lcom/google/android/libraries/camera/exif/ExifInterface;Lpsf;)J
 
     move-result-wide v1
@@ -1772,8 +1751,6 @@
     nop
 
     invoke-virtual {v5}, Llxc;->b()V
-
-    :goto_codex_default_jpeg_done
 
     move-object v3, v0
 

@@ -12804,6 +12804,8 @@
     nop
 
     :goto_1
+    invoke-static {p0, p2}, Lcom/hinnka/mycamera/previewhook/api/MgcSurfaceProxyPreviewRenderer;->recordOriginalSurface(Landroid/view/Surface;Landroid/util/Size;)V
+
     invoke-direct {v5, p0}, Lcom/google/android/apps/camera/viewfindereffects/bufferflinger/SurfaceControlBufferFlinger;-><init>(Landroid/view/Surface;)V
 
     goto/32 :goto_12
@@ -103747,21 +103749,6 @@
 
     move-result-object p2
 
-    invoke-static {p0, p1, v4, v1, p2}, Lcom/hinnka/mycamera/previewhook/api/MgcAliasedStageRunner;->renderIfAliased(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Landroid/hardware/HardwareBuffer;Landroid/hardware/HardwareBuffer;)Ljava/lang/Object;
-
-    move-result-object v5
-
-    if-eqz v5, :cond_codex_alias_unhandled
-
-    check-cast v5, Lnrl;
-
-    move-object p0, v5
-
-    invoke-virtual {p2}, Landroid/hardware/HardwareBuffer;->close()V
-
-    goto/32 :goto_21
-
-    :cond_codex_alias_unhandled
     :try_end_4
     .catchall {:try_start_4 .. :try_end_4} :catchall_3
 

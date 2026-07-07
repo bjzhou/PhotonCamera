@@ -10,7 +10,6 @@ object MgcUiHook {
     fun onActivityCreate(activity: Activity) {
         val appContext = activity.applicationContext
         PhotonRawClient.initialize(appContext)
-        MgcPhotonThumbnailBridge.initialize(activity)
         MgcRawPipelineRuntime.configure(appContext)
         PhotonLookClient.syncAsync(appContext, force = true)
     }

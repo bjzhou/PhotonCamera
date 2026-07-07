@@ -435,11 +435,6 @@
     goto :goto_0
 
     :cond_2
-    if-eqz v2, :cond_3
-
-    invoke-static {v2}, Lcodexlutruntime;->a(Llnt;)V
-
-    :cond_3
     return-object p0
 .end method
 

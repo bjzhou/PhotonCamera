@@ -1,18 +1,11 @@
 package com.hinnka.mycamera.previewhook.api
 
 data class MgcVfeLutSnapshot(
-    val vertexShader: String,
-    val fragmentShader: String,
-    val atlasFragmentShader: String,
     val lutPayload: ByteArray?,
     val lutSize: Int,
     val lutDataType: Int,
     val lutCurveOrdinal: Int,
     val lutColorSpaceOrdinal: Int,
-    val lutAtlasPayload: ByteArray?,
-    val lutAtlasWidth: Int,
-    val lutAtlasHeight: Int,
-    val lutAtlasUploadDataType: Int,
     val lutEnabled: Boolean,
     val lutIntensity: Float,
     val colorRecipeEnabled: Boolean,
@@ -31,7 +24,6 @@ data class MgcVfeLutSnapshot(
     val filmGrain: Float,
     val vignette: Float,
     val bleachBypass: Float,
-    val halation: Float,
     val chromaticAberration: Float,
     val noise: Float,
     val lowRes: Float,

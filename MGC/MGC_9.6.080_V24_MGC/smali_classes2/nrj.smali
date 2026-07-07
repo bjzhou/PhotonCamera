@@ -5978,25 +5978,6 @@
 
     invoke-virtual {v2, p1}, Lows;->d(Lpci;)V
 
-    invoke-static {p0}, Lcodexlutruntime;->b(Lnrk;)Lnrm;
-
-    move-result-object v4
-
-    if-eqz v4, :cond_codex_fast_lut_ready
-
-    invoke-interface {v4, v1, v1}, Lnrm;->a(Lprw;Lprw;)Lnrl;
-
-    move-result-object v4
-
-    sget-object v5, Lnrl;->c:Lnrl;
-
-    if-ne v4, v5, :cond_codex_fast_lut_ready
-
-    invoke-virtual {v2}, Lows;->close()V
-
-    goto :goto_8
-
-    :cond_codex_fast_lut_ready
     const/4 p1, 0x0
 
     nop
@@ -7703,6 +7684,35 @@
     nop
 
     :goto_9
+    move-object/from16 p4, v6
+
+    move/from16 v30, v2
+
+    move-object/from16 v31, v4
+
+    move-object/from16 v18, v9
+
+    move-object/from16 v19, p2
+
+    move-object/from16 v20, v10
+
+    move-object/from16 v21, v14
+
+    move/from16 v22, v29
+
+    move/from16 v23, v30
+
+    invoke-static/range {v18 .. v23}, Lcom/hinnka/mycamera/previewhook/api/MgcSurfaceProxyPreviewRenderer;->displayBuffer(Ljava/lang/Object;Landroid/hardware/HardwareBuffer;Landroid/graphics/Rect;Landroid/graphics/Rect;II)Z
+
+    move-result v11
+
+    if-eqz v11, :cond_codex_surface_proxy_original
+
+    monitor-exit v9
+
+    goto/32 :goto_17
+
+    :cond_codex_surface_proxy_original
     move-object v11, v9
 
     nop
@@ -7786,10 +7796,6 @@
     nop
 
     iget v2, v14, Landroid/graphics/Rect;->top:I
-
-    nop
-
-    move-object/from16 v31, v4
 
     nop
 
@@ -11577,8 +11583,6 @@
     nop
 
     invoke-interface {v0, v1}, Lpdf;->f(Ljava/lang/String;)V
-
-    invoke-static {}, Lcodexlutruntime;->c()V
 
     iget-object v0, p0, Lnrj;->f:Lows;
 
@@ -16286,27 +16290,6 @@
 
     invoke-virtual {v1, v5}, Lows;->d(Lpci;)V
 
-    invoke-static {p0}, Lcodexlutruntime;->b(Lnrk;)Lnrm;
-
-    move-result-object v5
-
-    if-eqz v5, :cond_codex_lut_ready
-
-    iget-object v6, v0, Lnrs;->b:Lphh;
-
-    invoke-interface {v5, p1, v6, p1}, Lnrm;->b(Lpge;Lphh;Lpge;)Lnrl;
-
-    move-result-object v5
-
-    sget-object v6, Lnrl;->c:Lnrl;
-
-    if-ne v5, v6, :cond_codex_lut_ready
-
-    invoke-virtual {v1}, Lows;->close()V
-
-    goto :goto_f
-
-    :cond_codex_lut_ready
     invoke-virtual {p0}, Lnrj;->g()Lryb;
 
     move-result-object v5
@@ -16504,17 +16487,6 @@
     nop
 
     :try_start_0
-    invoke-static {p0, p1}, Lcom/hinnka/mycamera/previewhook/api/MgcNrjStageChainAugmenter;->augmentStages(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
-
-    move-result-object v1
-
-    if-eqz v1, :cond_codex_keep_stages
-
-    move-object p1, v1
-
-    check-cast p1, Lryb;
-
-    :cond_codex_keep_stages
     iput-object p1, p0, Lnrj;->G:Lryb;
 
     nop

@@ -78,9 +78,7 @@ object PhotonRawClient {
             return false
         }
         val dngUri = resolveDngUri(output)
-        if (dngUri != null) {
-            MgcPhotonThumbnailBridge.showLatestDngContent(context, dngUri)
-        } else {
+        if (dngUri == null) {
             Log.d(TAG, "MGC DNG output URI unavailable")
         }
         val source = dngBuffer ?: return dngUri != null
