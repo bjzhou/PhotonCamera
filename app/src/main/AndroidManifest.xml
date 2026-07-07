@@ -193,6 +193,16 @@
                     android:resource="@xml/file_paths" />
         </provider>
 
+        <provider
+                android:name=".mgc.PhotonLookProvider"
+                android:authorities="${applicationId}.mgc.look"
+                android:exported="true" />
+
+        <provider
+                android:name=".mgc.PhotonRawProvider"
+                android:authorities="${applicationId}.mgc.raw"
+                android:exported="true" />
+
         <activity
                 android:name=".phantom.PhantomShortcutActivity"
                 android:exported="true"

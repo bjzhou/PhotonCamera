@@ -1,15 +1,9 @@
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.util.Base64
-import groovy.json.JsonSlurper
-
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
 }
 
 val syncedSourceDir = layout.buildDirectory.dir("generated/previewhook/syncedSrc")
-val generatedSourceDir = layout.buildDirectory.dir("generated/previewhook/generatedSrc")
 val freshMgcClasses4 = layout.projectDirectory.file("../MGC/MGC_9.6.080_V24_MGC/classes4.dex")
 
 android {
@@ -34,7 +28,6 @@ android {
     sourceSets {
         getByName("main") {
             java.srcDir(syncedSourceDir)
-            java.srcDir(generatedSourceDir)
         }
     }
 }
@@ -42,185 +35,30 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    compileOnly(libs.androidx.material.icons.extended)
+    compileOnly(libs.androidx.material.icons.core)
 }
 
 val syncPreviewhookSources by tasks.registering(Sync::class) {
     val appSrc = layout.projectDirectory.dir("../app/src/main/java")
     from(appSrc) {
-        include("com/hinnka/mycamera/ui/camera/CameraGLSurfaceView.kt")
-        include("com/hinnka/mycamera/lut/LutRenderer.kt")
-        include("com/hinnka/mycamera/lut/LutImageProcessor.kt")
+        include("com/hinnka/mycamera/color/TransferCurve.kt")
         include("com/hinnka/mycamera/lut/Shaders.kt")
-        include("com/hinnka/mycamera/lut/LutCurve.kt")
-        include("com/hinnka/mycamera/lut/LutParser.kt")
-        include("com/hinnka/mycamera/lut/CubeLutParser.kt")
-        include("com/hinnka/mycamera/lut/LutConverter.kt")
-        include("com/hinnka/mycamera/lut/XmpLutParser.kt")
-        include("com/hinnka/mycamera/lut/GlUtils.kt")
-        include("com/hinnka/mycamera/lut/CurveUtils.kt")
+        include("com/hinnka/mycamera/lut/PreviewColorShader.kt")
+        include("com/hinnka/mycamera/lut/PreviewColorShaderModules.kt")
+        include("com/hinnka/mycamera/lut/PreviewShadowsHighlightsShader.kt")
         include("com/hinnka/mycamera/model/ColorPaletteMapper.kt")
         include("com/hinnka/mycamera/model/ColorPaletteState.kt")
-        include("com/hinnka/mycamera/screencapture/PhantomPipCrop.kt")
         include("com/hinnka/mycamera/raw/ColorSpace.kt")
-        include("com/hinnka/mycamera/raw/NLMShaders.kt")
     }
     into(syncedSourceDir)
 }
 
-val generateDefaultVerificationLutSource by tasks.registering {
-    val inputFile = layout.projectDirectory.file("../app/src/main/assets/luts/monochrome.plut")
-    val outputDir = generatedSourceDir.map { it.dir("com/hinnka/mycamera/previewhook/generated") }
-    val outputFile = outputDir.map { it.file("DefaultVerificationLutData.kt") }
-
-    inputs.file(inputFile)
-    outputs.file(outputFile)
-
-    doLast {
-        val bytes = inputFile.asFile.readBytes()
-        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        val magic = buffer.int
-        check(magic == 0x54554C50) { "Unexpected LUT magic: $magic" }
-        val version = buffer.int
-        val size = buffer.int
-        val dataType = buffer.int
-        val curveOrdinal = if (version >= 2) buffer.int else 0
-        val colorSpaceOrdinal = if (version >= 3) buffer.int else 0
-        val payload = ByteArray(buffer.remaining())
-        buffer.get(payload)
-        val payloadBase64 = Base64.getEncoder().encodeToString(payload)
-        val payloadChunks = payloadBase64.chunked(16000)
-
-        val file = outputFile.get().asFile
-        file.parentFile.mkdirs()
-        val payloadList = payloadChunks.joinToString(",\n        ") { "\"$it\"" }
-
-        file.writeText(
-            """
-            package com.hinnka.mycamera.previewhook.generated
-
-            object DefaultVerificationLutData {
-                const val TITLE: String = "monochrome"
-                const val SIZE: Int = $size
-                const val CONFIG_DATA_TYPE: Int = ${if (dataType == 1) 1 else 0}
-                const val CURVE_ORDINAL: Int = $curveOrdinal
-                const val COLOR_SPACE_ORDINAL: Int = $colorSpaceOrdinal
-                val PAYLOAD_BASE64: String = listOf(
-                    $payloadList
-                ).joinToString(separator = "")
-            }
-            """.trimIndent()
-        )
-    }
-}
-
-val generateBuiltInLutCatalogSource by tasks.registering {
-    val configFile = layout.projectDirectory.file("../app/src/main/assets/luts/config.json")
-    val assetsDir = layout.projectDirectory.dir("../app/src/main/assets/luts")
-    val outputDir = generatedSourceDir.map { it.dir("com/hinnka/mycamera/previewhook/generated") }
-    val outputFile = outputDir.map { it.file("BuiltInLutCatalog.kt") }
-
-    inputs.file(configFile)
-    inputs.dir(assetsDir)
-    outputs.file(outputFile)
-
-    doLast {
-        val parsed = JsonSlurper().parse(configFile.asFile) as Map<*, *>
-        val luts = parsed["luts"] as List<*>
-        val entries = luts.map { raw ->
-            raw as Map<*, *>
-        }
-
-        val entryBlocks = entries.joinToString(",\n") { entry ->
-            val id = entry["id"] as String
-            val nameMap = entry["name"] as Map<*, *>
-            val path = (entry["path"] as? String).orEmpty()
-            val isDefault = entry["isDefault"] as? Boolean ?: false
-            val isVip = entry["isVip"] as? Boolean ?: false
-            val category = (entry["category"] as? String).orEmpty()
-
-            val payloadInfo = if (path.isBlank()) {
-                """
-                payloadBase64 = "",
-                size = 0,
-                configDataType = 0,
-                curveOrdinal = 0,
-                colorSpaceOrdinal = 0
-                """.trimIndent()
-            } else {
-                val inputFile = assetsDir.file(path).asFile
-                val bytes = inputFile.readBytes()
-                val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-                val magic = buffer.int
-                check(magic == 0x54554C50) { "Unexpected LUT magic for $path: $magic" }
-                val version = buffer.int
-                val size = buffer.int
-                val dataType = buffer.int
-                val curveOrdinal = if (version >= 2) buffer.int else 0
-                val colorSpaceOrdinal = if (version >= 3) buffer.int else 0
-                val payload = ByteArray(buffer.remaining())
-                buffer.get(payload)
-                val payloadBase64 = Base64.getEncoder().encodeToString(payload)
-                """
-                payloadBase64 = "${payloadBase64}",
-                size = $size,
-                configDataType = $dataType,
-                curveOrdinal = $curveOrdinal,
-                colorSpaceOrdinal = $colorSpaceOrdinal
-                """.trimIndent()
-            }
-
-            """
-                Entry(
-                    id = "$id",
-                    nameEn = "${nameMap["en"] as String}",
-                    nameZh = "${nameMap["zh"] as String}",
-                    path = "$path",
-                    isDefault = $isDefault,
-                    isVip = $isVip,
-                    category = "$category",
-                    $payloadInfo
-                )
-            """.trimIndent()
-        }
-
-        val file = outputFile.get().asFile
-        file.parentFile.mkdirs()
-        file.writeText(
-            """
-            package com.hinnka.mycamera.previewhook.generated
-
-            object BuiltInLutCatalog {
-                data class Entry(
-                    val id: String,
-                    val nameEn: String,
-                    val nameZh: String,
-                    val path: String,
-                    val isDefault: Boolean,
-                    val isVip: Boolean,
-                    val category: String,
-                    val payloadBase64: String,
-                    val size: Int,
-                    val configDataType: Int,
-                    val curveOrdinal: Int,
-                    val colorSpaceOrdinal: Int,
-                )
-
-                val entries: List<Entry> = listOf(
-            $entryBlocks
-                )
-            }
-            """.trimIndent()
-        )
-    }
-}
-
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    dependsOn(syncPreviewhookSources, generateDefaultVerificationLutSource, generateBuiltInLutCatalogSource)
+    dependsOn(syncPreviewhookSources)
 }
 
 tasks.named("preBuild") {
-    dependsOn(syncPreviewhookSources, generateDefaultVerificationLutSource, generateBuiltInLutCatalogSource)
+    dependsOn(syncPreviewhookSources)
 }
 
 val assembleStandaloneDexRelease by tasks.registering {

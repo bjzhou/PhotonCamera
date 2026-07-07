@@ -20,6 +20,11 @@ import java.util.concurrent.RejectedExecutionException
  */
 object MgcVfeReflectiveStageFactory {
     private const val TAG = "codex_lut_chain"
+    private val identityMatrix3 = floatArrayOf(
+        1f, 0f, 0f,
+        0f, 1f, 0f,
+        0f, 0f, 1f,
+    )
     private val directRgbaOutputScope = ThreadLocal<Boolean>()
 
     fun <T> withDirectRgbaOutput(block: () -> T): T {
@@ -60,7 +65,7 @@ object MgcVfeReflectiveStageFactory {
             ) {
                 "create reflective LUT stage nrk=${nrk.javaClass.simpleName}@${System.identityHashCode(nrk)} lutEnabled=${snapshot.lutEnabled} recipeEnabled=${snapshot.colorRecipeEnabled}"
             }
-            val state = StageState(qht)
+            val state = StageState(qht, nrk)
             Proxy.newProxyInstance(
                 bridge.nrmClass.classLoader,
                 arrayOf(bridge.nrmClass),
@@ -135,6 +140,7 @@ object MgcVfeReflectiveStageFactory {
 
     private class StageState(
         val qht: Any,
+        private val nrk: Any,
     ) {
         private var program: Any? = null
         private var copyProgram: Any? = null
@@ -148,6 +154,9 @@ object MgcVfeReflectiveStageFactory {
         private var atlasWidth: Int = 0
         private var atlasHeight: Int = 0
         private var loggedFirstFrame: Boolean = false
+        private var rotationProvider: Any? = null
+        private var rotationMethod: Method? = null
+        private var loggedRotationSource: Boolean = false
 
         fun render(inputQiu: Any, outputQjs: Any): Boolean {
             return try {
@@ -292,7 +301,6 @@ object MgcVfeReflectiveStageFactory {
             bridge.qioBindFloat.invoke(qio, "uFilmGrain", snapshot.filmGrain)
             bridge.qioBindFloat.invoke(qio, "uVignette", snapshot.vignette)
             bridge.qioBindFloat.invoke(qio, "uBleachBypass", snapshot.bleachBypass)
-            bridge.qioBindFloat.invoke(qio, "uHalation", snapshot.halation)
             bridge.qioBindFloat.invoke(qio, "uChromaticAberration", snapshot.chromaticAberration)
             bridge.qioBindFloat.invoke(qio, "uNoise", snapshot.noise)
             bridge.qioBindFloat.invoke(qio, "uLowRes", snapshot.lowRes)
@@ -300,6 +308,7 @@ object MgcVfeReflectiveStageFactory {
             bridge.qioBindFloat.invoke(qio, "uAspectRatio", inputWidth.toFloat() / inputHeight.coerceAtLeast(1).toFloat())
             bridge.qioBindFloat.invoke(qio, "uAperture", 1.4f)
             bridge.qioBindVec2.invoke(qio, "uFocusPoint", 0.5f, 0.5f)
+            bridge.qioBindVec2.invoke(qio, "uTexelSize", 1f / inputWidth.coerceAtLeast(1), 1f / inputHeight.coerceAtLeast(1))
             bridge.qioBindVec2.invoke(qio, "uLutAtlasSize", atlasWidth.toFloat(), atlasHeight.toFloat())
             bridge.qioBindAttribute.invoke(qio, "aPosition", 0)
             bridge.qioBindAttribute.invoke(qio, "aTexCoord", 1)
@@ -307,9 +316,16 @@ object MgcVfeReflectiveStageFactory {
 
             val uniformMap = bridge.qioUniformMapField.get(qio) as MutableMap<Any?, Any?>
             uniformMap["uLutEnabled"] = bridge.newUniform1iBinder("uLutEnabled", if (snapshot.lutEnabled) 1 else 0)
+            uniformMap["uLutMaskType"] = bridge.newUniform1iBinder("uLutMaskType", 0)
             uniformMap["uColorRecipeEnabled"] = bridge.newUniform1iBinder("uColorRecipeEnabled", if (snapshot.colorRecipeEnabled) 1 else 0)
+            uniformMap["uVideoLogEnabled"] = bridge.newUniform1iBinder("uVideoLogEnabled", 0)
+            uniformMap["uVideoLogCurve"] = bridge.newUniform1iBinder("uVideoLogCurve", 0)
+            uniformMap["uVideoColorSpace"] = bridge.newUniform1iBinder("uVideoColorSpace", 0)
+            uniformMap["uIsHlgInput"] = bridge.newUniform1iBinder("uIsHlgInput", 0)
+            uniformMap["uCurveEnabled"] = bridge.newUniform1iBinder("uCurveEnabled", 0)
             uniformMap["uLutCurve"] = bridge.newUniform1iBinder("uLutCurve", snapshot.lutCurveOrdinal)
             uniformMap["uLutColorSpace"] = bridge.newUniform1iBinder("uLutColorSpace", snapshot.lutColorSpaceOrdinal)
+            uniformMap["uPrimaryCalibrationMatrix"] = bridge.newUniformMatrix3fvBinder("uPrimaryCalibrationMatrix", identityMatrix3)
             uniformMap["uLchHueAdjustments[0]"] = bridge.newUniform1fvBinder("uLchHueAdjustments[0]", snapshot.lchHueAdjustments)
             uniformMap["uLchChromaAdjustments[0]"] = bridge.newUniform1fvBinder("uLchChromaAdjustments[0]", snapshot.lchChromaAdjustments)
             uniformMap["uLchLightnessAdjustments[0]"] = bridge.newUniform1fvBinder("uLchLightnessAdjustments[0]", snapshot.lchLightnessAdjustments)
@@ -318,6 +334,7 @@ object MgcVfeReflectiveStageFactory {
             }
             bridge.qioFinalize.invoke(qio)
             bridge.qioRender.invoke(qio, targetCanvas)
+            captureRenderedCanvas(targetCanvas)
             if (!loggedFirstFrame) {
                 loggedFirstFrame = true
                 Log.d(
@@ -325,6 +342,88 @@ object MgcVfeReflectiveStageFactory {
                     "rendered reflective LUT stage frame size=${inputWidth}x${inputHeight} lutEnabled=${snapshot.lutEnabled} recipeEnabled=${snapshot.colorRecipeEnabled}",
                 )
             }
+        }
+
+        private fun captureRenderedCanvas(targetCanvas: Any) {
+            val layout = bridge.qjsGetLayout.invoke(targetCanvas) ?: return
+            val qfd = bridge.qheFormatField.get(layout)
+            val width = (bridge.qfdGetWidth.invoke(qfd) as Number).toInt()
+            val height = (bridge.qfdGetHeight.invoke(qfd) as Number).toInt()
+            if (!MgcFilteredPreviewThumbnailCache.markCaptureAttempt(width, height)) return
+
+            runCatching {
+                val pixelCount = width.toLong() * height.toLong()
+                if (pixelCount <= 0L || pixelCount > 12_000_000L) {
+                    error("unexpected canvas size ${width}x$height")
+                }
+                val buffer = ByteBuffer.allocateDirect((pixelCount * 4L).toInt())
+                    .order(ByteOrder.nativeOrder())
+                val readback = Proxy.newProxyInstance(
+                    bridge.qeuClass.classLoader,
+                    arrayOf(bridge.qeuClass),
+                ) { _, method, args ->
+                    if (method.name == "a") {
+                        runCatching {
+                            val rawCanvas = args?.getOrNull(0)
+                                ?: error("target canvas raw qjf missing")
+                            bridge.qjfBind.invoke(rawCanvas)
+                            bridge.qjfRead.invoke(rawCanvas, buffer)
+                            MgcFilteredPreviewThumbnailCache.cacheRgbaFrame(
+                                width,
+                                height,
+                                buffer,
+                                currentPreviewRotationDegrees(),
+                            )
+                        }.onFailure {
+                            Log.d(TAG, "filtered preview canvas readback failed: ${it.message}", it)
+                        }
+                        bridge.qetValue
+                    } else {
+                        null
+                    }
+                }
+                val taskName = bridge.khyCtor.newInstance(3)
+                val future = bridge.qjsSchedule.invoke(targetCanvas, taskName, readback)
+                bridge.qfsNotify.invoke(future, bridge.qffValue)
+            }.onFailure {
+                Log.d(TAG, "filtered preview canvas readback schedule failed: ${it.message}", it)
+            }
+        }
+
+        private fun currentPreviewRotationDegrees(): Int {
+            val mgcRotation = runCatching {
+                val provider = rotationProvider ?: resolveMgcRotationProvider().also {
+                    rotationProvider = it
+                    rotationMethod = it.javaClass.getMethod("cM")
+                }
+                val method = rotationMethod ?: provider.javaClass.getMethod("cM").also {
+                    rotationMethod = it
+                }
+                (method.invoke(provider) as? Number)?.toInt()
+            }.getOrNull()
+            val rotation = mgcRotation ?: MgcFilteredPreviewThumbnailCache.currentDisplayRotationDegrees()
+            if (!loggedRotationSource) {
+                loggedRotationSource = true
+                Log.d(
+                    TAG,
+                    "filtered preview thumbnail rotation=${rotation} source=${if (mgcRotation != null) "mgc" else "display"}",
+                )
+            }
+            return rotation
+        }
+
+        private fun resolveMgcRotationProvider(): Any {
+            val previewState = readField(nrk, "g")
+            return readField(previewState, "c")
+        }
+
+        private fun readField(instance: Any, name: String): Any {
+            val field = runCatching {
+                instance.javaClass.getField(name)
+            }.getOrElse {
+                instance.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            }
+            return field.get(instance) ?: error("field $name is null")
         }
 
         private fun copyToOutput(outputQjs: Any) {
@@ -414,6 +513,13 @@ object MgcVfeReflectiveStageFactory {
         val qiaClass: Class<*> = Class.forName("qia")
         val qinClass: Class<*> = Class.forName("qin")
         val qjnClass: Class<*> = Class.forName("qjn")
+        val qjfClass: Class<*> = Class.forName("qjf")
+        val qjaClass: Class<*> = Class.forName("qja")
+        val qeuClass: Class<*> = Class.forName("qeu")
+        val qfsClass: Class<*> = Class.forName("qfs")
+        val qffClass: Class<*> = Class.forName("qff")
+        val qetClass: Class<*> = Class.forName("qet")
+        val khyClass: Class<*> = Class.forName("khy")
 
         val nrkGetContext: Method = nrkClass.getMethod("f")
         val nzkFast: Method = nzkClass.getMethod("k", nrmClass, Class.forName("prw"), Class.forName("prw"))
@@ -439,7 +545,14 @@ object MgcVfeReflectiveStageFactory {
         val qfdGetHeight: Method = qfdClass.getMethod("a")
 
         val qiaContextField: Field = qiaClass.getField("b")
+        val qjsSchedule: Method = qiaClass.getMethod("d", qjaClass, qeuClass)
         val qiaClose: Method = qiaClass.getMethod("close")
+        val qjfBind: Method = qjfClass.getMethod("i")
+        val qjfRead: Method = qjfClass.getMethod("j", Buffer::class.java)
+        val qfsNotify: Method = qfsClass.getMethod("g", qffClass)
+        val qffValue: Any = qffClass.getField("a").get(null)
+        val qetValue: Any = qetClass.getField("a").get(null)
+        val khyCtor = khyClass.getConstructor(Int::class.javaPrimitiveType)
 
         val qjdCreate: Method = qjdClass.getMethod("a", qhtClass)
         val qioFactory: Method = qioClass.getMethod("k", Class.forName("qjy"))
@@ -509,6 +622,20 @@ object MgcVfeReflectiveStageFactory {
                     val qjn = args!![0]
                     val location = (qjnGetUniformLocation.invoke(qjn, name) as Number).toInt()
                     GLES20.glUniform1fv(location, values.size, values, 0)
+                }
+                null
+            }
+        }
+
+        fun newUniformMatrix3fvBinder(name: String, values: FloatArray): Any {
+            return Proxy.newProxyInstance(
+                qinClass.classLoader,
+                arrayOf(qinClass),
+            ) { _, method, args ->
+                if (method.name == "a") {
+                    val qjn = args!![0]
+                    val location = (qjnGetUniformLocation.invoke(qjn, name) as Number).toInt()
+                    GLES20.glUniformMatrix3fv(location, 1, false, values, 0)
                 }
                 null
             }

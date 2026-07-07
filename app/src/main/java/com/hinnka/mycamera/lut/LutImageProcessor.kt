@@ -56,9 +56,6 @@ class LutImageProcessor {
         }
     }.asCoroutineDispatcher()
 
-    @Volatile
-    private var glThread: Thread? = null
-
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE

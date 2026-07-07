@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.mgc.PhotonLookContract
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.Flow
@@ -314,6 +315,9 @@ class LutManager(private val context: Context) {
             if (target == null) {
                 preferences.removeLegacyKeys(lutId)
             }
+        }
+        if (target == null) {
+            PhotonLookContract.notifyLookChanged(context)
         }
 //        PLog.d(TAG, "Color recipe params saved for LUT [$lutId]: $params")
     }

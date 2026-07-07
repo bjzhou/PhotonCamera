@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -62,6 +63,7 @@ import kotlinx.coroutines.flow.combine
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.hinnka.mycamera.camera.AspectRatio
@@ -190,6 +192,7 @@ class MainActivity : ComponentActivity() {
     private var mlPreloadComplete by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)
     private var pendingLutImportUris by mutableStateOf<List<Uri>>(emptyList())
+    private var externalGalleryReviewReturnToCaller by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -332,7 +335,12 @@ class MainActivity : ComponentActivity() {
                                 pendingRoute = pendingRoute,
                                 onRouteHandled = { pendingRoute = null },
                                 pendingLutImportUris = pendingLutImportUris,
-                                onLutImportHandled = { pendingLutImportUris = emptyList() }
+                                onLutImportHandled = { pendingLutImportUris = emptyList() },
+                                externalGalleryReviewReturnToCaller = externalGalleryReviewReturnToCaller,
+                                onExternalGalleryReviewBack = {
+                                    externalGalleryReviewReturnToCaller = false
+                                    finish()
+                                }
                             )
                         } else {
                             PermissionScreen(
@@ -406,6 +414,8 @@ class MainActivity : ComponentActivity() {
             }
         } else if (isExternalGalleryLaunchIntent(intent)) {
             handleExternalGalleryLaunchIntent(intent)
+        } else {
+            externalGalleryReviewReturnToCaller = false
         }
         intent.getStringExtra("route")?.let {
             pendingRoute = it
@@ -417,9 +427,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleExternalGalleryLaunchIntent(intent: Intent) {
         val data = intent.data
+        externalGalleryReviewReturnToCaller = intent.action in EXTERNAL_GALLERY_REVIEW_ACTIONS
         PLog.d(
             "MainActivity",
-            "External gallery launch intent: action=${intent.action}, type=${intent.type}, data=$data"
+            "External gallery launch intent: action=${intent.action}, type=${intent.type}, data=$data, returnToCaller=$externalGalleryReviewReturnToCaller"
         )
         if (data == null) {
             pendingRoute = Routes.GALLERY
@@ -606,16 +617,33 @@ fun NavigationHost(
     pendingRoute: String? = null,
     onRouteHandled: () -> Unit = {},
     pendingLutImportUris: List<Uri> = emptyList(),
-    onLutImportHandled: () -> Unit = {}
+    onLutImportHandled: () -> Unit = {},
+    externalGalleryReviewReturnToCaller: Boolean = false,
+    onExternalGalleryReviewBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val handleGalleryBack: () -> Unit = {
+        if (externalGalleryReviewReturnToCaller) {
+            onExternalGalleryReviewBack()
+        } else {
+            navController.popBackStack()
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(pendingRoute) {
         pendingRoute?.let {
             navController.navigate(it)
             onRouteHandled()
         }
+    }
+    BackHandler(
+        enabled = externalGalleryReviewReturnToCaller &&
+            (currentRoute == Routes.GALLERY || currentRoute == Routes.PHOTO_DETAIL)
+    ) {
+        onExternalGalleryReviewBack()
     }
     navController.addOnDestinationChangedListener { _, destination, _ ->
         BuglyHelper.setUserScene(context, destination.route.hashCode())
@@ -725,9 +753,7 @@ fun NavigationHost(
             composable(Routes.GALLERY) {
                 GalleryScreen(
                     viewModel = galleryViewModel,
-                    onBack = {
-                        navController.popBackStack()
-                    },
+                    onBack = handleGalleryBack,
                     onPhotoClick = { tab, index ->
                         navController.navigate(Routes.photoDetail(tab, index))
                     },
@@ -760,9 +786,7 @@ fun NavigationHost(
                     initialIndex = index,
                     selectedTab = GalleryTab.valueOf(tab),
                     photoId = photoId,
-                    onBack = {
-                        navController.popBackStack()
-                    },
+                    onBack = handleGalleryBack,
                     onGoToGallery = {
                         navController.navigate(Routes.GALLERY) {
                             popUpTo(Routes.CAMERA)

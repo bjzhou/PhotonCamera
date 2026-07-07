@@ -1,17 +1,15 @@
 package com.hinnka.mycamera.previewhook.api
 
 import android.app.Application
-import android.os.Environment
-import android.util.Log
+import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.lut.LutCurve
-import com.hinnka.mycamera.lut.LutParser
+import com.hinnka.mycamera.lut.PreviewColorShader
+import com.hinnka.mycamera.lut.PreviewColorShaderVariant
+import com.hinnka.mycamera.lut.PreviewColorTextureSource
 import com.hinnka.mycamera.lut.Shaders
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.previewhook.filters.MgcFilterStore
 import com.hinnka.mycamera.raw.ColorSpace
-import java.io.File
 import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -24,9 +22,6 @@ import java.nio.ByteOrder
  * stage needs, without forcing that stage to depend on app-side state classes.
  */
 object MgcVfeLutRuntime {
-    private const val TAG = "codex_lut_chain"
-    private const val LUT_FILE_NAME = "active.cube"
-
     private val identityMatrix4 = floatArrayOf(
         1f, 0f, 0f, 0f,
         0f, 1f, 0f, 0f,
@@ -35,6 +30,20 @@ object MgcVfeLutRuntime {
     )
 
     private val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
+
+    private val previewShaderVariant = PreviewColorShaderVariant(
+        textureSource = PreviewColorTextureSource.EXTERNAL_OES,
+        includeHlgInput = false,
+        includeExtendedLutCurves = true,
+        includeOklchDensity = true,
+        includeLchMixer = true,
+        includeFilmGrain = true,
+        includeLutMask = false,
+    )
+
+    private val previewFragmentShader: String by lazy {
+        PreviewColorShader.source(previewShaderVariant)
+    }
 
     @Volatile
     private var activeLutConfig: LutConfig? = null
@@ -49,16 +58,7 @@ object MgcVfeLutRuntime {
     private var cachedSnapshot: MgcVfeLutSnapshot? = null
 
     @Volatile
-    private var externalBootstrapLut: LutConfig? = null
-
-    @Volatile
-    private var externalBootstrapSource: String? = null
-
-    @Volatile
-    private var externalBootstrapLastModified: Long = Long.MIN_VALUE
-
-    @Volatile
-    private var savedSelectionRestoreAttempted: Boolean = false
+    private var activeLookSignature: String? = null
 
     private fun invalidateSnapshot() {
         snapshotVersion += 1
@@ -68,6 +68,7 @@ object MgcVfeLutRuntime {
     @JvmStatic
     fun setActiveLutConfig(lutConfig: LutConfig?) {
         activeLutConfig = lutConfig
+        activeLookSignature = null
         invalidateSnapshot()
     }
 
@@ -76,7 +77,7 @@ object MgcVfeLutRuntime {
         size: Int,
         payload: ByteArray,
         title: String = "",
-        curveOrdinal: Int = LutCurve.SRGB.ordinal,
+        curveOrdinal: Int = TransferCurve.SRGB.ordinal,
         colorSpaceOrdinal: Int = ColorSpace.SRGB.ordinal,
     ) {
         setActiveLutConfig(
@@ -88,7 +89,7 @@ object MgcVfeLutRuntime {
                     .apply { position(0) },
                 title = title,
                 configDataType = LutConfig.CONFIG_DATA_TYPE_UINT8,
-                curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB },
+                curve = TransferCurve.entries.getOrElse(curveOrdinal) { TransferCurve.SRGB },
                 colorSpace = ColorSpace.entries.getOrElse(colorSpaceOrdinal) { ColorSpace.SRGB },
             )
         )
@@ -99,7 +100,7 @@ object MgcVfeLutRuntime {
         size: Int,
         payload: ByteArray,
         title: String = "",
-        curveOrdinal: Int = LutCurve.SRGB.ordinal,
+        curveOrdinal: Int = TransferCurve.SRGB.ordinal,
         colorSpaceOrdinal: Int = ColorSpace.SRGB.ordinal,
     ) {
         setActiveLutConfig(
@@ -111,7 +112,7 @@ object MgcVfeLutRuntime {
                     .apply { position(0) },
                 title = title,
                 configDataType = LutConfig.CONFIG_DATA_TYPE_UINT16,
-                curve = LutCurve.entries.getOrElse(curveOrdinal) { LutCurve.SRGB },
+                curve = TransferCurve.entries.getOrElse(curveOrdinal) { TransferCurve.SRGB },
                 colorSpace = ColorSpace.entries.getOrElse(colorSpaceOrdinal) { ColorSpace.SRGB },
             )
         )
@@ -122,28 +123,58 @@ object MgcVfeLutRuntime {
 
     @JvmStatic
     fun ensureBootstrapVerificationLut(): LutConfig? {
-        activeLutConfig?.let { return it }
-        restoreSavedSelectionIfNeeded()?.let { return it }
-        activeLutConfig = null
+        syncPhotonLookIfNeeded(force = false)
+        return activeLutConfig
+    }
+
+    @JvmStatic
+    fun syncPhotonLookIfNeeded(force: Boolean = false): Boolean {
+        return PhotonLookClient.sync(currentApplication(), force)
+    }
+
+    @JvmStatic
+    fun applyPhotonLook(
+        signature: String,
+        lutConfig: LutConfig?,
+        recipeParams: ColorRecipeParams,
+    ): Boolean {
+        if (activeLookSignature == signature) {
+            return false
+        }
+        activeLookSignature = signature
+        activeLutConfig = lutConfig
+        activeRecipeParams = recipeParams
         invalidateSnapshot()
-        return null
+        return true
+    }
+
+    @JvmStatic
+    fun getActiveLookSignature(): String? = activeLookSignature
+
+    @JvmStatic
+    fun ensureActiveLutConfig(): LutConfig? {
+        activeLutConfig?.let { return it }
+        return ensureBootstrapVerificationLut()
     }
 
     @JvmStatic
     fun clearActiveLutConfig() {
         activeLutConfig = null
+        activeLookSignature = null
         invalidateSnapshot()
     }
 
     @JvmStatic
     fun setActiveRecipeParams(params: MgcPreviewRecipeParams?) {
         activeRecipeParams = params?.toColorRecipeParams() ?: ColorRecipeParams.DEFAULT
+        activeLookSignature = null
         invalidateSnapshot()
     }
 
     @JvmStatic
     fun setActiveRecipeParamsDirect(params: ColorRecipeParams?) {
         activeRecipeParams = params ?: ColorRecipeParams.DEFAULT
+        activeLookSignature = null
         invalidateSnapshot()
     }
 
@@ -153,82 +184,8 @@ object MgcVfeLutRuntime {
     @JvmStatic
     fun clearActiveRecipeParams() {
         activeRecipeParams = ColorRecipeParams.DEFAULT
+        activeLookSignature = null
         invalidateSnapshot()
-    }
-
-    private fun restoreSavedSelectionIfNeeded(): LutConfig? {
-        if (savedSelectionRestoreAttempted) {
-            return activeLutConfig
-        }
-        savedSelectionRestoreAttempted = true
-        val application = currentApplication() ?: return activeLutConfig
-        return runCatching {
-            if (MgcFilterStore.restoreSavedSelection(application)) {
-                Log.d(TAG, "restored saved LUT selection from MGC filter store")
-            }
-            activeLutConfig
-        }.getOrElse {
-            Log.e(TAG, "failed to restore saved LUT selection", it)
-            activeLutConfig
-        }
-    }
-
-    private fun loadExternalBootstrapLut(): LutConfig? {
-        val source = resolveBootstrapCubeSource() ?: return null.also {
-            externalBootstrapLut = null
-            externalBootstrapSource = null
-            externalBootstrapLastModified = Long.MIN_VALUE
-        }
-        val sourceId = source.sourceId
-        val lastModified = source.lastModified
-        externalBootstrapLut?.let { cached ->
-            if (externalBootstrapSource == sourceId && externalBootstrapLastModified == lastModified) {
-                return cached
-            }
-        }
-        return try {
-            val parsed = source.openInputStream().use { LutParser.parse(it, source.title) }
-            externalBootstrapLut = parsed
-            externalBootstrapSource = sourceId
-            externalBootstrapLastModified = lastModified
-            Log.d(TAG, "loaded bootstrap cube source=$sourceId size=${parsed.size}")
-            parsed
-        } catch (t: Throwable) {
-            Log.e(TAG, "failed to load bootstrap cube source=$sourceId", t)
-            externalBootstrapLut = null
-            externalBootstrapSource = null
-            externalBootstrapLastModified = Long.MIN_VALUE
-            null
-        }
-    }
-
-    private fun resolveBootstrapCubeSource(): CubeSource? {
-        resolvePublicBootstrapCube()?.let { return it }
-        return null
-    }
-
-    private fun resolvePublicBootstrapCube(): CubeSource? {
-        val root = File(Environment.getExternalStorageDirectory(), "MGC")
-
-        var file = File(root, LUT_FILE_NAME)
-
-        val canRead = runCatching { file.isFile && file.canRead() }.getOrDefault(false)
-
-        if (!canRead) {
-            file = root.listFiles()
-                ?.asSequence()
-                ?.filter { it.isFile && it.extension.equals("cube", ignoreCase = true) }
-                ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenBy { it.name.lowercase() })
-                ?.firstOrNull()
-                ?: return null
-        }
-
-        return CubeSource(
-            sourceId = "public:${file.absolutePath}",
-            title = file.nameWithoutExtension,
-            lastModified = file.lastModified(),
-            openInputStream = { file.inputStream() },
-        )
     }
 
     private fun currentApplication(): Application? {
@@ -240,13 +197,6 @@ object MgcVfeLutRuntime {
             null
         }
     }
-
-    private data class CubeSource(
-        val sourceId: String,
-        val title: String,
-        val lastModified: Long,
-        val openInputStream: () -> java.io.InputStream,
-    )
 
     @JvmStatic
     fun getVertexShaderSource(): String = Shaders.VERTEX_SHADER.removePrefix("\uFEFF").trimStart()
@@ -261,11 +211,11 @@ object MgcVfeLutRuntime {
     fun getFullCropRect(): FloatArray = fullCropRect
 
     @JvmStatic
-    fun getFragmentShaderSource(): String = Shaders.FRAGMENT_SHADER_COLOR_RECIPE.removePrefix("\uFEFF").trimStart()
+    fun getFragmentShaderSource(): String = previewFragmentShader.removePrefix("\uFEFF").trimStart()
 
     @JvmStatic
     fun getPackedAtlasFragmentShaderSource(): String =
-        MgcVfeShaderAdapters.buildPackedLutFragmentShader(Shaders.FRAGMENT_SHADER_COLOR_RECIPE)
+        MgcVfeShaderAdapters.buildPackedLutFragmentShader(previewFragmentShader)
 
     @JvmStatic
     fun buildPackedLutAtlas(): MgcVfePackedLutAtlas? =
@@ -314,14 +264,14 @@ object MgcVfeLutRuntime {
         val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(activeRecipeParams)
         return MgcVfeLutSnapshot(
             vertexShader = Shaders.VERTEX_SHADER,
-            fragmentShader = Shaders.FRAGMENT_SHADER_COLOR_RECIPE,
+            fragmentShader = previewFragmentShader,
             atlasFragmentShader = getPackedAtlasFragmentShaderSource(),
             lutPayload = lutConfig?.takeIf { it.isValid() }?.toByteBuffer()?.let { buffer ->
                 ByteArray(buffer.remaining()).also { bytes -> buffer.get(bytes) }
             },
             lutSize = lutConfig?.size ?: 0,
             lutDataType = lutConfig?.configDataType ?: LutConfig.CONFIG_DATA_TYPE_UINT8,
-            lutCurveOrdinal = lutConfig?.curve?.ordinal ?: 0,
+            lutCurveOrdinal = lutConfig?.curve?.shaderId ?: TransferCurve.SRGB.shaderId,
             lutColorSpaceOrdinal = lutConfig?.colorSpace?.ordinal ?: 0,
             lutAtlasPayload = packedAtlas?.payload,
             lutAtlasWidth = packedAtlas?.width ?: 0,
