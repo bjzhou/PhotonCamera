@@ -227,6 +227,7 @@ object MultiFrameStacker {
         useGpuAcceleration: Boolean = true,
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
+        whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
         noiseModel: FloatArray = floatArrayOf(0f, 0f),
         rawNoiseModel: RawNoiseModel = RawNoiseModel.fromLegacyNoiseModel(noiseModel),
         lensShading: FloatArray? = null,
@@ -245,7 +246,8 @@ object MultiFrameStacker {
         val height = shortFrame.image.height
         RawStackRuntimeDebug.d(TAG) {
             "Starting RAW HDR stacking for short+${normalFrames.size} normal frames. " +
-                "Pattern=$cfaPattern GPU=$useGpuAcceleration BL=${masterBlackLevel.joinToString()} WL=$whiteLevel"
+                "Pattern=$cfaPattern GPU=$useGpuAcceleration BL=${masterBlackLevel.joinToString()} " +
+                "WL=$whiteLevel WB=${whiteBalanceGains.joinToString()}"
         }
         if (!useGpuAcceleration) {
             PLog.w(TAG, "RAW HDR denoise stack requires GLES; GPU acceleration setting is ignored")
@@ -267,6 +269,7 @@ object MultiFrameStacker {
             cfaPattern = cfaPattern,
             blackLevel = masterBlackLevel,
             whiteLevel = whiteLevel,
+            whiteBalanceGains = whiteBalanceGains,
             noiseModel = noiseModel,
             rawNoiseModel = rawNoiseModel,
             lensShading = stackLensShading,

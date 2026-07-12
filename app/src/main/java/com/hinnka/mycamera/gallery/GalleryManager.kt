@@ -3030,6 +3030,7 @@ object GalleryManager {
                     useGpuAcceleration = true,
                     masterBlackLevel = stackBlackLevel,
                     whiteLevel = stackWhiteLevel,
+                    whiteBalanceGains = rawMetadata.whiteBalanceGains,
                     noiseModel = rawMetadata.noiseProfile,
                     rawNoiseModel = RawNoiseModel.fromCamera2NoiseProfile(rawMetadata.channelNoiseProfile),
                     lensShading = rawMetadata.lensShadingMap,

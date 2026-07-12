@@ -8,6 +8,33 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class GlesRawStackerShaderTest {
     @Test
+    fun hdrRgbPipelineShadersCompileAndLinkOnDevice() {
+        val stacker = GlesRawStacker(
+            width = 64,
+            height = 64,
+            cfaPattern = 0,
+            blackLevel = floatArrayOf(64f, 64f, 64f, 64f),
+            whiteLevel = 4095,
+            noiseModel = floatArrayOf(0.001f, 0.00001f),
+            lensShading = null,
+            lensShadingWidth = 0,
+            lensShadingHeight = 0,
+            tuning = RawStackTuningProfile(mode = RawStackMode.HDR_MFNR),
+            debugConfig = RawStackDebugConfig.Disabled,
+        )
+        try {
+            invokePrivate(stacker, "initEgl")
+            invokePrivate(stacker, "ensureGles31")
+            invokePrivate(stacker, "initPrograms")
+            invokePrivate(stacker, "initHdrPrograms")
+            invokePrivate(stacker, "initResources")
+            invokePrivate(stacker, "applyRawRenderState")
+        } finally {
+            invokePrivate(stacker, "release")
+        }
+    }
+
+    @Test
     fun productionShadersCompileAndLinkOnDevice() {
         validateMode(RawStackMode.MFNR)
         validateMode(RawStackMode.MFSR)

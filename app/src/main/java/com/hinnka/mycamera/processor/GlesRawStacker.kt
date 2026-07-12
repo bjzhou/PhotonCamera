@@ -253,6 +253,9 @@ class GlesRawStacker(
     private var hdrShortGlobalAlignProgram = 0
     private var hdrRecoveryMaskProgram = 0
     private var hdrRecoveryCoverageProgram = 0
+    private var hdrRcdNormalPopulateProgram = 0
+    private var hdrRcdStoreRgbProgram = 0
+    private var hdrRgbFusionProgram = 0
     private var pgtmStatsProgram = 0
     private var diagnosticAlignmentProgram = 0
     private var diagnosticFinalProgram = 0
@@ -278,6 +281,9 @@ class GlesRawStacker(
     private var tileMaskTexture = 0
     private var hdrRecoveryOrigMaskTexture = 0
     private var hdrRecoveryCoverageTexture = 0
+    private var hdrNormalRgbStripeTexture = 0
+    private var hdrReferenceRgbStripeTexture = 0
+    private var hdrShortRgbStripeTexture = 0
     private var accumulatorValueWeightTexture = 0
     private var accumulatorStatisticsTexture = 0
     private var superResolutionAccumulatorTexture = 0
@@ -309,6 +315,8 @@ class GlesRawStacker(
     private var superResolutionDetailFrameCount = 0
     private var superResolutionDetailWeightSum = 0f
     private var superResolutionDetailWeightMax = 0f
+    private var hdrShortRawOffsetX = 0f
+    private var hdrShortRawOffsetY = 0f
 
     fun process(images: List<SafeImage>): RawStackResult? {
         return processFrames(images.map { RawStackFrame(it) })
@@ -584,6 +592,7 @@ class GlesRawStacker(
             applyRawRenderState()
             RawStackRuntimeDebug.d(TAG) {
                 "HWMF RAW HDR stack mode=${tuning.mode} normalFrames=${normalFrames.size} " +
+                    "calculationWb=${demosaicCalculationWbGains.contentToString()} " +
                     "${registrationSummary.compactSummary()} regProxy=REG_OUT " +
                     "regCtx=${registrationSetup.referenceContextSummary()} " +
                     "prefilterLevels=$pyramidLevels flowGrid=$flowGridSpacing " +
@@ -656,10 +665,10 @@ class GlesRawStacker(
             }
             computeHdrRecoveryMask()
             GlesGpuScheduler.yieldToUiRenderer()
-            normalizeOutput(
-                hdrMode = true,
+            reconstructHdrRgbStripes(
+                shortImage = shortFrame.image,
+                referenceImage = normalFrames.first().image,
                 referenceExposureScale = referenceOutputScale,
-                shortExposureScale = 1.0f,
             )
             val readTiming = readOutput(outputBuffer)
             outputBuffer.rewind()
@@ -834,6 +843,29 @@ class GlesRawStacker(
             HDR_RECOVERY_COVERAGE_FRAGMENT_SHADER,
             "raw_hdr_recovery_coverage",
         )
+        hdrRcdNormalPopulateProgram = linkComputeProgram(
+            HDR_RCD_NORMAL_POPULATE_COMPUTE_SHADER,
+            "raw_hdr_rcd_normal_populate",
+        )
+        hdrRcdStoreRgbProgram = linkComputeProgram(
+            HDR_RCD_STORE_RGB_COMPUTE_SHADER,
+            "raw_hdr_rcd_store_rgb",
+        )
+        hdrRgbFusionProgram = linkGraphicsProgram(
+            FULLSCREEN_VERTEX_SHADER,
+            HDR_RGB_FUSION_FRAGMENT_SHADER,
+            "raw_hdr_rgb_fusion",
+        )
+        if (rcdStripePopulateProgram == 0) {
+            rcdStripePopulateProgram = linkComputeProgram(RCD_STRIPE_POPULATE_COMPUTE_SHADER, "raw_hdr_rcd_populate")
+            rcdStripeStep1Program = linkComputeProgram(RcdShaders.STEP_1, "raw_hdr_rcd_step1")
+            rcdStripeStep2Program = linkComputeProgram(RcdShaders.STEP_2, "raw_hdr_rcd_step2")
+            rcdStripeStep3Program = linkComputeProgram(RcdShaders.STEP_3, "raw_hdr_rcd_step3")
+            rcdStripeStep40Program = linkComputeProgram(RcdShaders.STEP_4_0, "raw_hdr_rcd_step40")
+            rcdStripeStep41Program = linkComputeProgram(RcdShaders.STEP_4_1, "raw_hdr_rcd_step41")
+            rcdStripeStep42Program = linkComputeProgram(RcdShaders.STEP_4_2, "raw_hdr_rcd_step42")
+            rcdStripeStep43Program = linkComputeProgram(RcdShaders.STEP_4_3, "raw_hdr_rcd_step43")
+        }
         pgtmStatsProgram = linkComputeProgram(PGTM_STATS_COMPUTE_SHADER, "raw_hdr_pgtm_stats")
     }
 
@@ -1047,6 +1079,29 @@ class GlesRawStacker(
         }
     }
 
+    private fun ensureHdrRcdStripeResources(capacityRows: Int) {
+        ensureRcdStripeResources(capacityRows)
+        if (hdrNormalRgbStripeTexture != 0) return
+        hdrNormalRgbStripeTexture = createTexture2D(
+            width,
+            rcdStripeCapacityRows,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        hdrReferenceRgbStripeTexture = createTexture2D(
+            width,
+            rcdStripeCapacityRows,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        hdrShortRgbStripeTexture = createTexture2D(
+            width,
+            rcdStripeCapacityRows,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+    }
+
     private fun uploadRcdRawStripe(image: SafeImage, firstRow: Int, rowCount: Int, label: String) {
         require(rcdStripeRawTexture != 0 && rowCount <= rcdStripeCapacityRows)
         val plane = image.planes.firstOrNull() ?: throw IllegalArgumentException("$label has no RAW plane")
@@ -1108,6 +1163,12 @@ class GlesRawStacker(
         )
         GLES31.glDispatchCompute(groupCount(width), groupCount(rowCount), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+
+        runRcdSteps(rowCount, label)
+    }
+
+    private fun runRcdSteps(rowCount: Int, label: String) {
+        bindRcdStripeBuffers()
 
         fun dispatch(program: Int, halfWidth: Boolean, step: String) {
             GLES31.glUseProgram(program)
@@ -3067,6 +3128,8 @@ class GlesRawStacker(
     }
 
     private fun writeHdrShortAlignmentTexture(dx: Float, dy: Float) {
+        hdrShortRawOffsetX = (dx.takeIf { it.isFinite() } ?: 0f) * 2f
+        hdrShortRawOffsetY = (dy.takeIf { it.isFinite() } ?: 0f) * 2f
         val buffer = ByteBuffer.allocateDirect(4 * 4)
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
@@ -3303,10 +3366,175 @@ class GlesRawStacker(
         )
         GLES31.glUniform1i(
             GLES31.glGetUniformLocation(hdrRecoveryCoverageProgram, "uBlockRadius"),
-            (rawCfaPeriod / 2).coerceIn(1, 4),
+            max(4, rawCfaPeriod / 2).coerceIn(1, 4),
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         finishFramebufferPass("computeHdrRecoveryMask coverage")
+    }
+
+    private fun populateHdrNormalRcdStripe(
+        sourceRowOffset: Int,
+        sourceRowCount: Int,
+        referenceExposureScale: Float,
+    ) {
+        bindRcdStripeBuffers()
+        GLES31.glUseProgram(hdrRcdNormalPopulateProgram)
+        bindTexture(hdrRcdNormalPopulateProgram, "uAccumulatorValueWeight", 0, accumulatorValueWeightTexture)
+        bindTexture(hdrRcdNormalPopulateProgram, "uReferenceRaw", 1, refRaw)
+        bindTexture(hdrRcdNormalPopulateProgram, "uLensShadingMap", 2, lensShadingTexture)
+        setCommonUniforms(hdrRcdNormalPopulateProgram)
+        GLES31.glUniform2i(uniformLocation(hdrRcdNormalPopulateProgram, "uImageSize"), width, height)
+        GLES31.glUniform2i(uniformLocation(hdrRcdNormalPopulateProgram, "uStripeSize"), width, sourceRowCount)
+        GLES31.glUniform1i(
+            uniformLocation(hdrRcdNormalPopulateProgram, "uSourceRowOffset"),
+            sourceRowOffset,
+        )
+        GLES31.glUniform1f(
+            uniformLocation(hdrRcdNormalPopulateProgram, "uReferenceExposureScale"),
+            referenceExposureScale,
+        )
+        GLES31.glUniform4fv(
+            uniformLocation(hdrRcdNormalPopulateProgram, "uCalculationWbGains"),
+            1,
+            demosaicCalculationWbGains,
+            0,
+        )
+        GLES31.glDispatchCompute(groupCount(width), groupCount(sourceRowCount), 1)
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+        checkGlError("HDR normal RCD populate")
+    }
+
+    private fun storeHdrRcdRgbStripe(targetTexture: Int, rowCount: Int, label: String) {
+        GLES31.glUseProgram(hdrRcdStoreRgbProgram)
+        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, rcdStripeBuffers[1])
+        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, rcdStripeBuffers[2])
+        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 3, rcdStripeBuffers[3])
+        bindImage(0, targetTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+        GLES31.glUniform2i(uniformLocation(hdrRcdStoreRgbProgram, "uSourceSize"), width, rowCount)
+        GLES31.glUniform3f(
+            uniformLocation(hdrRcdStoreRgbProgram, "uCalculationGains"),
+            demosaicCalculationWbGains[0],
+            1f,
+            demosaicCalculationWbGains[3],
+        )
+        GLES31.glDispatchCompute(groupCount(width), groupCount(rowCount), 1)
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+        )
+        checkGlError(label)
+    }
+
+    private fun reconstructHdrRgbStripes(
+        shortImage: SafeImage,
+        referenceImage: SafeImage,
+        referenceExposureScale: Float,
+    ) {
+        var requiredRows = 1
+        var outputRow = 0
+        while (outputRow < height) {
+            val outputCount = minOf(HDR_RGB_STRIPE_ROWS, height - outputRow)
+            val normalBand = RawSuperResolutionStripePlanner.sourceRowBand(
+                outputRow, outputCount, 1f, 0f, 0f, rawCfaPeriod, height,
+            )
+            val shortBand = RawSuperResolutionStripePlanner.sourceRowBand(
+                outputRow,
+                outputCount,
+                1f,
+                hdrShortRawOffsetY * 0.5f,
+                hdrShortRawOffsetY * 0.5f,
+                rawCfaPeriod,
+                height,
+            )
+            requiredRows = max(requiredRows, max(normalBand.rowCount, shortBand.rowCount))
+            outputRow += outputCount
+        }
+        ensureHdrRcdStripeResources(requiredRows)
+
+        outputRow = 0
+        while (outputRow < height) {
+            val outputCount = minOf(HDR_RGB_STRIPE_ROWS, height - outputRow)
+            val normalBand = RawSuperResolutionStripePlanner.sourceRowBand(
+                outputRow, outputCount, 1f, 0f, 0f, rawCfaPeriod, height,
+            )
+            val shortBand = RawSuperResolutionStripePlanner.sourceRowBand(
+                outputRow,
+                outputCount,
+                1f,
+                hdrShortRawOffsetY * 0.5f,
+                hdrShortRawOffsetY * 0.5f,
+                rawCfaPeriod,
+                height,
+            )
+
+            populateHdrNormalRcdStripe(
+                sourceRowOffset = normalBand.firstRow,
+                sourceRowCount = normalBand.rowCount,
+                referenceExposureScale = referenceExposureScale,
+            )
+            runRcdSteps(normalBand.rowCount, "HDR normal")
+            storeHdrRcdRgbStripe(hdrNormalRgbStripeTexture, normalBand.rowCount, "HDR normal RGB store")
+
+            uploadRcdRawStripe(referenceImage, normalBand.firstRow, normalBand.rowCount, "HDR reference normal")
+            runRcdStripe(normalBand.firstRow, normalBand.rowCount, "HDR reference normal")
+            storeHdrRcdRgbStripe(
+                hdrReferenceRgbStripeTexture,
+                normalBand.rowCount,
+                "HDR reference normal RGB store",
+            )
+
+            uploadRcdRawStripe(shortImage, shortBand.firstRow, shortBand.rowCount, "HDR short")
+            runRcdStripe(shortBand.firstRow, shortBand.rowCount, "HDR short")
+            storeHdrRcdRgbStripe(hdrShortRgbStripeTexture, shortBand.rowCount, "HDR short RGB store")
+
+            bindFramebufferOutput(outputTexture, "HDR RGB fusion")
+            GLES30.glViewport(0, outputRow, width, outputCount)
+            GLES30.glUseProgram(hdrRgbFusionProgram)
+            bindTexture(hdrRgbFusionProgram, "uNormalRgb", 0, hdrNormalRgbStripeTexture)
+            bindTexture(hdrRgbFusionProgram, "uReferenceRgb", 1, hdrReferenceRgbStripeTexture)
+            bindTexture(hdrRgbFusionProgram, "uShortRgb", 2, hdrShortRgbStripeTexture)
+            bindTexture(hdrRgbFusionProgram, "uRecoveryMask", 3, hdrRecoveryOrigMaskTexture)
+            bindTexture(hdrRgbFusionProgram, "uRecoveryCoverageMask", 4, hdrRecoveryCoverageTexture)
+            GLES31.glUniform2i(uniformLocation(hdrRgbFusionProgram, "uImageSize"), width, height)
+            GLES31.glUniform2i(uniformLocation(hdrRgbFusionProgram, "uPlaneSize"), planeWidth, planeHeight)
+            GLES31.glUniform2i(
+                uniformLocation(hdrRgbFusionProgram, "uNormalSourceSize"),
+                width,
+                normalBand.rowCount,
+            )
+            GLES31.glUniform2i(
+                uniformLocation(hdrRgbFusionProgram, "uShortSourceSize"),
+                width,
+                shortBand.rowCount,
+            )
+            GLES31.glUniform1i(
+                uniformLocation(hdrRgbFusionProgram, "uNormalSourceRowOffset"),
+                normalBand.firstRow,
+            )
+            GLES31.glUniform1i(
+                uniformLocation(hdrRgbFusionProgram, "uShortSourceRowOffset"),
+                shortBand.firstRow,
+            )
+            GLES31.glUniform2f(
+                uniformLocation(hdrRgbFusionProgram, "uShortRawOffset"),
+                hdrShortRawOffsetX,
+                hdrShortRawOffsetY,
+            )
+            GLES31.glUniform1i(uniformLocation(hdrRgbFusionProgram, "uCfaPattern"), cfaPattern)
+            GLES31.glUniform1f(
+                uniformLocation(hdrRgbFusionProgram, "uReferenceExposureScale"),
+                referenceExposureScale,
+            )
+            GLES31.glUniform3f(
+                uniformLocation(hdrRgbFusionProgram, "uCalculationGains"),
+                demosaicCalculationWbGains[0],
+                1f,
+                demosaicCalculationWbGains[3],
+            )
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            finishFramebufferPass("HDR RGB fusion")
+            outputRow += outputCount
+            GlesGpuScheduler.yieldToUiRenderer()
+        }
     }
 
     private fun normalizeOutput(
@@ -4695,6 +4923,7 @@ class GlesRawStacker(
         private const val BASE_ACCUMULATOR_DISPATCH_ROWS = 256
         private const val SUPER_RESOLUTION_STRIPE_ROWS = 256
         private const val SUPER_RESOLUTION_SPATIAL_RADIUS = 2
+        private const val HDR_RGB_STRIPE_ROWS = 256
         private const val PGTM_STATS_BUFFER_BINDING = 7
         private const val HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING = 8
         private const val HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE = 4
@@ -7040,6 +7269,290 @@ class GlesRawStacker(
             }
         """.trimIndent()
 
+        private val HDR_RCD_NORMAL_POPULATE_COMPUTE_SHADER = """
+            #version 310 es
+            $RAW_COMMON
+            layout(local_size_x = 16, local_size_y = 16) in;
+            uniform highp usampler2D uAccumulatorValueWeight;
+            uniform highp usampler2D uReferenceRaw;
+            uniform sampler2D uLensShadingMap;
+            uniform ivec2 uImageSize;
+            uniform ivec2 uStripeSize;
+            uniform int uSourceRowOffset;
+            uniform int uCfaPattern;
+            uniform float uBlackLevel[4];
+            uniform float uWhiteLevel;
+            uniform float uReferenceExposureScale;
+            uniform vec4 uCalculationWbGains;
+            layout(std430, binding = 0) buffer CFA_Buf { float cfa[]; };
+            layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
+            layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
+            layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
+
+            float lscGain(ivec2 p) {
+                vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uImageSize);
+                vec4 gains = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
+                return gains[lensShadingChannelAt(uCfaPattern, p)];
+            }
+
+            float referenceValue(ivec2 p, int channel) {
+                float raw = float(texelFetch(uReferenceRaw, p, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
+                return max(raw - uBlackLevel[channel], 0.0) * lscGain(p) /
+                    range * uReferenceExposureScale;
+            }
+
+            void main() {
+                ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+                if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
+                ivec2 global = ivec2(local.x, local.y + uSourceRowOffset);
+                int channel = bayerIndexAt(uCfaPattern, global);
+                vec2 valueWeight = unpackHalf2x16(texelFetch(uAccumulatorValueWeight, global, 0).r);
+                float value = valueWeight.y > 0.02 ?
+                    valueWeight.x / max(valueWeight.y, 1e-6) :
+                    referenceValue(global, channel);
+                value = clamp(value * max(uCalculationWbGains[channel], 1e-6), 0.0, 8.0);
+                int index = local.y * uStripeSize.x + local.x;
+                cfa[index] = value;
+                rgb0[index] = channel == 0 ? value : 0.0;
+                rgb1[index] = (channel == 1 || channel == 2) ? value : 0.0;
+                rgb2[index] = channel == 3 ? value : 0.0;
+            }
+        """.trimIndent()
+
+        private val HDR_RCD_STORE_RGB_COMPUTE_SHADER = """
+            #version 310 es
+            precision highp float;
+            precision highp int;
+            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(std430, binding = 1) readonly buffer RcdRgb0_Buf { float rcdRgb0[]; };
+            layout(std430, binding = 2) readonly buffer RcdRgb1_Buf { float rcdRgb1[]; };
+            layout(std430, binding = 3) readonly buffer RcdRgb2_Buf { float rcdRgb2[]; };
+            layout(rgba16f, binding = 0) writeonly uniform highp image2D uOutput;
+            uniform ivec2 uSourceSize;
+            uniform vec3 uCalculationGains;
+
+            void main() {
+                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+                if (p.x >= uSourceSize.x || p.y >= uSourceSize.y) return;
+                int index = p.y * uSourceSize.x + p.x;
+                vec3 rgb = vec3(rcdRgb0[index], rcdRgb1[index], rcdRgb2[index]) /
+                    max(uCalculationGains, vec3(1e-6));
+                imageStore(uOutput, p, vec4(max(rgb, vec3(0.0)), 1.0));
+            }
+        """.trimIndent()
+
+        private val HDR_RGB_FUSION_FRAGMENT_SHADER = """
+            #version 300 es
+            $RAW_COMMON
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            uniform sampler2D uNormalRgb;
+            uniform sampler2D uReferenceRgb;
+            uniform sampler2D uShortRgb;
+            uniform sampler2D uRecoveryMask;
+            uniform sampler2D uRecoveryCoverageMask;
+            uniform ivec2 uImageSize;
+            uniform ivec2 uPlaneSize;
+            uniform ivec2 uNormalSourceSize;
+            uniform ivec2 uShortSourceSize;
+            uniform int uNormalSourceRowOffset;
+            uniform int uShortSourceRowOffset;
+            uniform vec2 uShortRawOffset;
+            uniform int uCfaPattern;
+            uniform float uReferenceExposureScale;
+            uniform vec3 uCalculationGains;
+
+            vec3 stripeFetch(sampler2D source, ivec2 p, ivec2 sourceSize) {
+                p = clamp(p, ivec2(0), sourceSize - ivec2(1));
+                return texelFetch(source, p, 0).rgb;
+            }
+
+            vec3 sampleStripe(sampler2D source, vec2 p, ivec2 sourceSize) {
+                p = clamp(p, vec2(0.0), vec2(sourceSize - ivec2(1)));
+                ivec2 p0 = ivec2(floor(p));
+                ivec2 p1 = min(p0 + ivec2(1), sourceSize - ivec2(1));
+                vec2 f = p - vec2(p0);
+                vec3 v00 = stripeFetch(source, p0, sourceSize);
+                vec3 v10 = stripeFetch(source, ivec2(p1.x, p0.y), sourceSize);
+                vec3 v01 = stripeFetch(source, ivec2(p0.x, p1.y), sourceSize);
+                vec3 v11 = stripeFetch(source, p1, sourceSize);
+                return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+            }
+
+            vec3 referenceRgbAtGlobal(vec2 globalPos) {
+                vec2 local = vec2(globalPos.x, globalPos.y - float(uNormalSourceRowOffset));
+                return clamp(
+                    sampleStripe(uReferenceRgb, local, uNormalSourceSize) * uReferenceExposureScale,
+                    vec3(0.0),
+                    vec3(1.0)
+                );
+            }
+
+            vec3 shortRgbAtGlobal(vec2 globalPos) {
+                vec2 shortGlobal = globalPos + uShortRawOffset;
+                vec2 local = vec2(shortGlobal.x, shortGlobal.y - float(uShortSourceRowOffset));
+                return clamp(
+                    sampleStripe(uShortRgb, local, uShortSourceSize),
+                    vec3(0.0),
+                    vec3(1.0)
+                );
+            }
+
+            vec4 recoveryClassAt(ivec2 block) {
+                block = clamp(block, ivec2(0), uPlaneSize - ivec2(1));
+                return clamp(texelFetch(uRecoveryMask, block, 0), vec4(0.0), vec4(1.0));
+            }
+
+            float workingLuma(vec3 sensorRgb) {
+                vec3 working = sensorRgb * max(uCalculationGains, vec3(1e-6));
+                return dot(working, vec3(0.2126, 0.7152, 0.0722));
+            }
+
+            vec3 workingChroma(vec3 sensorRgb) {
+                vec3 working = max(sensorRgb * max(uCalculationGains, vec3(1e-6)), vec3(0.0));
+                return working / max(working.r + working.g + working.b, 1e-5);
+            }
+
+            vec3 blendChromaAndLuma(vec3 fromSensorRgb, vec3 toSensorRgb, float weight) {
+                weight = clamp(weight, 0.0, 1.0);
+                vec3 gains = max(uCalculationGains, vec3(1e-6));
+                vec3 fromWorking = max(fromSensorRgb * gains, vec3(0.0));
+                vec3 toWorking = max(toSensorRgb * gains, vec3(0.0));
+                vec3 fromChroma = fromWorking /
+                    max(fromWorking.r + fromWorking.g + fromWorking.b, 1e-5);
+                vec3 toChroma = toWorking /
+                    max(toWorking.r + toWorking.g + toWorking.b, 1e-5);
+                vec3 chroma = mix(fromChroma, toChroma, weight);
+                chroma /= max(chroma.r + chroma.g + chroma.b, 1e-5);
+
+                const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+                float luma = mix(
+                    dot(fromWorking, LUMA),
+                    dot(toWorking, LUMA),
+                    weight
+                );
+                vec3 workingRgb = chroma * (luma / max(dot(chroma, LUMA), 1e-5));
+                return clamp(workingRgb / gains, vec3(0.0), vec3(1.0));
+            }
+
+            float movingHighlightSeed(ivec2 block) {
+                vec4 recoveryClass = recoveryClassAt(block);
+                if (recoveryClass.g <= 0.5 || recoveryClass.b > 0.5) return 0.0;
+                vec2 globalCenter = vec2(block * 2 + ivec2(1));
+                vec3 referenceRgb = referenceRgbAtGlobal(globalCenter);
+                vec3 shortRgb = shortRgbAtGlobal(globalCenter);
+                float referenceLuma = workingLuma(referenceRgb);
+                float shortLuma = workingLuma(shortRgb);
+                float lumaRelativeError = abs(referenceLuma - shortLuma) /
+                    max(max(referenceLuma, shortLuma), 0.01);
+                float chromaError = length(workingChroma(referenceRgb) - workingChroma(shortRgb));
+                float lumaMotion = smoothstep(0.28, 0.52, lumaRelativeError);
+                float chromaMotion = smoothstep(0.14, 0.30, chromaError);
+                return max(lumaMotion, chromaMotion);
+            }
+
+            float movingHighlightNearby(ivec2 centerBlock) {
+                // Max-dilation (splat), not blur: motion confidence expands over a 9x9 block
+                // neighborhood without averaging incorrect color into adjacent pixels.
+                float motion = 0.0;
+                for (int y = -4; y <= 4; ++y) {
+                    for (int x = -4; x <= 4; ++x) {
+                        ivec2 block = clamp(
+                            centerBlock + ivec2(x, y),
+                            ivec2(0),
+                            uPlaneSize - ivec2(1)
+                        );
+                        motion = max(motion, movingHighlightSeed(block));
+                    }
+                }
+                return motion;
+            }
+
+            void writePackedRaw(float value) {
+                uint raw = uint(floor(clamp(value, 0.0, 1.0) * 65535.0 + 0.5));
+                fragColor = vec4(
+                    float(raw & 255u) / 255.0,
+                    float((raw >> 8) & 255u) / 255.0,
+                    0.0,
+                    1.0
+                );
+            }
+
+            void main() {
+                ivec2 outputPos = ivec2(gl_FragCoord.xy);
+                vec2 normalLocal = vec2(outputPos.x, outputPos.y - uNormalSourceRowOffset);
+                vec3 accumulatedNormalRgb = clamp(
+                    sampleStripe(uNormalRgb, normalLocal, uNormalSourceSize),
+                    vec3(0.0),
+                    vec3(1.0)
+                );
+                vec3 referenceRgb = referenceRgbAtGlobal(vec2(outputPos));
+                vec3 shortRgb = shortRgbAtGlobal(vec2(outputPos));
+                ivec2 maskPos = clamp(outputPos / 2, ivec2(0), uPlaneSize - ivec2(1));
+                vec4 recoveryClass = recoveryClassAt(maskPos);
+                float recoveryCoverage = clamp(
+                    texelFetch(uRecoveryCoverageMask, maskPos, 0).r,
+                    0.0,
+                    1.0
+                );
+
+                vec3 rgb = accumulatedNormalRgb;
+                float motion = 0.0;
+                if (recoveryCoverage > 0.0) {
+                    motion = movingHighlightNearby(maskPos);
+                    if (recoveryClass.r > 0.5) {
+                        float commonScale = 1.0;
+                        if (recoveryClass.b <= 0.5) {
+                            float referenceLuma = workingLuma(referenceRgb);
+                            float shortLuma = workingLuma(shortRgb);
+                            commonScale = clamp(
+                                referenceLuma / max(shortLuma, 1e-5),
+                                0.5,
+                                2.0
+                            );
+                        }
+                        // Both candidates were demosaiced at their native exposure. Exposure
+                        // matching happens only now in RGB, in the same order used by MFSR.
+                        vec3 recovered = clamp(
+                            shortRgb * commonScale,
+                            vec3(0.0),
+                            vec3(1.0)
+                        );
+                        float expectedHighlight = max(0.010, 0.90 * uReferenceExposureScale);
+                        float recoveredLuma = workingLuma(recovered);
+                        float shortSupport = smoothstep(
+                            0.08 * expectedHighlight,
+                            0.30 * expectedHighlight,
+                            recoveredLuma
+                        );
+                        // The Bayer-domain exposure-scaled accumulator is deliberately excluded
+                        // from recovery pixels because scale-before-RCD changes highlight color.
+                        // Blend luma and normalized chromaticity separately; direct RGB mix does
+                        // not preserve channel ratios when one endpoint is partially clipped.
+                        float recoveryWeight = shortSupport * (1.0 - motion);
+                        rgb = blendChromaAndLuma(
+                            referenceRgb,
+                            recovered,
+                            recoveryWeight
+                        );
+                    } else {
+                        // Max-dilated motion reaches beyond the original recovery block so the
+                        // whole moving light footprint returns to the original normal frame.
+                        rgb = blendChromaAndLuma(
+                            accumulatedNormalRgb,
+                            referenceRgb,
+                            motion
+                        );
+                    }
+                }
+
+                int channel = bayerIndexAt(uCfaPattern, outputPos);
+                float mosaic = channel == 0 ? rgb.r : (channel == 3 ? rgb.b : rgb.g);
+                writePackedRaw(mosaic);
+            }
+        """.trimIndent()
+
         private val HDR_SHORT_GLOBAL_ALIGN_COMPUTE_SHADER = """
             #version 310 es
             precision highp float;
@@ -7170,6 +7683,11 @@ class GlesRawStacker(
                 return signal >= 0.90;
             }
 
+            bool physicallyClippedAt(ivec2 p) {
+                p = clampRaw(p);
+                return sensorNorm(p) >= 0.985;
+            }
+
             vec4 readAccumulator(ivec2 p) {
                 vec2 valueWeight = unpackHalf2x16(texelFetch(uAccumulatorValueWeight, p, 0).r);
                 vec2 statistics = unpackHalf2x16(texelFetch(uAccumulatorStatistics, p, 0).r);
@@ -7185,14 +7703,19 @@ class GlesRawStacker(
             void main() {
                 ivec2 block = clamp(ivec2(gl_FragCoord.xy), ivec2(0), uPlaneSize - ivec2(1));
                 ivec2 base = block * 2;
-                int riskCount = 0;
+                int affectedCount = 0;
+                int actualClipCount = 0;
                 for (int y = 0; y <= 1; ++y) {
                     for (int x = 0; x <= 1; ++x) {
-                        if (phaseAffected(base + ivec2(x, y))) riskCount += 1;
+                        ivec2 rawPos = base + ivec2(x, y);
+                        if (phaseAffected(rawPos)) affectedCount += 1;
+                        if (physicallyClippedAt(rawPos)) actualClipCount += 1;
                     }
                 }
-                bool sourceMask = riskCount > 0;
-                bool fullySaturated = riskCount == 4;
+                bool sourceMask = affectedCount > 0;
+                // Kernel-support clip mass may affect all four phases without any of them being
+                // physically clipped. Only the original normal RAW can prove full saturation.
+                bool fullySaturated = actualClipCount == 4;
                 bool partiallySaturated = sourceMask && !fullySaturated;
                 fragColor = vec4(
                     sourceMask ? 1.0 : 0.0,
@@ -7221,22 +7744,81 @@ class GlesRawStacker(
             layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
             layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
 
+            const float HIGHLIGHT_CLIP_THRESHOLD = 0.985;
+            const float HIGHLIGHT_CEILING = 8.0;
+
+            ivec2 clampLocal(ivec2 p) {
+                return clamp(p, ivec2(0), uStripeSize - ivec2(1));
+            }
+
+            ivec2 globalAt(ivec2 local) {
+                local = clampLocal(local);
+                return ivec2(local.x, local.y + uGlobalRowOffset);
+            }
+
+            float sensorNormalizedAt(ivec2 local) {
+                local = clampLocal(local);
+                ivec2 global = globalAt(local);
+                int channel = bayerIndexAt(uCfaPattern, global);
+                float raw = float(texelFetch(uRawStripe, local, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
+                return max(raw - uBlackLevel[channel], 0.0) / range;
+            }
+
+            float calculationSampleAt(ivec2 local) {
+                local = clampLocal(local);
+                ivec2 global = globalAt(local);
+                int channel = bayerIndexAt(uCfaPattern, global);
+                vec2 uv = (vec2(global) + vec2(0.5)) / vec2(uFullImageSize);
+                vec4 lsc = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
+                int lscChannel = lensShadingChannelAt(uCfaPattern, global);
+                float linear = sensorNormalizedAt(local) * lsc[lscChannel] *
+                    max(uCalculationWbGains[channel], 1e-6);
+                return clamp(linear, 0.0, HIGHLIGHT_CEILING);
+            }
+
+            int colorAt(ivec2 local) {
+                int channel = bayerIndexAt(uCfaPattern, globalAt(local));
+                return channel == 0 ? 0 : (channel == 3 ? 2 : 1);
+            }
+
+            float estimateOpposedLinear(ivec2 local, int ownColor, float fallback) {
+                vec3 sum = vec3(0.0);
+                vec3 count = vec3(0.0);
+                for (int y = -1; y <= 1; ++y) {
+                    for (int x = -1; x <= 1; ++x) {
+                        ivec2 sampleLocal = clampLocal(local + ivec2(x, y));
+                        int sampleColor = colorAt(sampleLocal);
+                        float value = calculationSampleAt(sampleLocal);
+                        sum[sampleColor] += value;
+                        count[sampleColor] += 1.0;
+                    }
+                }
+                const float power = 3.0;
+                vec3 roots = pow(max(sum / max(count, vec3(1.0)), vec3(0.0)),
+                    vec3(1.0 / power));
+                float opposedRoot = ownColor == 0 ? 0.5 * (roots.g + roots.b) :
+                    (ownColor == 1 ? 0.5 * (roots.r + roots.b) :
+                        0.5 * (roots.r + roots.g));
+                return max(pow(max(opposedRoot, 0.0), power), fallback);
+            }
+
             void main() {
                 ivec2 local = ivec2(gl_GlobalInvocationID.xy);
                 if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
                 ivec2 global = ivec2(local.x, local.y + uGlobalRowOffset);
                 int channel = bayerIndexAt(uCfaPattern, global);
-                float raw = float(texelFetch(uRawStripe, local, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
-                vec2 uv = (vec2(global) + vec2(0.5)) / vec2(uFullImageSize);
-                vec4 gains = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
-                int lscChannel = lensShadingChannelAt(uCfaPattern, global);
-                float value = clamp(
-                    max(raw - uBlackLevel[channel], 0.0) * gains[lscChannel] /
-                        range * max(uCalculationWbGains[channel], 1e-6),
-                    0.0,
-                    8.0
-                );
+                float sensor = sensorNormalizedAt(local);
+                float value = calculationSampleAt(local);
+                float clipMask = smoothstep(HIGHLIGHT_CLIP_THRESHOLD, 1.0, sensor);
+                if (clipMask > 0.0) {
+                    float reconstructed = estimateOpposedLinear(
+                        local,
+                        colorAt(local),
+                        value
+                    );
+                    value = min(mix(value, reconstructed, clipMask), HIGHLIGHT_CEILING);
+                }
                 int index = local.y * uStripeSize.x + local.x;
                 cfa[index] = value;
                 rgb0[index] = channel == 0 ? value : 0.0;
