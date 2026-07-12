@@ -306,6 +306,8 @@
     <string name="settings_isz_lens_focal_length">%1$dmm</string>
     <string name="settings_isz_lens_unknown_focal_length">未知焦段</string>
     <string name="settings_isz_virtual_lens_name">%1$s + ISZ %2$s（顯示 %3$s）</string>
+    <string name="settings_isz_vendor_profile_none">無廠商 Key</string>
+    <string name="settings_isz_vendor_profile_entry">%1$s=%2$d</string>
     <string name="settings_vendor_capture_title">ISZ / DCG 廠商 Key</string>
     <string name="settings_vendor_capture_description">鏡頭：%1$s。這些實驗性廠商參數僅針對該鏡頭生效，不保證設備可用。如果出現無法拍攝或閃退，請關閉這些設定。</string>
     <string name="settings_vendor_capture_insensor_zoom">Qualcomm 傳感器內變焦</string>
@@ -687,6 +689,9 @@
     <string name="settings_main_camera_id">主攝 ID</string>
     <string name="settings_main_camera_id_description">選擇將哪個 1x 后置相機 ID 作為主攝。</string>
     <string name="settings_main_camera_id_option">相機 ID %1$s</string>
+    <string name="settings_macro_camera_id">微距鏡頭 ID</string>
+    <string name="settings_macro_camera_id_description">選擇一個後置相機 ID 強制作為微距鏡頭。自動識別會保留目前相機偵測邏輯。</string>
+    <string name="settings_macro_camera_id_auto">自動識別</string>
     <string name="settings_logical_multi_camera_discovery">邏輯多攝探測</string>
     <string name="settings_logical_multi_camera_discovery_description">探測邏輯多攝 ID 暴露的物理鏡頭。預設關閉以提高相容性。</string>
     <string name="settings_logical_camera_binding_whitelist">邏輯/物理攝像頭白名單</string>
@@ -792,6 +797,7 @@
     <string name="settings_white_level_raw12">RAW12</string>
     <string name="settings_white_level_raw14">RAW14</string>
     <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
+    <string name="settings_white_level_custom">自訂</string>
     <string name="settings_raw_cfa_correction">CFA 通道校正</string>
     <string name="settings_raw_cfa_correction_with_lens">CFA 通道校正（鏡頭 %1$s · %2$dmm）</string>
     <string name="settings_raw_cfa_correction_description">覆蓋寫入 DNG 的 RAW CFA 通道排列。針對鏡頭單獨設定。</string>
@@ -811,7 +817,7 @@
     <string name="ghost_mode">幻影模式</string>
     <string name="close_ghost_mode">關閉幻影模式</string>
     <string name="ghost_mode_dialog_title">開啟幻影模式</string>
-    <string name="ghost_mode_dialog_description">開啟后，App 將在后臺自動為系統相機拍攝的相片（DCIM/Camera 目錄）應用當前選擇的 LUT 效果。</string>
+    <string name="ghost_mode_dialog_description">開啟後，App 將在後台自動為系統相機拍攝的相片（DCIM/Camera 目錄）應用當前選擇的 LUT 效果。</string>
     <string name="ghost_mode_permissions_required">需開啟以下權限：</string>
     <string name="ghost_mode_overlay_permission">\u2022 懸浮窗權限：允許 App 在後台穩定執行而不被系統清理，確保監測的連續性。</string>
     <string name="screen_capture_test_status_idle">準備啟動錄屏預覽。</string>
@@ -824,7 +830,7 @@
     <string name="screen_capture_test_notification_title">錄屏測試正在執行</string>
     <string name="screen_capture_test_notification_text">應用正在保持錄屏預覽會話。</string>
     <string name="ghost_mode_file_permission">\u2022 所有檔案管理權限：準許 App 直接讀寫系統相機相片，為您提供無感的自動修圖體驗。</string>
-    <string name="ghost_mode_dialog_confirm">同意并前往設定</string>
+    <string name="ghost_mode_dialog_confirm">同意並前往設定</string>
     <string name="settings_phantom_button_hidden">隱藏懸浮按鈕</string>
     <string name="settings_phantom_button_hidden_description">在幻影模式下隱藏螢幕上的懸浮按鈕。你仍可以通過快捷設定或應用快捷方式來控制。</string>
     <string name="settings_launch_camera_on_phantom_mode">啟動系統相機</string>
@@ -997,4 +1003,5 @@
     <string name="preset_restore_defaults_confirm">還原預設預設將清除所有自訂覆蓋，是否繼續？</string>
     <string name="preset_custom_badge">自訂</string>
     <string name="preset_builtin_badge">內置</string>
+    <string name="gallery">相簿</string>
 </resources>

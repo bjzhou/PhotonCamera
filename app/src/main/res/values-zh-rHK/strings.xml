@@ -817,7 +817,7 @@
     <string name="ghost_mode">幻影模式</string>
     <string name="close_ghost_mode">關閉幻影模式</string>
     <string name="ghost_mode_dialog_title">開啟幻影模式</string>
-    <string name="ghost_mode_dialog_description">開啟后，App 將在后臺自動為系統相機拍攝的相片（DCIM/Camera 目錄）應用當前選擇的 LUT 效果。</string>
+    <string name="ghost_mode_dialog_description">開啟後，App 將在後台自動為系統相機拍攝的相片（DCIM/Camera 目錄）應用當前選擇的 LUT 效果。</string>
     <string name="ghost_mode_permissions_required">需開啟以下權限：</string>
     <string name="ghost_mode_overlay_permission">\u2022 懸浮窗權限：允許 App 在後台穩定執行而不被系統清理，確保監測的連續性。</string>
     <string name="screen_capture_test_status_idle">準備啟動錄屏預覽。</string>
@@ -830,7 +830,7 @@
     <string name="screen_capture_test_notification_title">錄屏測試正在執行</string>
     <string name="screen_capture_test_notification_text">應用正在保持錄屏預覽會話。</string>
     <string name="ghost_mode_file_permission">\u2022 所有檔案管理權限：準許 App 直接讀寫系統相機相片，為您提供無感的自動修圖體驗。</string>
-    <string name="ghost_mode_dialog_confirm">同意并前往設定</string>
+    <string name="ghost_mode_dialog_confirm">同意並前往設定</string>
     <string name="settings_phantom_button_hidden">隱藏懸浮按鈕</string>
     <string name="settings_phantom_button_hidden_description">在幻影模式下隱藏螢幕上的懸浮按鈕。你仍可以通過快捷設定或應用快捷方式來控制。</string>
     <string name="settings_launch_camera_on_phantom_mode">啟動系統相機</string>
