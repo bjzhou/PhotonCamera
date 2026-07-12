@@ -141,6 +141,9 @@ class GlesRawStacker(
     private val programs = ArrayList<Int>()
     private val framebuffers = ArrayList<Int>()
     private val buffers = ArrayList<Int>()
+    private val uniformLocations = HashMap<Int, MutableMap<String, Int>>()
+    private var readbackScratchBuffer = 0
+    private var readbackScratchCapacityBytes = 0
 
     private val normalizedBlackLevel = FloatArray(4) { index ->
         blackLevel.getOrElse(index) { blackLevel.firstOrNull() ?: 0f }
@@ -258,6 +261,9 @@ class GlesRawStacker(
 
     private var renderFbo = 0
     private var readbackFbo = 0
+    private var renderFboTargetTexture = 0
+    private val checkedRenderTargetTextures = HashSet<Int>()
+    private val colorAttachment0 = intArrayOf(GLES30.GL_COLOR_ATTACHMENT0)
 
     private var refRaw = 0
     private var curRaw = 0
@@ -412,8 +418,13 @@ class GlesRawStacker(
             superResolutionPhaseTracker.reset()
             resetSuperResolutionDecisionStats()
             val acceptedSuperResolutionFrames = ArrayList<AcceptedSuperResolutionFrame>()
-            clearAccumulator()
-            accumulateFrame(refRaw, isReference = true)
+            // The RCD reconstruction below owns the MFSR output. The base accumulator is only
+            // needed for MFNR output and optional diagnostic statistics.
+            val needsBaseAccumulator = !superResolutionEnabled || hwmfDebug.collectMetrics
+            if (needsBaseAccumulator) {
+                clearAccumulator()
+                accumulateFrame(refRaw, isReference = true)
+            }
             GlesGpuScheduler.yieldToUiRenderer()
 
             var alignedFrameCount = 0
@@ -453,7 +464,9 @@ class GlesRawStacker(
                     continue
                 }
                 if (superResolutionEnabled) {
-                    accumulateFrame(curRaw, isReference = false, exposureScale = exposureScale)
+                    if (needsBaseAccumulator) {
+                        accumulateFrame(curRaw, isReference = false, exposureScale = exposureScale)
+                    }
                     if (shouldAccumulateSuperResolutionFrame()) {
                         // Phase novelty is a ranking signal, not an admission gate. Temporal graph
                         // summaries may legitimately quantize the global phase to zero while the
@@ -597,7 +610,6 @@ class GlesRawStacker(
             buildProxy(hdrShortRaw, curProxy, "short global alignment", exposureScale = shortAlignmentScale)
             buildPyramid(curPyramid)
             alignHdrShortToReference(refPyramid, curPyramid)
-            GlesGpuScheduler.waitForGpuCheckpoint(TAG, "hdr short alignment")
             computeStructureTensor()
             clearAccumulator()
             currentRegistrationTransform = registrationSetup.identityTransform(RawStackRegistrationStage.BLEND)
@@ -611,7 +623,6 @@ class GlesRawStacker(
                 exposureScale = referenceOutputScale,
                 hdrMode = true,
             )
-            GlesGpuScheduler.waitForGpuCheckpoint(TAG, "hdr normal reference accumulation")
 
             var alignedFrameCount = 1
             normalFrames.drop(1).forEachIndexed { relativeIndex, frame ->
@@ -627,7 +638,6 @@ class GlesRawStacker(
                     preAlignment = null,
                     frameIndex = frameIndex,
                 )
-                GlesGpuScheduler.waitForGpuCheckpoint(TAG, "hdr normal frame $frameIndex alignment")
                 refineFlow()
                 smoothFlow()
                 computeRobustness()
@@ -642,7 +652,7 @@ class GlesRawStacker(
                     recordAlignmentDiagnostics()
                 }
                 alignedFrameCount += 1
-                GlesGpuScheduler.waitForGpuCheckpoint(TAG, "hdr normal frame $frameIndex accumulation")
+                GlesGpuScheduler.yieldToUiRenderer()
             }
             computeHdrRecoveryMask()
             GlesGpuScheduler.yieldToUiRenderer()
@@ -651,7 +661,6 @@ class GlesRawStacker(
                 referenceExposureScale = referenceOutputScale,
                 shortExposureScale = 1.0f,
             )
-            GlesGpuScheduler.waitForGpuCheckpoint(TAG, "hdr normalize")
             val readTiming = readOutput(outputBuffer)
             outputBuffer.rewind()
             val profileGainTableMap = computeHdrProfileGainTableMap(rawHdrBaselineExposureEv)
@@ -1077,22 +1086,22 @@ class GlesRawStacker(
         GLES31.glUseProgram(rcdStripePopulateProgram)
         bindTexture(rcdStripePopulateProgram, "uRawStripe", 0, rcdStripeRawTexture)
         bindTexture(rcdStripePopulateProgram, "uLensShadingMap", 1, lensShadingTexture)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uStripeSize"), width, rowCount)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uFullImageSize"), width, height)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uGlobalRowOffset"), firstRow)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uCfaPattern"), cfaPattern)
+        GLES31.glUniform2i(uniformLocation(rcdStripePopulateProgram, "uStripeSize"), width, rowCount)
+        GLES31.glUniform2i(uniformLocation(rcdStripePopulateProgram, "uFullImageSize"), width, height)
+        GLES31.glUniform1i(uniformLocation(rcdStripePopulateProgram, "uGlobalRowOffset"), firstRow)
+        GLES31.glUniform1i(uniformLocation(rcdStripePopulateProgram, "uCfaPattern"), cfaPattern)
         GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uBlackLevel"),
+            uniformLocation(rcdStripePopulateProgram, "uBlackLevel"),
             1,
             normalizedBlackLevel,
             0,
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uWhiteLevel"),
+            uniformLocation(rcdStripePopulateProgram, "uWhiteLevel"),
             normalizedWhiteLevel,
         )
         GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(rcdStripePopulateProgram, "uCalculationWbGains"),
+            uniformLocation(rcdStripePopulateProgram, "uCalculationWbGains"),
             1,
             demosaicCalculationWbGains,
             0,
@@ -1102,8 +1111,8 @@ class GlesRawStacker(
 
         fun dispatch(program: Int, halfWidth: Boolean, step: String) {
             GLES31.glUseProgram(program)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(program, "uImageSize"), width, rowCount)
-            val cfaLocation = GLES31.glGetUniformLocation(program, "uCfaPattern")
+            GLES31.glUniform2i(uniformLocation(program, "uImageSize"), width, rowCount)
+            val cfaLocation = uniformLocation(program, "uCfaPattern")
             if (cfaLocation >= 0) GLES31.glUniform1i(cfaLocation, cfaPattern)
             GLES31.glDispatchCompute(groupCount(if (halfWidth) (width + 1) / 2 else width), groupCount(rowCount), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
@@ -1168,36 +1177,31 @@ class GlesRawStacker(
         val cellCount = pgtmGridWidth * pgtmGridHeight
         val floatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
         val byteCount = floatCount * 4
-        val buffers = IntArray(1)
-        GLES31.glGenBuffers(1, buffers, 0)
-        val statsBufferId = buffers[0]
-        if (statsBufferId == 0) return null
         return try {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, statsBufferId)
-            GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, byteCount, null, GLES31.GL_DYNAMIC_READ)
+            val statsBufferId = prepareReadbackScratchBuffer(byteCount)
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, PGTM_STATS_BUFFER_BINDING, statsBufferId)
             GLES31.glUseProgram(pgtmStatsProgram)
             bindTexture(pgtmStatsProgram, "uPackedRaw", 0, outputTexture)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(pgtmStatsProgram, "uImageSize"), width, height)
+            GLES31.glUniform2i(uniformLocation(pgtmStatsProgram, "uImageSize"), width, height)
             GLES31.glUniform4i(
-                GLES31.glGetUniformLocation(pgtmStatsProgram, "uStatsBounds"),
+                uniformLocation(pgtmStatsProgram, "uStatsBounds"),
                 pgtmStatsBounds.left,
                 pgtmStatsBounds.top,
                 pgtmStatsBounds.right,
                 pgtmStatsBounds.bottom,
             )
             GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(pgtmStatsProgram, "uGridSize"),
+                uniformLocation(pgtmStatsProgram, "uGridSize"),
                 pgtmGridWidth,
                 pgtmGridHeight,
             )
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(pgtmStatsProgram, "uCfaPattern"), cfaPattern)
+            GLES31.glUniform1i(uniformLocation(pgtmStatsProgram, "uCfaPattern"), cfaPattern)
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmStatsProgram, "uBaselineExposureGain"),
+                uniformLocation(pgtmStatsProgram, "uBaselineExposureGain"),
                 2.0f.pow(baselineExposureEv.coerceIn(0f, 8f))
             )
             GLES31.glUniformMatrix3fv(
-                GLES31.glGetUniformLocation(pgtmStatsProgram, "uColorCorrectionMatrix"),
+                uniformLocation(pgtmStatsProgram, "uColorCorrectionMatrix"),
                 1,
                 false,
                 transposeMatrix3x3(pgtmColorCorrectionMatrix),
@@ -1249,7 +1253,6 @@ class GlesRawStacker(
         } finally {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, PGTM_STATS_BUFFER_BINDING, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glDeleteBuffers(1, intArrayOf(statsBufferId), 0)
         }
     }
 
@@ -1364,7 +1367,7 @@ class GlesRawStacker(
         val trackingHeight = scaledTrackingDimension(planeHeight, trackingScale)
         val trackingTextures = IntArray(frames.size)
         trackingTextures[0] = referenceTrackingTexture
-        var edgeOutputTexture = 0
+        val edgeOutputTextures = ArrayList<Int>()
         try {
             eligibleFrameIndices.drop(1).forEach { index ->
                 val texture = createTexture2D(
@@ -1407,16 +1410,16 @@ class GlesRawStacker(
             )
             val graphGridWidth = (planeWidth + graphTileSpacing - 1) / graphTileSpacing
             val graphGridHeight = (planeHeight + graphTileSpacing - 1) / graphTileSpacing
-            edgeOutputTexture = createTexture2D(
-                graphGridWidth,
-                graphGridHeight,
-                GLES30.GL_RGBA16F,
-                GLES30.GL_LINEAR,
-            )
-            val edgeFields = ArrayList<RawTemporalEdgeFlowField>(graph.edges.size)
             graph.edges.forEachIndexed { edgeIndex, edge ->
                 val fromFrameIndex = eligibleFrameIndices[edge.fromFrameIndex]
                 val toFrameIndex = eligibleFrameIndices[edge.toFrameIndex]
+                val edgeOutputTexture = createTexture2D(
+                    graphGridWidth,
+                    graphGridHeight,
+                    GLES30.GL_RGBA16F,
+                    GLES30.GL_LINEAR,
+                )
+                edgeOutputTextures += edgeOutputTexture
                 drawAlignment(
                     reference = TextureLevel(
                         trackingTextures[fromFrameIndex],
@@ -1444,18 +1447,22 @@ class GlesRawStacker(
                     ),
                     label = "temporal edge $edgeIndex",
                 )
+                GlesGpuScheduler.yieldToUiRenderer()
+            }
+            val edgeValues = readFlowTextures(
+                textures = edgeOutputTextures,
+                textureWidth = graphGridWidth,
+                textureHeight = graphGridHeight,
+                label = "temporal graph edges",
+            )
+            val edgeFields = ArrayList<RawTemporalEdgeFlowField>(graph.edges.size)
+            graph.edges.forEachIndexed { edgeIndex, edge ->
                 edgeFields += RawTemporalEdgeFlowField(
                     edge = edge,
                     width = graphGridWidth,
                     height = graphGridHeight,
-                    values = readFlowTexture(
-                        texture = edgeOutputTexture,
-                        textureWidth = graphGridWidth,
-                        textureHeight = graphGridHeight,
-                        label = "temporal edge $edgeIndex",
-                    ),
+                    values = edgeValues[edgeIndex],
                 )
-                GlesGpuScheduler.yieldToUiRenderer()
             }
 
             val fallbackFlow = buildTemporalFallbackFlow(
@@ -1497,7 +1504,7 @@ class GlesRawStacker(
             )
         } finally {
             trackingTextures.filter { it != 0 }.forEach(::deleteTexture)
-            if (edgeOutputTexture != 0) deleteTexture(edgeOutputTexture)
+            edgeOutputTextures.forEach(::deleteTexture)
         }
     }
 
@@ -1570,43 +1577,61 @@ class GlesRawStacker(
         textureWidth: Int,
         textureHeight: Int,
         label: String,
-    ): FloatArray {
-        val floatCount = textureWidth * textureHeight * 4
-        val byteCount = floatCount * 4
-        val ids = IntArray(1)
-        GLES31.glGenBuffers(1, ids, 0)
-        val bufferId = ids[0]
-        if (bufferId == 0) throw IllegalStateException("Failed to allocate flow readback buffer")
+    ): FloatArray = readFlowTextures(
+        textures = listOf(texture),
+        textureWidth = textureWidth,
+        textureHeight = textureHeight,
+        label = label,
+    ).single()
+
+    private fun readFlowTextures(
+        textures: List<Int>,
+        textureWidth: Int,
+        textureHeight: Int,
+        label: String,
+    ): List<FloatArray> {
+        if (textures.isEmpty()) return emptyList()
+        val sampleCount = textureWidth * textureHeight
+        val floatCountPerTexture = sampleCount * 4
+        val totalFloatCount = floatCountPerTexture.toLong() * textures.size.toLong()
+        val byteCount = totalFloatCount * 4L
+        require(byteCount <= Int.MAX_VALUE) { "Flow readback exceeds GLES allocation range: $byteCount" }
+        val bufferId = prepareReadbackScratchBuffer(byteCount.toInt())
         try {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
-            GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, byteCount, null, GLES31.GL_DYNAMIC_READ)
             GLES31.glBindBufferBase(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
                 FLOW_READBACK_BUFFER_BINDING,
                 bufferId,
             )
             GLES31.glUseProgram(flowReadbackProgram)
-            bindTexture(flowReadbackProgram, "uFlow", 0, texture)
             GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(flowReadbackProgram, "uGridSize"),
+                uniformLocation(flowReadbackProgram, "uGridSize"),
                 textureWidth,
                 textureHeight,
             )
-            GLES31.glDispatchCompute(groupCount(textureWidth), groupCount(textureHeight), 1)
+            textures.forEachIndexed { index, texture ->
+                bindTexture(flowReadbackProgram, "uFlow", 0, texture)
+                GLES31.glUniform1i(
+                    uniformLocation(flowReadbackProgram, "uSampleOffset"),
+                    index * sampleCount,
+                )
+                GLES31.glDispatchCompute(groupCount(textureWidth), groupCount(textureHeight), 1)
+            }
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
             )
-            checkGlError("readFlowTexture dispatch $label")
+            checkGlError("readFlowTextures dispatch $label")
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
             val mapped = GLES31.glMapBufferRange(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
                 0,
-                byteCount,
+                byteCount.toInt(),
                 GLES31.GL_MAP_READ_BIT,
             ) as? ByteBuffer ?: throw IllegalStateException("Flow readback map failed for $label")
             return try {
-                FloatArray(floatCount).also { values ->
-                    mapped.order(ByteOrder.nativeOrder()).asFloatBuffer().get(values)
+                val values = mapped.order(ByteOrder.nativeOrder()).asFloatBuffer()
+                List(textures.size) {
+                    FloatArray(floatCountPerTexture).also { output -> values.get(output) }
                 }
             } finally {
                 GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
@@ -1614,7 +1639,6 @@ class GlesRawStacker(
         } finally {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, FLOW_READBACK_BUFFER_BINDING, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glDeleteBuffers(1, intArrayOf(bufferId), 0)
         }
     }
 
@@ -2652,16 +2676,8 @@ class GlesRawStacker(
         )
         val floatCount = scoreCount * REGISTRATION_GLOBAL_SCORE_STRIDE
         val byteCount = floatCount * 4
-        val ids = IntArray(1)
-        GLES31.glGenBuffers(1, ids, 0)
-        val scoreBuffer = ids[0]
-        if (scoreBuffer == 0) {
-            PLog.w(TAG, "RAW registration global score buffer allocation failed")
-            return null
-        }
         return try {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, scoreBuffer)
-            GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, byteCount, null, GLES31.GL_DYNAMIC_READ)
+            val scoreBuffer = prepareReadbackScratchBuffer(byteCount)
             GLES31.glBindBufferBase(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
                 REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING,
@@ -2671,37 +2687,37 @@ class GlesRawStacker(
             bindTexture(registrationGlobalAlignProgram, "uReference", 0, reference.texture)
             bindTexture(registrationGlobalAlignProgram, "uCurrent", 1, current.texture)
             GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uLevelSize"),
+                uniformLocation(registrationGlobalAlignProgram, "uLevelSize"),
                 reference.width,
                 reference.height,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uLevelScale"),
+                uniformLocation(registrationGlobalAlignProgram, "uLevelScale"),
                 1 shl levelIndex,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uSearchRadius"),
+                uniformLocation(registrationGlobalAlignProgram, "uSearchRadius"),
                 searchRadius,
             )
             GLES31.glUniform2f(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uCenterShift"),
+                uniformLocation(registrationGlobalAlignProgram, "uCenterShift"),
                 seedShiftPlane.getOrElse(0) { 0f },
                 seedShiftPlane.getOrElse(1) { 0f },
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uSampleStep"),
+                uniformLocation(registrationGlobalAlignProgram, "uSampleStep"),
                 sampleStep,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uSampleBorder"),
+                uniformLocation(registrationGlobalAlignProgram, "uSampleBorder"),
                 sampleBorder,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uCoveragePenalty"),
+                uniformLocation(registrationGlobalAlignProgram, "uCoveragePenalty"),
                 coveragePenaltyOverride ?: hwmfPrefilter.alignCoveragePenalty,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(registrationGlobalAlignProgram, "uShiftPenalty"),
+                uniformLocation(registrationGlobalAlignProgram, "uShiftPenalty"),
                 shiftPenaltyOverride ?: hwmfPrefilter.alignShiftPenalty,
             )
             GLES31.glDispatchCompute(scoreSide, scoreSide, 1)
@@ -2733,7 +2749,6 @@ class GlesRawStacker(
         } finally {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glDeleteBuffers(1, intArrayOf(scoreBuffer), 0)
         }
     }
 
@@ -2779,16 +2794,8 @@ class GlesRawStacker(
         if (sampleCount <= 0 || registrationSampleProgram == 0) return null
         val floatCount = sampleCount * REGISTRATION_SAMPLE_FLOAT_STRIDE
         val byteCount = floatCount * 4
-        val ids = IntArray(1)
-        GLES31.glGenBuffers(1, ids, 0)
-        val sampleBuffer = ids[0]
-        if (sampleBuffer == 0) {
-            PLog.w(TAG, "RAW registration sample buffer allocation failed")
-            return null
-        }
         return try {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, sampleBuffer)
-            GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, byteCount, null, GLES31.GL_DYNAMIC_READ)
+            val sampleBuffer = prepareReadbackScratchBuffer(byteCount)
             GLES31.glBindBufferBase(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
                 REGISTRATION_SAMPLE_BUFFER_BINDING,
@@ -2800,10 +2807,10 @@ class GlesRawStacker(
             bindTexture(registrationSampleProgram, "uTileMask", 2, tileMaskTexture)
             bindTexture(registrationSampleProgram, "uReference", 3, refProxy)
             bindTexture(registrationSampleProgram, "uCurrent", 4, curProxy)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(registrationSampleProgram, "uImageSize"), width, height)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(registrationSampleProgram, "uPlaneSize"), planeWidth, planeHeight)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(registrationSampleProgram, "uGridSize"), gridWidth, gridHeight)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(registrationSampleProgram, "uTileSize"), flowGridSpacing)
+            GLES31.glUniform2i(uniformLocation(registrationSampleProgram, "uImageSize"), width, height)
+            GLES31.glUniform2i(uniformLocation(registrationSampleProgram, "uPlaneSize"), planeWidth, planeHeight)
+            GLES31.glUniform2i(uniformLocation(registrationSampleProgram, "uGridSize"), gridWidth, gridHeight)
+            GLES31.glUniform1i(uniformLocation(registrationSampleProgram, "uTileSize"), flowGridSpacing)
             GLES31.glDispatchCompute(groupCount(gridWidth), groupCount(gridHeight), 1)
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
@@ -2833,7 +2840,6 @@ class GlesRawStacker(
         } finally {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, REGISTRATION_SAMPLE_BUFFER_BINDING, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glDeleteBuffers(1, intArrayOf(sampleBuffer), 0)
         }
     }
 
@@ -2922,7 +2928,7 @@ class GlesRawStacker(
         GLES31.glUseProgram(clearAccumulatorProgram)
         bindImage(0, accumulatorValueWeightTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
         bindImage(1, accumulatorStatisticsTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(clearAccumulatorProgram, "uImageSize"), width, height)
+        GLES31.glUniform2i(uniformLocation(clearAccumulatorProgram, "uImageSize"), width, height)
         GLES31.glDispatchCompute(groupCount(width), groupCount(height), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
         checkGlError("clearAccumulator")
@@ -2934,7 +2940,7 @@ class GlesRawStacker(
         bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
         bindImage(2, superResolutionAccumulatorBTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(clearSuperResolutionAccumulatorProgram, "uImageSize"),
+            uniformLocation(clearSuperResolutionAccumulatorProgram, "uImageSize"),
             outputWidth,
             superResolutionAccumulatorHeight,
         )
@@ -2959,34 +2965,33 @@ class GlesRawStacker(
         bindImage(0, accumulatorValueWeightTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
         bindImage(1, accumulatorStatisticsTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
         setCommonUniforms(accumulateProgram)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(accumulateProgram, "uImageSize"), width, height)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(accumulateProgram, "uPlaneSize"), planeWidth, planeHeight)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(accumulateProgram, "uGridSize"), gridWidth, gridHeight)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(accumulateProgram, "uTileSize"), flowGridSpacing)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(accumulateProgram, "uIsReference"), if (isReference) 1 else 0)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(accumulateProgram, "uHdrMode"), if (hdrMode) 1 else 0)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(accumulateProgram, "uExposureScale"), exposureScale)
+        GLES31.glUniform2i(uniformLocation(accumulateProgram, "uImageSize"), width, height)
+        GLES31.glUniform2i(uniformLocation(accumulateProgram, "uPlaneSize"), planeWidth, planeHeight)
+        GLES31.glUniform2i(uniformLocation(accumulateProgram, "uGridSize"), gridWidth, gridHeight)
+        GLES31.glUniform1i(uniformLocation(accumulateProgram, "uTileSize"), flowGridSpacing)
+        GLES31.glUniform1i(uniformLocation(accumulateProgram, "uIsReference"), if (isReference) 1 else 0)
+        GLES31.glUniform1i(uniformLocation(accumulateProgram, "uHdrMode"), if (hdrMode) 1 else 0)
+        GLES31.glUniform1f(uniformLocation(accumulateProgram, "uExposureScale"), exposureScale)
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateProgram, "uFrameWeight"),
+            uniformLocation(accumulateProgram, "uFrameWeight"),
             if (isReference) 1.0f else hwmfBlend.nonReferenceFrameWeight,
         )
         setBlendAccumulatorUniforms(accumulateProgram)
         var imageRow = 0
+        // Each dispatch writes a disjoint output-row range. Queue all ranges before publishing
+        // the completed accumulator instead of forcing a CPU/GPU rendezvous for every stripe.
         while (imageRow < height) {
             val rowCount = minOf(BASE_ACCUMULATOR_DISPATCH_ROWS, height - imageRow)
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(accumulateProgram, "uImageRowOffset"),
+                uniformLocation(accumulateProgram, "uImageRowOffset"),
                 imageRow,
             )
             GLES31.glDispatchCompute(groupCount(width), groupCount(rowCount), 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
-            GlesGpuScheduler.waitForGpuCheckpoint(
-                TAG,
-                "RAW base rows=$imageRow..${imageRow + rowCount}",
-            )
             imageRow += rowCount
         }
-        GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+        )
         checkGlError("accumulateFrame")
     }
 
@@ -3001,16 +3006,8 @@ class GlesRawStacker(
         val scoreCount = scoreSide * scoreSide
         val floatCount = scoreCount * HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE
         val byteCount = floatCount * 4
-        val ids = IntArray(1)
-        GLES31.glGenBuffers(1, ids, 0)
-        val scoreBufferId = ids[0]
-        if (scoreBufferId == 0) {
-            writeHdrShortAlignmentTexture(0f, 0f)
-            return
-        }
         try {
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, scoreBufferId)
-            GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, byteCount, null, GLES31.GL_DYNAMIC_READ)
+            val scoreBufferId = prepareReadbackScratchBuffer(byteCount)
             GLES31.glBindBufferBase(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
                 HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING,
@@ -3019,14 +3016,14 @@ class GlesRawStacker(
             GLES31.glUseProgram(hdrShortGlobalAlignProgram)
             bindTexture(hdrShortGlobalAlignProgram, "uReference", 0, ref.texture)
             bindTexture(hdrShortGlobalAlignProgram, "uCurrent", 1, cur.texture)
-            GLES31.glUniform2i(GLES31.glGetUniformLocation(hdrShortGlobalAlignProgram, "uLevelSize"), ref.width, ref.height)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(hdrShortGlobalAlignProgram, "uLevelScale"), 1 shl levelIndex)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(hdrShortGlobalAlignProgram, "uSearchRadius"), searchRadius)
+            GLES31.glUniform2i(uniformLocation(hdrShortGlobalAlignProgram, "uLevelSize"), ref.width, ref.height)
+            GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uLevelScale"), 1 shl levelIndex)
+            GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uSearchRadius"), searchRadius)
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(hdrShortGlobalAlignProgram, "uSampleStep"),
+                uniformLocation(hdrShortGlobalAlignProgram, "uSampleStep"),
                 HDR_123_SHORT_GLOBAL_SAMPLE_STEP,
             )
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(hdrShortGlobalAlignProgram, "uSampleBorder"), sampleBorder)
+            GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uSampleBorder"), sampleBorder)
             GLES31.glDispatchCompute(scoreSide, scoreSide, 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
             checkGlError("alignHdrShortToReference dispatch")
@@ -3066,7 +3063,6 @@ class GlesRawStacker(
         } finally {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-            GLES31.glDeleteBuffers(1, intArrayOf(scoreBufferId), 0)
         }
     }
 
@@ -3124,89 +3120,90 @@ class GlesRawStacker(
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 3, rcdStripeBuffers[3])
         setCommonUniforms(accumulateSuperResolutionProgram)
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uImageSize"),
+            uniformLocation(accumulateSuperResolutionProgram, "uImageSize"),
             width,
             height,
         )
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uOutputSize"),
+            uniformLocation(accumulateSuperResolutionProgram, "uOutputSize"),
             outputWidth,
             outputHeight,
         )
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uPlaneSize"),
+            uniformLocation(accumulateSuperResolutionProgram, "uPlaneSize"),
             planeWidth,
             planeHeight,
         )
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uGridSize"),
+            uniformLocation(accumulateSuperResolutionProgram, "uGridSize"),
             gridWidth,
             gridHeight,
         )
         GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uTileSize"),
+            uniformLocation(accumulateSuperResolutionProgram, "uTileSize"),
             flowGridSpacing,
         )
         GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uIsReference"),
+            uniformLocation(accumulateSuperResolutionProgram, "uIsReference"),
             if (isReference) 1 else 0,
         )
         GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uSourceRowOffset"),
+            uniformLocation(accumulateSuperResolutionProgram, "uSourceRowOffset"),
             sourceRowOffset,
         )
         GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uSourceSize"),
+            uniformLocation(accumulateSuperResolutionProgram, "uSourceSize"),
             width,
             sourceRowCount,
         )
         GLES31.glUniform3f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uCalculationGains"),
+            uniformLocation(accumulateSuperResolutionProgram, "uCalculationGains"),
             demosaicCalculationWbGains[0],
             1f,
             demosaicCalculationWbGains[3],
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uOutputScale"),
+            uniformLocation(accumulateSuperResolutionProgram, "uOutputScale"),
             superResolutionScale,
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uFrameWeight"),
+            uniformLocation(accumulateSuperResolutionProgram, "uFrameWeight"),
             if (isReference) 1.0f else hwmfBlend.nonReferenceFrameWeight,
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uExposureScale"),
+            uniformLocation(accumulateSuperResolutionProgram, "uExposureScale"),
             exposureScale,
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uSrMinEffectiveWeight"),
+            uniformLocation(accumulateSuperResolutionProgram, "uSrMinEffectiveWeight"),
             hwmfSr.minEffectiveWeight.coerceAtLeast(0f),
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uSrSplatRadius"),
+            uniformLocation(accumulateSuperResolutionProgram, "uSrSplatRadius"),
             hwmfSr.cfaFootprintSigmaRawPx.coerceAtLeast(0.25f),
         )
         GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uRegistrationSrWeight"),
+            uniformLocation(accumulateSuperResolutionProgram, "uRegistrationSrWeight"),
             if (isReference) 1.0f else registrationWeight.coerceIn(0.0f, 1.0f),
         )
         setBlendAccumulatorUniforms(accumulateSuperResolutionProgram)
         val safeRowCount = outputRowCount.coerceIn(1, superResolutionAccumulatorHeight)
         GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uOutputRowOffset"),
+            uniformLocation(accumulateSuperResolutionProgram, "uOutputRowOffset"),
             outputRowOffset,
         )
         GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(accumulateSuperResolutionProgram, "uOutputRowCount"),
+            uniformLocation(accumulateSuperResolutionProgram, "uOutputRowCount"),
             safeRowCount,
         )
         GLES31.glDispatchCompute(groupCount(outputWidth), groupCount(safeRowCount), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
-        GlesGpuScheduler.waitForGpuCheckpoint(
-            TAG,
-            "MFSR rows=$outputRowOffset..${outputRowOffset + safeRowCount}",
+        // The following frame reuses the RCD SSBOs and reads these accumulator images. Publish
+        // both resource classes without blocking the CPU on a fence.
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
         )
-        GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
         checkGlError("accumulateSuperResolutionFrame")
     }
 
@@ -4151,17 +4148,22 @@ class GlesRawStacker(
 
     private fun bindFramebufferOutput(texture: Int, label: String) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, renderFbo)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            texture,
-            0,
-        )
-        GLES30.glDrawBuffers(1, intArrayOf(GLES30.GL_COLOR_ATTACHMENT0), 0)
+        if (renderFboTargetTexture != texture) {
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                texture,
+                0,
+            )
+            renderFboTargetTexture = texture
+        }
+        GLES30.glDrawBuffers(1, colorAttachment0, 0)
         GLES30.glDisable(GLES30.GL_BLEND)
         GLES30.glDisable(GLES30.GL_DITHER)
-        checkFramebuffer(label)
+        if (checkedRenderTargetTextures.add(texture)) {
+            checkFramebuffer(label)
+        }
     }
 
     private fun finishFramebufferPass(label: String) {
@@ -4171,19 +4173,19 @@ class GlesRawStacker(
     }
 
     private fun setCommonUniforms(program: Int) {
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uCfaPattern"), cfaPattern)
-        GLES31.glUniform1fv(GLES31.glGetUniformLocation(program, "uBlackLevel[0]"), 4, normalizedBlackLevel, 0)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uWhiteLevel"), normalizedWhiteLevel)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uNoiseAlpha"), noiseAlpha)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uNoiseBeta"), noiseBeta)
+        GLES31.glUniform1i(uniformLocation(program, "uCfaPattern"), cfaPattern)
+        GLES31.glUniform1fv(uniformLocation(program, "uBlackLevel[0]"), 4, normalizedBlackLevel, 0)
+        GLES31.glUniform1f(uniformLocation(program, "uWhiteLevel"), normalizedWhiteLevel)
+        GLES31.glUniform1f(uniformLocation(program, "uNoiseAlpha"), noiseAlpha)
+        GLES31.glUniform1f(uniformLocation(program, "uNoiseBeta"), noiseBeta)
         GLES31.glUniform1fv(
-            GLES31.glGetUniformLocation(program, "uNoiseAlphaByChannel[0]"),
+            uniformLocation(program, "uNoiseAlphaByChannel[0]"),
             4,
             normalizedNoiseAlphaByChannel,
             0
         )
         GLES31.glUniform1fv(
-            GLES31.glGetUniformLocation(program, "uNoiseBetaByChannel[0]"),
+            uniformLocation(program, "uNoiseBetaByChannel[0]"),
             4,
             normalizedNoiseBetaByChannel,
             0
@@ -4449,6 +4451,19 @@ class GlesRawStacker(
 
     private fun deleteTexture(texture: Int) {
         if (texture == 0) return
+        if (renderFboTargetTexture == texture) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, renderFbo)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            renderFboTargetTexture = 0
+        }
+        checkedRenderTargetTextures.remove(texture)
         GLES30.glDeleteTextures(1, intArrayOf(texture), 0)
         textures.removeAll { it == texture }
     }
@@ -4509,7 +4524,35 @@ class GlesRawStacker(
     private fun bindTexture(program: Int, name: String, unit: Int, texture: Int) {
         GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + unit)
         GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, name), unit)
+        GLES31.glUniform1i(uniformLocation(program, name), unit)
+    }
+
+    private fun uniformLocation(program: Int, name: String): Int {
+        val locations = uniformLocations.getOrPut(program) { HashMap() }
+        return locations.getOrPut(name) { GLES31.glGetUniformLocation(program, name) }
+    }
+
+    private fun prepareReadbackScratchBuffer(requiredBytes: Int): Int {
+        require(requiredBytes > 0) { "Readback scratch buffer size must be positive: $requiredBytes" }
+        if (readbackScratchBuffer == 0) {
+            val ids = IntArray(1)
+            GLES31.glGenBuffers(1, ids, 0)
+            readbackScratchBuffer = ids[0]
+            check(readbackScratchBuffer != 0) { "Failed to allocate GLES readback scratch buffer" }
+            buffers += readbackScratchBuffer
+        }
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, readbackScratchBuffer)
+        if (requiredBytes > readbackScratchCapacityBytes) {
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                requiredBytes,
+                null,
+                GLES31.GL_DYNAMIC_READ,
+            )
+            checkGlError("grow readback scratch buffer to $requiredBytes bytes")
+            readbackScratchCapacityBytes = requiredBytes
+        }
+        return readbackScratchBuffer
     }
 
     private fun bindImage(unit: Int, texture: Int, access: Int, format: Int) {
@@ -4611,6 +4654,7 @@ class GlesRawStacker(
                     GLES30.glDeleteProgram(program)
                 }
             }
+            uniformLocations.clear()
             if (textures.isNotEmpty()) {
                 GLES30.glDeleteTextures(textures.size, textures.toIntArray(), 0)
             }
@@ -5112,6 +5156,7 @@ class GlesRawStacker(
             layout(local_size_x = 16, local_size_y = 16) in;
             uniform sampler2D uFlow;
             uniform ivec2 uGridSize;
+            uniform int uSampleOffset;
             layout(std430, binding = $FLOW_READBACK_BUFFER_BINDING) buffer FlowReadback {
                 vec4 samples[];
             };
@@ -5119,7 +5164,7 @@ class GlesRawStacker(
             void main() {
                 ivec2 p = ivec2(gl_GlobalInvocationID.xy);
                 if (p.x >= uGridSize.x || p.y >= uGridSize.y) return;
-                samples[p.y * uGridSize.x + p.x] = texelFetch(uFlow, p, 0);
+                samples[uSampleOffset + p.y * uGridSize.x + p.x] = texelFetch(uFlow, p, 0);
             }
         """.trimIndent()
 
