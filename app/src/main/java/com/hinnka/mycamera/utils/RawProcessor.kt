@@ -153,6 +153,8 @@ object RawProcessor {
         whiteLevelMode: String? = null,
         customWhiteLevel: Float? = null,
         cfaCorrectionMode: String? = null,
+        effectiveFocalLengthMm: Float? = null,
+        effectiveFocalLength35mm: Int? = null,
     ): Boolean {
         if (!isRawImage(image)) {
             throw IllegalArgumentException("Image is not RAW format: ${image.format}")
@@ -170,25 +172,62 @@ object RawProcessor {
             whiteLevelMode = whiteLevelMode,
             customWhiteLevel = customWhiteLevel,
             cfaCorrectionMode = cfaCorrectionMode,
-            defaultCrop = resolveCameraRawDefaultCrop(image.width, image.height, characteristics),
+            effectiveFocalLengthMm = effectiveFocalLengthMm,
+            effectiveFocalLength35mm = effectiveFocalLength35mm,
+            defaultCrop = resolveCameraRawDefaultCrop(
+                width = image.width,
+                height = image.height,
+                characteristics = characteristics,
+                captureResult = captureResult,
+            ),
         )
     }
 
-    private fun resolveCameraRawDefaultCrop(
+    internal fun resolveCameraRawDefaultCrop(
         width: Int,
         height: Int,
         characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
     ): Rect {
         val pixelArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val preCorrection = characteristics.get(
             CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE
+        ) ?: Rect(0, 0, width, height)
+        val postCorrection = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val bufferIncludesPixelArray = pixelArray?.width == width && pixelArray.height == height
+        val targetWidth = if (bufferIncludesPixelArray) preCorrection.width() else width
+        val targetHeight = if (bufferIncludesPixelArray) preCorrection.height() else height
+        val scalerCropRegion = captureResult.get(CaptureResult.SCALER_CROP_REGION)
+        val zoomRatio = captureResult.get(CaptureResult.CONTROL_ZOOM_RATIO) ?: 1f
+        val distortionMode = captureResult.get(CaptureResult.DISTORTION_CORRECTION_MODE)
+        val hasDistortionCorrectionControl = characteristics.get(
+            CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES
+        ) != null
+        val mapped = RawDngCropMapper.mapToDefaultCrop(
+            preCorrectionActiveArray = preCorrection.toRawCropRect(),
+            postCorrectionActiveArray = postCorrection?.toRawCropRect(),
+            scalerCropRegion = scalerCropRegion?.toRawCropRect(),
+            zoomRatio = zoomRatio,
+            usePreCorrectionCoordinateSystem = hasDistortionCorrectionControl &&
+                distortionMode == CaptureResult.DISTORTION_CORRECTION_MODE_OFF,
+            targetWidth = targetWidth,
+            targetHeight = targetHeight,
         )
-        return if (pixelArray?.width == width && pixelArray.height == height && preCorrection != null) {
-            Rect(0, 0, preCorrection.width(), preCorrection.height())
-        } else {
-            Rect(0, 0, width, height)
-        }
+        val defaultCrop = Rect(mapped.left, mapped.top, mapped.right, mapped.bottom)
+        PLog.i(
+            TAG,
+            "RAW_CROP_TRACE stage=CAMERA2_RESULT buffer=${width}x$height " +
+                "pixelArray=$pixelArray activePre=$preCorrection activePost=$postCorrection " +
+                "scalerCrop=$scalerCropRegion scalerReturned=${scalerCropRegion != null} " +
+                "zoomRatio=$zoomRatio distortionMode=$distortionMode " +
+                "distortionControl=$hasDistortionCorrectionControl " +
+                "coordinateSpace=${if (hasDistortionCorrectionControl && distortionMode == CaptureResult.DISTORTION_CORRECTION_MODE_OFF) "PRE_CORRECTION" else "POST_CORRECTION"} " +
+                "dngTarget=${targetWidth}x$targetHeight mappedDefaultCrop=$defaultCrop"
+        )
+        return defaultCrop
     }
+
+    private fun Rect.toRawCropRect(): RawCropRect = RawCropRect(left, top, right, bottom)
 
     private fun saveRawImageToDngWithCustomWriter(
         image: SafeImage,
@@ -202,6 +241,8 @@ object RawProcessor {
         whiteLevelMode: String?,
         customWhiteLevel: Float?,
         cfaCorrectionMode: String?,
+        effectiveFocalLengthMm: Float?,
+        effectiveFocalLength35mm: Int?,
         defaultCrop: Rect,
     ): Boolean {
         if (image.format != ImageFormat.RAW_SENSOR) {
@@ -237,6 +278,8 @@ object RawProcessor {
             whiteLevelMode = whiteLevelMode,
             customWhiteLevel = customWhiteLevel,
             cfaCorrectionMode = cfaCorrectionMode,
+            effectiveFocalLengthMm = effectiveFocalLengthMm,
+            effectiveFocalLength35mm = effectiveFocalLength35mm,
             defaultCrop = defaultCrop,
         )
     }
@@ -278,6 +321,8 @@ object RawProcessor {
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
         captureMetadataResult: CaptureResult? = null,
+        effectiveFocalLengthMm: Float? = null,
+        effectiveFocalLength35mm: Int? = null,
         outputStream: java.io.OutputStream,
         rotation: Int = 0,
         thumbnail: Bitmap? = null,
@@ -330,6 +375,8 @@ object RawProcessor {
                 characteristics = characteristics,
                 captureResult = captureResult,
                 captureMetadataResult = captureMetadataResult ?: captureResult,
+                effectiveFocalLengthMm = effectiveFocalLengthMm,
+                effectiveFocalLength35mm = effectiveFocalLength35mm,
                 orientation = orientation,
                 cfaPattern = resolvedCfaPattern,
                 blackLevel = blackLevel,

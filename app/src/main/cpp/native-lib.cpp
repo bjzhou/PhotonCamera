@@ -3646,8 +3646,12 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   int defaultCrop[4] = {0, 0, 0, 0};
   const bool hasDefaultCrop = computeValidDngDefaultCrop(
       dngRawTagInfo, left, top, width, height, defaultCrop);
-  LOGI("dng default crop tags: origin=%d(%f,%f) size=%d(%f,%f) "
-       "valid=%d crop=%d,%d,%d,%d buffer=%d,%d,%d,%d",
+  LOGI("RAW_CROP_TRACE stage=NATIVE_DNG_READ activeTag=%d active=%d,%d,%d,%d "
+       "originTag=%d origin=%f,%f sizeTag=%d size=%f,%f "
+       "valid=%d localCrop=%d,%d,%d,%d buffer=%d,%d,%d,%d",
+       dngRawTagInfo.hasActiveArea ? 1 : 0,
+       dngRawTagInfo.activeArea[0], dngRawTagInfo.activeArea[1],
+       dngRawTagInfo.activeArea[2], dngRawTagInfo.activeArea[3],
        dngRawTagInfo.hasDefaultCropOrigin ? 1 : 0,
        dngRawTagInfo.defaultCropOrigin[0], dngRawTagInfo.defaultCropOrigin[1],
        dngRawTagInfo.hasDefaultCropSize ? 1 : 0,

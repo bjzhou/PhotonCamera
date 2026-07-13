@@ -751,17 +751,31 @@ object RcdShaders {
             }
         }
 
-        ivec2 clampCoord(ivec2 coord) {
-            return clamp(coord, ivec2(0), uImageSize - ivec2(1));
+        int mirrorIndex(int value, int size) {
+            if (size <= 1) return 0;
+            int period = 2 * (size - 1);
+            int wrapped = value % period;
+            if (wrapped < 0) wrapped += period;
+            return (wrapped < size) ? wrapped : period - wrapped;
+        }
+
+        // Mirror at the photosite center instead of clamping to the last sample.
+        // The reflection preserves x/y parity, so every synthetic neighbour keeps
+        // the same Bayer color it would have had outside the image.
+        ivec2 mirrorCoord(ivec2 coord) {
+            return ivec2(
+                mirrorIndex(coord.x, uImageSize.x),
+                mirrorIndex(coord.y, uImageSize.y)
+            );
         }
 
         int indexAt(ivec2 coord) {
-            ivec2 safe = clampCoord(coord);
+            ivec2 safe = mirrorCoord(coord);
             return safe.y * uImageSize.x + safe.x;
         }
 
         int colorAt(ivec2 coord) {
-            ivec2 safe = clampCoord(coord);
+            ivec2 safe = mirrorCoord(coord);
             return getBayerColor(uCfaPattern, safe.x, safe.y);
         }
 
@@ -769,61 +783,10 @@ object RcdShaders {
             return cfa[indexAt(coord)];
         }
 
-        bool inImage(ivec2 coord) {
-            return coord.x >= 0 && coord.y >= 0 &&
-                coord.x < uImageSize.x && coord.y < uImageSize.y;
-        }
-
-        bool inOutermostBorder(ivec2 coord) {
-            return coord.x < 3 || coord.y < 3 ||
-                coord.x >= uImageSize.x - 3 || coord.y >= uImageSize.y - 3;
-        }
-
-        vec3 borderInterpolateAt(ivec2 coord) {
-            ivec2 center = clampCoord(coord);
-            vec3 sum = vec3(0.0);
-            vec3 count = vec3(0.0);
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    ivec2 sampleCoord = center + ivec2(dx, dy);
-                    if (!inImage(sampleCoord)) continue;
-                    int sampleColor = colorAt(sampleCoord);
-                    float sampleValue = max(0.0, rawAt(sampleCoord));
-                    if (sampleColor == RED) {
-                        sum.r += sampleValue;
-                        count.r += 1.0;
-                    } else if (sampleColor == GREEN) {
-                        sum.g += sampleValue;
-                        count.g += 1.0;
-                    } else {
-                        sum.b += sampleValue;
-                        count.b += 1.0;
-                    }
-                }
-            }
-
-            float self = max(0.0, rawAt(center));
-            vec3 color = vec3(
-                count.r > 0.0 ? sum.r / count.r : self,
-                count.g > 0.0 ? sum.g / count.g : self,
-                count.b > 0.0 ? sum.b / count.b : self
-            );
-            int ownColor = colorAt(center);
-            if (ownColor == RED) {
-                color.r = self;
-            } else if (ownColor == GREEN) {
-                color.g = self;
-            } else {
-                color.b = self;
-            }
-            return max(color, vec3(0.0));
-        }
-
         float ppgGreenAt(ivec2 coord) {
-            ivec2 center = clampCoord(coord);
-            if (inOutermostBorder(center)) {
-                return borderInterpolateAt(center).g;
-            }
+            // Keep the virtual coordinate so recursive PPG estimates use the neighbourhood
+            // around that reflected photosite, rather than shifting the kernel into the image.
+            ivec2 center = coord;
 
             int ownColor = colorAt(center);
             float pc = rawAt(center);
@@ -861,10 +824,7 @@ object RcdShaders {
         }
 
         vec3 ppgColorAt(ivec2 coord) {
-            ivec2 center = clampCoord(coord);
-            if (inOutermostBorder(center)) {
-                return borderInterpolateAt(center);
-            }
+            ivec2 center = coord;
 
             int ownColor = colorAt(center);
             float pc = max(0.0, rawAt(center));

@@ -786,6 +786,8 @@ fun GalleryDetailScreen(
 
     // 照片信息对话框
     if (showInfoDialog && currentPhoto != null) {
+        val infoPhoto = currentPhoto.relatedPhoto ?: currentPhoto
+        val infoMetadata = infoPhoto.metadata ?: currentPhoto.metadata
         AlertDialog(
             onDismissRequest = { showInfoDialog = false },
             title = { Text(stringResource(if (currentPhoto.isVideo) R.string.video_info else R.string.photo_info)) },
@@ -797,7 +799,7 @@ fun GalleryDetailScreen(
                     InfoRow(stringResource(R.string.photo_info_date), currentPhoto.getFormattedDate())
                     InfoRow(stringResource(R.string.photo_info_resolution), currentPhoto.getResolution())
                     InfoRow(stringResource(R.string.photo_info_size), currentPhoto.copy(size = displayPhotoSize).getFormattedSize())
-                    currentPhoto.metadata?.let {
+                    infoMetadata?.let {
                         if (currentPhoto.isVideo) {
                             InfoRow(stringResource(R.string.video_info_duration), currentPhoto.getFormattedDuration())
                             InfoRow(stringResource(R.string.video_info_mime), it.mimeType ?: (currentPhoto.mimeType ?: "N/A"))

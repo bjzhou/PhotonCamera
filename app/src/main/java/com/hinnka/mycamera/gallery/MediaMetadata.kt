@@ -506,9 +506,9 @@ data class MediaMetadata(
 
                     val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 }
                         ?.let { "f/${String.format("%.1f", it)}" }
-                    val focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0).let {
-                        "${it.toInt()}mm"
-                    }
+                    val focalLength = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0)
+                        .takeIf { it > 0.0 }
+                        ?.let { "${it.toInt()}mm" }
                     val focalLength35mm = exif.getAttributeInt(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0)
                         .takeIf { it > 0 }?.let { "${it}mm" }
 

@@ -2310,6 +2310,17 @@ class Camera2Controller(private val context: Context) {
             setZslDisabledIfSupported(builder)
         }
         applyVendorCaptureSettings(builder, isCapture)
+        if (isCapture) {
+            PLog.i(
+                TAG,
+                "RAW_CROP_TRACE stage=CAMERA2_REQUEST isRaw=$isRawCapture " +
+                    "selectedCamera=${currentState.currentCameraId} openCamera=${getActiveOpenCameraId()} " +
+                    "physicalOutput=$activeOutputPhysicalCameraId stateZoom=${currentState.zoomRatio} " +
+                    "requestZoom=${builder.get(CaptureRequest.CONTROL_ZOOM_RATIO)} " +
+                    "requestScalerCrop=${builder.get(CaptureRequest.SCALER_CROP_REGION)} " +
+                    "requestDistortion=${builder.get(CaptureRequest.DISTORTION_CORRECTION_MODE)}"
+            )
+        }
     }
 
     private fun forcedVendorSessionParameterValues(state: CameraState): Map<VendorCaptureKey, Int> {

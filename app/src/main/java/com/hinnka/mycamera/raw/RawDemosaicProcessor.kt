@@ -1307,7 +1307,8 @@ class RawDemosaicProcessor {
                 return@withContext RawProcessor.processAndToBitmap(
                     dngFile,
                     aspectRatio,
-                    cropRegion,
+                    // Platform DNG decoding already consumes DefaultCrop.
+                    null,
                     rotation
                 )?.let {
                     RawHdrRenderResult(
@@ -1317,6 +1318,13 @@ class RawDemosaicProcessor {
                 }
             }
             dngRawDataCleanup = dngRawData
+            PLog.i(
+                TAG,
+                "RAW_CROP_TRACE stage=DNG_READ raw=${dngRawData.width}x${dngRawData.height} " +
+                    "activeArray=${dngRawData.activeArray?.contentToString()} " +
+                    "defaultCrop=${dngRawData.defaultCrop?.contentToString()} " +
+                    "warpCount=${dngRawData.warpRectilinear?.size?.div(8) ?: 0}"
+            )
             embeddedDngJpegPreview = dngRawData.embeddedPreview
             dngWarpRectilinear = dngRawData.warpRectilinear
             actualRawData = dngRawData.rawData
@@ -1416,12 +1424,28 @@ class RawDemosaicProcessor {
             metadataDefaultCrop = actualMetadata.defaultCrop
         )
         val effectiveDefaultCrop = rawBlackBorderDefaultCrop ?: actualMetadata.defaultCrop
+        val renderCropRegion = if (dngFile != null && effectiveDefaultCrop != null) {
+            if (cropRegion != null) {
+                PLog.d(TAG, "DNG DefaultCrop is authoritative; ignoring legacy Camera2 crop=$cropRegion")
+            }
+            null
+        } else {
+            cropRegion
+        }
         val outputSourceBounds = calculateOutputSourceBounds(
             width = actualWidth,
             height = actualHeight,
             aspectRatio = aspectRatio,
-            cropRegion = cropRegion,
+            cropRegion = renderCropRegion,
             metadataDefaultCrop = effectiveDefaultCrop
+        )
+        PLog.i(
+            TAG,
+            "RAW_CROP_TRACE stage=RENDER_BOUNDS raw=${actualWidth}x$actualHeight " +
+                "metadataDefaultCrop=${actualMetadata.defaultCrop} " +
+                "blackBorderOverride=$rawBlackBorderDefaultCrop effectiveDefaultCrop=$effectiveDefaultCrop " +
+                "legacyCrop=$cropRegion appliedLegacyCrop=$renderCropRegion " +
+                "aspectRatio=$aspectRatio rotation=$actualRotation outputSourceBounds=$outputSourceBounds"
         )
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
         val autoExposurePreview = capturePreviewThumbnail

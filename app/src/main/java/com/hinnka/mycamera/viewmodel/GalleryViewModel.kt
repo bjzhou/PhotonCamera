@@ -1171,12 +1171,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
 
         if (selectedTab == GalleryTab.SYSTEM) {
-            photo.metadata?.let { m ->
+            photo.relatedPhoto?.metadata?.let { m ->
                 currentPhotoMetadataId = photo.id
                 applyMetadataToEditState(m)
                 return
             }
-            photo.relatedPhoto?.metadata?.let { m ->
+            photo.metadata?.let { m ->
                 currentPhotoMetadataId = photo.id
                 applyMetadataToEditState(m)
                 return
@@ -2936,10 +2936,18 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
+                val targetMetadata = GalleryManager.loadMetadata(context, targetPhotoId)
+                    ?: photo.relatedPhoto?.metadata
+                    ?: currentMediaMetadata
+                    ?: photo.metadata
                 val rawBaselineLutId = editRawBaselineLutId.value
                 val rawBaselineRecipeParams = loadRawBaselineRecipeParams(rawBaselineLutId)
-                val w = photo.metadata?.width ?: photo.width
-                val h = photo.metadata?.height ?: photo.height
+                val w = targetMetadata?.width?.takeIf { it > 0 }
+                    ?: photo.relatedPhoto?.width?.takeIf { it > 0 }
+                    ?: photo.width
+                val h = targetMetadata?.height?.takeIf { it > 0 }
+                    ?: photo.relatedPhoto?.height?.takeIf { it > 0 }
+                    ?: photo.height
                 val finalCropRegion = editCropRect.value?.let { rectF ->
                     android.graphics.Rect(
                         (rectF.left * w).roundToInt(),
@@ -2993,6 +3001,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                     currentMediaMetadata = success
                     photo.metadata = success
+                    photo.relatedPhoto?.metadata = success
 
                     // 系统相册项保存后保留 SYSTEM tab，通过 relatedPhoto 展示导入副本的编辑结果。
                     if (wasSystemPhoto) {

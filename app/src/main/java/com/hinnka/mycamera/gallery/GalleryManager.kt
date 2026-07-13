@@ -1536,6 +1536,16 @@ object GalleryManager {
                 imageWidth = metadata.width,
                 imageHeight = metadata.height
             )
+            if (includeCropRegionInOutputSize) {
+                PLog.i(
+                    TAG,
+                    "RAW_CROP_TRACE stage=PREPARE_RESULT image=${metadata.width}x${metadata.height} " +
+                        "scalerCrop=${captureResult?.get(CaptureResult.SCALER_CROP_REGION)} " +
+                        "zoomRatio=${captureResult?.get(CaptureResult.CONTROL_ZOOM_RATIO)} " +
+                        "distortionMode=${captureResult?.get(CaptureResult.DISTORTION_CORRECTION_MODE)} " +
+                        "legacyDerivedCrop=$cropRegion"
+                )
+            }
             if (superResolutionScale > 1.0f && cropRegion != null) {
                 cropRegion = Rect(
                     (cropRegion.left * superResolutionScale).roundToInt(),
@@ -1815,6 +1825,7 @@ object GalleryManager {
             }
 
             var dngSaveAttempted = false
+            val captureInfo = metadata.toCaptureInfo()
             FileOutputStream(tempDngFile).use { outputStream ->
                 image.use {
                     try {
@@ -1829,7 +1840,9 @@ object GalleryManager {
                             customBlackLevel = metadata.rawCustomBlackLevel,
                             whiteLevelMode = metadata.rawWhiteLevelMode,
                             customWhiteLevel = metadata.rawCustomWhiteLevel,
-                            cfaCorrectionMode = metadata.rawCfaCorrectionMode
+                            cfaCorrectionMode = metadata.rawCfaCorrectionMode,
+                            effectiveFocalLengthMm = captureInfo.focalLength,
+                            effectiveFocalLength35mm = captureInfo.focalLength35mm,
                         )
                     } catch (e: Throwable) {
                         PLog.e(TAG, "DNG save failed", e)
@@ -3368,6 +3381,7 @@ object GalleryManager {
         inputColStepSamples: Int? = null,
     ): Boolean {
         val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
+        val captureInfo = metadata.toCaptureInfo()
         val dngWritten = try {
             FileOutputStream(tempDngFile).use { outputStream ->
                 RawProcessor.saveRawBufferToDng(
@@ -3377,6 +3391,8 @@ object GalleryManager {
                     characteristics = characteristics,
                     captureResult = captureResult,
                     captureMetadataResult = captureMetadataResult,
+                    effectiveFocalLengthMm = captureInfo.focalLength,
+                    effectiveFocalLength35mm = captureInfo.focalLength35mm,
                     outputStream = outputStream,
                     rotation = rotation,
                     thumbnail = thumbnail,
@@ -3400,10 +3416,14 @@ object GalleryManager {
                     compression = compression,
                     inputRowStepSamples = inputRowStepSamples,
                     inputColStepSamples = inputColStepSamples,
-                    // The fused buffer producer defines its entire returned
-                    // grid as valid. Any future fusion-stage crop must be
-                    // carried here explicitly instead of inferred by the writer.
-                    defaultCrop = Rect(0, 0, width, height),
+                    // Carry the Camera2 field of view into the DNG itself. The renderer consumes
+                    // DefaultCrop after OpcodeList3, matching the DNG SDK processing order.
+                    defaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
+                        width = width,
+                        height = height,
+                        characteristics = characteristics,
+                        captureResult = captureResult,
+                    ),
                 )
             }
         } catch (e: Throwable) {
@@ -4527,6 +4547,13 @@ object GalleryManager {
                             tempImportJpeg(uri, context, metadata, photoFile, thumbnailFile)
                         }
                     }
+                    if (!deferRawPreview && photoFile.exists()) {
+                        syncImportedRawMetadataToOriginalJpeg(
+                            context = context,
+                            photoId = photoId,
+                            photoFile = photoFile,
+                        )
+                    }
                 } else {
                     // --- 常规 JPEG 处理逻辑 ---
                     // 传递元数据确保旋转信息被正确处理
@@ -4772,6 +4799,33 @@ object GalleryManager {
 
         saveMetadata(context, photoDir.name, updatedMetadata)
         generateThumbnail(photoFile, thumbnailFile)
+    }
+
+    private suspend fun syncImportedRawMetadataToOriginalJpeg(
+        context: Context,
+        photoId: String,
+        photoFile: File,
+    ) {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(photoFile.absolutePath, options)
+        val outputWidth = options.outWidth
+        val outputHeight = options.outHeight
+        if (outputWidth <= 0 || outputHeight <= 0) {
+            PLog.w(TAG, "Unable to read imported RAW original.jpg dimensions: ${photoFile.absolutePath}")
+            return
+        }
+        updateMetadata(context, photoId) { current ->
+            current.copy(
+                width = outputWidth,
+                height = outputHeight,
+                rotation = 0,
+            )
+        }
+        PLog.i(
+            TAG,
+            "RAW_CROP_TRACE stage=IMPORT_METADATA originalJpeg=${outputWidth}x$outputHeight " +
+                "photoId=$photoId"
+        )
     }
 
     /**

@@ -72,6 +72,7 @@ object SuperResolutionDngWriter {
     private const val TAG_PLANAR_CONFIGURATION = 284
     private const val TAG_SOFTWARE = 305
     private const val TAG_DATETIME = 306
+    private const val TAG_EXIF_IFD_POINTER = 34665
     private const val TAG_EXPOSURE_TIME = 33434
     private const val TAG_F_NUMBER = 33437
     private const val TAG_ISO_SPEED_RATINGS = 34855
@@ -133,6 +134,8 @@ object SuperResolutionDngWriter {
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
         captureMetadataResult: CaptureResult = captureResult,
+        effectiveFocalLengthMm: Float? = null,
+        effectiveFocalLength35mm: Int? = null,
         orientation: Int,
         cfaPattern: Int,
         blackLevel: FloatArray,
@@ -229,12 +232,14 @@ object SuperResolutionDngWriter {
             }
             val imageByteCount = imageBytes?.size?.toLong() ?: uncompressedByteCount
 
-            val entries = buildEntries(
+            val directories = buildEntries(
                 width = width,
                 height = height,
                 characteristics = characteristics,
                 captureResult = captureResult,
                 captureMetadataResult = captureMetadataResult,
+                effectiveFocalLengthMm = effectiveFocalLengthMm,
+                effectiveFocalLength35mm = effectiveFocalLength35mm,
                 orientation = orientation,
                 cfaPattern = cfaPattern,
                 blackLevel = encodedBlackLevel,
@@ -249,7 +254,10 @@ object SuperResolutionDngWriter {
                 valueDomain = valueDomain,
                 defaultCrop = defaultCrop,
             )
-            val header = buildHeader(entries)
+            val header = buildHeader(
+                primaryEntries = directories.primaryEntries,
+                exifEntries = directories.exifEntries,
+            )
             outputStream.write(header)
             if (imageBytes != null) {
                 outputStream.write(imageBytes)
@@ -278,6 +286,8 @@ object SuperResolutionDngWriter {
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
         captureMetadataResult: CaptureResult,
+        effectiveFocalLengthMm: Float?,
+        effectiveFocalLength35mm: Int?,
         orientation: Int,
         cfaPattern: Int,
         blackLevel: FloatArray,
@@ -291,7 +301,7 @@ object SuperResolutionDngWriter {
         compression: Compression,
         valueDomain: RawProcessor.RawBufferValueDomain,
         defaultCrop: Rect,
-    ): List<TiffEntry> {
+    ): TiffDirectories {
         // The custom writer is used when the fused RAW dimensions no longer
         // match the camera sensor. The fused buffer already lives in its final
         // Bayer pixel grid, so DefaultScale must stay 1:1. Scaling it back to
@@ -301,6 +311,17 @@ object SuperResolutionDngWriter {
         val defaultScaleY = 1.0
         val cameraModel = buildCameraModel(characteristics)
         val geometry = resolveDngGeometry(width, height, characteristics, defaultCrop)
+        PLog.i(
+            TAG,
+            "RAW_CROP_TRACE stage=DNG_WRITE buffer=${width}x$height " +
+                "activeArea=${geometry.activeArea.contentToString()} " +
+                "defaultCropOrigin=${geometry.defaultCropLeft},${geometry.defaultCropTop} " +
+                "defaultCropSize=${geometry.defaultCropWidth}x${geometry.defaultCropHeight} " +
+                "sourceOrigin=${geometry.sourceOriginX},${geometry.sourceOriginY} " +
+                "sourceSize=${geometry.sourceWidth}x${geometry.sourceHeight} " +
+                "includesPixelArray=${geometry.bufferIncludesPixelArray} " +
+                "scale=${geometry.scaleX},${geometry.scaleY}"
+        )
         val illuminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: 21
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
         val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
@@ -318,8 +339,11 @@ object SuperResolutionDngWriter {
             ?.let { it.toDouble() / 1_000_000_000.0 }
         val iso = captureMetadataResult.get(CaptureResult.SENSOR_SENSITIVITY)?.takeIf { it > 0 }
         val aperture = captureMetadataResult.get(CaptureResult.LENS_APERTURE)?.takeIf { it > 0f }
-        val focalLength = captureMetadataResult.get(CaptureResult.LENS_FOCAL_LENGTH)?.takeIf { it > 0f }
-        val focalLength35mm = calculate35mmEquivalent(characteristics, focalLength)
+        val physicalFocalLength = captureMetadataResult.get(CaptureResult.LENS_FOCAL_LENGTH)
+            ?.takeIf { it > 0f }
+        val focalLength = effectiveFocalLengthMm?.takeIf { it > 0f } ?: physicalFocalLength
+        val focalLength35mm = effectiveFocalLength35mm?.takeIf { it > 0 }
+            ?: calculate35mmEquivalent(characteristics, physicalFocalLength)
         val exifWhiteBalance = captureMetadataResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
             if (awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
         }
@@ -349,7 +373,23 @@ object SuperResolutionDngWriter {
             }
         }
 
-        return buildList {
+        val exifEntries = buildList {
+            exposureTimeSeconds?.let { add(rationalArray(TAG_EXPOSURE_TIME, listOf(it))) }
+            aperture?.let {
+                add(rationalArray(TAG_F_NUMBER, listOf(it.toDouble())))
+                add(rationalArray(TAG_APERTURE_VALUE, listOf(apexAperture(it).toDouble())))
+            }
+            iso?.let { add(short(TAG_ISO_SPEED_RATINGS, it.coerceIn(1, MAX_TIFF_SHORT))) }
+            add(ascii(TAG_DATETIME_ORIGINAL, dateTime))
+            add(ascii(TAG_DATETIME_DIGITIZED, dateTime))
+            focalLength?.let { add(rationalArray(TAG_FOCAL_LENGTH, listOf(it.toDouble()))) }
+            exifWhiteBalance?.let { add(short(TAG_WHITE_BALANCE, it)) }
+            focalLength35mm?.let {
+                add(short(TAG_FOCAL_LENGTH_IN_35MM_FILM, it.coerceIn(1, MAX_TIFF_SHORT)))
+            }
+        }.sortedBy { it.tag }
+
+        val primaryEntries = buildList {
             add(long(TAG_NEW_SUBFILE_TYPE, 0))
             add(long(TAG_IMAGE_WIDTH, width.toLong()))
             add(long(TAG_IMAGE_LENGTH, height.toLong()))
@@ -366,17 +406,9 @@ object SuperResolutionDngWriter {
             add(short(TAG_PLANAR_CONFIGURATION, 1))
             add(ascii(TAG_SOFTWARE, "PhotonCamera"))
             add(ascii(TAG_DATETIME, dateTime))
-            exposureTimeSeconds?.let { add(rationalArray(TAG_EXPOSURE_TIME, listOf(it))) }
-            aperture?.let {
-                add(rationalArray(TAG_F_NUMBER, listOf(it.toDouble())))
-                add(sRationalArray(TAG_APERTURE_VALUE, listOf(apexAperture(it).toDouble())))
+            if (exifEntries.isNotEmpty()) {
+                add(long(TAG_EXIF_IFD_POINTER, 0))
             }
-            iso?.let { add(short(TAG_ISO_SPEED_RATINGS, it.coerceIn(1, MAX_TIFF_SHORT))) }
-            add(ascii(TAG_DATETIME_ORIGINAL, dateTime))
-            add(ascii(TAG_DATETIME_DIGITIZED, dateTime))
-            focalLength?.let { add(rationalArray(TAG_FOCAL_LENGTH, listOf(it.toDouble()))) }
-            exifWhiteBalance?.let { add(short(TAG_WHITE_BALANCE, it)) }
-            focalLength35mm?.let { add(short(TAG_FOCAL_LENGTH_IN_35MM_FILM, it.coerceIn(1, MAX_TIFF_SHORT))) }
             if (isCfa) {
                 add(shortArray(TAG_CFA_REPEAT_PATTERN_DIM, RawCfaCorrection.repeatPatternDim(cfaPattern)))
                 add(byteArray(TAG_CFA_PATTERN, RawCfaCorrection.cfaPatternBytes(cfaPattern)))
@@ -437,13 +469,26 @@ object SuperResolutionDngWriter {
                 add(undefined(TAG_PROFILE_GAIN_TABLE_MAP_2, it.encodeProfileGainTableMap2(ByteOrder.LITTLE_ENDIAN)))
             }
         }.sortedBy { it.tag }
+
+        return TiffDirectories(
+            primaryEntries = primaryEntries,
+            exifEntries = exifEntries,
+        ).also {
+            PLog.i(
+                TAG,
+                "DNG focal metadata: physical=${physicalFocalLength ?: "none"}mm " +
+                    "recorded=${effectiveFocalLengthMm ?: "none"}mm " +
+                    "encoded=${focalLength ?: "none"}mm " +
+                    "equivalent35mm=${focalLength35mm ?: "none"}mm"
+            )
+        }
     }
 
-    private fun buildHeader(entries: List<TiffEntry>): ByteArray {
+    private fun encodeDirectoryEntries(
+        entries: List<TiffEntry>,
+        dataBaseOffset: Int,
+    ): Pair<List<EncodedEntry>, ByteArray> {
         val dataArea = ByteArrayOutputStream()
-        val entryCount = entries.size
-        val dataBaseOffset = 8 + 2 + entryCount * 12 + 4
-
         val encodedEntries = entries.map { entry ->
             if (entry.value.size <= 4) {
                 EncodedEntry(entry, inlineValue(entry.value))
@@ -454,27 +499,72 @@ object SuperResolutionDngWriter {
                 EncodedEntry(entry, uintBytes(offset.toLong()))
             }
         }
-
         if ((dataArea.size() and 1) != 0) dataArea.write(0)
-        val rawOffset = dataBaseOffset + dataArea.size()
+        return encodedEntries to dataArea.toByteArray()
+    }
+
+    private fun buildHeader(
+        primaryEntries: List<TiffEntry>,
+        exifEntries: List<TiffEntry>,
+    ): ByteArray {
+        val primaryEntryCount = primaryEntries.size
+        val primaryDataBaseOffset = 8 + 2 + primaryEntryCount * 12 + 4
+        val (encodedPrimaryEntries, primaryData) = encodeDirectoryEntries(
+            entries = primaryEntries,
+            dataBaseOffset = primaryDataBaseOffset,
+        )
+
+        val exifIfdOffset = if (exifEntries.isNotEmpty()) {
+            primaryDataBaseOffset + primaryData.size
+        } else {
+            0
+        }
+        val exifDataBaseOffset = if (exifEntries.isNotEmpty()) {
+            exifIfdOffset + 2 + exifEntries.size * 12 + 4
+        } else {
+            primaryDataBaseOffset + primaryData.size
+        }
+        val (encodedExifEntries, exifData) = encodeDirectoryEntries(
+            entries = exifEntries,
+            dataBaseOffset = exifDataBaseOffset,
+        )
+        val rawOffset = exifDataBaseOffset + exifData.size
         val out = ByteArrayOutputStream(rawOffset)
         out.write(byteArrayOf('I'.code.toByte(), 'I'.code.toByte()))
         out.write(ushortBytes(42))
         out.write(uintBytes(8))
-        out.write(ushortBytes(entryCount))
-        for (encoded in encodedEntries) {
+        out.write(ushortBytes(primaryEntryCount))
+        for (encoded in encodedPrimaryEntries) {
             out.write(ushortBytes(encoded.entry.tag))
             out.write(ushortBytes(encoded.entry.type))
             out.write(uintBytes(encoded.entry.count))
-            val value = if (encoded.entry.tag == TAG_STRIP_OFFSETS) {
-                uintBytes(rawOffset.toLong())
-            } else {
-                encoded.valueOrOffset
+            val value = when (encoded.entry.tag) {
+                TAG_STRIP_OFFSETS -> uintBytes(rawOffset.toLong())
+                TAG_EXIF_IFD_POINTER -> uintBytes(exifIfdOffset.toLong())
+                else -> encoded.valueOrOffset
             }
             out.write(value)
         }
         out.write(uintBytes(0))
-        out.write(dataArea.toByteArray())
+        out.write(primaryData)
+
+        if (exifEntries.isNotEmpty()) {
+            check(out.size() == exifIfdOffset) {
+                "ExifIFD offset mismatch: expected=$exifIfdOffset actual=${out.size()}"
+            }
+            out.write(ushortBytes(exifEntries.size))
+            for (encoded in encodedExifEntries) {
+                out.write(ushortBytes(encoded.entry.tag))
+                out.write(ushortBytes(encoded.entry.type))
+                out.write(uintBytes(encoded.entry.count))
+                out.write(encoded.valueOrOffset)
+            }
+            out.write(uintBytes(0))
+            out.write(exifData)
+        }
+        check(out.size() == rawOffset) {
+            "RAW strip offset mismatch: expected=$rawOffset actual=${out.size()}"
+        }
         return out.toByteArray()
     }
 
@@ -530,9 +620,9 @@ object SuperResolutionDngWriter {
 
     private fun calculate35mmEquivalent(
         characteristics: CameraCharacteristics,
-        focalLength: Float?,
+        physicalFocalLength: Float?,
     ): Int? {
-        val fl = focalLength?.takeIf { it > 0f } ?: return null
+        val fl = physicalFocalLength?.takeIf { it > 0f } ?: return null
         val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return null
         val sensorDiagonal = sqrt(
             sensorSize.width.toDouble() * sensorSize.width.toDouble() +
@@ -1109,6 +1199,11 @@ object SuperResolutionDngWriter {
         val type: Int,
         val count: Long,
         val value: ByteArray,
+    )
+
+    private data class TiffDirectories(
+        val primaryEntries: List<TiffEntry>,
+        val exifEntries: List<TiffEntry>,
     )
 
     private data class EncodedEntry(
