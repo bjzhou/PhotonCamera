@@ -3404,13 +3404,27 @@ class GlesRawStacker(
         checkGlError("HDR normal RCD populate")
     }
 
-    private fun storeHdrRcdRgbStripe(targetTexture: Int, rowCount: Int, label: String) {
+    private fun storeHdrRcdRgbStripe(
+        targetTexture: Int,
+        rowCount: Int,
+        label: String,
+        exposureScale: Float = 1.0f,
+        desaturateBeforeExposureScale: Boolean = false,
+    ) {
         GLES31.glUseProgram(hdrRcdStoreRgbProgram)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, rcdStripeBuffers[1])
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, rcdStripeBuffers[2])
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 3, rcdStripeBuffers[3])
         bindImage(0, targetTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
         GLES31.glUniform2i(uniformLocation(hdrRcdStoreRgbProgram, "uSourceSize"), width, rowCount)
+        GLES31.glUniform1f(
+            uniformLocation(hdrRcdStoreRgbProgram, "uExposureScale"),
+            exposureScale,
+        )
+        GLES31.glUniform1i(
+            uniformLocation(hdrRcdStoreRgbProgram, "uDesaturateBeforeExposureScale"),
+            if (desaturateBeforeExposureScale) 1 else 0,
+        )
         GLES31.glUniform3f(
             uniformLocation(hdrRcdStoreRgbProgram, "uCalculationGains"),
             demosaicCalculationWbGains[0],
@@ -3480,6 +3494,8 @@ class GlesRawStacker(
                 hdrReferenceRgbStripeTexture,
                 normalBand.rowCount,
                 "HDR reference normal RGB store",
+                exposureScale = referenceExposureScale,
+                desaturateBeforeExposureScale = true,
             )
 
             uploadRcdRawStripe(shortImage, shortBand.firstRow, shortBand.rowCount, "HDR short")
@@ -7331,12 +7347,38 @@ class GlesRawStacker(
             layout(rgba16f, binding = 0) writeonly uniform highp image2D uOutput;
             uniform ivec2 uSourceSize;
             uniform vec3 uCalculationGains;
+            uniform float uExposureScale;
+            uniform int uDesaturateBeforeExposureScale;
+
+            vec3 desaturateHighlightPreservingLuma(vec3 rgb) {
+                rgb = max(rgb, vec3(0.0));
+                const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+                float luma = dot(rgb, LUMA);
+                float ceiling = max(1.0, luma);
+                vec3 chroma = rgb - vec3(luma);
+                float chromaScale = 1.0;
+                if (chroma.r > 0.0) {
+                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.r);
+                }
+                if (chroma.g > 0.0) {
+                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.g);
+                }
+                if (chroma.b > 0.0) {
+                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.b);
+                }
+                return vec3(luma) + chroma * clamp(chromaScale, 0.0, 1.0);
+            }
 
             void main() {
                 ivec2 p = ivec2(gl_GlobalInvocationID.xy);
                 if (p.x >= uSourceSize.x || p.y >= uSourceSize.y) return;
                 int index = p.y * uSourceSize.x + p.x;
-                vec3 rgb = vec3(rcdRgb0[index], rcdRgb1[index], rcdRgb2[index]) /
+                vec3 workingRgb = vec3(rcdRgb0[index], rcdRgb1[index], rcdRgb2[index]);
+                if (uDesaturateBeforeExposureScale != 0) {
+                    workingRgb = desaturateHighlightPreservingLuma(workingRgb);
+                }
+                workingRgb *= uExposureScale;
+                vec3 rgb = workingRgb /
                     max(uCalculationGains, vec3(1e-6));
                 imageStore(uOutput, p, vec4(max(rgb, vec3(0.0)), 1.0));
             }
@@ -7383,7 +7425,7 @@ class GlesRawStacker(
             vec3 referenceRgbAtGlobal(vec2 globalPos) {
                 vec2 local = vec2(globalPos.x, globalPos.y - float(uNormalSourceRowOffset));
                 return clamp(
-                    sampleStripe(uReferenceRgb, local, uNormalSourceSize) * uReferenceExposureScale,
+                    sampleStripe(uReferenceRgb, local, uNormalSourceSize),
                     vec3(0.0),
                     vec3(1.0)
                 );
