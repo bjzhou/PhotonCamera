@@ -2018,7 +2018,7 @@ class Camera2Controller(private val context: Context) {
                 }
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val streamUseCase = when (outputType) {
                     CameraOutputType.PREVIEW ->
                         CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()
@@ -2042,7 +2042,7 @@ class Camera2Controller(private val context: Context) {
                         "OutputConfiguration streamUseCase=${outputType.name} unsupported; using DEFAULT"
                     )
                 }
-            }
+            }*/
         }
     }
 
