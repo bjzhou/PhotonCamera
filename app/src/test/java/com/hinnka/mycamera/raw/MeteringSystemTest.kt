@@ -52,8 +52,80 @@ class MeteringSystemTest {
         assertTrue(stats.highlightCompression.autoHighlightsAdjustment < -0.60f)
     }
 
+    @Test
+    fun fullFrameHistogramIncludesPixelsOutsideCenterRegion() {
+        val width = 32
+        val height = 32
+        val pixels = IntArray(width * height) { displayGrayscaleArgb(255) }
+        for (y in 8 until 24) {
+            for (x in 8 until 24) {
+                pixels[y * width + x] = displayGrayscaleArgb(0)
+            }
+        }
+
+        val histogram = MeteringSystem.analyzeFullFrameSrgbHistogram(width, height, pixels)
+            ?: error("Expected full-frame histogram")
+
+        assertEquals(width * height, histogram.sampleCount)
+        assertEquals(16 * 16, histogram.binCounts[0])
+        assertEquals(width * height - 16 * 16, histogram.binCounts[255])
+    }
+
+    @Test
+    fun histogramAverageEvGainTracksOneStopDisplayLumaChange() {
+        val width = 32
+        val height = 32
+        val reference = MeteringSystem.analyzeFullFrameSrgbHistogram(
+            width,
+            height,
+            IntArray(width * height) { displayGrayscaleArgb(128) }
+        ) ?: error("Expected reference histogram")
+        val rendered = MeteringSystem.analyzeFullFrameSrgbHistogram(
+            width,
+            height,
+            IntArray(width * height) { displayGrayscaleArgb(64) }
+        ) ?: error("Expected rendered histogram")
+
+        val gain = MeteringSystem.histogramAverageEvGain(reference, rendered)
+            ?: error("Expected EV gain")
+
+        assertEquals(1f, gain, 0.02f)
+    }
+
+    @Test
+    fun histogramAverageEvGainAveragesMixedSceneInEvDomain() {
+        val width = 32
+        val height = 32
+        val referencePixels = IntArray(width * height) { index ->
+            displayGrayscaleArgb(if (index < width * height / 2) 64 else 128)
+        }
+        val renderedPixels = IntArray(width * height) { index ->
+            displayGrayscaleArgb(if (index < width * height / 2) 32 else 64)
+        }
+        val reference = MeteringSystem.analyzeFullFrameSrgbHistogram(
+            width,
+            height,
+            referencePixels
+        ) ?: error("Expected reference histogram")
+        val rendered = MeteringSystem.analyzeFullFrameSrgbHistogram(
+            width,
+            height,
+            renderedPixels
+        ) ?: error("Expected rendered histogram")
+
+        val gain = MeteringSystem.histogramAverageEvGain(reference, rendered)
+            ?: error("Expected EV gain")
+
+        assertEquals(1f, gain, 0.03f)
+    }
+
     private fun grayscalePixels(width: Int, height: Int, linearLuma: Float): IntArray {
         return IntArray(width * height) { grayscaleArgb(linearLuma) }
+    }
+
+    private fun displayGrayscaleArgb(value: Int): Int {
+        val byte = value.coerceIn(0, 255)
+        return (0xff shl 24) or (byte shl 16) or (byte shl 8) or byte
     }
 
     private fun grayscaleArgb(linearLuma: Float): Int {
