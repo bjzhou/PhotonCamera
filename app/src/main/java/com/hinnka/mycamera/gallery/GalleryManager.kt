@@ -2956,9 +2956,14 @@ object GalleryManager {
                 closeRemainingImages()
                 return@withContext false
             }
-            val rawHdrMetadataCandidate = rawHdrStackSelection.first
-            val rawMetadataImage = rawHdrMetadataCandidate.image
-            val rawMetadataResult = rawHdrMetadataCandidate.captureResult
+            val (shortCandidate, normalCandidates) = rawHdrStackSelection
+            val normalReferenceCandidate = normalCandidates.first()
+
+            // The fused Bayer buffer is normalized to the short-exposure domain, so keep using
+            // that frame for stack calibration. Public capture metadata, however, describes the
+            // intended 0EV photo and must come from a normal-exposure reference frame.
+            val rawMetadataImage = shortCandidate.image
+            val rawMetadataResult = shortCandidate.captureResult
 
             val rawMetadata = RawMetadata.create(
                 rawMetadataImage.width,
@@ -2998,8 +3003,7 @@ object GalleryManager {
                 )
             }
 
-            rawHdrStackSelection.let { (shortCandidate, normalCandidates) ->
-                val normalReferenceCandidate = normalCandidates.first()
+            run {
                 if (!useGpuAcceleration) {
                     PLog.w(TAG, "RAW HDR denoise requires GLES stacker; ignoring disabled GPU acceleration setting")
                 }
@@ -3079,6 +3083,7 @@ object GalleryManager {
                         isNormalizedSensorData = true,
                         characteristics = characteristics,
                         captureResult = shortCandidate.captureResult,
+                        captureMetadataResult = normalReferenceCandidate.captureResult,
                         rotation = rotation,
                         thumbnail = null,
                         metadata = stackedMetadata,
@@ -3348,6 +3353,7 @@ object GalleryManager {
         isNormalizedSensorData: Boolean,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
+        captureMetadataResult: CaptureResult? = null,
         rotation: Int,
         thumbnail: Bitmap?,
         metadata: MediaMetadata,
@@ -3370,6 +3376,7 @@ object GalleryManager {
                     height = height,
                     characteristics = characteristics,
                     captureResult = captureResult,
+                    captureMetadataResult = captureMetadataResult,
                     outputStream = outputStream,
                     rotation = rotation,
                     thumbnail = thumbnail,

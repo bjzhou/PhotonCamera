@@ -132,6 +132,7 @@ object SuperResolutionDngWriter {
         height: Int,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
+        captureMetadataResult: CaptureResult = captureResult,
         orientation: Int,
         cfaPattern: Int,
         blackLevel: FloatArray,
@@ -233,6 +234,7 @@ object SuperResolutionDngWriter {
                 height = height,
                 characteristics = characteristics,
                 captureResult = captureResult,
+                captureMetadataResult = captureMetadataResult,
                 orientation = orientation,
                 cfaPattern = cfaPattern,
                 blackLevel = encodedBlackLevel,
@@ -275,6 +277,7 @@ object SuperResolutionDngWriter {
         height: Int,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
+        captureMetadataResult: CaptureResult,
         orientation: Int,
         cfaPattern: Int,
         blackLevel: FloatArray,
@@ -306,18 +309,18 @@ object SuperResolutionDngWriter {
         val calibrationMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
         val noiseProfile = buildNoiseProfile(captureResult)
         val dateTime = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(
-            captureResult.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestampNs ->
+            captureMetadataResult.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestampNs ->
                 Date(System.currentTimeMillis() - SystemClock.elapsedRealtime() + timestampNs / 1_000_000L)
             } ?: Date()
         )
-        val exposureTimeSeconds = captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+        val exposureTimeSeconds = captureMetadataResult.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             ?.takeIf { it > 0L }
             ?.let { it.toDouble() / 1_000_000_000.0 }
-        val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY)?.takeIf { it > 0 }
-        val aperture = captureResult.get(CaptureResult.LENS_APERTURE)?.takeIf { it > 0f }
-        val focalLength = captureResult.get(CaptureResult.LENS_FOCAL_LENGTH)?.takeIf { it > 0f }
+        val iso = captureMetadataResult.get(CaptureResult.SENSOR_SENSITIVITY)?.takeIf { it > 0 }
+        val aperture = captureMetadataResult.get(CaptureResult.LENS_APERTURE)?.takeIf { it > 0f }
+        val focalLength = captureMetadataResult.get(CaptureResult.LENS_FOCAL_LENGTH)?.takeIf { it > 0f }
         val focalLength35mm = calculate35mmEquivalent(characteristics, focalLength)
-        val exifWhiteBalance = captureResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
+        val exifWhiteBalance = captureMetadataResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
             if (awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
         }
         val isCfa = imageLayout == ImageLayout.CFA
