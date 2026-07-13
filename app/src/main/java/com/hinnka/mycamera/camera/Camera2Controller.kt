@@ -5201,6 +5201,7 @@ class Camera2Controller(private val context: Context) {
                         state = currentState,
                         baseResult = baseExposureResult,
                         lockExposure = false,
+                        isRawCapture = isRawCapture,
                     )
                     PLog.d(TAG, "HDR bracket request[$index]: ev=$evOffset, manual=${manualBaseExposure != null}")
                 }.build()
@@ -5442,6 +5443,7 @@ class Camera2Controller(private val context: Context) {
         state: CameraState,
         baseResult: CaptureResult?,
         lockExposure: Boolean,
+        isRawCapture: Boolean,
     ) {
         if (!state.useMFNR && !state.useMFSR) return
 
@@ -5449,26 +5451,23 @@ class Camera2Controller(private val context: Context) {
             builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
             val requestUsesManualExposure =
                 builder.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_OFF
-            val requestIso = builder.get(CaptureRequest.SENSOR_SENSITIVITY)
-                .takeIf { requestUsesManualExposure }
-            val requestExposure = builder.get(CaptureRequest.SENSOR_EXPOSURE_TIME)
-                .takeIf { requestUsesManualExposure }
-            val lockedIso = requestIso ?: baseResult?.get(CaptureResult.SENSOR_SENSITIVITY)
-            val lockedExposure = requestExposure ?: baseResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-            val canUseManualExposure = isManualSensorSupported &&
-                    availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF) &&
-                    lockedIso != null && lockedIso > 0 &&
-                    lockedExposure != null && lockedExposure > 0L
-            if (canUseManualExposure) {
-                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                builder.set(CaptureRequest.SENSOR_SENSITIVITY, lockedIso)
-                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, lockedExposure)
-            } else {
+            if (isRawCapture && !requestUsesManualExposure) {
+                val lockedIso = baseResult?.get(CaptureResult.SENSOR_SENSITIVITY)
+                val lockedExposure = baseResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                val canUseManualExposure = isManualSensorSupported &&
+                        availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF) &&
+                        lockedIso != null && lockedIso > 0 &&
+                        lockedExposure != null && lockedExposure > 0L
+                if (canUseManualExposure) {
+                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    builder.set(CaptureRequest.SENSOR_SENSITIVITY, lockedIso)
+                    builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, lockedExposure)
+                }
+            }
+
+            if (builder.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF) {
                 val aeLockAvailable = getActiveOpenCameraCharacteristics()
                     ?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
-                if (availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)) {
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                }
                 if (aeLockAvailable) {
                     builder.set(CaptureRequest.CONTROL_AE_LOCK, true)
                 }
@@ -5612,6 +5611,7 @@ class Camera2Controller(private val context: Context) {
                     state = currentState,
                     baseResult = baseExposureResult,
                     lockExposure = true,
+                    isRawCapture = isRawCapture,
                 )
 
                 PLog.d(
