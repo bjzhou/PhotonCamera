@@ -5759,6 +5759,11 @@ class Camera2Controller(private val context: Context) {
 
         try {
             applyBaseCameraSettings(builder, isCapture = false)
+            val aeLockAvailable = getActiveOpenCameraCharacteristics()
+                ?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+            if (aeLockAvailable) {
+                builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
+            }
 
             builder.set(
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
