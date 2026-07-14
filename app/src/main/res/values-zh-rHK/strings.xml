@@ -313,6 +313,7 @@
     <string name="settings_vendor_capture_insensor_zoom">Qualcomm 傳感器內變焦</string>
     <string name="settings_vendor_capture_qcom_sensor_mode">Qualcomm 傳感器模式</string>
     <string name="settings_vendor_capture_vivo_sensor_mode">vivo 強制傳感器模式</string>
+    <string name="settings_vendor_capture_mtk_raw_bpp">MediaTek RAW 位元深度</string>
     <string name="settings_vendor_capture_oplus_agingtest_mode">Oplus Aging Test 模式</string>
     <string name="settings_vendor_capture_value_label">數值</string>
     <string name="settings_vendor_capture_int_value">Int 數值</string>

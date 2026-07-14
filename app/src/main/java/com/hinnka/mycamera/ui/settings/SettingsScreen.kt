@@ -4039,6 +4039,7 @@ private fun VendorCaptureKey.displayName(): String {
         VendorCaptureKey.INSENSOR_ZOOM -> stringResource(R.string.settings_vendor_capture_insensor_zoom)
         VendorCaptureKey.QCOM_SENSOR_CURRENT_MODE -> stringResource(R.string.settings_vendor_capture_qcom_sensor_mode)
         VendorCaptureKey.VIVO_FORCE_SENSOR_MODE -> stringResource(R.string.settings_vendor_capture_vivo_sensor_mode)
+        VendorCaptureKey.MTK_RAW_BPP -> stringResource(R.string.settings_vendor_capture_mtk_raw_bpp)
         VendorCaptureKey.OPLUS_AGINGTEST_MODE_SELECT -> stringResource(R.string.settings_vendor_capture_oplus_agingtest_mode)
     }
 }

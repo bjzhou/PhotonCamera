@@ -315,6 +315,7 @@
     <string name="settings_vendor_capture_insensor_zoom">Qualcomm In-sensor Zoom</string>
     <string name="settings_vendor_capture_qcom_sensor_mode">Qualcomm sensor mode</string>
     <string name="settings_vendor_capture_vivo_sensor_mode">vivo force sensor mode</string>
+    <string name="settings_vendor_capture_mtk_raw_bpp">MediaTek RAW bit depth</string>
     <string name="settings_vendor_capture_oplus_agingtest_mode">Oplus aging test mode</string>
     <string name="settings_vendor_capture_value_label">Value</string>
     <string name="settings_vendor_capture_int_value">Int value</string>

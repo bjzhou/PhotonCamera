@@ -67,4 +67,15 @@ class IszLensConfigTest {
             settings.toVirtualLensProfileId()
         )
     }
+
+    @Test
+    fun vendorCaptureSettings_mtkRawBppUsesIntValue() {
+        val settings = VendorCaptureSettings(
+            mapOf(VendorCaptureKey.MTK_RAW_BPP to 14)
+        )
+
+        assertEquals(14, settings.valueFor(VendorCaptureKey.MTK_RAW_BPP))
+        assertEquals(VendorCaptureValueType.INT, VendorCaptureKey.MTK_RAW_BPP.valueType)
+        assertEquals("mtk_raw_bpp_14", settings.toVirtualLensProfileId())
+    }
 }

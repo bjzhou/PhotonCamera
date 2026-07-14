@@ -150,6 +150,12 @@ enum class VendorCaptureKey(
         valueType = VendorCaptureValueType.INT,
         defaultValue = 1
     ),
+    MTK_RAW_BPP(
+        persistedName = "mtk_raw_bpp",
+        requestKeyName = "com.mediatek.control.capture.raw.bpp",
+        valueType = VendorCaptureValueType.INT,
+        defaultValue = 14
+    ),
     OPLUS_AGINGTEST_MODE_SELECT(
         persistedName = "oplus_agingtest_mode_select",
         requestKeyName = "com.oplus.engineercamera.agingtest.mode.select",
