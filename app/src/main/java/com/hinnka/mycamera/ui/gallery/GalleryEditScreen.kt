@@ -111,6 +111,7 @@ private data class PreviewRenderSignature(
     val editRawShadowsAdjustment: Float,
     val editRawBlackPointCorrection: Float,
     val editRawWhitePointCorrection: Float,
+    val editRawLensShadingCorrectionEnabled: Boolean,
     val editRawDROMode: String,
     val editRawBlackLevelMode: String,
     val editRawCustomBlackLevel: Float,
@@ -195,6 +196,7 @@ fun GalleryEditScreen(
     val editRawShadowsAdjustment by viewModel.editRawShadowsAdjustment.collectAsState()
     val editRawBlackPointCorrection by viewModel.editRawBlackPointCorrection.collectAsState()
     val editRawWhitePointCorrection by viewModel.editRawWhitePointCorrection.collectAsState()
+    val editRawLensShadingCorrectionEnabled by viewModel.editRawLensShadingCorrectionEnabled.collectAsState()
     val editRawDROMode by viewModel.editRawDROMode.collectAsState()
     val editRawBlackLevelMode by viewModel.editRawBlackLevelMode.collectAsState()
     val editRawCustomBlackLevel by viewModel.editRawCustomBlackLevel.collectAsState()
@@ -265,6 +267,7 @@ fun GalleryEditScreen(
             editRawShadowsAdjustment = if (fast) 0f else editRawShadowsAdjustment,
             editRawBlackPointCorrection = if (fast) 0f else editRawBlackPointCorrection,
             editRawWhitePointCorrection = if (fast) 0f else editRawWhitePointCorrection,
+            editRawLensShadingCorrectionEnabled = if (fast) false else editRawLensShadingCorrectionEnabled,
             editRawDROMode = if (fast) "" else editRawDROMode,
             editRawBlackLevelMode = if (fast) "" else editRawBlackLevelMode,
             editRawCustomBlackLevel = if (fast) 0f else editRawCustomBlackLevel,
@@ -1246,6 +1249,19 @@ fun GalleryEditScreen(
                                         showDngMetadataControls = true,
                                         contentMode = RawEditPanelContentMode.FULL,
                                         modifier = Modifier.fillMaxWidth()
+                                    )
+                                    SwitchSettingItem(
+                                        title = stringResource(R.string.settings_raw_lens_shading_correction),
+                                        description = stringResource(R.string.settings_raw_lens_shading_correction_description),
+                                        checked = editRawLensShadingCorrectionEnabled,
+                                        onCheckedChange = { enabled ->
+                                            viewModel.saveRawLensShadingCorrectionEnabled(
+                                                currentEditSourcePhoto,
+                                                enabled
+                                            ) { success ->
+                                                if (success) requestRawPreviewRefresh()
+                                            }
+                                        }
                                     )
                                 }
                                 3 -> {

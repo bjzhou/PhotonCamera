@@ -96,6 +96,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         .map { it.chromaNoiseReduction }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
+    val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.rawLensShadingCorrectionEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
     val categoryOrder: StateFlow<List<String>> = userPreferencesRepository.userPreferences
         .map { it.categoryOrder }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -335,6 +339,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var editRawBlackPointCorrection = MutableStateFlow(0f)
         private set
     var editRawWhitePointCorrection = MutableStateFlow(0f)
+        private set
+    var editRawLensShadingCorrectionEnabled = MutableStateFlow(true)
         private set
     var editRawDROMode = MutableStateFlow("OFF")
         private set
@@ -1009,7 +1015,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawAutoExposure.value == (metadata.rawAutoExposure ?: true) &&
             editRawHighlightsAdjustment.value == (metadata.rawHighlightsAdjustment ?: 0f) &&
             editRawShadowsAdjustment.value == (metadata.rawShadowsAdjustment ?: 0f) &&
+            editRawLensShadingCorrectionEnabled.value == resolveRawLensShadingCorrectionForEdit(metadata) &&
             editRawToneMappingParameters.value == metadata.rawToneMappingParameters
+    }
+
+    private fun resolveRawLensShadingCorrectionForEdit(metadata: MediaMetadata?): Boolean {
+        return metadata?.rawLensShadingCorrectionEnabled
+            ?: if (metadata?.isImported == true) true else rawLensShadingCorrectionEnabled.value
     }
 
     /**
@@ -1283,6 +1295,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawShadowsAdjustment.value = m.rawShadowsAdjustment ?: 0f
             editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
             editRawWhitePointCorrection.value = m.rawWhitePointCorrection ?: 0f
+            editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(m)
             editRawBlackLevelMode.value = m.rawBlackLevelMode ?: RawCfaCorrection.MODE_DEFAULT
             editRawCustomBlackLevel.value = m.rawCustomBlackLevel ?: 0f
             editRawWhiteLevelMode.value = m.rawWhiteLevelMode ?: RawWhiteLevelCorrection.MODE_DEFAULT
@@ -1852,6 +1865,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawAutoExposure.value = metadata.rawAutoExposure ?: true
         editRawHighlightsAdjustment.value = metadata.rawHighlightsAdjustment ?: 0f
         editRawShadowsAdjustment.value = metadata.rawShadowsAdjustment ?: 0f
+        editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(metadata)
         editRawToneMappingParameters.value = metadata.rawToneMappingParameters
     }
 
@@ -1908,6 +1922,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawShadowsAdjustment.value = metadata.rawShadowsAdjustment ?: 0f
                 editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
                 editRawWhitePointCorrection.value = metadata.rawWhitePointCorrection ?: 0f
+                editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(metadata)
                 editRawBlackLevelMode.value = metadata.rawBlackLevelMode ?: RawCfaCorrection.MODE_DEFAULT
                 editRawCustomBlackLevel.value = metadata.rawCustomBlackLevel ?: 0f
                 editRawWhiteLevelMode.value = metadata.rawWhiteLevelMode ?: RawWhiteLevelCorrection.MODE_DEFAULT
@@ -1934,6 +1949,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawShadowsAdjustment.value = 0f
                 editRawBlackPointCorrection.value = 0f
                 editRawWhitePointCorrection.value = 0f
+                editRawLensShadingCorrectionEnabled.value = rawLensShadingCorrectionEnabled.value
                 editRawBlackLevelMode.value = RawCfaCorrection.MODE_DEFAULT
                 editRawCustomBlackLevel.value = 0f
                 editRawWhiteLevelMode.value = RawWhiteLevelCorrection.MODE_DEFAULT
@@ -2041,6 +2057,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawShadowsAdjustment.value = 0f
         editRawBlackPointCorrection.value = 0f
         editRawWhitePointCorrection.value = 0f
+        editRawLensShadingCorrectionEnabled.value = true
         editRawBlackLevelMode.value = RawCfaCorrection.MODE_DEFAULT
         editRawCustomBlackLevel.value = 0f
         editRawWhiteLevelMode.value = RawWhiteLevelCorrection.MODE_DEFAULT
@@ -2179,6 +2196,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val shadows = editRawShadowsAdjustment.value
         val blackPoint = editRawBlackPointCorrection.value
         val whitePoint = editRawWhitePointCorrection.value
+        val lensShadingCorrectionEnabled = editRawLensShadingCorrectionEnabled.value
         val droMode = editRawDROMode.value
         val blackLevelMode = editRawBlackLevelMode.value
         val customBlackLevel = editRawCustomBlackLevel.value
@@ -2214,6 +2232,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     rawShadowsAdjustment = shadows,
                     rawBlackPointCorrection = blackPoint,
                     rawWhitePointCorrection = whitePoint,
+                    rawLensShadingCorrectionEnabled = lensShadingCorrectionEnabled,
                     rawBlackLevelMode = blackLevelMode,
                     rawCustomBlackLevel = customBlackLevel,
                     rawWhiteLevelMode = whiteLevelMode,
@@ -2329,6 +2348,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveRawWhitePointCorrectionValue(mediaData: MediaData, value: Float, onComplete: ((Boolean) -> Unit)? = null) {
         editRawWhitePointCorrection.value = value
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
+    fun saveRawLensShadingCorrectionEnabled(
+        mediaData: MediaData,
+        enabled: Boolean,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawLensShadingCorrectionEnabled.value = enabled
         persistRawEditMetadata(mediaData, onComplete)
     }
 
@@ -2632,6 +2660,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawShadowsAdjustment = editRawShadowsAdjustment.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,
                         rawWhitePointCorrection = editRawWhitePointCorrection.value,
+                        rawLensShadingCorrectionEnabled = editRawLensShadingCorrectionEnabled.value,
                         rawBlackLevelMode = editRawBlackLevelMode.value,
                         rawCustomBlackLevel = editRawCustomBlackLevel.value,
                         rawWhiteLevelMode = editRawWhiteLevelMode.value,
@@ -2971,6 +3000,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawShadowsAdjustment = editRawShadowsAdjustment.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,
                         rawWhitePointCorrection = editRawWhitePointCorrection.value,
+                        rawLensShadingCorrectionEnabled = editRawLensShadingCorrectionEnabled.value,
                         rawBlackLevelMode = editRawBlackLevelMode.value,
                         rawCustomBlackLevel = editRawCustomBlackLevel.value,
                         rawWhiteLevelMode = editRawWhiteLevelMode.value,

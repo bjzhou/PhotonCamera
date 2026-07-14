@@ -178,13 +178,15 @@ object GalleryManager {
         context: Context,
         metadata: MediaMetadata?
     ): Boolean {
-        // Imported DNG files carry their own residual/complete LSC gain map. Always let the
-        // RAW processor consume that embedded map; the user preference only controls RAW
-        // captured by this app.
-        if (metadata?.isImported == true) return true
         return metadata?.rawLensShadingCorrectionEnabled
-            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawLensShadingCorrectionEnabled ?: true)
+            ?: if (metadata?.isImported == true) {
+                // Imported DNG files default to consuming their embedded residual/complete map,
+                // while an explicit photo-level edit is still honored above.
+                true
+            } else {
+                ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
+                    ?.rawLensShadingCorrectionEnabled ?: true
+            }
     }
 
     private suspend fun resolveRawAutoExposure(
