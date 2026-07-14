@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import org.junit.Ignore
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.floor
@@ -8,6 +9,96 @@ import kotlin.math.max
 import kotlin.math.pow
 
 class DngPhotonProfileGainTableGeneratorTest {
+    @Test
+    fun compatibleFieldCalibrationScenesStayWithinPointTwelveEv() {
+        assertFieldCalibrationCases(
+            listOf(
+                ExposureCalibrationCase(
+                    name = "14:18 baseline-0 low-range",
+                    baselineExposureEv = 0f,
+                    p10 = 0.035187688f,
+                    p50 = 0.08524494f,
+                    p90 = 0.14404307f,
+                    p98 = 0.16417652f,
+                    p995 = 0.17360601f,
+                    p999 = 0.18164334f,
+                    maxInput = 0.20776238f,
+                    linearMean = null,
+                    logAverage = null,
+                    highlightFraction = 0f,
+                    reportedObservedRangeEv = 2.3679657f,
+                    reportedExposureLiftEv = 0.66f,
+                    reportedBrightnessErrorEv = 0.39f
+                ),
+                ExposureCalibrationCase(
+                    name = "14:22 baseline-0 wide-range",
+                    baselineExposureEv = 0f,
+                    p10 = 0.0046890248f,
+                    p50 = 0.035560552f,
+                    p90 = 0.35547075f,
+                    p98 = 0.4203099f,
+                    p995 = 0.44679728f,
+                    p999 = 0.46304873f,
+                    maxInput = 0.5280757f,
+                    linearMean = 0.114991106f,
+                    logAverage = 0.039605092f,
+                    highlightFraction = 0f,
+                    reportedObservedRangeEv = 6.6257324f,
+                    reportedExposureLiftEv = 2.47f,
+                    reportedBrightnessErrorEv = 0.23f
+                )
+            )
+        )
+    }
+
+    @Ignore(
+        "Conflicting field feedback: the baseline-3 low-range case has nearly " +
+            "the same observed range and p50 as the active 14:18 case but " +
+            "requires 0.51 EV more exposure. Keep both cases without changing " +
+            "the stable one-dimensional range model."
+    )
+    @Test
+    fun conflictingBaselineThreeFieldCalibrationScenes() {
+        assertFieldCalibrationCases(
+            listOf(
+                ExposureCalibrationCase(
+                    name = "18:53 baseline-3 sparse-tail",
+                    baselineExposureEv = 3f,
+                    p10 = 0.022204947f,
+                    p50 = 0.13993193f,
+                    p90 = 0.21021318f,
+                    p98 = 0.24911182f,
+                    p995 = 0.27169982f,
+                    p999 = 0.5752382f,
+                    maxInput = 1.249979f,
+                    linearMean = 0.1295324f,
+                    logAverage = 0.09985464f,
+                    highlightFraction = 6.739298E-5f,
+                    reportedObservedRangeEv = 4.6952066f,
+                    reportedExposureLiftEv = 0.2878443f,
+                    reportedBrightnessErrorEv = 0.28f
+                ),
+                ExposureCalibrationCase(
+                    name = "18:54 baseline-3 low-range",
+                    baselineExposureEv = 3f,
+                    p10 = 0.045957692f,
+                    p50 = 0.08537395f,
+                    p90 = 0.13890508f,
+                    p98 = 0.18092623f,
+                    p995 = 0.2126976f,
+                    p999 = 0.2313348f,
+                    maxInput = 0.27256522f,
+                    linearMean = 0.08850919f,
+                    logAverage = 0.07818398f,
+                    highlightFraction = 0f,
+                    reportedObservedRangeEv = 2.331604f,
+                    reportedExposureLiftEv = 0.27f,
+                    reportedBrightnessErrorEv = -0.51f
+                )
+            )
+        )
+    }
+
     @Test
     fun moderateRangeTailCompressesToEightEvAndRaisesSceneMedian() {
         val width = 2800
@@ -353,6 +444,33 @@ class DngPhotonProfileGainTableGeneratorTest {
         return (ln(value.toDouble()) / ln(2.0)).toFloat()
     }
 
+    private fun assertFieldCalibrationCases(cases: List<ExposureCalibrationCase>) {
+        cases.forEach { case ->
+            val calculatedObservedRangeEv = log2(
+                max(case.p999, max(case.p995, case.p98)) /
+                    max(case.p10, 0.002f)
+            )
+            val actualExposureLiftEv =
+                DngPhotonProfileGainTableGenerator.displayExposureLiftEv(calculatedObservedRangeEv)
+            val expectedExposureLiftEv =
+                case.reportedExposureLiftEv - case.reportedBrightnessErrorEv
+            val residualEv = actualExposureLiftEv - expectedExposureLiftEv
+
+            assertTrue(
+                "${case.name}: observed=$calculatedObservedRangeEv " +
+                    "reported=${case.reportedObservedRangeEv}",
+                kotlin.math.abs(
+                    calculatedObservedRangeEv - case.reportedObservedRangeEv
+                ) <= 0.002f
+            )
+            assertTrue(
+                "${case.name}: actualLift=$actualExposureLiftEv " +
+                    "expectedLift=$expectedExposureLiftEv residual=$residualEv",
+                residualEv in -0.12f..0.12f
+            )
+        }
+    }
+
     private data class TierCase(
         val p10: Float,
         val p50: Float,
@@ -361,5 +479,24 @@ class DngPhotonProfileGainTableGeneratorTest {
         val tailP99: Float,
         val dynamicRangeEv: Float,
         val displayMiddleGray: Float,
+    )
+
+    @Suppress("unused")
+    private data class ExposureCalibrationCase(
+        val name: String,
+        val baselineExposureEv: Float,
+        val p10: Float,
+        val p50: Float,
+        val p90: Float,
+        val p98: Float,
+        val p995: Float,
+        val p999: Float,
+        val maxInput: Float,
+        val linearMean: Float?,
+        val logAverage: Float?,
+        val highlightFraction: Float,
+        val reportedObservedRangeEv: Float,
+        val reportedExposureLiftEv: Float,
+        val reportedBrightnessErrorEv: Float,
     )
 }

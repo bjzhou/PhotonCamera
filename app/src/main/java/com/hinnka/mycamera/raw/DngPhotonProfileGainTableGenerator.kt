@@ -324,7 +324,7 @@ internal object DngPhotonProfileGainTableGenerator {
         )
     }
 
-    private fun displayExposureLiftEv(observedRangeEv: Float): Float {
+    internal fun displayExposureLiftEv(observedRangeEv: Float): Float {
         val rangeStrength = smoothStep(
             DISPLAY_EXPOSURE_TRANSITION_START_EV,
             DISPLAY_EXPOSURE_TRANSITION_END_EV,
