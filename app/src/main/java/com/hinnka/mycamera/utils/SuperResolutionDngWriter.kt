@@ -368,9 +368,16 @@ object SuperResolutionDngWriter {
         val encodedBlackLevels = if (isCfa) {
             blackLevelByCfaPosition(cfaPattern, blackLevel)
         } else {
-            List(samplesPerPixel) { index ->
-                blackLevel.getOrElse(index) { blackLevel.firstOrNull() ?: 0f }
+            val red = blackLevel.getOrElse(0) { 0f }
+            val green = if (blackLevel.size >= 3) {
+                (blackLevel[1] + blackLevel[2]) * 0.5f
+            } else {
+                blackLevel.getOrElse(1) { red }
             }
+            val blue = blackLevel.getOrElse(3) {
+                blackLevel.getOrElse(2) { green }
+            }
+            listOf(red, green, blue)
         }
 
         val exifEntries = buildList {

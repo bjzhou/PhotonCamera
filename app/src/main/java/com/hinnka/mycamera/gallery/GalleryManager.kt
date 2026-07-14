@@ -32,6 +32,7 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
 import com.hinnka.mycamera.processor.RawHdrStackFrame
 import com.hinnka.mycamera.processor.RawNoiseModel
+import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackResult
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrame
@@ -2758,7 +2759,11 @@ object GalleryManager {
                     thumbnail = null,
                     metadata = stackedMetadata,
                     shouldAutoSave = shouldAutoSave,
-                    exportDngWithRawExport = exportDngWithRawExport
+                    exportDngWithRawExport = exportDngWithRawExport,
+                    imageLayout = finalStackResult.bufferLayout.toDngImageLayout(),
+                    compression = finalStackResult.bufferLayout.toDngCompression(),
+                    inputRowStepSamples = finalStackResult.inputRowStepSamples,
+                    inputColStepSamples = finalStackResult.inputColStepSamples,
                 )
             } finally {
                 finalStackResult.fusedBayerBuffer = null
@@ -3111,13 +3116,17 @@ object GalleryManager {
                         baselineExposureEv = rawHdrBaselineExposureEv,
                         profileGainTableMap = rawHdrProfileGainTableMap,
                         profileToneMapMode = rawHdrPgtmModeForMetadata(stackedMetadata),
+                        imageLayout = stackResult.bufferLayout.toDngImageLayout(),
+                        compression = stackResult.bufferLayout.toDngCompression(),
+                        inputRowStepSamples = stackResult.inputRowStepSamples,
+                        inputColStepSamples = stackResult.inputColStepSamples,
                     )
                 } finally {
                     stackResult.fusedBayerBuffer = null
                     rawHdrStackResult = null
                     if (stackResult.fusedBayerUsesNativeAllocator) {
                         LargeDirectBuffer.free(fusedBayerBuffer)
-                        PLog.d(TAG, "Released RAW HDR stacked Bayer buffer")
+                        PLog.d(TAG, "Released RAW HDR stacked linear RGB buffer")
                     }
                 }
                 if (!dngWritten) {
@@ -3358,6 +3367,18 @@ object GalleryManager {
             bitmap.recycle()
         }
     }
+
+    private fun RawStackBufferLayout.toDngImageLayout(): SuperResolutionDngWriter.ImageLayout =
+        when (this) {
+            RawStackBufferLayout.CFA -> SuperResolutionDngWriter.ImageLayout.CFA
+            RawStackBufferLayout.LINEAR_RGB -> SuperResolutionDngWriter.ImageLayout.LINEAR_RAW_RGB
+        }
+
+    private fun RawStackBufferLayout.toDngCompression(): SuperResolutionDngWriter.Compression =
+        when (this) {
+            RawStackBufferLayout.CFA -> SuperResolutionDngWriter.Compression.UNCOMPRESSED
+            RawStackBufferLayout.LINEAR_RGB -> SuperResolutionDngWriter.Compression.JPEG_LOSSLESS
+        }
 
     private suspend fun trySaveStackedRawDng(
         context: Context,

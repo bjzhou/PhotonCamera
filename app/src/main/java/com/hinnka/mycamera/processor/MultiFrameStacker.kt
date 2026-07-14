@@ -13,6 +13,11 @@ import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 
+enum class RawStackBufferLayout {
+    CFA,
+    LINEAR_RGB,
+}
+
 data class RawStackResult(
     var fusedBayerBuffer: ByteBuffer?,
     val width: Int,
@@ -23,6 +28,9 @@ data class RawStackResult(
     val profileGainTableMap: DngProfileGainTableMap? = null,
     val profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Default,
     val diagnostics: RawStackDiagnostics? = null,
+    val bufferLayout: RawStackBufferLayout = RawStackBufferLayout.CFA,
+    val inputRowStepSamples: Int? = null,
+    val inputColStepSamples: Int? = null,
 )
 
 data class RawHdrStackFrame(
