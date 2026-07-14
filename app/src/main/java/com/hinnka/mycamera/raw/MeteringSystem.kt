@@ -107,23 +107,6 @@ object MeteringSystem {
         val highlightCompression: HighlightCompressionEstimate
     )
 
-    /**
-     * 全图 sRGB 显示亮度直方图。
-     *
-     * [meanEv] 是以 256 个亮度区间中心值计算的平均 log2 亮度。两张图的
-     * meanEv 差值可直接作为显示亮度域中的平均 EV 增益。
-     */
-    data class SrgbDisplayLumaHistogram(
-        val binCounts: IntArray,
-        val sampleCount: Int,
-        val meanEv: Float
-    ) {
-        init {
-            require(binCounts.size == DISPLAY_LUMA_HISTOGRAM_BIN_COUNT)
-            require(sampleCount >= 0)
-        }
-    }
-
     fun hasManualRawDevelopAdjustments(
         rawExposureCompensation: Float,
         rawHighlightsAdjustment: Float,
@@ -275,69 +258,6 @@ object MeteringSystem {
         )
     }
 
-    /**
-     * 统计整张图的 256 档 sRGB 显示亮度直方图，不应用中心权重或区域裁切。
-     */
-    fun analyzeFullFrameSrgbHistogram(
-        width: Int,
-        height: Int,
-        argbPixels: IntArray
-    ): SrgbDisplayLumaHistogram? {
-        if (width <= 0 || height <= 0 || argbPixels.size < width * height) {
-            return null
-        }
-
-        val binCounts = IntArray(DISPLAY_LUMA_HISTOGRAM_BIN_COUNT)
-        var sampleCount = 0
-        for (index in 0 until width * height) {
-            val pixel = argbPixels[index]
-            val alpha = (pixel ushr 24) and 0xff
-            if (alpha == 0) continue
-
-            val alphaScale = alpha / 255f
-            val displayR = ((pixel ushr 16) and 0xff) / 255f
-            val displayG = ((pixel ushr 8) and 0xff) / 255f
-            val displayB = (pixel and 0xff) / 255f
-            val displayLuma = sanitizeDisplayLuma(
-                (0.2126f * displayR + 0.7152f * displayG + 0.0722f * displayB) * alphaScale
-            )
-            val binIndex = fullRangeDisplayHistogramIndex(displayLuma)
-            binCounts[binIndex]++
-            sampleCount++
-        }
-        if (sampleCount < MIN_METERING_SAMPLE_COUNT) {
-            return null
-        }
-
-        var weightedEvSum = 0.0
-        for (binIndex in binCounts.indices) {
-            val count = binCounts[binIndex]
-            if (count <= 0) continue
-            val representativeLuma = displayHistogramBinCenter(binIndex)
-            weightedEvSum += log2(representativeLuma).toDouble() * count.toDouble()
-        }
-        val meanEv = (weightedEvSum / sampleCount.toDouble()).toFloat()
-        if (!meanEv.isFinite()) return null
-
-        return SrgbDisplayLumaHistogram(
-            binCounts = binCounts,
-            sampleCount = sampleCount,
-            meanEv = meanEv
-        )
-    }
-
-    /**
-     * 返回把 [rendered] 提升到 [reference] 平均直方图亮度所需的 EV 增益。
-     */
-    fun histogramAverageEvGain(
-        reference: SrgbDisplayLumaHistogram,
-        rendered: SrgbDisplayLumaHistogram
-    ): Float? {
-        if (reference.sampleCount <= 0 || rendered.sampleCount <= 0) return null
-        val gain = reference.meanEv - rendered.meanEv
-        return gain.takeIf { it.isFinite() }
-    }
-
     private fun logLumaHistogramIndex(logLuma: Float): Int {
         val normalized = (logLuma - LOG_LUMA_HISTOGRAM_MIN) / LOG_LUMA_HISTOGRAM_RANGE
         return (normalized * (LOG_LUMA_HISTOGRAM_BIN_COUNT - 1))
@@ -349,18 +269,6 @@ object MeteringSystem {
         return (displayLuma.coerceIn(0f, 1f) * (DISPLAY_LUMA_HISTOGRAM_BIN_COUNT - 1))
             .toInt()
             .coerceIn(0, DISPLAY_LUMA_HISTOGRAM_BIN_COUNT - 1)
-    }
-
-    private fun fullRangeDisplayHistogramIndex(displayLuma: Float): Int {
-        return (displayLuma.coerceIn(0f, 1f) * DISPLAY_LUMA_HISTOGRAM_BIN_COUNT)
-            .toInt()
-            .coerceIn(0, DISPLAY_LUMA_HISTOGRAM_BIN_COUNT - 1)
-    }
-
-    private fun displayHistogramBinCenter(binIndex: Int): Float {
-        return ((binIndex.coerceIn(0, DISPLAY_LUMA_HISTOGRAM_BIN_COUNT - 1) + 0.5f) /
-            DISPLAY_LUMA_HISTOGRAM_BIN_COUNT.toFloat())
-            .coerceAtLeast(LUMA_FLOOR)
     }
 
     private fun robustMidToneDisplayLuma(

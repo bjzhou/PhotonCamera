@@ -191,8 +191,6 @@ class RawDemosaicProcessor {
         private const val RAW_TONE_MAPPED_AE_MAX_SOLVE_STEPS = 3
         private const val RAW_TONE_MAPPED_AE_EV_TOLERANCE = 0.05f
         private const val RAW_TONE_MAPPED_AE_MIN_STEP_EV = 0.025f
-        // 编译期开关：true=全图 256 档直方图平均 EV；false=中心 2/3 普通平均亮度。
-        private const val RAW_AE_USE_FULL_FRAME_HISTOGRAM = true
         private const val FILMIC_GREY_SOURCE = 0.1845f
         private const val FILMIC_OUTPUT_POWER = 3.614815775f
         private const val FILMIC_DISPLAY_BLACK = 0.0001517634f
@@ -636,63 +634,20 @@ class RawDemosaicProcessor {
         val stats: MeteringSystem.SrgbThumbnailMeteringStats
     )
 
-    private sealed interface RawAeMeteringReference {
-        val width: Int
-        val height: Int
-    }
-
     private data class RawAeCenterAverageReference(
-        override val width: Int,
-        override val height: Int,
+        val width: Int,
+        val height: Int,
         val bounds: Rect,
         val targetDisplayLuma: Float,
         val pixelCount: Int
-    ) : RawAeMeteringReference
-
-    private data class RawAeFullFrameHistogramReference(
-        override val width: Int,
-        override val height: Int,
-        val histogram: MeteringSystem.SrgbDisplayLumaHistogram
-    ) : RawAeMeteringReference
-
-    private data class RawAeMeteringMatch(
-        val errorEv: Float,
-        val targetMetric: Float,
-        val renderedMetric: Float,
-        val renderedDisplayLuma: Float,
-        val pixelCount: Int,
-        val mode: String
     )
 
-    private fun buildRawAeMeteringReference(
-        image: RawAeMeteringImage
-    ): RawAeMeteringReference? {
-        return if (RAW_AE_USE_FULL_FRAME_HISTOGRAM) {
-            val histogram = MeteringSystem.analyzeFullFrameSrgbHistogram(
-                width = image.width,
-                height = image.height,
-                argbPixels = image.argbPixels
-            ) ?: return null
-            PLog.d(
-                TAG,
-                "RAW AE reference: mode=full-frame-histogram-256 " +
-                    "meanEv=${histogram.meanEv} samples=${histogram.sampleCount}"
-            )
-            RawAeFullFrameHistogramReference(
-                width = image.width,
-                height = image.height,
-                histogram = histogram
-            )
-        } else {
-            buildRawAeCenterAverageReference(image)?.also { reference ->
-                PLog.d(
-                    TAG,
-                    "RAW AE reference: mode=center-two-thirds-average " +
-                        "displayLuma=${reference.targetDisplayLuma} samples=${reference.pixelCount}"
-                )
-            }
-        }
-    }
+    private data class RawAeCenterAverageMatch(
+        val errorEv: Float,
+        val targetDisplayLuma: Float,
+        val renderedDisplayLuma: Float,
+        val pixelCount: Int
+    )
 
     private fun buildRawAeCenterAverageReference(
         image: RawAeMeteringImage
@@ -711,51 +666,24 @@ class RawDemosaicProcessor {
         return reference
     }
 
-    private fun matchRawAeMeteringReference(
-        reference: RawAeMeteringReference,
+    private fun matchRawAeCenterAverage(
+        reference: RawAeCenterAverageReference,
         rendered: RawAeMeteringImage
-    ): RawAeMeteringMatch? {
+    ): RawAeCenterAverageMatch? {
         if (reference.width != rendered.width || reference.height != rendered.height) {
             return null
         }
-        return when (reference) {
-            is RawAeCenterAverageReference -> {
-                val renderedDisplayLuma = averageSrgbDisplayLuma(rendered, reference.bounds)
-                    ?: return null
-                RawAeMeteringMatch(
-                    errorEv = displayLumaErrorEv(
-                        renderedLuma = renderedDisplayLuma,
-                        targetLuma = reference.targetDisplayLuma
-                    ),
-                    targetMetric = reference.targetDisplayLuma,
-                    renderedMetric = renderedDisplayLuma,
-                    renderedDisplayLuma = renderedDisplayLuma,
-                    pixelCount = reference.pixelCount,
-                    mode = "center-two-thirds-average"
-                )
-            }
-
-            is RawAeFullFrameHistogramReference -> {
-                val renderedHistogram = MeteringSystem.analyzeFullFrameSrgbHistogram(
-                    width = rendered.width,
-                    height = rendered.height,
-                    argbPixels = rendered.argbPixels
-                ) ?: return null
-                val requiredEvGain = MeteringSystem.histogramAverageEvGain(
-                    reference = reference.histogram,
-                    rendered = renderedHistogram
-                ) ?: return null
-                RawAeMeteringMatch(
-                    // 求解器的 errorEv 约定为“渲染值 - 目标值”，与所需增益符号相反。
-                    errorEv = -requiredEvGain,
-                    targetMetric = reference.histogram.meanEv,
-                    renderedMetric = renderedHistogram.meanEv,
-                    renderedDisplayLuma = 2.0.pow(renderedHistogram.meanEv.toDouble()).toFloat(),
-                    pixelCount = renderedHistogram.sampleCount,
-                    mode = "full-frame-histogram-256"
-                )
-            }
-        }
+        val renderedDisplayLuma = averageSrgbDisplayLuma(rendered, reference.bounds)
+            ?: return null
+        return RawAeCenterAverageMatch(
+            errorEv = displayLumaErrorEv(
+                renderedLuma = renderedDisplayLuma,
+                targetLuma = reference.targetDisplayLuma
+            ),
+            targetDisplayLuma = reference.targetDisplayLuma,
+            renderedDisplayLuma = renderedDisplayLuma,
+            pixelCount = reference.pixelCount
+        )
     }
 
     private fun rawAeCenterTwoThirdsBounds(width: Int, height: Int): Rect? {
@@ -1777,8 +1705,8 @@ class RawDemosaicProcessor {
             }
         }
         val viewfinderThumbnailStats = viewfinderThumbnailMeteringImage?.stats
-        val viewfinderMeteringReference = viewfinderThumbnailMeteringImage
-            ?.let { buildRawAeMeteringReference(it) }
+        val viewfinderCenterAverageReference = viewfinderThumbnailMeteringImage
+            ?.let { buildRawAeCenterAverageReference(it) }
 
         PLog.d(
             TAG,
@@ -2165,7 +2093,7 @@ class RawDemosaicProcessor {
                 applyProfileGainTableMap = hasProfileGainTableMap,
                 clampProfileRgb = useAdobeProfilePipeline,
                 viewfinderThumbnailStats = viewfinderThumbnailStats,
-                viewfinderMeteringReference = viewfinderMeteringReference,
+                viewfinderCenterAverageReference = viewfinderCenterAverageReference,
                 outputBounds = rawAeContentBounds?.rawRenderBounds ?: bounds,
                 outputRotation = actualRotation,
                 spectralFilmLut = spektrafilmLut,
@@ -7756,7 +7684,7 @@ class RawDemosaicProcessor {
         applyProfileGainTableMap: Boolean,
         clampProfileRgb: Boolean,
         viewfinderThumbnailStats: MeteringSystem.SrgbThumbnailMeteringStats?,
-        viewfinderMeteringReference: RawAeMeteringReference?,
+        viewfinderCenterAverageReference: RawAeCenterAverageReference?,
         outputBounds: Rect,
         outputRotation: Int,
         spectralFilmLut: SpectralFilmLut?,
@@ -7820,7 +7748,7 @@ class RawDemosaicProcessor {
                 readbackHeight = viewfinderThumbnailStats.height.coerceAtLeast(1),
                 outputRotation = outputRotation,
                 viewfinderThumbnailStats = viewfinderThumbnailStats,
-                viewfinderMeteringReference = viewfinderMeteringReference,
+                viewfinderCenterAverageReference = viewfinderCenterAverageReference,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmLut = spectralFilmLut,
                 colorEngine = colorEngine,
@@ -7844,7 +7772,7 @@ class RawDemosaicProcessor {
         val profileExposureEv: Float,
         val renderedLuma: Float,
         val errorEv: Float,
-        val meteringMatch: RawAeMeteringMatch,
+        val centerAverageMatch: RawAeCenterAverageMatch,
         val stats: MeteringSystem.SrgbThumbnailMeteringStats,
         val argbPixels: IntArray
     )
@@ -7926,7 +7854,7 @@ class RawDemosaicProcessor {
         readbackHeight: Int,
         outputRotation: Int,
         viewfinderThumbnailStats: MeteringSystem.SrgbThumbnailMeteringStats,
-        viewfinderMeteringReference: RawAeMeteringReference?,
+        viewfinderCenterAverageReference: RawAeCenterAverageReference?,
         dcpRenderPlan: DcpRenderPlan?,
         spectralFilmLut: SpectralFilmLut?,
         colorEngine: RawRenderingEngine,
@@ -7939,8 +7867,8 @@ class RawDemosaicProcessor {
         applyProfileDcpBaselineExposureOffset: Boolean,
         applyProfileDngBaselineExposure: Boolean
     ): MeteringSystem.MeteringResult? {
-        val meteringReference = viewfinderMeteringReference ?: run {
-            PLog.d(TAG, "RAW auto exposure disabled: metering reference unavailable")
+        val centerAverageReference = viewfinderCenterAverageReference ?: run {
+            PLog.d(TAG, "RAW auto exposure disabled: center average reference unavailable")
             return null
         }
         val pixelCount = readbackWidth * readbackHeight
@@ -7956,7 +7884,7 @@ class RawDemosaicProcessor {
                 width = width,
                 height = height,
                 autoEv = 0f,
-                meteringReference = meteringReference,
+                centerAverageReference = centerAverageReference,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmLut = spectralFilmLut,
                 colorEngine = colorEngine,
@@ -7981,7 +7909,7 @@ class RawDemosaicProcessor {
                     width = width,
                     height = height,
                     autoEv = autoEv,
-                    meteringReference = meteringReference,
+                    centerAverageReference = centerAverageReference,
                     dcpRenderPlan = dcpRenderPlan,
                     spectralFilmLut = spectralFilmLut,
                     colorEngine = colorEngine,
@@ -8155,7 +8083,7 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         autoEv: Float,
-        meteringReference: RawAeMeteringReference,
+        centerAverageReference: RawAeCenterAverageReference,
         dcpRenderPlan: DcpRenderPlan?,
         spectralFilmLut: SpectralFilmLut?,
         colorEngine: RawRenderingEngine,
@@ -8223,22 +8151,16 @@ class RawDemosaicProcessor {
             pixelBuffer = readbackBuffer
         ) ?: return null
         val stats = image.stats
-        val meteringMatch = matchRawAeMeteringReference(meteringReference, image)
+        val centerAverageMatch = matchRawAeCenterAverage(centerAverageReference, image)
             ?: return null
-        val renderedLuma = meteringMatch.renderedDisplayLuma
-        val errorEv = meteringMatch.errorEv
-        PLog.d(
-            TAG,
-            "RAW AE sample: mode=${meteringMatch.mode} autoEv=$clampedAutoEv " +
-                "target=${meteringMatch.targetMetric} rendered=${meteringMatch.renderedMetric} " +
-                "requiredEvGain=${-errorEv} samples=${meteringMatch.pixelCount}"
-        )
+        val renderedLuma = centerAverageMatch.renderedDisplayLuma
+        val errorEv = centerAverageMatch.errorEv
         return ToneMappedRawAeSample(
             autoEv = clampedAutoEv,
             profileExposureEv = profileExposureUniforms.exposureEv,
             renderedLuma = renderedLuma,
             errorEv = errorEv,
-            meteringMatch = meteringMatch,
+            centerAverageMatch = centerAverageMatch,
             stats = stats,
             argbPixels = image.argbPixels
         )
