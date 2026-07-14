@@ -13,6 +13,7 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngHdrProfileGainTableGenerator
 import com.hinnka.mycamera.raw.DngPhotonProfileGainTableGenerator
 import com.hinnka.mycamera.raw.DngPgtmDiagnostic
+import com.hinnka.mycamera.raw.DngPgtmGlobalStats
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RcdShaders
 import com.hinnka.mycamera.utils.LargeDirectBuffer
@@ -1236,7 +1237,14 @@ class GlesRawStacker(
         }
 
         val cellCount = pgtmGridWidth * pgtmGridHeight
-        val floatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+        val cellStatsFloatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+        val globalSamplesFloatCount = if (profileToneMapMode == RawProfileToneMapMode.Photon) {
+            cellCount * PGTM_STATS_SAMPLE_COUNT
+        } else {
+            0
+        }
+        val globalSamplesOffset = if (globalSamplesFloatCount > 0) cellStatsFloatCount else -1
+        val floatCount = cellStatsFloatCount + globalSamplesFloatCount
         val byteCount = floatCount * 4
         return try {
             val statsBufferId = prepareReadbackScratchBuffer(byteCount)
@@ -1255,6 +1263,10 @@ class GlesRawStacker(
                 uniformLocation(pgtmStatsProgram, "uGridSize"),
                 pgtmGridWidth,
                 pgtmGridHeight,
+            )
+            GLES31.glUniform1i(
+                uniformLocation(pgtmStatsProgram, "uGlobalSamplesOffset"),
+                globalSamplesOffset
             )
             GLES31.glUniform1i(uniformLocation(pgtmStatsProgram, "uCfaPattern"), cfaPattern)
             GLES31.glUniform1f(
@@ -1281,7 +1293,7 @@ class GlesRawStacker(
                 byteCount,
                 GLES31.GL_MAP_READ_BIT
             ) ?: throw IllegalStateException("PGTM stats buffer map failed")
-            val stats = try {
+            val statsAndSamples = try {
                 FloatArray(floatCount).also { values ->
                     val byteBuffer = mapped as? ByteBuffer
                         ?: throw IllegalStateException("PGTM stats buffer is not ByteBuffer")
@@ -1290,13 +1302,34 @@ class GlesRawStacker(
             } finally {
                 GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
             }
+            val packedCellStats = statsAndSamples.copyOf(cellStatsFloatCount)
+            val globalStats = if (globalSamplesOffset >= 0) {
+                var globalSampleCount = 0
+                for (cellIndex in 0 until cellCount) {
+                    val cellOffset = cellIndex * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+                    val cellSampleCount = packedCellStats[cellOffset + 5]
+                        .roundToInt()
+                        .coerceIn(0, PGTM_STATS_SAMPLE_COUNT)
+                    val sourceOffset = globalSamplesOffset + cellIndex * PGTM_STATS_SAMPLE_COUNT
+                    for (sampleIndex in 0 until cellSampleCount) {
+                        statsAndSamples[globalSampleCount] = statsAndSamples[sourceOffset + sampleIndex]
+                        globalSampleCount += 1
+                    }
+                }
+                DngPgtmGlobalStats.fromMutableSamples(statsAndSamples, globalSampleCount)
+                    ?: throw IllegalStateException("GPU Photon PGTM global stats are empty")
+            } else {
+                null
+            }
             val diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU stacker")
             when (profileToneMapMode) {
                 RawProfileToneMapMode.Photon -> DngPhotonProfileGainTableGenerator.forCellStats(
                     width = width,
                     height = height,
                     baselineExposureEv = baselineExposureEv,
-                    packedCellStats = stats,
+                    packedCellStats = packedCellStats,
+                    globalStats = globalStats
+                        ?: throw IllegalStateException("GPU Photon PGTM global stats are missing"),
                     diagnosticBand = diagnosticBand
                 )
 
@@ -1304,7 +1337,7 @@ class GlesRawStacker(
                     width = width,
                     height = height,
                     baselineExposureEv = baselineExposureEv,
-                    packedCellStats = stats,
+                    packedCellStats = packedCellStats,
                     diagnosticBand = diagnosticBand
                 )
             }
@@ -4988,6 +5021,7 @@ class GlesRawStacker(
         private const val READBACK_STRIPE_ROWS = 128
         private const val HDR_RGB_STRIPE_ROWS = 256
         private const val PGTM_STATS_BUFFER_BINDING = 7
+        private const val PGTM_STATS_SAMPLE_COUNT = 16 * 16
         private const val HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING = 8
         private const val HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE = 4
         private const val HDR_123_ALIGN_LEVEL = 2
@@ -7960,6 +7994,7 @@ class GlesRawStacker(
             uniform ivec2 uImageSize;
             uniform ivec4 uStatsBounds;
             uniform ivec2 uGridSize;
+            uniform int uGlobalSamplesOffset;
             uniform int uCfaPattern;
             uniform float uBaselineExposureGain;
             uniform mat3 uColorCorrectionMatrix;
@@ -8035,6 +8070,7 @@ class GlesRawStacker(
                 if (cell.x >= uGridSize.x || cell.y >= uGridSize.y) return;
                 ivec2 localId = ivec2(gl_LocalInvocationID.xy);
                 int localIndex = localId.y * SAMPLE_GRID + localId.x;
+                int cellIndex = cell.y * uGridSize.x + cell.x;
 
                 if (localIndex < HIST_BINS) {
                     hist[localIndex] = 0u;
@@ -8076,6 +8112,9 @@ class GlesRawStacker(
                 y = clamp(y - (y & 1), startY, max(startY, endY - 2));
                 float inputValue = pgtmInputAt(ivec2(x, y));
                 inputSamples[localIndex] = inputValue;
+                if (uGlobalSamplesOffset >= 0) {
+                    stats[uGlobalSamplesOffset + cellIndex * HIST_BINS + localIndex] = inputValue;
+                }
                 float clampedInput = clamp(inputValue, 0.0, 1.0);
                 uint bin = uint(clamp(int(floor(clampedInput * float(HIST_BINS - 1) + 0.5)), 0, HIST_BINS - 1));
                 atomicAdd(hist[bin], 1u);
@@ -8136,7 +8175,6 @@ class GlesRawStacker(
                     }
                 }
 
-                int cellIndex = cell.y * uGridSize.x + cell.x;
                 int offset = cellIndex * STATS_STRIDE;
                 stats[offset + 0] = samples > 0 ? p10 : 0.0;
                 stats[offset + 1] = samples > 0 ? p50 : 0.0;

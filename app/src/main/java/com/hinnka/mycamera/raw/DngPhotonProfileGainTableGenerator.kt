@@ -15,14 +15,38 @@ internal object DngPhotonProfileGainTableGenerator {
     private const val MIN_BASELINE_EV = 0f
     private const val MAX_BASELINE_EV = 8f
     private const val MIN_CURVE_INPUT = 1e-6f
-    private const val MIN_SCENE_MAX = 1f
-    private const val MAX_SCENE_MAX = 4.80f
-    private const val MAX_GAIN_VALUE = 5.40f
+    private const val BASE_WHITE_POINT = 1f
+    private const val MAX_WHITE_POINT_ADJUSTMENT = 1.30f
+    private const val MAX_GAIN_VALUE = 32f
     private const val MAP_INPUT_WEIGHT_COUNT = 5
-    private const val MID_GRAY_INPUT = 0.18f
-    private const val DEFAULT_MID_GRAY_LIFT_EV = 1.10f
-    private const val MAX_LOCAL_MICRO_CONTRAST = 0.045f
-    private const val MAX_ADAPTIVE_SHADOW_LIFT_EV = 1.05f
+    // A square-root table domain resolves more than 9.5 EV below white with
+    // 257 points; a linear table would place its first sample only 8 EV down.
+    private const val TABLE_INPUT_GAMMA = 0.5f
+    private const val MAX_SCENE_MIDDLE_GRAY = 0.18f
+    private const val SOURCE_SHADOW_HEADROOM_EV = 4f
+    private const val MIN_SOURCE_COMPRESSION_EV = 0.75f
+    private const val MAX_SOURCE_DYNAMIC_RANGE_EV = 12.5f
+    private const val STANDARD_DYNAMIC_RANGE_EV = 8f
+    private const val WIDE_DYNAMIC_RANGE_EV = 8.5f
+    private const val HDR_DYNAMIC_RANGE_EV = 9f
+    private const val EXTENDED_HDR_DYNAMIC_RANGE_EV = 9.5f
+    private const val WIDE_RANGE_THRESHOLD_EV = 5.5f
+    private const val HDR_RANGE_THRESHOLD_EV = 6f
+    private const val EXTENDED_HDR_RANGE_THRESHOLD_EV = 6.5f
+    private const val MIN_DYNAMIC_RANGE_EV = STANDARD_DYNAMIC_RANGE_EV
+    private const val MAX_DYNAMIC_RANGE_EV = EXTENDED_HDR_DYNAMIC_RANGE_EV
+    private const val MIN_STATS_BLACK_POINT = 0.002f
+    private const val STANDARD_DISPLAY_MIDDLE_GRAY = 0.26f
+    private const val WIDE_DISPLAY_MIDDLE_GRAY = 0.28f
+    private const val HDR_DISPLAY_MIDDLE_GRAY = 0.30f
+    private const val EXTENDED_HDR_DISPLAY_MIDDLE_GRAY = 0.32f
+    private const val MIN_DISPLAY_EXPOSURE_LIFT_EV = 0.27f
+    private const val MAX_DISPLAY_EXPOSURE_LIFT_EV = 2.24f
+    private const val DISPLAY_EXPOSURE_TRANSITION_START_EV = 4.6f
+    private const val DISPLAY_EXPOSURE_TRANSITION_END_EV = 6.3f
+    private const val MIN_HIGHLIGHT_ENDPOINT_SLOPE_RATIO = 0.65f
+    private const val MAX_HIGHLIGHT_ENDPOINT_SLOPE_RATIO = 0.88f
+    private const val MAX_LOCAL_MICRO_CONTRAST_EV = 0.22f
 
     private val BASE_INPUT_WEIGHTS = floatArrayOf(
         DngHdrProfileGainTableGenerator.BASE_INPUT_WEIGHT_RED,
@@ -37,6 +61,7 @@ internal object DngPhotonProfileGainTableGenerator {
         height: Int,
         baselineExposureEv: Float,
         packedCellStats: FloatArray,
+        globalStats: DngPgtmGlobalStats,
         tablePointCount: Int = DEFAULT_TABLE_POINTS,
         diagnosticBand: DngHdrProfileGainTableGenerator.DiagnosticBand? = null,
         emitDiagnostics: Boolean = true,
@@ -67,13 +92,15 @@ internal object DngPhotonProfileGainTableGenerator {
                 packedStatsAt(packedCellStats, offset, sampleWeight)
             }
         }
-        val global = weightedGlobalStats(cells)
+        val global = globalStats.toPhotonCellStats() ?: return null
         val safeBaselineEv = baselineExposureEv.coerceIn(0f, MAX_BASELINE_EV)
         val safePointCount = tablePointCount.coerceIn(MIN_TABLE_POINTS, MAX_TABLE_POINTS)
-        val sceneMax = photonSceneMaxForStats(global)
-        // Stats collection and the render shader both apply DNG baseline gain before
-        // table lookup, so table input 1.0 corresponds to raw linear 1 / baselineGain.
-        val inputScale = sanitizeInputScale(1f / sceneMax)
+        val toneAnchors = buildPhotonToneAnchors(
+            global = global,
+            exposureAnchor = globalStats.logAverage,
+            baselineExposureEv = safeBaselineEv
+        )
+        val inputScale = sanitizeInputScale(1f / toneAnchors.whitePoint)
         val gains = FloatArray(cellCount * safePointCount)
         for (cellIndex in 0 until cellCount) {
             writePhotonCurve(
@@ -81,6 +108,7 @@ internal object DngPhotonProfileGainTableGenerator {
                 outputOffset = cellIndex * safePointCount,
                 pointCount = safePointCount,
                 inputScale = inputScale,
+                toneAnchors = toneAnchors,
                 global = global,
                 local = cells[cellIndex] ?: global
             )
@@ -95,16 +123,64 @@ internal object DngPhotonProfileGainTableGenerator {
             mapOriginH = 0.0,
             mapPointsN = safePointCount,
             mapInputWeights = photonPgtmInputWeights(inputScale),
-            gamma = 1f,
+            gamma = TABLE_INPUT_GAMMA,
             gains = gains,
             sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2
         )
         if (emitDiagnostics) {
+            val p50Input = max(global.p50, MIN_CURVE_INPUT)
+            val requestedP50Output = photonToneOutput(
+                sceneLinear = p50Input,
+                toneAnchors = toneAnchors,
+                global = global,
+                local = global
+            )
+            val requestedP50Gain = requestedP50Output / p50Input
+            val appliedP50Gain = requestedP50Gain.coerceIn(0.05f, MAX_GAIN_VALUE)
+            val appliedP50Output = p50Input * appliedP50Gain
+            val finalDisplayP50 = photonProfileOutputForInput(appliedP50Output)
+            val anchorMiddleGain = toneAnchors.middleGrayOutput / toneAnchors.middleGrayPoint
+            val exposureLiftEv = displayExposureLiftEv(toneAnchors.observedDynamicRangeEv)
+            val observedShadowRangeEv = log2(
+                max(global.p50, MIN_CURVE_INPUT) / max(global.p10, MIN_STATS_BLACK_POINT)
+            )
+            val observedHighlightRangeEv = log2(
+                max(global.p999, global.p50) / max(global.p50, MIN_CURVE_INPUT)
+            )
             PLog.d(
                 TAG,
                 "Built Photon PGTM: grid=${gridWidth}x${gridHeight}x$safePointCount " +
-                    "baselineEv=$safeBaselineEv sceneMax=$sceneMax inputScale=$inputScale " +
-                    "p98=${global.p98} tail99=${global.tailP99} max=${global.maxInput}"
+                    "statsSource=global-samples globalSampleCount=${globalStats.sampleCount} " +
+                    "baselineEv=$safeBaselineEv observedRangeEv=${toneAnchors.observedDynamicRangeEv} " +
+                    "curveRangeEv=${toneAnchors.curveDynamicRangeEv} " +
+                    "targetRangeEv=${toneAnchors.targetDynamicRangeEv} " +
+                    "shadowRangeEv=$observedShadowRangeEv highlightRangeEv=$observedHighlightRangeEv " +
+                    "relativeEv=${toneAnchors.blackRelativeExposure}.." +
+                    "${toneAnchors.whiteRelativeExposure} " +
+                    "source=${toneAnchors.blackPoint},${toneAnchors.middleGrayPoint}," +
+                    "${toneAnchors.whitePoint} pgtm=${toneAnchors.blackOutput}," +
+                    "${toneAnchors.middleGrayOutput},1.0 display=${toneAnchors.displayBlackPoint}," +
+                    "${toneAnchors.displayMiddleGray},1.0 " +
+                    "tierDisplayMiddle=${toneAnchors.tierDisplayMiddleGray} " +
+                    "rawRight=${toneAnchors.rawWhitePoint} inputScale=$inputScale " +
+                    "p10=${global.p10} p50=${global.p50} p90=${global.p90} " +
+                    "p98=${global.p98} p995=${global.p995} p999=${global.p999} " +
+                    "maxInput=${global.maxInput} " +
+                    "linearMean=${globalStats.linearMean} logAverage=${globalStats.logAverage} " +
+                    "highlightFraction=${global.highlightFraction}"
+            )
+            PLog.d(
+                TAG,
+                "Photon PGTM exposure: p50Input=${global.p50} " +
+                    "logAverageInput=${globalStats.logAverage} " +
+                    "sourceMiddle=${toneAnchors.middleGrayPoint} " +
+                    "anchorMiddleGain=$anchorMiddleGain requestedP50Gain=$requestedP50Gain " +
+                    "appliedP50Gain=$appliedP50Gain pgtmP50=$appliedP50Output " +
+                    "displayP50=$finalDisplayP50 targetDisplayMiddle=${toneAnchors.displayMiddleGray} " +
+                    "tierDisplayMiddle=${toneAnchors.tierDisplayMiddleGray} " +
+                    "exposureLiftEv=$exposureLiftEv " +
+                    "whiteAdjustment=${toneAnchors.whitePoint / BASE_WHITE_POINT} " +
+                    "maxGain=$MAX_GAIN_VALUE"
             )
         }
         return DngHdrProfileGainTableGenerator.withDiagnosticBand(map, diagnosticBand)
@@ -115,126 +191,187 @@ internal object DngPhotonProfileGainTableGenerator {
         val p50 = max(p10, safe01(stats[offset + 1]))
         val p90 = max(p50, safe01(stats[offset + 2]))
         val p98 = max(p90, safe01(stats[offset + 3]))
-        val tailP95 = max(p98, safePositive(stats[offset + 6], p98))
-        val tailP99 = max(tailP95, safePositive(stats[offset + 7], tailP95))
+        val p995 = max(p98, safePositive(stats[offset + 6], p98))
+        val p999 = max(p995, safePositive(stats[offset + 7], p995))
         return PhotonPgtmCellStats(
             p10 = p10,
             p50 = p50,
             p90 = p90,
             p98 = p98,
             highlightFraction = safe01(stats[offset + 4]),
-            tailP95 = tailP95,
-            tailP99 = tailP99,
-            maxInput = tailP99,
+            p995 = p995,
+            p999 = p999,
+            maxInput = p999,
             sampleWeight = sampleWeight
         )
     }
 
-    private fun weightedGlobalStats(cells: Array<PhotonPgtmCellStats?>): PhotonPgtmCellStats {
-        var weightSum = 0f
-        var p10 = 0f
-        var p50 = 0f
-        var p90 = 0f
-        var p98 = 0f
-        var highlightFraction = 0f
-        val validCells = ArrayList<PhotonPgtmCellStats>(cells.size)
-        cells.forEach { cell ->
-            if (cell != null && cell.sampleWeight > 0f) {
-                validCells += cell
-                weightSum += cell.sampleWeight
-                p10 += cell.p10 * cell.sampleWeight
-                p50 += cell.p50 * cell.sampleWeight
-                p90 += cell.p90 * cell.sampleWeight
-                p98 += cell.p98 * cell.sampleWeight
-                highlightFraction += cell.highlightFraction * cell.sampleWeight
-            }
-        }
-        if (weightSum <= 0f) {
-            return PhotonPgtmCellStats(
-                p10 = 0.02f,
-                p50 = 0.18f,
-                p90 = 0.55f,
-                p98 = 0.82f,
-                highlightFraction = 0f,
-                tailP95 = 0.82f,
-                tailP99 = 0.82f,
-                maxInput = 0.82f,
-                sampleWeight = 1f
-            )
-        }
-        val tailP95 = weightedPercentile(validCells, 0.95f) { it.tailP95 }
-        val tailP99 = weightedPercentile(validCells, 0.99f) { it.tailP99 }
-        val maxInput = validCells.maxOfOrNull { it.maxInput } ?: tailP99
+    private fun DngPgtmGlobalStats.toPhotonCellStats(): PhotonPgtmCellStats? {
+        if (sampleCount <= 0) return null
+        val safeP10 = safe01(p10)
+        val safeP50 = max(safeP10, safe01(p50))
+        val safeP90 = max(safeP50, safe01(p90))
+        val safeP98 = max(safeP90, safe01(p98))
+        val safeP995 = max(safeP98, safePositive(p995, safeP98))
+        val safeP999 = max(safeP995, safePositive(p999, safeP995))
         return PhotonPgtmCellStats(
-            p10 = p10 / weightSum,
-            p50 = p50 / weightSum,
-            p90 = p90 / weightSum,
-            p98 = p98 / weightSum,
-            highlightFraction = highlightFraction / weightSum,
-            tailP95 = tailP95,
-            tailP99 = tailP99,
-            maxInput = maxInput,
-            sampleWeight = weightSum
+            p10 = safeP10,
+            p50 = safeP50,
+            p90 = safeP90,
+            p98 = safeP98,
+            highlightFraction = safe01(highlightFraction),
+            p995 = safeP995,
+            p999 = safeP999,
+            maxInput = max(safeP999, safePositive(maxInput, safeP999)),
+            sampleWeight = sampleCount.toFloat()
         )
     }
 
-    private fun weightedPercentile(
-        cells: List<PhotonPgtmCellStats>,
-        percentile: Float,
-        selector: (PhotonPgtmCellStats) -> Float,
-    ): Float {
-        if (cells.isEmpty()) return 0f
-        val sorted = cells
-            .mapNotNull { cell ->
-                val value = selector(cell)
-                if (value.isFinite() && cell.sampleWeight > 0f) {
-                    value to cell.sampleWeight
-                } else {
-                    null
-                }
-            }
-            .sortedBy { it.first }
-        if (sorted.isEmpty()) return 0f
-        val totalWeight = sorted.sumOf { it.second.toDouble() }.toFloat()
-        val target = totalWeight * percentile.coerceIn(0f, 1f)
-        var cumulative = 0f
-        sorted.forEach { (value, weight) ->
-            cumulative += weight
-            if (cumulative >= target) return value
+    private fun buildPhotonToneAnchors(
+        global: PhotonPgtmCellStats,
+        exposureAnchor: Float,
+        baselineExposureEv: Float,
+    ): PhotonToneAnchors {
+        val observedDynamicRangeEv = photonObservedDynamicRangeEv(global)
+        val targetDynamicRangeEv = photonDynamicRangeTier(observedDynamicRangeEv)
+        val displayBlackPoint = 1f / 2.0f.pow(targetDynamicRangeEv)
+        val tierDisplayMiddleGray = displayMiddleGrayForTier(targetDynamicRangeEv)
+        val displayMiddleGray = displayMiddleGrayForDynamicRange(
+            exposureAnchor = exposureAnchor,
+            observedRangeEv = observedDynamicRangeEv,
+            displayBlackPoint = displayBlackPoint,
+            tierDisplayMiddleGray = tierDisplayMiddleGray
+        )
+        val blackOutput = photonProfileInputForDisplay(displayBlackPoint)
+        val middleGrayOutput = photonProfileInputForDisplay(displayMiddleGray)
+        val whitePointAdjustment = photonWhitePointAdjustment(global, targetDynamicRangeEv)
+        val baselineGain = 2.0f.pow(baselineExposureEv.coerceIn(MIN_BASELINE_EV, MAX_BASELINE_EV))
+
+        // ProfileGainTableMap is evaluated with baseline gain applied to its
+        // input. A scene-domain white of 1 therefore corresponds to raw-linear
+        // 1 / baselineGain. Highlight statistics may extend that endpoint, but
+        // the extension is deliberately capped at 30%.
+        val rawWhitePoint = (BASE_WHITE_POINT / baselineGain) * whitePointAdjustment
+        val whitePoint = rawWhitePoint * baselineGain
+
+        // p10 is a shadow percentile, not the scene black. Reserve up to four
+        // stops below it without extending the curve domain beyond the selected
+        // output range plus the deliberate compression headroom.
+        val percentileBlackPoint = max(global.p10, MIN_STATS_BLACK_POINT) /
+            2.0f.pow(SOURCE_SHADOW_HEADROOM_EV)
+        val compressionBlackPoint = whitePoint /
+            2.0f.pow(targetDynamicRangeEv + MIN_SOURCE_COMPRESSION_EV)
+        val gainLimitedBlackPoint = blackOutput / MAX_GAIN_VALUE
+        val minimumBlackPoint = max(
+            whitePoint / 2.0f.pow(MAX_SOURCE_DYNAMIC_RANGE_EV),
+            gainLimitedBlackPoint
+        )
+        val blackPoint = max(percentileBlackPoint, compressionBlackPoint)
+            .coerceIn(minimumBlackPoint, whitePoint * 0.25f)
+
+        // Exposure normalization is global: map the perceptual log-average
+        // luminance (never a value above canonical 18% gray) through the scene-range exposure
+        // curve, within the selected tier's perceptual middle-gray ceiling.
+        val minimumMiddleGrayPoint = max(
+            blackPoint * 4f,
+            middleGrayOutput / MAX_GAIN_VALUE
+        )
+        val maximumMiddleGrayPoint = min(MAX_SCENE_MIDDLE_GRAY, whitePoint * 0.5f)
+        val middleGrayPoint = exposureAnchor.coerceIn(
+            min(minimumMiddleGrayPoint, maximumMiddleGrayPoint),
+            maximumMiddleGrayPoint
+        )
+        val whiteRelativeExposure = log2(whitePoint / middleGrayPoint)
+        val blackRelativeExposure = log2(blackPoint / middleGrayPoint)
+        val curveDynamicRangeEv = whiteRelativeExposure - blackRelativeExposure
+        return PhotonToneAnchors(
+            observedDynamicRangeEv = observedDynamicRangeEv,
+            targetDynamicRangeEv = targetDynamicRangeEv,
+            curveDynamicRangeEv = curveDynamicRangeEv,
+            blackRelativeExposure = blackRelativeExposure,
+            whiteRelativeExposure = whiteRelativeExposure,
+            blackPoint = blackPoint,
+            blackOutput = blackOutput,
+            middleGrayPoint = middleGrayPoint,
+            middleGrayOutput = middleGrayOutput,
+            displayBlackPoint = displayBlackPoint,
+            displayMiddleGray = displayMiddleGray,
+            tierDisplayMiddleGray = tierDisplayMiddleGray,
+            whitePoint = whitePoint,
+            rawWhitePoint = rawWhitePoint
+        )
+    }
+
+    private fun displayMiddleGrayForTier(dynamicRangeEv: Float): Float {
+        return when (dynamicRangeEv) {
+            STANDARD_DYNAMIC_RANGE_EV -> STANDARD_DISPLAY_MIDDLE_GRAY
+            WIDE_DYNAMIC_RANGE_EV -> WIDE_DISPLAY_MIDDLE_GRAY
+            HDR_DYNAMIC_RANGE_EV -> HDR_DISPLAY_MIDDLE_GRAY
+            else -> EXTENDED_HDR_DISPLAY_MIDDLE_GRAY
         }
-        return sorted.last().first
     }
 
-    private fun photonSceneMaxForStats(global: PhotonPgtmCellStats): Float {
-        val tailP95 = max(global.tailP95, global.p98)
-        val tailP99 = max(global.tailP99, tailP95)
-        val maxInput = max(global.maxInput, tailP99)
-        val tailRangeEv = log2((tailP99 + 0.04f) / (global.p50 + 0.04f)).coerceIn(0f, 8f)
-        val highlightDensity = global.highlightFraction.coerceIn(0f, 1f)
-        val hdrStrength = max(
-            max(smoothStep(1.02f, 1.55f, tailP95), smoothStep(1.8f, 4.2f, tailRangeEv)),
-            smoothStep(0.08f, 0.24f, highlightDensity) * smoothStep(0.86f, 1.18f, tailP95)
+    private fun displayMiddleGrayForDynamicRange(
+        exposureAnchor: Float,
+        observedRangeEv: Float,
+        displayBlackPoint: Float,
+        tierDisplayMiddleGray: Float,
+    ): Float {
+        val exposureLiftEv = displayExposureLiftEv(observedRangeEv)
+        return (exposureAnchor * 2.0f.pow(exposureLiftEv)).coerceIn(
+            displayBlackPoint * 4f,
+            tierDisplayMiddleGray
         )
-        val outlierGapEv = log2((maxInput + 0.04f) / (tailP99 + 0.04f)).coerceIn(0f, 6f)
-        val sparseOutlier = smoothStep(0.45f, 1.25f, outlierGapEv) *
-            (1f - smoothStep(0.16f, 0.32f, highlightDensity))
-        val denseHighlight = smoothStep(0.12f, 0.30f, highlightDensity)
-        // The upper percentile is not the desired white point. Leaving roughly half
-        // a stop above it is important in HDR scenes: otherwise most of the curve is
-        // spent compressing ordinary highlights and the shoulder becomes needlessly flat.
-        val percentileHeadroom = lerp(1.62f, 1.38f, denseHighlight)
-        val percentileTarget = max(
-            1f,
-            lerp(tailP95, tailP99, 0.68f + 0.20f * denseHighlight) * percentileHeadroom
+    }
+
+    private fun displayExposureLiftEv(observedRangeEv: Float): Float {
+        val rangeStrength = smoothStep(
+            DISPLAY_EXPOSURE_TRANSITION_START_EV,
+            DISPLAY_EXPOSURE_TRANSITION_END_EV,
+            observedRangeEv
         )
-        val outlierTarget = lerp(
-            percentileTarget,
-            min(maxInput, max(percentileTarget, tailP99 * 1.24f)),
-            sparseOutlier * 0.42f
+        return lerp(
+            MIN_DISPLAY_EXPOSURE_LIFT_EV,
+            MAX_DISPLAY_EXPOSURE_LIFT_EV,
+            rangeStrength
         )
-        val headroomStrength = smoothStep(0.15f, 0.65f, hdrStrength)
-        return lerp(MIN_SCENE_MAX, outlierTarget, headroomStrength)
-            .coerceIn(MIN_SCENE_MAX, MAX_SCENE_MAX)
+    }
+
+    private fun photonObservedDynamicRangeEv(global: PhotonPgtmCellStats): Float {
+        val shadowReference = max(global.p10, MIN_STATS_BLACK_POINT)
+        val percentileWhite = max(global.p98, global.p90)
+        val tailWhite = max(global.p999, max(global.p995, percentileWhite))
+        val percentileRangeEv = log2(max(percentileWhite, shadowReference) / shadowReference)
+        val tailRangeEv = log2(max(tailWhite, shadowReference) / shadowReference)
+        return max(percentileRangeEv, tailRangeEv)
+    }
+
+    private fun photonDynamicRangeTier(observedRangeEv: Float): Float {
+        val tier = when {
+            observedRangeEv >= EXTENDED_HDR_RANGE_THRESHOLD_EV -> EXTENDED_HDR_DYNAMIC_RANGE_EV
+            observedRangeEv >= HDR_RANGE_THRESHOLD_EV -> HDR_DYNAMIC_RANGE_EV
+            observedRangeEv >= WIDE_RANGE_THRESHOLD_EV -> WIDE_DYNAMIC_RANGE_EV
+            else -> STANDARD_DYNAMIC_RANGE_EV
+        }
+        return tier.coerceIn(MIN_DYNAMIC_RANGE_EV, MAX_DYNAMIC_RANGE_EV)
+    }
+
+    private fun photonWhitePointAdjustment(
+        global: PhotonPgtmCellStats,
+        dynamicRangeEv: Float,
+    ): Float {
+        val p995 = max(global.p995, global.p98)
+        val p999 = max(global.p999, p995)
+        val representativeTail = lerp(p995, p999, 0.65f)
+        val sparseTailPressure = smoothStep(0.94f, 1.32f, representativeTail)
+        val denseHighlightPressure = smoothStep(0.07f, 0.24f, global.highlightFraction) *
+            smoothStep(0.84f, 1.12f, p995)
+        val rangeTierStrength = (dynamicRangeEv - MIN_DYNAMIC_RANGE_EV) /
+            (MAX_DYNAMIC_RANGE_EV - MIN_DYNAMIC_RANGE_EV)
+        val pressure = max(sparseTailPressure, denseHighlightPressure) *
+            lerp(0.82f, 1f, rangeTierStrength)
+        return lerp(BASE_WHITE_POINT, MAX_WHITE_POINT_ADJUSTMENT, pressure)
+            .coerceIn(BASE_WHITE_POINT, MAX_WHITE_POINT_ADJUSTMENT)
     }
 
     private fun writePhotonCurve(
@@ -242,15 +379,15 @@ internal object DngPhotonProfileGainTableGenerator {
         outputOffset: Int,
         pointCount: Int,
         inputScale: Float,
+        toneAnchors: PhotonToneAnchors,
         global: PhotonPgtmCellStats,
         local: PhotonPgtmCellStats,
     ) {
         val safeInputScale = sanitizeInputScale(inputScale)
-        val sceneMax = (1f / safeInputScale).coerceIn(MIN_SCENE_MAX, MAX_SCENE_MAX)
         var previousOutput = 0f
         val lowTableInput = 1f / max(pointCount - 1, 1).toFloat()
-        val lowSceneLinear = lowTableInput / safeInputScale
-        val lowGain = (photonToneOutput(lowSceneLinear, sceneMax, global, local) / lowSceneLinear)
+        val lowSceneLinear = sceneLinearForTableInput(lowTableInput, safeInputScale)
+        val lowGain = (photonToneOutput(lowSceneLinear, toneAnchors, global, local) / lowSceneLinear)
             .coerceIn(0.05f, MAX_GAIN_VALUE)
         for (index in 0 until pointCount) {
             val tableInput = tableInputForIndex(index, pointCount)
@@ -258,8 +395,8 @@ internal object DngPhotonProfileGainTableGenerator {
                 output[outputOffset + index] = lowGain
                 continue
             }
-            val sceneLinear = tableInput / safeInputScale
-            val targetOutput = photonToneOutput(sceneLinear, sceneMax, global, local)
+            val sceneLinear = sceneLinearForTableInput(tableInput, safeInputScale)
+            val targetOutput = photonToneOutput(sceneLinear, toneAnchors, global, local)
             val monotonicOutput = max(previousOutput, targetOutput)
             output[outputOffset + index] = (monotonicOutput / max(sceneLinear, MIN_CURVE_INPUT))
                 .coerceIn(0.05f, MAX_GAIN_VALUE)
@@ -269,61 +406,71 @@ internal object DngPhotonProfileGainTableGenerator {
 
     private fun photonToneOutput(
         sceneLinear: Float,
-        sceneMax: Float,
+        toneAnchors: PhotonToneAnchors,
         global: PhotonPgtmCellStats,
         local: PhotonPgtmCellStats,
     ): Float {
         if (sceneLinear <= 0f) return 0f
-        val midGrayGain = photonMidGrayGain(global, local, sceneMax)
-        val midGrayOutput = (MID_GRAY_INPUT * midGrayGain).coerceIn(0.20f, 0.72f)
-        val baseOutput = if (sceneLinear <= MID_GRAY_INPUT) {
-            photonAdaptiveShadowOutput(
-                baseOutput = sceneLinear * midGrayGain,
-                sceneLinear = sceneLinear,
-                sceneMax = sceneMax,
-                global = global,
-                local = local
-            )
-        } else {
-            // sceneMax is baseline-normalized. Its output 1 maps to raw 1 / baselineGain.
-            val inputRange = max(sceneMax - MID_GRAY_INPUT, 1e-4f)
-            val outputRange = max(1f - midGrayOutput, 1e-4f)
-            val t = ((sceneLinear - MID_GRAY_INPUT) / inputRange).coerceIn(0f, 1f)
-            val initialSlope = min(midGrayGain * inputRange, 2.4f * outputRange)
-            val finalSlope = 0.22f * outputRange
-            cubicHermite(
-                start = midGrayOutput,
-                end = 1f,
-                startSlope = initialSlope,
-                endSlope = finalSlope,
-                t = t
-            )
-        }
+        val baseOutput = photonGlobalToneOutput(sceneLinear, toneAnchors)
         return photonLocalMicroContrastOutput(
             baseOutput = baseOutput,
             sceneLinear = sceneLinear,
+            toneAnchors = toneAnchors,
             global = global,
             local = local
         )
     }
 
-    private fun photonMidGrayGain(
-        global: PhotonPgtmCellStats,
-        local: PhotonPgtmCellStats,
-        sceneMax: Float,
+    private fun photonGlobalToneOutput(
+        sceneLinear: Float,
+        toneAnchors: PhotonToneAnchors,
     ): Float {
-        val rangeEv = log2((global.p98 + 0.008f) / (global.p10 + 0.008f)).coerceIn(0f, 10f)
-        val highContrast = smoothStep(3.6f, 6.2f, rangeEv) *
-            smoothStep(1.10f, 1.80f, sceneMax)
-        val lowContrast = 1f - smoothStep(1.6f, 3.0f, rangeEv)
-        val darkScene = 1f - smoothStep(0.14f, 0.30f, global.p50)
-        val darkCell = 1f - smoothStep(0.12f, 0.28f, local.p50)
-        val liftEv = DEFAULT_MID_GRAY_LIFT_EV +
-            0.22f * highContrast * darkScene +
-            0.08f * highContrast * darkCell -
-            0.16f * highContrast * (1f - darkScene) -
-            0.12f * lowContrast
-        return 2.0f.pow(liftEv.coerceIn(0.82f, 1.38f))
+        if (sceneLinear <= 0f) return 0f
+        if (sceneLinear < toneAnchors.blackPoint) {
+            return toneAnchors.blackOutput * (sceneLinear / toneAnchors.blackPoint)
+        }
+        if (sceneLinear >= toneAnchors.whitePoint) return 1f
+
+        val encoded = (
+            (log2(sceneLinear / toneAnchors.middleGrayPoint) - toneAnchors.blackRelativeExposure) /
+                toneAnchors.curveDynamicRangeEv
+            ).coerceIn(0f, 1f)
+        val pivotX = (-toneAnchors.blackRelativeExposure / toneAnchors.curveDynamicRangeEv)
+            .coerceIn(1e-4f, 1f - 1e-4f)
+        val pivotY = toneAnchors.middleGrayOutput
+        val leftSecant = (pivotY - toneAnchors.blackOutput) / pivotX
+        val rightSecant = (1f - pivotY) / (1f - pivotX)
+        val rangeStrength = (toneAnchors.targetDynamicRangeEv - MIN_DYNAMIC_RANGE_EV) /
+            (MAX_DYNAMIC_RANGE_EV - MIN_DYNAMIC_RANGE_EV)
+        val desiredPivotSlope = lerp(0.84f, 0.94f, rangeStrength)
+        val monotoneSlopeLimit = 0.92f * 3f * min(leftSecant, rightSecant)
+        val pivotSlope = min(desiredPivotSlope, monotoneSlopeLimit)
+        val highlightEndpointSlopeRatio = lerp(
+            MIN_HIGHLIGHT_ENDPOINT_SLOPE_RATIO,
+            MAX_HIGHLIGHT_ENDPOINT_SLOPE_RATIO,
+            rangeStrength
+        )
+
+        return if (encoded <= pivotX) {
+            val segmentT = encoded / pivotX
+            cubicHermite(
+                start = toneAnchors.blackOutput,
+                end = pivotY,
+                startSlope = leftSecant * 0.06f * pivotX,
+                endSlope = pivotSlope * pivotX,
+                t = segmentT
+            )
+        } else {
+            val segmentLength = 1f - pivotX
+            val segmentT = (encoded - pivotX) / segmentLength
+            cubicHermite(
+                start = pivotY,
+                end = 1f,
+                startSlope = pivotSlope * segmentLength,
+                endSlope = rightSecant * highlightEndpointSlopeRatio * segmentLength,
+                t = segmentT
+            )
+        }
     }
 
     private fun cubicHermite(
@@ -344,76 +491,51 @@ internal object DngPhotonProfileGainTableGenerator {
             .coerceIn(start, end)
     }
 
-    /**
-     * The fixed profile curve owns only the base S shape. PGTM adds local shadow
-     * gain when the scene is both high contrast and globally dark.
-     */
-    private fun photonAdaptiveShadowOutput(
-        baseOutput: Float,
-        sceneLinear: Float,
-        sceneMax: Float,
-        global: PhotonPgtmCellStats,
-        local: PhotonPgtmCellStats,
-    ): Float {
-        val x = sceneLinear.coerceIn(0f, MID_GRAY_INPUT)
-        if (x <= 0f || x >= MID_GRAY_INPUT) return baseOutput
-        // Keep a finite toe gain all the way to black. A lower smooth-step here used
-        // to turn the lift off for the darkest (and most numerous) samples. Fade the
-        // extra exposure into the mid-gray slope instead of adding a small gain bump.
-        val shadowWindow = 1f - smoothStep(0.045f, MID_GRAY_INPUT, x)
-        val adaptiveLiftEv = photonAdaptiveShadowLiftEv(sceneMax, global, local)
-        return baseOutput * 2.0f.pow(adaptiveLiftEv * shadowWindow)
-    }
-
     private fun photonLocalMicroContrastOutput(
         baseOutput: Float,
         sceneLinear: Float,
+        toneAnchors: PhotonToneAnchors,
         global: PhotonPgtmCellStats,
         local: PhotonPgtmCellStats,
     ): Float {
+        if (baseOutput <= 0f || baseOutput >= 1f) return baseOutput
         val localRangeEv = log2((local.p90 + 0.008f) / (local.p10 + 0.008f))
             .coerceIn(0f, 8f)
-        val localDetail = smoothStep(1.15f, 3.20f, localRangeEv)
-        val highlightDamping = 1f - smoothStep(0.10f, 0.34f, global.highlightFraction)
-        val strength = MAX_LOCAL_MICRO_CONTRAST * localDetail * highlightDamping
-        if (strength <= 1e-4f) return baseOutput
-
-        val pivot = local.p50.coerceIn(0.065f, 0.28f)
-        val signedDistance = (log2((sceneLinear + 0.010f) / (pivot + 0.010f)) / 1.35f)
-            .coerceIn(-1f, 1f)
-        val tonalWindow = smoothStep(0.020f, 0.065f, sceneLinear) *
-            (1f - smoothStep(0.55f, 0.85f, sceneLinear))
-        val adjusted = baseOutput * (1f + strength * signedDistance * tonalWindow)
-        return adjusted.coerceIn(0f, 1f)
-    }
-
-    private fun photonAdaptiveShadowLiftEv(
-        sceneMax: Float,
-        global: PhotonPgtmCellStats,
-        local: PhotonPgtmCellStats,
-    ): Float {
-        val globalRangeEv = log2((global.p98 + 0.008f) / (global.p10 + 0.008f))
-            .coerceIn(0f, 10f)
-        // p98 is histogram-clamped and can substantially under-report a sparse HDR
-        // tail. Include the unclamped tail percentile used to choose sceneMax.
-        val tailRangeEv = log2((global.tailP99 + 0.04f) / (global.p50 + 0.04f))
+        val globalRangeEv = log2((global.p90 + 0.008f) / (global.p10 + 0.008f))
             .coerceIn(0f, 8f)
-        val highDynamicRange = max(
-            smoothStep(2.5f, 5.2f, globalRangeEv),
-            smoothStep(1.8f, 3.8f, tailRangeEv)
-        ) * smoothStep(1.15f, 2.10f, sceneMax)
-        val globalDarkArea = max(
-            1f - smoothStep(0.075f, 0.165f, global.p50),
-            0.75f * (1f - smoothStep(0.24f, 0.50f, global.p90))
+        val localDetail = smoothStep(0.90f, 3.15f, localRangeEv)
+        val relativeDetail = smoothStep(-0.35f, 0.80f, localRangeEv - globalRangeEv)
+        val highlightDamping = 1f - 0.38f * smoothStep(0.14f, 0.38f, global.highlightFraction)
+        val strengthEv = MAX_LOCAL_MICRO_CONTRAST_EV * localDetail *
+            lerp(0.72f, 1f, relativeDetail) * highlightDamping
+        if (strengthEv <= 1e-4f) return baseOutput
+
+        val localPivot = local.p50.coerceIn(
+            toneAnchors.middleGrayPoint * 0.45f,
+            toneAnchors.middleGrayPoint * 1.65f
         )
-        val localDarkArea = max(
-            1f - smoothStep(0.060f, 0.150f, local.p50),
-            0.60f * (1f - smoothStep(0.20f, 0.45f, local.p90))
+        val pivot = 2.0f.pow(
+            lerp(
+                log2(toneAnchors.middleGrayPoint),
+                log2(localPivot),
+                0.35f
+            )
         )
-        val globalDarkness = globalDarkArea.coerceIn(0f, 1f)
-        val localDarkness = localDarkArea.coerceIn(0f, 1f)
-        return (highDynamicRange * (0.62f + 0.28f * globalDarkness + 0.18f * localDarkness))
-            .coerceIn(0f, MAX_ADAPTIVE_SHADOW_LIFT_EV)
+        val signedDistance = (log2(sceneLinear / pivot) / 1.45f)
+            .coerceIn(-1f, 1f)
+        val blackFeatherEnd = max(toneAnchors.blackPoint * 4f, 0.018f)
+        val highlightFeatherStart = max(
+            toneAnchors.middleGrayPoint * 2.4f,
+            toneAnchors.whitePoint * 0.48f
+        )
+        val highlightFeatherEnd = max(
+            highlightFeatherStart + 1e-4f,
+            toneAnchors.whitePoint * 0.82f
+        )
+        val tonalWindow = smoothStep(toneAnchors.blackPoint, blackFeatherEnd, sceneLinear) *
+            (1f - smoothStep(highlightFeatherStart, highlightFeatherEnd, sceneLinear))
+        val adjusted = baseOutput * 2.0f.pow(strengthEv * signedDistance * tonalWindow)
+        return adjusted.coerceIn(0f, 1f)
     }
 
     private fun photonPgtmInputWeights(inputScale: Float): FloatArray {
@@ -432,10 +554,54 @@ internal object DngPhotonProfileGainTableGenerator {
         }
     }
 
+    private fun sceneLinearForTableInput(tableInput: Float, inputScale: Float): Float {
+        val encodedInput = tableInput.coerceIn(0f, 1f)
+        val normalizedScene = encodedInput.pow(1f / TABLE_INPUT_GAMMA)
+        return normalizedScene / sanitizeInputScale(inputScale)
+    }
+
     private fun sanitizeInputScale(inputScale: Float): Float {
         return inputScale.takeIf { it.isFinite() }
-            ?.coerceIn(1f / MAX_SCENE_MAX, 1.0f)
+            ?.coerceIn(1f / MAX_WHITE_POINT_ADJUSTMENT, 1.0f)
             ?: 1.0f
+    }
+
+    private fun photonProfileInputForDisplay(displayValue: Float): Float {
+        val target = displayValue.coerceIn(0f, 1f)
+        val points = DngProfileToneCurve.photonPgtmToneCurvePoints()
+        if (points.size < 4) return target
+        var index = 0
+        while (index + 3 < points.size) {
+            val x0 = points[index]
+            val y0 = points[index + 1]
+            val x1 = points[index + 2]
+            val y1 = points[index + 3]
+            if (target <= y1) {
+                val t = if (y1 > y0) (target - y0) / (y1 - y0) else 0f
+                return lerp(x0, x1, t)
+            }
+            index += 2
+        }
+        return points[points.size - 2].coerceIn(0f, 1f)
+    }
+
+    private fun photonProfileOutputForInput(inputValue: Float): Float {
+        val input = inputValue.coerceIn(0f, 1f)
+        val points = DngProfileToneCurve.photonPgtmToneCurvePoints()
+        if (points.size < 4) return input
+        var index = 0
+        while (index + 3 < points.size) {
+            val x0 = points[index]
+            val y0 = points[index + 1]
+            val x1 = points[index + 2]
+            val y1 = points[index + 3]
+            if (input <= x1) {
+                val t = if (x1 > x0) (input - x0) / (x1 - x0) else 0f
+                return lerp(y0, y1, t)
+            }
+            index += 2
+        }
+        return points.last().coerceIn(0f, 1f)
     }
 
     private fun smoothStep(edge0: Float, edge1: Float, x: Float): Float {
@@ -465,9 +631,26 @@ internal object DngPhotonProfileGainTableGenerator {
         val p90: Float,
         val p98: Float,
         val highlightFraction: Float,
-        val tailP95: Float,
-        val tailP99: Float,
+        val p995: Float,
+        val p999: Float,
         val maxInput: Float,
         val sampleWeight: Float,
+    )
+
+    private data class PhotonToneAnchors(
+        val observedDynamicRangeEv: Float,
+        val targetDynamicRangeEv: Float,
+        val curveDynamicRangeEv: Float,
+        val blackRelativeExposure: Float,
+        val whiteRelativeExposure: Float,
+        val blackPoint: Float,
+        val blackOutput: Float,
+        val middleGrayPoint: Float,
+        val middleGrayOutput: Float,
+        val displayBlackPoint: Float,
+        val displayMiddleGray: Float,
+        val tierDisplayMiddleGray: Float,
+        val whitePoint: Float,
+        val rawWhitePoint: Float,
     )
 }

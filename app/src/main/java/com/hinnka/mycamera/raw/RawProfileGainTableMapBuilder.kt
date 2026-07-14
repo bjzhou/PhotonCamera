@@ -12,6 +12,11 @@ internal object RawProfileGainTableMapBuilder {
     private const val SAMPLE_GRID = 16
     private const val HIST_BINS = 256
 
+    private data class BuiltPgtmStats(
+        val packedCellStats: FloatArray,
+        val globalStats: DngPgtmGlobalStats?,
+    )
+
     fun build(
         rawData: ByteBuffer,
         width: Int,
@@ -29,7 +34,8 @@ internal object RawProfileGainTableMapBuilder {
             rowStride = rowStride,
             metadata = metadata,
             samplesPerPixel = samplesPerPixel,
-            statsBounds = statsBounds
+            statsBounds = statsBounds,
+            collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon
         ) ?: return null
         val diagnosticBand = DngPgtmDiagnostic.activeBandForSource(TAG)
         val baselineExposureEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
@@ -38,7 +44,7 @@ internal object RawProfileGainTableMapBuilder {
                 width = width,
                 height = height,
                 baselineExposureEv = baselineExposureEv,
-                packedCellStats = stats,
+                packedCellStats = stats.packedCellStats,
                 diagnosticBand = diagnosticBand
             )
 
@@ -46,7 +52,8 @@ internal object RawProfileGainTableMapBuilder {
                 width = width,
                 height = height,
                 baselineExposureEv = baselineExposureEv,
-                packedCellStats = stats,
+                packedCellStats = stats.packedCellStats,
+                globalStats = stats.globalStats ?: return null,
                 diagnosticBand = diagnosticBand
             )
 
@@ -63,7 +70,8 @@ internal object RawProfileGainTableMapBuilder {
         metadata: RawMetadata,
         samplesPerPixel: Int,
         statsBounds: Rect?,
-    ): FloatArray? {
+        collectGlobalStats: Boolean,
+    ): BuiltPgtmStats? {
         if (width <= 0 || height <= 0 || metadata.whiteLevel <= 0f) return null
         val sampleCountPerPixel = samplesPerPixel.coerceAtLeast(1)
         val rowBytes = width * sampleCountPerPixel * 2
@@ -92,6 +100,12 @@ internal object RawProfileGainTableMapBuilder {
         val stats = FloatArray(gridWidth * gridHeight * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE)
         val hist = IntArray(HIST_BINS)
         val inputSamples = FloatArray(SAMPLE_GRID * SAMPLE_GRID)
+        val globalSamples = if (collectGlobalStats) {
+            FloatArray(gridWidth * gridHeight * SAMPLE_GRID * SAMPLE_GRID)
+        } else {
+            null
+        }
+        var globalSampleCount = 0
         val statsWidth = safeStatsBounds.width()
         val statsHeight = safeStatsBounds.height()
         for (cellY in 0 until gridHeight) {
@@ -135,6 +149,10 @@ internal object RawProfileGainTableMapBuilder {
                             samplesPerPixel = sampleCountPerPixel
                         )
                         inputSamples[sampleCount] = inputValue
+                        if (globalSamples != null) {
+                            globalSamples[globalSampleCount] = inputValue
+                            globalSampleCount += 1
+                        }
                         val clampedInput = inputValue.coerceIn(0f, 1f)
                         val bin = (clampedInput * (HIST_BINS - 1).toFloat() + 0.5f)
                             .toInt()
@@ -161,7 +179,16 @@ internal object RawProfileGainTableMapBuilder {
                 stats[offset + 7] = percentileFromSamples(inputSamples, sampleCount, 0.999f)
             }
         }
-        return stats
+        val globalStats = globalSamples?.let { samples ->
+            DngPgtmGlobalStats.fromMutableSamples(
+                samples = samples,
+                sampleCount = globalSampleCount
+            ) ?: return null
+        }
+        return BuiltPgtmStats(
+            packedCellStats = stats,
+            globalStats = globalStats
+        )
     }
 
     private fun sanitizeStatsBounds(statsBounds: Rect?, width: Int, height: Int): Rect? {
