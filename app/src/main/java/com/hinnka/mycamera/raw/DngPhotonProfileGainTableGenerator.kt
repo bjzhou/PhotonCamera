@@ -3,10 +3,9 @@ package com.hinnka.mycamera.raw
 import com.hinnka.mycamera.utils.PLog
 
 /**
- * Photon uses Google's PGTM implementation directly. The only Photon-specific values are
- * exposure-fusion planning parameters selected to keep its median brightness close to the
- * previous Photon rendering. Input scale estimation, spatial planning, synthetic-exposure
- * fusion, highlight shoulder, and the table endpoint all remain the Google implementation.
+ * Photon uses Google's current PGTM implementation and translates a fixed-span synthetic
+ * exposure stack from the historical Photon scene-brightness target. The fusion key remains a
+ * curve-shape parameter; one exposure stays pinned to inputScale to protect highlight layers.
  */
 internal object DngPhotonProfileGainTableGenerator {
     private const val TAG = "DngPhotonProfileGainTableGenerator"
@@ -32,6 +31,8 @@ internal object DngPhotonProfileGainTableGenerator {
         emitDiagnostics: Boolean = true,
         statsSource: String = "global-samples",
     ): DngProfileGainTableMap? {
+        val brightnessTarget = PhotonPgtmBrightnessModel.resolve(globalStats)
+        var fusionResolution: HdrExposureFusionResolutionDiagnostics? = null
         val map = DngHdrProfileGainTableGenerator.forCellStats(
             width = width,
             height = height,
@@ -40,6 +41,8 @@ internal object DngPhotonProfileGainTableGenerator {
             tablePointCount = tablePointCount,
             diagnosticBand = diagnosticBand,
             fusionParameters = PHOTON_FUSION_PARAMETERS,
+            brightnessTarget = brightnessTarget?.fusionTarget,
+            resolutionDiagnostics = { fusionResolution = it },
         ) ?: return null
 
         if (emitDiagnostics) {
@@ -48,7 +51,7 @@ internal object DngPhotonProfileGainTableGenerator {
             val p50Input = globalStats.p50.takeIf { it.isFinite() && it > 0f } ?: 0f
             PLog.d(
                 TAG,
-                "Built Photon with Google PGTM: grid=${map.mapPointsH}x${map.mapPointsV}x" +
+                "Built adaptive Photon with Google PGTM: grid=${map.mapPointsH}x${map.mapPointsV}x" +
                     "${map.mapPointsN} statsSource=$statsSource " +
                     "globalSampleCount=${globalStats.sampleCount} baselineEv=$baselineExposureEv " +
                     "autoExposureTarget=${PHOTON_FUSION_PARAMETERS.autoExposureTarget} " +
@@ -56,7 +59,21 @@ internal object DngPhotonProfileGainTableGenerator {
                     "maxExposureGain=${PHOTON_FUSION_PARAMETERS.maxExposureGain} " +
                     "compactHdrOffsetEv=${PHOTON_FUSION_PARAMETERS.compactHdrExposureOffsetEv} " +
                     "inputScale=$inputScale sceneWhite=$sceneWhite " +
-                    "p50Input=$p50Input"
+                    "p50Input=$p50Input " +
+                    "brightnessAnchor=${brightnessTarget?.sceneAnchor} " +
+                    "anchorSource=${brightnessTarget?.anchorSource} " +
+                    "displayTarget=${brightnessTarget?.displayTarget} " +
+                    "exposureLiftEv=${brightnessTarget?.exposureLiftEv} " +
+                    "tailRangeEv=${brightnessTarget?.tailRangeEv} " +
+                    "exposureRangeEv=${brightnessTarget?.exposureRangeEv} " +
+                    "highlightGapEv=${brightnessTarget?.highlightGapEv} " +
+                    "sparseStrength=${brightnessTarget?.sparseHighlightStrength} " +
+                    "dynamicRangeEv=${brightnessTarget?.dynamicRangeEv} " +
+                    "referenceCenterEv=${fusionResolution?.referenceCenterEv} " +
+                    "resolvedCenterEv=${fusionResolution?.resolvedCenterEv} " +
+                    "centeredSpanEv=${fusionResolution?.centeredExposureSpanEv} " +
+                    "brightnessErrorEv=${fusionResolution?.brightnessErrorEv} " +
+                    "protectedExposureGain=${fusionResolution?.protectedExposureGain}"
             )
         }
         return map

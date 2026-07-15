@@ -8,10 +8,10 @@ import kotlin.math.sqrt
 /**
  * Spatial LTM stage fitted against Google PGTM cells from the Skyyking regression set.
  *
- * The brightest member of each local synthetic-exposure stack is biased from local luminance and
- * highlight topology. Absolute percentile levels, ranges and tail descriptors are retained. A
- * single normalized 3x3 convolution gives these exposure decisions the same spatial support as
- * the profile map; the final gain curve is produced later by exposure fusion, not by this stage.
+ * Each local synthetic-exposure stack is biased from local luminance and highlight topology.
+ * Google-compatible plans adjust the brightest member; centered Photon plans translate both
+ * endpoints to preserve their EV span. A normalized 3x3 convolution gives these decisions the
+ * same spatial support as the profile map; exposure fusion still produces the final gain curve.
  */
 internal object DngHdrLtmSpatialModel {
     private const val LEVEL_EPS = 0.006f
@@ -23,7 +23,9 @@ internal object DngHdrLtmSpatialModel {
         grid: HdrPgtmGrid,
         global: HdrPgtmCellStats,
         globalPlan: HdrLtmExposurePlan,
+        minimumExposureGain: Float = globalPlan.darkestExposureGain,
         maxExposureGain: Float,
+        preserveExposureSpan: Boolean = false,
     ): Array<HdrLtmExposurePlan> {
         val globalFeature = ToneFeature.from(global)
         val features = Array(cells.size) { index ->
@@ -56,7 +58,9 @@ internal object DngHdrLtmSpatialModel {
                     localFeature = neighborhoods[index],
                     sampleWeight = cell.sampleWeight,
                     residualScale = residualScale,
+                    minimumExposureGain = minimumExposureGain,
                     maxExposureGain = maxExposureGain,
+                    preserveExposureSpan = preserveExposureSpan,
                 )
             }
         }
@@ -68,7 +72,9 @@ internal object DngHdrLtmSpatialModel {
         localFeature: ToneFeature,
         sampleWeight: Float,
         residualScale: Float,
+        minimumExposureGain: Float,
         maxExposureGain: Float,
+        preserveExposureSpan: Boolean,
     ): HdrLtmExposurePlan {
         val residualEv =
             0.0070524f * (localFeature.logP10 - referenceFeature.logP10) +
@@ -83,9 +89,26 @@ internal object DngHdrLtmSpatialModel {
         val confidence = smoothStep(16f, 64f, sampleWeight)
         val exposureOffsetEv = (residualEv * confidence * residualScale)
             .coerceIn(-MAX_LOCAL_EXPOSURE_OFFSET_EV, MAX_LOCAL_EXPOSURE_OFFSET_EV)
-        return globalPlan.copy(
-            brightestExposureGain = (globalPlan.brightestExposureGain * 2.0f.pow(exposureOffsetEv))
-                .coerceIn(globalPlan.darkestExposureGain, maxExposureGain)
+        if (!preserveExposureSpan) {
+            return globalPlan.copy(
+                brightestExposureGain = (
+                    globalPlan.brightestExposureGain * 2.0f.pow(exposureOffsetEv)
+                    ).coerceIn(globalPlan.darkestExposureGain, maxExposureGain)
+            )
+        }
+        val minimumEv = log2(minimumExposureGain)
+        val maximumEv = log2(maxExposureGain)
+        val darkestEv = log2(globalPlan.darkestExposureGain)
+        val brightestEv = log2(globalPlan.brightestExposureGain)
+        val halfSpanEv = (brightestEv - darkestEv).coerceAtLeast(0f) * 0.5f
+        val requestedCenterEv = (darkestEv + brightestEv) * 0.5f + exposureOffsetEv
+        val centerEv = requestedCenterEv.coerceIn(
+            minimumEv + halfSpanEv,
+            maximumEv - halfSpanEv,
+        )
+        return HdrLtmExposurePlan(
+            brightestExposureGain = 2.0f.pow(centerEv + halfSpanEv),
+            darkestExposureGain = 2.0f.pow(centerEv - halfSpanEv),
         )
     }
 

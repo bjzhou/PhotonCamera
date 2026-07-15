@@ -53,6 +53,8 @@ internal object DngHdrProfileGainTableGenerator {
     private const val WEIGHT_LUT_STEPS_PER_EV = 256f
     private const val WEIGHT_LUT_MAX_DISTANCE_EV = 12f
     private const val CURVE_EPS = 1e-6f
+    private const val BRIGHTNESS_PLAN_SEARCH_STEPS = 256
+    private const val BRIGHTNESS_PLAN_REFINEMENT_ITERATIONS = 16
 
     internal const val BASE_INPUT_WEIGHT_RED = 0.1495f
     internal const val BASE_INPUT_WEIGHT_GREEN = 0.2935f
@@ -151,6 +153,8 @@ internal object DngHdrProfileGainTableGenerator {
         tablePointCount: Int = DEFAULT_TABLE_POINTS,
         diagnosticBand: DiagnosticBand? = null,
         fusionParameters: HdrExposureFusionParameters = GOOGLE_FUSION_PARAMETERS,
+        brightnessTarget: HdrExposureFusionBrightnessTarget? = null,
+        resolutionDiagnostics: ((HdrExposureFusionResolutionDiagnostics) -> Unit)? = null,
     ): DngProfileGainTableMap? {
         if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite() || baselineExposureEv < 0f) {
             return null
@@ -181,12 +185,20 @@ internal object DngHdrProfileGainTableGenerator {
             inputScale = inputScale,
             fusionParameters = fusionParameters,
         )
+        val resolvedFusion = resolveBrightnessTarget(
+            plan = globalPlan,
+            fusionParameters = fusionParameters,
+            brightnessTarget = brightnessTarget,
+        )
+        resolvedFusion.diagnostics?.let { resolutionDiagnostics?.invoke(it) }
         val cellPlans = DngHdrLtmSpatialModel.buildExposurePlans(
             cells = cells,
             grid = grid,
             global = spatialStats,
-            globalPlan = globalPlan,
+            globalPlan = resolvedFusion.plan,
+            minimumExposureGain = inputScale,
             maxExposureGain = fusionParameters.maxExposureGain,
+            preserveExposureSpan = resolvedFusion.preserveExposureSpan,
         )
         return buildMap(
             grid = grid,
@@ -194,7 +206,8 @@ internal object DngHdrProfileGainTableGenerator {
             inputScale = inputScale,
             cellPlans = cellPlans,
             diagnosticBand = diagnosticBand?.sanitized(),
-            fusionParameters = fusionParameters,
+            fusionParameters = resolvedFusion.parameters,
+            protectedExposureGain = resolvedFusion.protectedExposureGain,
         )
     }
 
@@ -438,6 +451,149 @@ internal object DngHdrProfileGainTableGenerator {
         )
     }
 
+    /**
+     * Solves the center of the synthetic exposure stack while preserving the span planned by the
+     * current PGTM model. The well-exposed key, exposure spacing, and stack width therefore keep
+     * defining one stable curve shape; scene brightness only translates that stack in EV.
+     */
+    private fun resolveBrightnessTarget(
+        plan: HdrLtmExposurePlan,
+        fusionParameters: HdrExposureFusionParameters,
+        brightnessTarget: HdrExposureFusionBrightnessTarget?,
+    ): ResolvedExposureFusion {
+        val fallback = ResolvedExposureFusion(
+            plan = plan,
+            parameters = fusionParameters,
+            preserveExposureSpan = false,
+            protectedExposureGain = null,
+            diagnostics = null,
+        )
+        val target = brightnessTarget ?: return fallback
+        if (!target.sceneInput.isFinite() || target.sceneInput <= 0f ||
+            !target.targetOutput.isFinite() || target.targetOutput <= 0f
+        ) {
+            return fallback
+        }
+
+        val desiredOutput = target.targetOutput.coerceIn(0f, 1f)
+        val darkestGain = plan.darkestExposureGain.coerceIn(
+            MIN_TABLE_GAIN,
+            fusionParameters.maxExposureGain,
+        )
+        val baseDarkestEv = log2(darkestGain)
+        val baseBrightestEv = log2(
+            plan.brightestExposureGain.coerceIn(darkestGain, fusionParameters.maxExposureGain)
+        )
+        val minimumExposureEv = baseDarkestEv
+        val maximumExposureEv = log2(fusionParameters.maxExposureGain)
+        val fullExposureSpanEv = (baseBrightestEv - baseDarkestEv).coerceIn(
+            0f,
+            maximumExposureEv - minimumExposureEv,
+        )
+        // Keep one exposure fixed at inputScale for highlight reconstruction. The other seven
+        // retain exactly the span occupied by the brightest seven members of the original
+        // equally-spaced eight-exposure stack.
+        val exposureIntervalEv = fullExposureSpanEv / (SYNTHETIC_EXPOSURE_COUNT - 1).toFloat()
+        val centeredExposureSpanEv = fullExposureSpanEv - exposureIntervalEv
+        val halfSpanEv = centeredExposureSpanEv * 0.5f
+        val minimumCenterEv = minimumExposureEv + halfSpanEv
+        val maximumCenterEv = maximumExposureEv - halfSpanEv
+        val referenceCenterEv = (
+            baseDarkestEv + exposureIntervalEv + halfSpanEv
+            ).coerceIn(minimumCenterEv, maximumCenterEv)
+        val protectedExposureGain = darkestGain
+
+        fun fusionOutput(centerEv: Float): Float {
+            val resolvedCenterEv = centerEv.coerceIn(minimumCenterEv, maximumCenterEv)
+            val resolvedDarkestEv = resolvedCenterEv - halfSpanEv
+            val resolvedBrightestEv = resolvedCenterEv + halfSpanEv
+            val resolvedDarkestGain = 2.0f.pow(resolvedDarkestEv)
+            val resolvedBrightestGain = 2.0f.pow(resolvedBrightestEv)
+            val exposureGains = syntheticExposureGains(
+                resolvedBrightestGain,
+                resolvedDarkestGain,
+                protectedExposureGain = protectedExposureGain,
+            )
+            val exposureGainEvs = FloatArray(SYNTHETIC_EXPOSURE_COUNT) { exposure ->
+                log2(exposureGains[exposure])
+            }
+            return fuseSyntheticExposures(
+                sceneInput = target.sceneInput,
+                exposureGains = exposureGains,
+                exposureGainEvs = exposureGainEvs,
+                fusionParameters = fusionParameters,
+            )
+        }
+
+        fun evaluate(centerEv: Float): ExposureCenterEvaluation {
+            val output = fusionOutput(centerEv)
+            return ExposureCenterEvaluation(
+                centerEv = centerEv.coerceIn(minimumCenterEv, maximumCenterEv),
+                brightnessErrorEv = abs(
+                    log2(max(output, CURVE_EPS) / max(desiredOutput, CURVE_EPS))
+                ),
+            )
+        }
+
+        var bestStep = 0
+        var bestEvaluation = evaluate(minimumCenterEv)
+        for (step in 0..BRIGHTNESS_PLAN_SEARCH_STEPS) {
+            val amount = step.toFloat() / BRIGHTNESS_PLAN_SEARCH_STEPS.toFloat()
+            val candidateEv = lerp(minimumCenterEv, maximumCenterEv, amount)
+            val candidateEvaluation = evaluate(candidateEv)
+            if (candidateEvaluation.brightnessErrorEv < bestEvaluation.brightnessErrorEv) {
+                bestEvaluation = candidateEvaluation
+                bestStep = step
+            }
+        }
+        var lowerEv = lerp(
+            minimumCenterEv,
+            maximumCenterEv,
+            (bestStep - 1).coerceAtLeast(0).toFloat() / BRIGHTNESS_PLAN_SEARCH_STEPS.toFloat(),
+        )
+        var upperEv = lerp(
+            minimumCenterEv,
+            maximumCenterEv,
+            (bestStep + 1).coerceAtMost(BRIGHTNESS_PLAN_SEARCH_STEPS).toFloat() /
+                BRIGHTNESS_PLAN_SEARCH_STEPS.toFloat(),
+        )
+        repeat(BRIGHTNESS_PLAN_REFINEMENT_ITERATIONS) {
+            val firstEv = lerp(lowerEv, upperEv, 1f / 3f)
+            val secondEv = lerp(lowerEv, upperEv, 2f / 3f)
+            val firstEvaluation = evaluate(firstEv)
+            val secondEvaluation = evaluate(secondEv)
+            if (firstEvaluation.brightnessErrorEv < secondEvaluation.brightnessErrorEv) {
+                upperEv = secondEv
+            } else {
+                lowerEv = firstEv
+            }
+        }
+        val resolvedEvaluation = listOf(
+            evaluate(lowerEv),
+            evaluate((lowerEv + upperEv) * 0.5f),
+            evaluate(upperEv),
+        ).reduce { best, candidate ->
+            if (candidate.brightnessErrorEv < best.brightnessErrorEv) candidate else best
+        }
+        val resolvedCenterEv = resolvedEvaluation.centerEv
+        return ResolvedExposureFusion(
+            plan = HdrLtmExposurePlan(
+                brightestExposureGain = 2.0f.pow(resolvedCenterEv + halfSpanEv),
+                darkestExposureGain = 2.0f.pow(resolvedCenterEv - halfSpanEv),
+            ),
+            parameters = fusionParameters,
+            preserveExposureSpan = true,
+            protectedExposureGain = protectedExposureGain,
+            diagnostics = HdrExposureFusionResolutionDiagnostics(
+                referenceCenterEv = referenceCenterEv,
+                resolvedCenterEv = resolvedCenterEv,
+                centeredExposureSpanEv = centeredExposureSpanEv,
+                brightnessErrorEv = resolvedEvaluation.brightnessErrorEv,
+                protectedExposureGain = protectedExposureGain,
+            ),
+        )
+    }
+
     private fun buildMap(
         grid: HdrPgtmGrid,
         pointCount: Int,
@@ -445,27 +601,40 @@ internal object DngHdrProfileGainTableGenerator {
         cellPlans: Array<HdrLtmExposurePlan>,
         diagnosticBand: DiagnosticBand?,
         fusionParameters: HdrExposureFusionParameters,
+        protectedExposureGain: Float?,
     ): DngProfileGainTableMap {
         val gains = FloatArray(grid.mapPointsH * grid.mapPointsV * pointCount)
-        // Local exposure plans vary smoothly. Quantizing only the brightest exposure to 1/128 EV
-        // limits the maximum planning error to 1/256 EV while allowing neighboring cells to share
-        // the complete 257-point fused curve.
-        val curveCache = HashMap<Int, FloatArray>()
+        // Local exposure plans vary smoothly. Quantizing both stack endpoints to 1/128 EV limits
+        // the maximum planning error to 1/256 EV while allowing neighboring cells to share the
+        // complete 257-point fused curve.
+        val curveCache = HashMap<Long, FloatArray>()
         for (cell in cellPlans.indices) {
             val plan = cellPlans[cell]
-            val planKey = (log2(plan.brightestExposureGain) * EXPOSURE_PLAN_STEPS_PER_EV)
+            val brightestKey = (log2(plan.brightestExposureGain) * EXPOSURE_PLAN_STEPS_PER_EV)
                 .roundToInt()
+            val darkestKey = (log2(plan.darkestExposureGain) * EXPOSURE_PLAN_STEPS_PER_EV)
+                .roundToInt()
+            val planKey = (brightestKey.toLong() shl 32) xor
+                (darkestKey.toLong() and 0xffffffffL)
             val curve = curveCache.getOrPut(planKey) {
                 val quantizedBrightestGain = 2.0f.pow(
-                    planKey.toFloat() / EXPOSURE_PLAN_STEPS_PER_EV
-                ).coerceIn(plan.darkestExposureGain, fusionParameters.maxExposureGain)
+                    brightestKey.toFloat() / EXPOSURE_PLAN_STEPS_PER_EV
+                ).coerceIn(inputScale, fusionParameters.maxExposureGain)
+                val quantizedDarkestGain = 2.0f.pow(
+                    darkestKey.toFloat() / EXPOSURE_PLAN_STEPS_PER_EV
+                ).coerceIn(inputScale, quantizedBrightestGain)
                 FloatArray(pointCount).also { cachedCurve ->
                     writeExposureFusionCurve(
                         output = cachedCurve,
                         outputOffset = 0,
                         pointCount = pointCount,
-                        plan = plan.copy(brightestExposureGain = quantizedBrightestGain),
+                        inputScale = inputScale,
+                        plan = HdrLtmExposurePlan(
+                            brightestExposureGain = quantizedBrightestGain,
+                            darkestExposureGain = quantizedDarkestGain,
+                        ),
                         fusionParameters = fusionParameters,
+                        protectedExposureGain = protectedExposureGain,
                     )
                 }
             }
@@ -499,27 +668,30 @@ internal object DngHdrProfileGainTableGenerator {
     }
 
     /**
-     * Renders eight exposure levels equally spaced in EV. For each table input, weights are
-     * computed from the distance of every rendered exposure to the well-exposed key, normalized,
-     * and used to fuse the rendered values. The PGTM gain is then recovered from fusedOutput /
-     * sceneInput. Monotonic enforcement only removes numerical or exposure-switching reversals.
+     * Renders eight exposure levels. The standard path spaces all eight equally in EV; an
+     * adaptive centered stack spaces seven equally and reserves one inputScale exposure for
+     * highlight reconstruction. Weights are computed from each rendered exposure's distance to
+     * the well-exposed key. Monotonic enforcement only removes numerical or switching reversals.
      */
     private fun writeExposureFusionCurve(
         output: FloatArray,
         outputOffset: Int,
         pointCount: Int,
+        inputScale: Float,
         plan: HdrLtmExposurePlan,
         fusionParameters: HdrExposureFusionParameters,
+        protectedExposureGain: Float?,
     ) {
         val brightestGain = plan.brightestExposureGain.coerceIn(
             MIN_TABLE_GAIN,
             fusionParameters.maxExposureGain,
         )
         val darkestGain = plan.darkestExposureGain.coerceIn(MIN_TABLE_GAIN, brightestGain)
-        val exposureGains = FloatArray(SYNTHETIC_EXPOSURE_COUNT) { exposure ->
-            val amount = exposure.toFloat() / (SYNTHETIC_EXPOSURE_COUNT - 1).toFloat()
-            2.0f.pow(lerp(log2(brightestGain), log2(darkestGain), amount))
-        }
+        val exposureGains = syntheticExposureGains(
+            brightestGain,
+            darkestGain,
+            protectedExposureGain,
+        )
         val exposureGainEvs = FloatArray(SYNTHETIC_EXPOSURE_COUNT) { exposure ->
             log2(exposureGains[exposure])
         }
@@ -530,7 +702,7 @@ internal object DngHdrProfileGainTableGenerator {
                 output[outputOffset + index] = brightestGain
                 continue
             }
-            val sceneInput = tableInput / darkestGain
+            val sceneInput = tableInput / inputScale
             val fusedOutput = fuseSyntheticExposures(
                 sceneInput = sceneInput,
                 exposureGains = exposureGains,
@@ -541,6 +713,28 @@ internal object DngHdrProfileGainTableGenerator {
             output[outputOffset + index] = (monotonicOutput / sceneInput)
                 .coerceIn(MIN_TABLE_GAIN, fusionParameters.maxExposureGain)
             previousOutput = monotonicOutput
+        }
+    }
+
+    private fun syntheticExposureGains(
+        brightestGain: Float,
+        darkestGain: Float,
+        protectedExposureGain: Float? = null,
+    ): FloatArray {
+        val protectedGain = protectedExposureGain
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?.coerceAtMost(darkestGain)
+            ?: return FloatArray(SYNTHETIC_EXPOSURE_COUNT) { exposure ->
+                val amount = exposure.toFloat() / (SYNTHETIC_EXPOSURE_COUNT - 1).toFloat()
+                2.0f.pow(lerp(log2(brightestGain), log2(darkestGain), amount))
+            }
+        return FloatArray(SYNTHETIC_EXPOSURE_COUNT) { exposure ->
+            if (exposure == SYNTHETIC_EXPOSURE_COUNT - 1) {
+                protectedGain
+            } else {
+                val amount = exposure.toFloat() / (SYNTHETIC_EXPOSURE_COUNT - 2).toFloat()
+                2.0f.pow(lerp(log2(brightestGain), log2(darkestGain), amount))
+            }
         }
     }
 
@@ -693,7 +887,33 @@ internal object DngHdrProfileGainTableGenerator {
         return values.firstOrNull { it.isFinite() && it > 0f } ?: 1f
     }
 
+    private data class ResolvedExposureFusion(
+        val plan: HdrLtmExposurePlan,
+        val parameters: HdrExposureFusionParameters,
+        val preserveExposureSpan: Boolean,
+        val protectedExposureGain: Float?,
+        val diagnostics: HdrExposureFusionResolutionDiagnostics?,
+    )
+
+    private data class ExposureCenterEvaluation(
+        val centerEv: Float,
+        val brightnessErrorEv: Float,
+    )
+
 }
+
+internal data class HdrExposureFusionBrightnessTarget(
+    val sceneInput: Float,
+    val targetOutput: Float,
+)
+
+internal data class HdrExposureFusionResolutionDiagnostics(
+    val referenceCenterEv: Float,
+    val resolvedCenterEv: Float,
+    val centeredExposureSpanEv: Float,
+    val brightnessErrorEv: Float,
+    val protectedExposureGain: Float,
+)
 
 internal data class HdrExposureFusionParameters(
     val autoExposureTarget: Float,
