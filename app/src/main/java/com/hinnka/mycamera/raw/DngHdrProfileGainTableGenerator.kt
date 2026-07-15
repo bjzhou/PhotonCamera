@@ -43,6 +43,12 @@ internal object DngHdrProfileGainTableGenerator {
     private const val AUTO_EXPOSURE_TARGET = 0.278f
     private const val WELL_EXPOSED_KEY = 0.525f
     private const val WELL_EXPOSED_SIGMA_EV = 0.750f
+    // Official Pixel maps broaden the exposure fusion only in the shoulder:
+    // the last trustworthy highlights stay close to white while the toe and
+    // midtones retain the narrower local-exposure weighting.
+    private const val HIGHLIGHT_WELL_EXPOSED_SIGMA_EV = 1.200f
+    private const val HIGHLIGHT_FUSION_START = 0.45f
+    private const val HIGHLIGHT_FUSION_END = 0.65f
     private const val EXPOSURE_PLAN_STEPS_PER_EV = 128f
     private const val WEIGHT_LUT_STEPS_PER_EV = 256f
     private const val WEIGHT_LUT_MAX_DISTANCE_EV = 12f
@@ -66,6 +72,14 @@ internal object DngHdrProfileGainTableGenerator {
     ) { index ->
         val distanceEv = index.toFloat() / WEIGHT_LUT_STEPS_PER_EV
         exp((-0.5f * (distanceEv / WELL_EXPOSED_SIGMA_EV).pow(2f)).toDouble()).toFloat()
+    }
+    private val HIGHLIGHT_WELL_EXPOSED_WEIGHT_LUT = FloatArray(
+        (WEIGHT_LUT_MAX_DISTANCE_EV * WEIGHT_LUT_STEPS_PER_EV).toInt() + 1
+    ) { index ->
+        val distanceEv = index.toFloat() / WEIGHT_LUT_STEPS_PER_EV
+        exp(
+            (-0.5f * (distanceEv / HIGHLIGHT_WELL_EXPOSED_SIGMA_EV).pow(2f)).toDouble()
+        ).toFloat()
     }
 
     fun gridSizeFor(width: Int, height: Int): IntArray {
@@ -507,6 +521,13 @@ internal object DngHdrProfileGainTableGenerator {
         exposureGainEvs: FloatArray,
     ): Float {
         val sceneFromKeyEv = log2(max(sceneInput, CURVE_EPS) / WELL_EXPOSED_KEY)
+        val darkestExposureGain = exposureGains.lastOrNull() ?: return 0f
+        val tableInput = sceneInput * darkestExposureGain
+        val highlightFusionStrength = smoothStep(
+            HIGHLIGHT_FUSION_START,
+            HIGHLIGHT_FUSION_END,
+            tableInput
+        )
         var weightSum = 0f
         var outputSum = 0f
         var nearestDistanceEv = Float.POSITIVE_INFINITY
@@ -515,7 +536,11 @@ internal object DngHdrProfileGainTableGenerator {
             val exposureGain = exposureGains[exposure]
             val exposed = max(sceneInput * exposureGain, CURVE_EPS)
             val distanceEv = sceneFromKeyEv + exposureGainEvs[exposure]
-            val weight = wellExposedWeight(distanceEv)
+            val weight = lerp(
+                wellExposedWeight(distanceEv, WELL_EXPOSED_WEIGHT_LUT),
+                wellExposedWeight(distanceEv, HIGHLIGHT_WELL_EXPOSED_WEIGHT_LUT),
+                highlightFusionStrength
+            )
             weightSum += weight
             outputSum += weight * min(exposed, 1f)
             if (abs(distanceEv) < nearestDistanceEv) {
@@ -527,16 +552,16 @@ internal object DngHdrProfileGainTableGenerator {
         return (outputSum / weightSum).coerceIn(0f, 1f)
     }
 
-    private fun wellExposedWeight(distanceEv: Float): Float {
+    private fun wellExposedWeight(distanceEv: Float, lut: FloatArray): Float {
         // Linear interpolation at 1/256 EV removes millions of exp() calls without changing the
         // exposure-fusion equation or its normalization.
         val scaled = abs(distanceEv) * WEIGHT_LUT_STEPS_PER_EV
-        if (scaled >= WELL_EXPOSED_WEIGHT_LUT.lastIndex.toFloat()) return 0f
+        if (scaled >= lut.lastIndex.toFloat()) return 0f
         val index = scaled.toInt()
         val fraction = scaled - index
         return lerp(
-            WELL_EXPOSED_WEIGHT_LUT[index],
-            WELL_EXPOSED_WEIGHT_LUT[index + 1],
+            lut[index],
+            lut[index + 1],
             fraction
         )
     }

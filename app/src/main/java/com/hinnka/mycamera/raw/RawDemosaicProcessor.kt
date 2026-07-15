@@ -1350,7 +1350,7 @@ class RawDemosaicProcessor {
                 )
             }
             actualRotation = if (dngRawData.rotation != 0) dngRawData.rotation else rotation
-            embeddedDngRenderPlan = if (false) {
+            embeddedDngRenderPlan = if (hasClassicTiffHeader) {
                 DngEmbeddedProfile.resolveRenderPlan(
                     file = dngFile,
                     metadata = actualMetadata,

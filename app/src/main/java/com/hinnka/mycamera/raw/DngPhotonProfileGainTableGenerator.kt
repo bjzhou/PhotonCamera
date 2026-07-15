@@ -196,7 +196,7 @@ internal object DngPhotonProfileGainTableGenerator {
                     "tailRangeEv=${toneAnchors.tailHighlightRangeEv} " +
                     "exposureRangeEv=${toneAnchors.exposureHighlightRangeEv} " +
                     "exposureLiftEv=$exposureLiftEv " +
-                    "whiteAdjustment=${toneAnchors.rawWhitePoint / BASE_WHITE_POINT} " +
+                    "whiteAdjustment=${toneAnchors.whitePoint / BASE_WHITE_POINT} " +
                     "maxGain=$MAX_GAIN_VALUE"
             )
         }
@@ -272,13 +272,15 @@ internal object DngPhotonProfileGainTableGenerator {
         val baselineGain = 2.0f.pow(baselineExposureEv.coerceIn(MIN_BASELINE_EV, MAX_BASELINE_EV))
 
         // ProfileGainTableMap lookup is evaluated after BaselineExposure even
-        // when the gain itself is applied before it. Cover the raw-linear white
-        // domain, including at most 30% profile-RGB overrange, so positive
-        // BaselineExposure does not collapse its recoverable highlight headroom
-        // into the final table entry.
+        // when the gain itself is applied before it. Its right edge belongs to
+        // that post-baseline profile domain and must not be expanded by the
+        // baseline gain a second time. Doing so would map sensor saturation to
+        // an output below white and make clipped channel ratios visible. Keep a
+        // small, statistics-driven profile overrange, while values beyond it
+        // reuse the terminal gain and naturally remain above display white.
         val blackRangeWhiteReference = BASE_WHITE_POINT * whitePointAdjustment
-        val rawWhitePoint = blackRangeWhiteReference
-        val whitePoint = rawWhitePoint * baselineGain
+        val whitePoint = blackRangeWhiteReference
+        val rawWhitePoint = whitePoint / baselineGain
 
         // The EV-histogram foot identifies the perceptual shadow onset. Keep a
         // short toe reserve below it; unlike p10, this point is based on image

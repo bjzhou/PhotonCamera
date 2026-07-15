@@ -74,6 +74,34 @@ class DngHdrProfileGainTableGeneratorTest {
     }
 
     @Test
+    fun official184953TrustedHighlightTailStaysNearWhite() {
+        val fixture = loadFixture(
+            "/pgtm/skyyking/Skyyking_20260711_184953.RAW-02.ORIGINAL.pgtfixture"
+        )
+        val map = generateMap(fixture)
+        val expectedSpecular = anchorGains(
+            source = fixture.expectedGains,
+            cellCount = fixture.cellCount,
+            anchor = ToneAnchor.SPECULAR
+        )
+        val actualSpecular = actualAnchorGains(fixture, map, ToneAnchor.SPECULAR)
+        val trustedShoulderCells = actualSpecular.indices.filter { cell ->
+            fixture.packedStats[cell * CELL_STATS_STRIDE + STAT_P999] in 2f..3f
+        }
+
+        assertTrue("Expected trusted shoulder cells", trustedShoulderCells.isNotEmpty())
+        trustedShoulderCells.forEach { cell ->
+            val p999 = fixture.packedStats[cell * CELL_STATS_STRIDE + STAT_P999]
+            val expectedOutput = p999 * expectedSpecular[cell]
+            val actualOutput = p999 * actualSpecular[cell]
+            assertTrue(
+                "cell=$cell p999=$p999 expectedOutput=$expectedOutput actualOutput=$actualOutput",
+                actualOutput + 0.025f >= expectedOutput
+            )
+        }
+    }
+
+    @Test
     fun generatedMapsMatchEmbeddedSemanticToneDistributions() {
         val failures = mutableListOf<String>()
         loadFixtures().forEach { fixture ->

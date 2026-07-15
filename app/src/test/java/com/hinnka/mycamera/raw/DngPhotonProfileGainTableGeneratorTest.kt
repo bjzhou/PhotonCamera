@@ -196,7 +196,7 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun baselineExposureHeadroomRemainsInsideProfileGainTableDomain() {
+    fun baselineExposureDoesNotExpandProfileGainTablePastTrustedWhite() {
         val width = 1280
         val height = 960
         val grid = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
@@ -241,15 +241,15 @@ class DngPhotonProfileGainTableGeneratorTest {
         val inputScale = map.mapInputWeights.sum()
         val sceneWhite = 1f / inputScale
         val rawRight = sceneWhite / baselineGain
-        val displayAtNominalWhite = finalOutputForScene(map, inputScale, 1.3f)
-        val displayAtRawWhite = finalOutputForScene(map, inputScale, baselineGain)
+        val terminalGain = medianGain(map, tableInput = 1f)
+        val pgtmAtRawWhite = baselineGain * terminalGain
         val displayAtDomainRight = finalOutputForScene(map, inputScale, sceneWhite)
 
-        assertTrue("sceneWhite=$sceneWhite", sceneWhite in 10.39f..10.41f)
-        assertTrue("rawRight=$rawRight", rawRight in 1.299f..1.301f)
+        assertTrue("sceneWhite=$sceneWhite", sceneWhite in 1.299f..1.301f)
+        assertTrue("rawRight=$rawRight", rawRight in 0.1623f..0.1627f)
         assertTrue(
-            "nominal=$displayAtNominalWhite rawWhite=$displayAtRawWhite",
-            displayAtRawWhite > displayAtNominalWhite + 0.05f
+            "terminalGain=$terminalGain pgtmAtRawWhite=$pgtmAtRawWhite",
+            pgtmAtRawWhite > 1.5f
         )
         assertTrue("domainRight=$displayAtDomainRight", displayAtDomainRight in 0.99f..1.01f)
         assertCurvesAreFiniteAndMonotonic(map, sceneWhite)
@@ -348,7 +348,7 @@ class DngPhotonProfileGainTableGeneratorTest {
             0.045098f / 2.0f.pow(
                 DngPhotonProfileGainTableGenerator.SHADOW_FOOT_HEADROOM_EV
             ),
-            rawRight / 2.0f.pow(9.75f)
+            sceneWhite / 2.0f.pow(9.75f)
         )
         val blackOutput = sourceBlackPoint * medianGain(
             map,
@@ -368,11 +368,11 @@ class DngPhotonProfileGainTableGeneratorTest {
         assertTrue("gamma=${map.gamma}", map.gamma == 0.5f)
         assertTrue(
             "sceneWhite=$sceneWhite baselineGain=$baselineGain",
-            sceneWhite / baselineGain in 1f..1.3001f
+            sceneWhite in 1f..1.3001f
         )
         assertTrue(
             "rawRight=$rawRight",
-            rawRight in 1f..1.3001f
+            rawRight in (1f / baselineGain)..(1.3001f / baselineGain)
         )
         assertTrue("outputDynamicRangeEv=$outputDynamicRangeEv", outputDynamicRangeEv in 8.8f..9.2f)
         assertTrue("finalMiddleOutput=$finalMiddleOutput", finalMiddleOutput in 0.285f..0.305f)
