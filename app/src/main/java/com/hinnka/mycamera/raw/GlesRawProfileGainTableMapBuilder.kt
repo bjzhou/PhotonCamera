@@ -39,6 +39,10 @@ internal class GlesRawProfileGainTableMapBuilder {
         samplesPerPixel: Int,
         statsBounds: Rect?,
         profileToneMapMode: RawProfileToneMapMode,
+        colorCorrectionMatrix: FloatArray = metadata.colorCorrectionMatrix,
+        cameraWhite: FloatArray = metadata.cameraWhite,
+        hueSatMap: DcpHueSatMap? = null,
+        hueSatTextureId: Int = 0,
     ): DngProfileGainTableMap? {
         if (statsProgram == 0 || rawTextureId == 0 || width <= 0 || height <= 0) return null
         if (profileToneMapMode != RawProfileToneMapMode.Photon &&
@@ -100,9 +104,31 @@ internal class GlesRawProfileGainTableMapBuilder {
                 uniform("uColorCorrectionMatrix"),
                 1,
                 false,
-                transposeMatrix3x3(metadata.colorCorrectionMatrix),
+                transposeMatrix3x3(colorCorrectionMatrix),
                 0
             )
+            val safeCameraWhite = safeCameraWhite(cameraWhite)
+            GLES31.glUniform3f(
+                uniform("uCameraWhite"),
+                safeCameraWhite[0],
+                safeCameraWhite[1],
+                safeCameraWhite[2],
+            )
+            val activeHueSatMap = hueSatMap?.takeIf { it.isValid && hueSatTextureId != 0 }
+            GLES31.glUniform1i(uniform("uHueSatMapEnabled"), if (activeHueSatMap != null) 1 else 0)
+            GLES31.glUniform3i(
+                uniform("uHueSatMapDivisions"),
+                activeHueSatMap?.hueDivisions ?: 1,
+                activeHueSatMap?.satDivisions ?: 1,
+                activeHueSatMap?.valueDivisions ?: 1,
+            )
+            GLES31.glUniform1i(
+                uniform("uHueSatMapEncoding"),
+                activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
+            )
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE1)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, hueSatTextureId)
+            GLES31.glUniform1i(uniform("uHueSatMap"), 1)
             GLES31.glUniform1i(uniform("uCellSumsOffset"), cellSumsOffset)
             GLES31.glUniform1i(uniform("uGlobalHistogramOffset"), globalHistogramOffset)
             GLES31.glUniform1i(uniform("uGlobalCountersOffset"), globalCountersOffset)
@@ -179,7 +205,6 @@ internal class GlesRawProfileGainTableMapBuilder {
                     height = height,
                     baselineExposureEv = baselineExposureEv,
                     packedCellStats = packedCellStats,
-                    denseGlobalStats = globalStats,
                     diagnosticBand = diagnosticBand
                 )
 
@@ -187,19 +212,6 @@ internal class GlesRawProfileGainTableMapBuilder {
                 RawProfileToneMapMode.OppoMaster -> null
             }
             val completeNs = System.nanoTime()
-            if (map != null && profileToneMapMode == RawProfileToneMapMode.GooglePixel) {
-                val risk = DngHdrProfileGainTableGenerator.highlightRiskBandFor(
-                    stats = globalStats,
-                    inputScale = map.mapInputWeights.sum(),
-                )
-                PLog.d(
-                    TAG,
-                    "Google PGTM highlight risk: strength=${risk.strength} " +
-                        "tableBand=${risk.start}..${risk.end} p90=${globalStats.p90} " +
-                        "p98=${globalStats.p98} p995=${globalStats.p995} " +
-                        "p999=${globalStats.p999} fraction=${globalStats.highlightFraction}"
-                )
-            }
             PLog.d(
                 TAG,
                 "GPU RAW PGTM built: mode=$profileToneMapMode grid=${gridWidth}x${gridHeight} " +
@@ -234,6 +246,13 @@ internal class GlesRawProfileGainTableMapBuilder {
     private fun safeBlackLevel(metadata: RawMetadata): FloatArray {
         val fallback = metadata.blackLevel.firstOrNull() ?: 0f
         return FloatArray(4) { index -> metadata.blackLevel.getOrElse(index) { fallback } }
+    }
+
+    private fun safeCameraWhite(cameraWhite: FloatArray): FloatArray = FloatArray(3) { index ->
+        cameraWhite.getOrElse(index) { 1f }
+            .takeIf { it.isFinite() }
+            ?.coerceIn(0.001f, 1f)
+            ?: 1f
     }
 
     private fun transposeMatrix3x3(matrix: FloatArray): FloatArray {
@@ -309,6 +328,11 @@ internal class GlesRawProfileGainTableMapBuilder {
             uniform float uWhiteLevel;
             uniform float uBaselineExposureGain;
             uniform mat3 uColorCorrectionMatrix;
+            uniform vec3 uCameraWhite;
+            uniform sampler3D uHueSatMap;
+            uniform int uHueSatMapEnabled;
+            uniform ivec3 uHueSatMapDivisions;
+            uniform int uHueSatMapEncoding;
             uniform int uCellSumsOffset;
             uniform int uGlobalHistogramOffset;
             uniform int uGlobalCountersOffset;
@@ -331,6 +355,8 @@ internal class GlesRawProfileGainTableMapBuilder {
             const int COUNTER_MAX_INPUT_BITS = 3;
 
             shared float inputSamples[SAMPLE_COUNT];
+
+            ${DcpHueSatMapGl.SHADER_FUNCTIONS}
 
             int baseBayerPattern() {
                 return uCfaPattern >= 8 ? uCfaPattern - 8 :
@@ -414,8 +440,17 @@ internal class GlesRawProfileGainTableMapBuilder {
             }
 
             float pgtmInputAt(ivec2 base) {
-                vec3 profileRgb = uColorCorrectionMatrix * cameraRgbAt(base) *
-                    uBaselineExposureGain;
+                vec3 cameraRgb = min(cameraRgbAt(base), max(uCameraWhite, vec3(0.001)));
+                vec3 profileRgb = clamp(uColorCorrectionMatrix * cameraRgb, vec3(0.0), vec3(1.0));
+                if (uHueSatMapEnabled != 0) {
+                    profileRgb = dngApplyHueSatMap(
+                        profileRgb,
+                        uHueSatMap,
+                        uHueSatMapDivisions,
+                        uHueSatMapEncoding
+                    );
+                }
+                profileRgb *= uBaselineExposureGain;
                 float minChannel = min(profileRgb.r, min(profileRgb.g, profileRgb.b));
                 float maxChannel = max(profileRgb.r, max(profileRgb.g, profileRgb.b));
                 float value =

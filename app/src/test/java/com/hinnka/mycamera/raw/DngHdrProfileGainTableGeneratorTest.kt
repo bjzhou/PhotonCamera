@@ -103,85 +103,7 @@ class DngHdrProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun denseSceneStatsMatchOfficial184953HighlightShoulder() {
-        val fixture = loadFixture(
-            "/pgtm/skyyking/Skyyking_20260711_184953.RAW-02.ORIGINAL.pgtfixture"
-        )
-        val map = DngHdrProfileGainTableGenerator.forCellStats(
-            width = fixture.width,
-            height = fixture.height,
-            baselineExposureEv = fixture.baselineExposureEv,
-            packedCellStats = fixture.packedStats,
-            denseGlobalStats = DngPgtmGlobalStats(
-                p10 = 0.005191058f,
-                p50 = 0.018155192f,
-                p90 = 0.551834350f,
-                p98 = 1.162652485f,
-                p995 = 3.329099033f,
-                p999 = 8.389943569f,
-                maxInput = 8.389943569f,
-                highlightFraction = 0.034409841f,
-                linearMean = 0.206666246f,
-                logAverage = 0.039490954f,
-                shadowEdge = 0.005191058f,
-                shadowFoot = 0.005191058f,
-                sampleCount = 786_432,
-            ),
-        ) ?: error("Expected Google PGTM for ${fixture.sourceName}")
-        val expectedSpecular = anchorGains(
-            source = fixture.expectedGains,
-            cellCount = fixture.cellCount,
-            anchor = ToneAnchor.SPECULAR
-        )
-        val actualSpecular = actualAnchorGains(fixture, map, ToneAnchor.SPECULAR)
-        val trustedShoulderCells = actualSpecular.indices.filter { cell ->
-            fixture.packedStats[cell * CELL_STATS_STRIDE + STAT_P999] in 2f..3f
-        }
-
-        assertTrue("Expected trusted shoulder cells", trustedShoulderCells.isNotEmpty())
-        val trustedShoulderResults = trustedShoulderCells.map { cell ->
-            val p999 = fixture.packedStats[cell * CELL_STATS_STRIDE + STAT_P999]
-            val expectedOutput = p999 * expectedSpecular[cell]
-            val actualOutput = p999 * actualSpecular[cell]
-            TrustedShoulderResult(cell, p999, expectedOutput, actualOutput)
-        }
-
-        val fixedShoulderResults = listOf(
-            FixedShoulderReference(tableInput = 0.25f, officialMedianGain = 0.915178f),
-            FixedShoulderReference(tableInput = 0.50f, officialMedianGain = 0.544002f),
-            FixedShoulderReference(tableInput = 0.75f, officialMedianGain = 0.395906f),
-        ).map { reference ->
-            val actualMedianGain = percentile(
-                FloatArray(fixture.cellCount) { cell ->
-                    sampleGain(map, reference.tableInput, cell)
-                },
-                0.50f,
-            )
-            FixedShoulderResult(
-                reference = reference,
-                actualMedianGain = actualMedianGain,
-            )
-        }
-        assertTrue(
-            trustedShoulderResults.joinToString("\n") { result ->
-                "cell=${result.cell} p999=${result.p999} expectedOutput=" +
-                    "${result.expectedOutput} actualOutput=${result.actualOutput}"
-            } + "\n" + fixedShoulderResults.joinToString("\n") { result ->
-                "tableInput=${result.reference.tableInput} officialMedianGain=" +
-                    "${result.reference.officialMedianGain} " +
-                    "actualMedianGain=${result.actualMedianGain}"
-            },
-            trustedShoulderResults.all { result ->
-                result.actualOutput + 0.025f >= result.expectedOutput
-            } &&
-            fixedShoulderResults.all { result ->
-                abs(result.actualMedianGain - result.reference.officialMedianGain) <= 0.03f
-            },
-        )
-    }
-
-    @Test
-    fun denseSceneRiskPreservesOfficialShouldersAcrossSkyykingSet() {
+    fun fixedFusionPreservesOfficialShouldersAcrossSkyykingSet() {
         val fixturesByName = loadFixtures().associateBy { it.sourceName }
         val results = denseShoulderCases().flatMap { case ->
             val fixture = fixturesByName[case.name] ?: error("Missing fixture ${case.name}")
@@ -190,7 +112,6 @@ class DngHdrProfileGainTableGeneratorTest {
                 height = fixture.height,
                 baselineExposureEv = fixture.baselineExposureEv,
                 packedCellStats = fixture.packedStats,
-                denseGlobalStats = case.globalStats,
             ) ?: error("Expected Google PGTM for ${case.name}")
             listOf(0.25f, 0.50f, 0.75f).mapIndexed { index, tableInput ->
                 val actual = percentile(
@@ -213,36 +134,6 @@ class DngHdrProfileGainTableGeneratorTest {
             },
             results.all { it.errorEv <= 0.38f },
         )
-    }
-
-    @Test
-    fun denseTailRiskSeparatesSparseOutliersFromSupportedHighlights() {
-        val fixturesByName = loadFixtures().associateBy { it.sourceName }
-        val casesByName = denseShoulderCases().associateBy { it.name }
-
-        fun risk(name: String): HdrHighlightRiskBand {
-            val fixture = fixturesByName[name] ?: error("Missing fixture $name")
-            val case = casesByName[name] ?: error("Missing dense stats $name")
-            return DngHdrProfileGainTableGenerator.highlightRiskBandFor(
-                stats = case.globalStats,
-                inputScale = fixture.inputScale,
-            )
-        }
-
-        val sparseBrokenTail = risk("Skyyking_20260711_184953.RAW-02.ORIGINAL")
-        val denseSupportedHighlights = risk("Skyyking_20260711_185704.RAW-02.ORIGINAL")
-        val continuousTail = risk("Skyyking_20260711_184627.RAW-02.ORIGINAL")
-
-        assertTrue("sparseBrokenTail=$sparseBrokenTail", sparseBrokenTail.strength > 0.99f)
-        assertTrue(
-            "sparseBrokenTail=$sparseBrokenTail",
-            sparseBrokenTail.start in 0.17f..0.18f && sparseBrokenTail.end in 0.36f..0.37f,
-        )
-        assertTrue(
-            "denseSupportedHighlights=$denseSupportedHighlights",
-            denseSupportedHighlights.strength < 0.01f,
-        )
-        assertTrue("continuousTail=$continuousTail", continuousTail.strength < 0.01f)
     }
 
     @Test
@@ -464,54 +355,26 @@ class DngHdrProfileGainTableGeneratorTest {
     }
 
     private fun denseShoulderCases(): List<DenseShoulderCase> = listOf(
-        denseShoulderCase("Skyyking_20260711_184627.RAW-02.ORIGINAL", 0.020172335f, 0.124901251f, 0.875294007f, 5.471382292f, 10.767577893f, 14.655574315f, 20.611095419f, 0.099154154f, 0.499043244f, 0.125733883f, 0.331765622f, 0.205544580f, 0.152909992f),
-        denseShoulderCase("Skyyking_20260711_184751.RAW-02.ORIGINAL", 0.061056067f, 0.314396789f, 1.012212430f, 1.605002744f, 2.246847243f, 3.700378549f, 4.366255744f, 0.124490102f, 0.437985919f, 0.264671714f, 0.462672237f, 0.337412789f, 0.272237092f),
-        denseShoulderCase("Skyyking_20260711_184953.RAW-02.ORIGINAL", 0.005191058f, 0.018155192f, 0.551834350f, 1.162652485f, 3.329099033f, 8.389943569f, 8.389943569f, 0.034409841f, 0.206666246f, 0.039490954f, 0.915177912f, 0.544002324f, 0.395905923f),
-        denseShoulderCase("Skyyking_20260711_185653.RAW-02.ORIGINAL", 0.370311566f, 2.512482396f, 3.813213919f, 5.120475517f, 5.567614998f, 5.790177933f, 38.276195401f, 0.746487935f, 2.251304119f, 1.571741688f, 0.213499438f, 0.181819726f, 0.162513237f),
-        denseShoulderCase("Skyyking_20260711_185704.RAW-02.ORIGINAL", 0.145013743f, 0.316054048f, 3.469537212f, 8.847691807f, 14.915796129f, 29.121761960f, 29.121761960f, 0.301193237f, 1.294745890f, 0.479610381f, 0.163654307f, 0.101506390f, 0.075539880f),
-        denseShoulderCase("Skyyking_20260711_185836.RAW-02.ORIGINAL", 0.012206823f, 0.126480593f, 0.355587152f, 0.432792685f, 0.462650502f, 0.493159692f, 2.637294839f, 0.000026703f, 0.156404806f, 0.089910030f, 0.522830814f, 0.433588199f, 0.374911249f),
-        denseShoulderCase("Skyyking_20260712_105529.RAW-02.ORIGINAL", 0.010147940f, 0.107563684f, 1.562283487f, 4.157630135f, 6.125361249f, 8.462417930f, 18.567126558f, 0.154716492f, 0.510046194f, 0.124380931f, 0.332546350f, 0.203987684f, 0.150961947f),
-        denseShoulderCase("Skyyking_20260713_232945.RAW-02.ORIGINAL", 0.038518862f, 0.254915462f, 0.947498705f, 1.376204882f, 1.562541283f, 1.695016885f, 6.936506958f, 0.107442220f, 0.378671069f, 0.221436961f, 0.504472025f, 0.425721936f, 0.372749154f),
-        denseShoulderCase("Skyyking_20260714_083737.RAW-02.ORIGINAL", 0.003378016f, 0.008042096f, 0.294214780f, 4.110145986f, 5.340132478f, 5.523095724f, 5.645071221f, 0.037193298f, 0.192204495f, 0.017270404f, 0.735527232f, 0.438027993f, 0.319880389f),
-        denseShoulderCase("Skyyking_20260714_092416.RAW-02.ORIGINAL", 0.004266809f, 0.063950656f, 2.126153418f, 3.981748021f, 4.972982040f, 6.020569097f, 20.924798021f, 0.187920888f, 0.539285387f, 0.071365597f, 0.243842043f, 0.142250773f, 0.102864855f),
-        denseShoulderCase("Skyyking_20260714_123251.RAW-02.ORIGINAL", 0.017058925f, 0.120602039f, 0.471383246f, 4.107495723f, 7.774886715f, 20.029784120f, 20.287619715f, 0.045697530f, 0.362590556f, 0.109233882f, 0.259386316f, 0.154736947f, 0.113109255f),
-        denseShoulderCase("Skyyking_20260714_151021.RAW-02.ORIGINAL", 0.005190248f, 0.084016346f, 0.313368077f, 2.072844313f, 4.232514755f, 7.760019339f, 10.563597493f, 0.050816854f, 0.222183756f, 0.064319970f, 0.411366213f, 0.272355564f, 0.209032677f),
+        denseShoulderCase("Skyyking_20260711_184627.RAW-02.ORIGINAL", 0.331765622f, 0.205544580f, 0.152909992f),
+        denseShoulderCase("Skyyking_20260711_184751.RAW-02.ORIGINAL", 0.462672237f, 0.337412789f, 0.272237092f),
+        denseShoulderCase("Skyyking_20260711_184953.RAW-02.ORIGINAL", 0.915177912f, 0.544002324f, 0.395905923f),
+        denseShoulderCase("Skyyking_20260711_185653.RAW-02.ORIGINAL", 0.213499438f, 0.181819726f, 0.162513237f),
+        denseShoulderCase("Skyyking_20260711_185704.RAW-02.ORIGINAL", 0.163654307f, 0.101506390f, 0.075539880f),
+        denseShoulderCase("Skyyking_20260711_185836.RAW-02.ORIGINAL", 0.522830814f, 0.433588199f, 0.374911249f),
+        denseShoulderCase("Skyyking_20260712_105529.RAW-02.ORIGINAL", 0.332546350f, 0.203987684f, 0.150961947f),
+        denseShoulderCase("Skyyking_20260713_232945.RAW-02.ORIGINAL", 0.504472025f, 0.425721936f, 0.372749154f),
+        denseShoulderCase("Skyyking_20260714_083737.RAW-02.ORIGINAL", 0.735527232f, 0.438027993f, 0.319880389f),
+        denseShoulderCase("Skyyking_20260714_092416.RAW-02.ORIGINAL", 0.243842043f, 0.142250773f, 0.102864855f),
+        denseShoulderCase("Skyyking_20260714_123251.RAW-02.ORIGINAL", 0.259386316f, 0.154736947f, 0.113109255f),
+        denseShoulderCase("Skyyking_20260714_151021.RAW-02.ORIGINAL", 0.411366213f, 0.272355564f, 0.209032677f),
     )
 
     private fun denseShoulderCase(
         name: String,
-        p10: Float,
-        p50: Float,
-        p90: Float,
-        p98: Float,
-        p995: Float,
-        p999: Float,
-        maxInput: Float,
-        highlightFraction: Float,
-        linearMean: Float,
-        logAverage: Float,
         gain25: Float,
         gain50: Float,
         gain75: Float,
-    ) = DenseShoulderCase(
-        name = name,
-        globalStats = DngPgtmGlobalStats(
-            p10 = p10,
-            p50 = p50,
-            p90 = p90,
-            p98 = p98,
-            p995 = p995,
-            p999 = p999,
-            maxInput = maxInput,
-            highlightFraction = highlightFraction,
-            linearMean = linearMean,
-            logAverage = logAverage,
-            shadowEdge = p10,
-            shadowFoot = p10,
-            sampleCount = 786_432,
-        ),
-        officialMedianGains = floatArrayOf(gain25, gain50, gain75),
-    )
+    ) = DenseShoulderCase(name, floatArrayOf(gain25, gain50, gain75))
 
     private fun loadFixtures(): List<PgtmFixture> = FIXTURE_RESOURCES.map(::loadFixture)
 
@@ -579,26 +442,8 @@ class DngHdrProfileGainTableGeneratorTest {
         val inputScale: Float get() = inputWeights.sum()
     }
 
-    private data class FixedShoulderReference(
-        val tableInput: Float,
-        val officialMedianGain: Float,
-    )
-
-    private data class FixedShoulderResult(
-        val reference: FixedShoulderReference,
-        val actualMedianGain: Float,
-    )
-
-    private data class TrustedShoulderResult(
-        val cell: Int,
-        val p999: Float,
-        val expectedOutput: Float,
-        val actualOutput: Float,
-    )
-
     private data class DenseShoulderCase(
         val name: String,
-        val globalStats: DngPgtmGlobalStats,
         val officialMedianGains: FloatArray,
     )
 

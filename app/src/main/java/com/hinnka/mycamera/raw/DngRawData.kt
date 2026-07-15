@@ -18,6 +18,7 @@ import java.nio.ByteBuffer
  * @param blackLevel 黑电平值数组 [R, Gr, Gb, B]
  * @param whiteBalance 白平衡增益 [R, Gr, Gb, B]
  * @param colorMatrix 色彩校正矩阵 (3x3 = 9个元素，行主序)
+ * @param cameraWhite DNG SDK 色彩规格在当前白点下计算出的相机空间白色 [R, G, B]
  * @param rotation 旋转角度 (0, 90, 180, 270)
  * @param shadowScale DNG ShadowScale，用于 Adobe DefaultBlackRender Auto 的暗部黑点计算
  * @param lensShadingMap Lens Shading Map (LSC) 增益表，null表示无LSC数据
@@ -40,6 +41,7 @@ data class DngRawData @Keep constructor(
     val preMul: FloatArray,
     val whiteBalance: FloatArray,
     val colorMatrix: FloatArray,
+    val cameraWhite: FloatArray,
     val cfaPattern: Int, // 0..3=Bayer, 4..7=4x4 expanded Bayer, 8..11=8x8 expanded Bayer
     val rotation: Int,
     val baselineExposure: Float,
@@ -100,6 +102,7 @@ data class DngRawData @Keep constructor(
         if (!preMul.contentEquals(other.preMul)) return false
         if (!whiteBalance.contentEquals(other.whiteBalance)) return false
         if (!colorMatrix.contentEquals(other.colorMatrix)) return false
+        if (!cameraWhite.contentEquals(other.cameraWhite)) return false
         if (cfaPattern != other.cfaPattern) return false
         if (rotation != other.rotation) return false
         if (baselineExposure != other.baselineExposure) return false
@@ -141,6 +144,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + preMul.contentHashCode()
         result = 31 * result + whiteBalance.contentHashCode()
         result = 31 * result + colorMatrix.contentHashCode()
+        result = 31 * result + cameraWhite.contentHashCode()
         result = 31 * result + cfaPattern
         result = 31 * result + rotation
         result = 31 * result + baselineExposure.hashCode()

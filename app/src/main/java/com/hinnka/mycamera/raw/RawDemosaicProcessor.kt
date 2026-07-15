@@ -12,6 +12,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
 import androidx.core.graphics.createBitmap
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.data.ContentRepository
@@ -99,6 +100,13 @@ class RawDemosaicProcessor {
                 0.0f, 0.0f, 1.0f
             )
         }
+        val cameraWhite = dngRawData.cameraWhite
+            .takeIf { values ->
+                values.size >= 3 && values.take(3).all { value -> value.isFinite() && value > 0f }
+            }
+            ?.copyOf(3)
+            ?: baseMetadata?.cameraWhite
+            ?: floatArrayOf(1f, 1f, 1f)
 
         val activeArray = if (dngRawData.activeArray != null && dngRawData.activeArray.size == 4) {
             Rect(
@@ -123,7 +131,7 @@ class RawDemosaicProcessor {
             whiteBalanceGains = whiteBalanceGains,
             preMul = preMul,
             colorCorrectionMatrix = colorCorrectionMatrix,
-            cameraWhite = baseMetadata?.cameraWhite ?: floatArrayOf(1f, 1f, 1f),
+            cameraWhite = cameraWhite,
             lensShadingMap = dngRawData.lensShadingMap,
             lensShadingMapWidth = dngRawData.lensShadingMapWidth,
             lensShadingMapHeight = dngRawData.lensShadingMapHeight,
@@ -175,6 +183,7 @@ class RawDemosaicProcessor {
         private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
         private const val EGL_CONTEXT_PRIORITY_LOW_IMG = 0x3103
         private const val PROFILE_GAIN_TABLE_TEXTURE_UNIT = 2
+        private const val LINEAR_DCP_HUE_SAT_TEXTURE_UNIT = 3
         private const val RCD_RAW_TEXTURE_UNIT = 0
         private const val RCD_LENS_SHADING_TEXTURE_UNIT = 1
         private const val RCD_OUTPUT_IMAGE_UNIT = 0
@@ -1350,7 +1359,7 @@ class RawDemosaicProcessor {
                 )
             }
             actualRotation = if (dngRawData.rotation != 0) dngRawData.rotation else rotation
-            embeddedDngRenderPlan = if (hasClassicTiffHeader) {
+            embeddedDngRenderPlan = if (hasClassicTiffHeader && !BuildConfig.DEBUG) {
                 DngEmbeddedProfile.resolveRenderPlan(
                     file = dngFile,
                     metadata = actualMetadata,
@@ -1590,6 +1599,19 @@ class RawDemosaicProcessor {
                         )
                     }
                     rawTexturePreparedForPgtm = true
+                    val generationColorMatrix = resolvedDcpRenderPlan?.colorCorrectionMatrix
+                        ?: actualMetadata.colorCorrectionMatrix
+                    val generationCameraWhite = resolvedDcpRenderPlan?.cameraWhite
+                        ?: actualMetadata.cameraWhite
+                    val generationHueSatMap = resolvedDcpRenderPlan?.hueSatMap
+                        ?.takeIf { it.isValid }
+                    val generationHueSatTextureId = generationHueSatMap?.let { map ->
+                        uploadDcp3DTexture(
+                            textureIdProvider = { dcpHueSatTextureId },
+                            assignTextureId = { dcpHueSatTextureId = it },
+                            table = map,
+                        )
+                    } ?: ensureDummyDcp3DTexture()
                     rawProfileGainTableGpuBuilder.build(
                         rawTextureId = rawTextureId,
                         width = actualWidth,
@@ -1597,7 +1619,11 @@ class RawDemosaicProcessor {
                         metadata = actualMetadata,
                         samplesPerPixel = actualSamplesPerPixel,
                         statsBounds = outputSourceBounds,
-                        profileToneMapMode = requestedProfileToneMapMode
+                        profileToneMapMode = requestedProfileToneMapMode,
+                        colorCorrectionMatrix = generationColorMatrix,
+                        cameraWhite = generationCameraWhite,
+                        hueSatMap = generationHueSatMap,
+                        hueSatTextureId = generationHueSatTextureId,
                     )
                 }
             } catch (error: Exception) {
@@ -2226,6 +2252,7 @@ class RawDemosaicProcessor {
                     "profileRampBlack=${profileExposureUniforms.rampBlack} " +
                     "dngShadowScale=${actualMetadata.shadowScale} " +
                     "dngBaselineExposure=${actualMetadata.baselineExposure} " +
+                    "linearCameraWhite=${linearCameraWhite.contentToString()} " +
                     "dngBaselineExposureInLinear=$applyLinearDngBaselineExposure " +
                     "profileGainTableMapActive=$hasProfileGainTableMap " +
                     "dcpBaselineExposureOffsetApplied=$applyDcpBaselineExposureOffset"
@@ -2244,6 +2271,7 @@ class RawDemosaicProcessor {
                 rawExposureCompensation = 0f,
                 colorCorrectionMatrix = linearColorCorrectionMatrix,
                 cameraWhite = linearCameraWhite,
+                hueSatMap = activeDcpRenderPlan?.hueSatMap,
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
                 applyProfileGainTableMap = hasProfileGainTableMap,
                 clampProfileRgb = useAdobeProfilePipeline,
@@ -2373,6 +2401,7 @@ class RawDemosaicProcessor {
                 metadata = actualMetadata,
                 inputTextureId = combinedInputTexture,
                 dcpRenderPlan = activeDcpRenderPlan,
+                applyDcpHueSatMap = false,
                 profileExposureUniforms = combinedProfileExposureUniforms,
                 spectralFilmLut = spektrafilmLut,
                 colorEngine = colorEngine,
@@ -2927,6 +2956,7 @@ class RawDemosaicProcessor {
         
         uniform sampler2D uDemosaickedTexture;
         uniform sampler2D uProfileGainTableMap;
+        uniform sampler3D uLinearDcpHueSatMap;
         uniform mat3 uColorCorrectionMatrix;
         uniform vec3 uCameraWhite;
         uniform float uExposureGain;
@@ -2939,6 +2969,11 @@ class RawDemosaicProcessor {
         uniform float uProfileGainGamma;
         uniform float uProfileGainBaselineGain;
         uniform int uProfileGainDebugOverlay;
+        uniform int uLinearDcpHueSatEnabled;
+        uniform ivec3 uLinearDcpHueSatDivisions;
+        uniform int uLinearDcpHueSatEncoding;
+
+        ${DcpHueSatMapGl.SHADER_FUNCTIONS}
 
         float profileGainTableValue(int tableX, int tableY, float tableIndex) {
             int pointCount = max(uProfileGainTableSize.z, 1);
@@ -3007,6 +3042,18 @@ class RawDemosaicProcessor {
                 rgb = min(rgb, max(uCameraWhite, vec3(0.001)));
             }
             rgb = uColorCorrectionMatrix * rgb;
+            if (uClampProfileRgb != 0) {
+                // dng_reference::RefBaselineABCtoRGB pins RIMM before Hue/Sat Map and PGTM.
+                rgb = clamp(rgb, vec3(0.0), vec3(1.0));
+            }
+            if (uLinearDcpHueSatEnabled != 0) {
+                rgb = dngApplyHueSatMap(
+                    rgb,
+                    uLinearDcpHueSatMap,
+                    uLinearDcpHueSatDivisions,
+                    uLinearDcpHueSatEncoding
+                );
+            }
             vec3 profileInputRgb = rgb * uProfileGainBaselineGain;
             float tableInput = profileGainTableInput(profileInputRgb);
             rgb *= profileGain(profileInputRgb, tableInput);
@@ -6100,8 +6147,12 @@ class RawDemosaicProcessor {
         return textureId
     }
 
-    private fun bindDcpCombinedResources(program: Int, dcpRenderPlan: DcpRenderPlan?) {
-        val hueSatMap = dcpRenderPlan?.hueSatMap?.takeIf { it.isValid }
+    private fun bindDcpCombinedResources(
+        program: Int,
+        dcpRenderPlan: DcpRenderPlan?,
+        applyHueSatMap: Boolean,
+    ) {
+        val hueSatMap = dcpRenderPlan?.hueSatMap?.takeIf { applyHueSatMap && it.isValid }
         val lookTable = dcpRenderPlan?.lookTable?.takeIf { it.isValid }
 
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uDcpHueSatTexture"), 2)
@@ -6277,6 +6328,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         inputTextureId: Int = demosaicTextureId,
         dcpRenderPlan: DcpRenderPlan? = null,
+        applyDcpHueSatMap: Boolean = true,
         spectralFilmLut: SpectralFilmLut? = null,
         colorEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
         outputWorkingColorSpace: ColorSpace = ColorSpace.ProPhoto,
@@ -6294,6 +6346,7 @@ class RawDemosaicProcessor {
         if (!renderEngineTonePass(
                 inputTextureId = inputTextureId,
                 dcpRenderPlan = dcpRenderPlan,
+                applyDcpHueSatMap = applyDcpHueSatMap,
                 spectralFilmLut = spectralFilmLut,
                 colorEngine = colorEngine,
                 profileToEngineTransform = profileToEngineTransform,
@@ -6341,6 +6394,7 @@ class RawDemosaicProcessor {
     private fun renderEngineTonePass(
         inputTextureId: Int,
         dcpRenderPlan: DcpRenderPlan?,
+        applyDcpHueSatMap: Boolean,
         spectralFilmLut: SpectralFilmLut?,
         colorEngine: RawRenderingEngine,
         profileToEngineTransform: FloatArray,
@@ -6374,7 +6428,7 @@ class RawDemosaicProcessor {
 
         when (colorEngine) {
             RawRenderingEngine.AdobeCurve -> {
-                bindDcpCombinedResources(program, dcpRenderPlan)
+                bindDcpCombinedResources(program, dcpRenderPlan, applyDcpHueSatMap)
                 bindProfileExposureUniforms(program, profileExposureUniforms)
                 val baseCurve = dcpRenderPlan?.toneCurveLut ?: ACR3Curve.samples()
                 bindCurveCombinedResource(program, baseCurve)
@@ -7402,6 +7456,7 @@ class RawDemosaicProcessor {
             PLog.w(TAG, "RAW DCP render plan is not ProPhoto: planSpace=$planSpace")
         }
         val hueSatEnabled = dcpRenderPlan?.hueSatMap?.isValid == true
+        val hueSatMap = dcpRenderPlan?.hueSatMap?.takeIf { it.isValid }
         val lookEnabled = dcpRenderPlan?.lookTable?.isValid == true
         val profileToneCurveEnabled = useAdobeProfilePipeline && dcpRenderPlan?.toneCurveLut != null
         val defaultBlackRender = dcpDefaultBlackRenderOrAuto(dcpRenderPlan)
@@ -7421,7 +7476,10 @@ class RawDemosaicProcessor {
                 "profileSpace=$profileWorkingColorSpace engineSpace=$engineWorkingColorSpace " +
                 "requestedEngine=$requestedColorEngine actualEngine=$colorEngine " +
                 "profileMapsBeforeEngine=$profileMapsBeforeEngine " +
-                "hueSat=$hueSatEnabled look=$lookEnabled " +
+                "hueSat=$hueSatEnabled " +
+                "hueSatDims=${hueSatMap?.let { "${it.hueDivisions}x${it.satDivisions}x${it.valueDivisions}" } ?: "none"} " +
+                "hueSatEncoding=${hueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR} " +
+                "look=$lookEnabled " +
                 "profileToneCurve=$profileToneCurveEnabled " +
                 "profileExposureRamp=$useProfileExposureRamp " +
                 "defaultBlackRender=$defaultBlackRender " +
@@ -7521,6 +7579,7 @@ class RawDemosaicProcessor {
         rawExposureCompensation: Float,
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray = metadata.cameraWhite,
+        hueSatMap: DcpHueSatMap? = null,
         applyDngBaselineExposure: Boolean,
         applyProfileGainTableMap: Boolean,
         clampProfileRgb: Boolean,
@@ -7558,6 +7617,10 @@ class RawDemosaicProcessor {
             rawExposureCompensation,
             applyDngBaselineExposure
         )
+        bindLinearDcpHueSatMap(
+            program = linearRcdProgram,
+            hueSatMap = hueSatMap?.takeIf { clampProfileRgb },
+        )
         bindProfileGainTableMapForLinearRcd(
             linearRcdProgram,
             metadata,
@@ -7581,6 +7644,40 @@ class RawDemosaicProcessor {
 
         drawQuad(linearRcdProgram)
         checkGlError("$label drawQuad")
+    }
+
+    private fun bindLinearDcpHueSatMap(
+        program: Int,
+        hueSatMap: DcpHueSatMap?,
+    ) {
+        val activeMap = hueSatMap?.takeIf { it.isValid }
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatEnabled"),
+            if (activeMap != null) 1 else 0,
+        )
+        GLES30.glUniform3i(
+            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatDivisions"),
+            activeMap?.hueDivisions ?: 1,
+            activeMap?.satDivisions ?: 1,
+            activeMap?.valueDivisions ?: 1,
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatEncoding"),
+            activeMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
+        )
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
+        val textureId = activeMap?.let { map ->
+            uploadDcp3DTexture(
+                textureIdProvider = { dcpHueSatTextureId },
+                assignTextureId = { dcpHueSatTextureId = it },
+                table = map,
+            )
+        } ?: ensureDummyDcp3DTexture()
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatMap"),
+            LINEAR_DCP_HUE_SAT_TEXTURE_UNIT,
+        )
     }
 
     private fun bindProfileGainTableMapForLinearRcd(
@@ -7763,6 +7860,7 @@ class RawDemosaicProcessor {
                 rawExposureCompensation = 0f,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 cameraWhite = cameraWhite,
+                hueSatMap = dcpRenderPlan?.hueSatMap,
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
                 applyProfileGainTableMap = applyProfileGainTableMap,
                 clampProfileRgb = clampProfileRgb,
@@ -8164,6 +8262,7 @@ class RawDemosaicProcessor {
             metadata = metadata,
             inputTextureId = linearTextureId,
             dcpRenderPlan = dcpRenderPlan,
+            applyDcpHueSatMap = false,
             spectralFilmLut = spectralFilmLut,
             colorEngine = colorEngine,
             outputWorkingColorSpace = outputWorkingColorSpace,

@@ -25,6 +25,9 @@ internal object RawProfileGainTableMapBuilder {
         samplesPerPixel: Int = 1,
         statsBounds: Rect? = null,
         profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
+        colorCorrectionMatrix: FloatArray = metadata.colorCorrectionMatrix,
+        cameraWhite: FloatArray = metadata.cameraWhite,
+        hueSatMap: DcpHueSatMap? = null,
     ): DngProfileGainTableMap? {
         val stats = buildPackedCellStats(
             rawData = rawData,
@@ -34,8 +37,10 @@ internal object RawProfileGainTableMapBuilder {
             metadata = metadata,
             samplesPerPixel = samplesPerPixel,
             statsBounds = statsBounds,
-            collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon ||
-                profileToneMapMode == RawProfileToneMapMode.GooglePixel
+            colorCorrectionMatrix = colorCorrectionMatrix,
+            cameraWhite = cameraWhite,
+            hueSatMap = hueSatMap,
+            collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon
         ) ?: return null
         val diagnosticBand = DngPgtmDiagnostic.activeBandForSource(TAG)
         val baselineExposureEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
@@ -45,7 +50,6 @@ internal object RawProfileGainTableMapBuilder {
                 height = height,
                 baselineExposureEv = baselineExposureEv,
                 packedCellStats = stats.packedCellStats,
-                denseGlobalStats = stats.globalStats ?: return null,
                 diagnosticBand = diagnosticBand
             )
 
@@ -71,6 +75,9 @@ internal object RawProfileGainTableMapBuilder {
         metadata: RawMetadata,
         samplesPerPixel: Int,
         statsBounds: Rect?,
+        colorCorrectionMatrix: FloatArray,
+        cameraWhite: FloatArray,
+        hueSatMap: DcpHueSatMap?,
         collectGlobalStats: Boolean,
     ): BuiltPgtmStats? {
         if (width <= 0 || height <= 0 || metadata.whiteLevel <= 0f) return null
@@ -145,7 +152,10 @@ internal object RawProfileGainTableMapBuilder {
                             baseX = x,
                             baseY = y,
                             baselineGain = baselineGain,
-                            samplesPerPixel = sampleCountPerPixel
+                            samplesPerPixel = sampleCountPerPixel,
+                            colorCorrectionMatrix = colorCorrectionMatrix,
+                            cameraWhite = cameraWhite,
+                            hueSatMap = hueSatMap,
                         )
                         inputSamples[sampleCount] = inputValue
                         if (globalSamples != null) {
@@ -217,6 +227,9 @@ internal object RawProfileGainTableMapBuilder {
         baseY: Int,
         baselineGain: Float,
         samplesPerPixel: Int,
+        colorCorrectionMatrix: FloatArray,
+        cameraWhite: FloatArray,
+        hueSatMap: DcpHueSatMap?,
     ): Float {
         if (samplesPerPixel >= 3) {
             return linearRgbPgtmInputAt(
@@ -228,7 +241,10 @@ internal object RawProfileGainTableMapBuilder {
                 x = baseX,
                 y = baseY,
                 baselineGain = baselineGain,
-                samplesPerPixel = samplesPerPixel
+                samplesPerPixel = samplesPerPixel,
+                colorCorrectionMatrix = colorCorrectionMatrix,
+                cameraWhite = cameraWhite,
+                hueSatMap = hueSatMap,
             )
         }
         var r = 0f
@@ -269,7 +285,9 @@ internal object RawProfileGainTableMapBuilder {
             green = green,
             blue = blue,
             baselineGain = baselineGain,
-            colorCorrectionMatrix = metadata.colorCorrectionMatrix
+            colorCorrectionMatrix = colorCorrectionMatrix,
+            cameraWhite = cameraWhite,
+            hueSatMap = hueSatMap,
         )
     }
 
@@ -283,6 +301,9 @@ internal object RawProfileGainTableMapBuilder {
         y: Int,
         baselineGain: Float,
         samplesPerPixel: Int,
+        colorCorrectionMatrix: FloatArray,
+        cameraWhite: FloatArray,
+        hueSatMap: DcpHueSatMap?,
     ): Float {
         val clampedX = x.coerceIn(0, width - 1)
         val clampedY = y.coerceIn(0, height - 1)
@@ -295,7 +316,9 @@ internal object RawProfileGainTableMapBuilder {
             green = green,
             blue = blue,
             baselineGain = baselineGain,
-            colorCorrectionMatrix = metadata.colorCorrectionMatrix
+            colorCorrectionMatrix = colorCorrectionMatrix,
+            cameraWhite = cameraWhite,
+            hueSatMap = hueSatMap,
         )
     }
 
@@ -305,13 +328,17 @@ internal object RawProfileGainTableMapBuilder {
         blue: Float,
         baselineGain: Float,
         colorCorrectionMatrix: FloatArray?,
+        cameraWhite: FloatArray?,
+        hueSatMap: DcpHueSatMap?,
     ): Float {
         return DngHdrProfileGainTableGenerator.sceneInputFromLinearRgb(
             red = red,
             green = green,
             blue = blue,
             baselineGain = baselineGain,
-            colorCorrectionMatrix = colorCorrectionMatrix
+            colorCorrectionMatrix = colorCorrectionMatrix,
+            cameraWhite = cameraWhite,
+            hueSatMap = hueSatMap,
         )
     }
 

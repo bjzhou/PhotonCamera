@@ -42,7 +42,6 @@ internal object DngHdrProfileGainTableGenerator {
     private const val MIN_TABLE_GAIN = 0.05f
     private const val AUTO_EXPOSURE_TARGET = 0.278f
     private const val WELL_EXPOSED_KEY = 0.525f
-    private const val RISKY_HIGHLIGHT_WELL_EXPOSED_KEY = 0.720f
     private const val WELL_EXPOSED_SIGMA_EV = 0.750f
     // Official Pixel maps broaden the exposure fusion only in the shoulder:
     // the last trustworthy highlights stay close to white while the toe and
@@ -71,7 +70,6 @@ internal object DngHdrProfileGainTableGenerator {
     internal val GOOGLE_FUSION_PARAMETERS = HdrExposureFusionParameters(
         autoExposureTarget = AUTO_EXPOSURE_TARGET,
         wellExposedKey = WELL_EXPOSED_KEY,
-        riskyHighlightWellExposedKey = RISKY_HIGHLIGHT_WELL_EXPOSED_KEY,
         maxExposureGain = MAX_LTM_GAIN,
         highlightFusionStart = HIGHLIGHT_FUSION_START,
         highlightFusionEnd = HIGHLIGHT_FUSION_END,
@@ -102,16 +100,17 @@ internal object DngHdrProfileGainTableGenerator {
         blue: Float,
         baselineGain: Float,
         colorCorrectionMatrix: FloatArray? = null,
+        cameraWhite: FloatArray? = null,
+        hueSatMap: DcpHueSatMap? = null,
     ): Float {
-        val profileRgb = if (colorCorrectionMatrix != null && colorCorrectionMatrix.size >= 9) {
-            floatArrayOf(
-                colorCorrectionMatrix[0] * red + colorCorrectionMatrix[1] * green + colorCorrectionMatrix[2] * blue,
-                colorCorrectionMatrix[3] * red + colorCorrectionMatrix[4] * green + colorCorrectionMatrix[5] * blue,
-                colorCorrectionMatrix[6] * red + colorCorrectionMatrix[7] * green + colorCorrectionMatrix[8] * blue
-            )
-        } else {
-            floatArrayOf(red, green, blue)
-        }
+        val profileRgb = DngSdkProfileRgbTransform.fromCameraRgb(
+            red = red,
+            green = green,
+            blue = blue,
+            colorCorrectionMatrix = colorCorrectionMatrix,
+            cameraWhite = cameraWhite,
+            hueSatMap = hueSatMap,
+        )
         return sceneInputFromProfileRgb(
             red = profileRgb[0],
             green = profileRgb[1],
@@ -126,9 +125,12 @@ internal object DngHdrProfileGainTableGenerator {
         blue: Float,
         baselineGain: Float,
     ): Float {
-        val r = red * baselineGain
-        val g = green * baselineGain
-        val b = blue * baselineGain
+        // dng_render obtains this RGB from BaselineABCtoRGB, which pins RIMM to [0, 1]
+        // before ProfileGainTableMap. BaselineExposure scales only the five-weight lookup input.
+        val profileRgb = DngSdkProfileRgbTransform.clampProfileRgb(red, green, blue)
+        val r = profileRgb[0] * baselineGain
+        val g = profileRgb[1] * baselineGain
+        val b = profileRgb[2] * baselineGain
         val rgbMin = min(r, min(g, b))
         val rgbMax = max(r, max(g, b))
         return max(
@@ -146,7 +148,6 @@ internal object DngHdrProfileGainTableGenerator {
         height: Int,
         baselineExposureEv: Float,
         packedCellStats: FloatArray,
-        denseGlobalStats: DngPgtmGlobalStats? = null,
         tablePointCount: Int = DEFAULT_TABLE_POINTS,
         diagnosticBand: DiagnosticBand? = null,
         fusionParameters: HdrExposureFusionParameters = GOOGLE_FUSION_PARAMETERS,
@@ -175,14 +176,6 @@ internal object DngHdrProfileGainTableGenerator {
         }
         val spatialStats = weightedGlobalStats(cells)
         val inputScale = estimateInputScale(spatialStats, baselineExposureEv)
-        val highlightRiskBand = denseGlobalStats?.let { stats ->
-            highlightRiskBandFor(stats, inputScale)
-        }
-            ?: HdrHighlightRiskBand(
-                start = fusionParameters.highlightFusionStart,
-                end = fusionParameters.highlightFusionEnd,
-                strength = 0f,
-            )
         val globalPlan = buildGlobalExposurePlan(
             stats = spatialStats,
             inputScale = inputScale,
@@ -202,47 +195,6 @@ internal object DngHdrProfileGainTableGenerator {
             cellPlans = cellPlans,
             diagnosticBand = diagnosticBand?.sanitized(),
             fusionParameters = fusionParameters,
-            highlightRiskBand = highlightRiskBand,
-        )
-    }
-
-    internal fun highlightRiskBandFor(
-        stats: DngPgtmGlobalStats,
-        inputScale: Float,
-    ): HdrHighlightRiskBand = with(stats) {
-        val safeScale = sanitizeInputScale(inputScale)
-        val safeP90 = p90.takeIf { it.isFinite() && it >= 0f } ?: 0f
-        val safeP98 = max(safeP90, p98.takeIf { it.isFinite() && it >= 0f } ?: safeP90)
-        val safeP995 = max(safeP98, p995.takeIf { it.isFinite() && it > 0f } ?: safeP98)
-        val safeP999 = max(safeP995, p999.takeIf { it.isFinite() && it > 0f } ?: safeP995)
-        val detectedStart = (safeP90 * safeScale).coerceIn(0f, 1f - 2f * CURVE_EPS)
-        val detectedEnd = safeP98 * safeScale
-        val tailGapEv = log2(
-            (safeP999 + 0.04f) / (safeP995 + 0.04f)
-        )
-        // Preserve the pre-exposure-fusion tail-usability rule: a large p999-to-p995 gap is a
-        // sparse outlier tail, not trustworthy highlight detail. Dense highlights are retained
-        // because their population provides enough color support to treat the tail as real.
-        val outlierRisk = smoothStep(0.48f, 0.72f, tailGapEv)
-        val safeHighlightFraction = highlightFraction.takeIf { it.isFinite() }
-            ?.coerceIn(0f, 1f)
-            ?: 0f
-        val sparseTail = 1f - smoothStep(0.10f, 0.18f, safeHighlightFraction)
-        val riskStrength = (outlierRisk * sparseTail).coerceIn(0f, 1f)
-        val start = lerp(
-            GOOGLE_FUSION_PARAMETERS.highlightFusionStart,
-            detectedStart,
-            riskStrength,
-        )
-        val end = lerp(
-            GOOGLE_FUSION_PARAMETERS.highlightFusionEnd,
-            detectedEnd,
-            riskStrength,
-        ).coerceIn(start + CURVE_EPS, 1f)
-        HdrHighlightRiskBand(
-            start = start,
-            end = end,
-            strength = riskStrength,
         )
     }
 
@@ -493,7 +445,6 @@ internal object DngHdrProfileGainTableGenerator {
         cellPlans: Array<HdrLtmExposurePlan>,
         diagnosticBand: DiagnosticBand?,
         fusionParameters: HdrExposureFusionParameters,
-        highlightRiskBand: HdrHighlightRiskBand,
     ): DngProfileGainTableMap {
         val gains = FloatArray(grid.mapPointsH * grid.mapPointsV * pointCount)
         // Local exposure plans vary smoothly. Quantizing only the brightest exposure to 1/128 EV
@@ -515,7 +466,6 @@ internal object DngHdrProfileGainTableGenerator {
                         pointCount = pointCount,
                         plan = plan.copy(brightestExposureGain = quantizedBrightestGain),
                         fusionParameters = fusionParameters,
-                        highlightRiskBand = highlightRiskBand,
                     )
                 }
             }
@@ -560,7 +510,6 @@ internal object DngHdrProfileGainTableGenerator {
         pointCount: Int,
         plan: HdrLtmExposurePlan,
         fusionParameters: HdrExposureFusionParameters,
-        highlightRiskBand: HdrHighlightRiskBand,
     ) {
         val brightestGain = plan.brightestExposureGain.coerceIn(
             MIN_TABLE_GAIN,
@@ -587,7 +536,6 @@ internal object DngHdrProfileGainTableGenerator {
                 exposureGains = exposureGains,
                 exposureGainEvs = exposureGainEvs,
                 fusionParameters = fusionParameters,
-                highlightRiskBand = highlightRiskBand,
             )
             val monotonicOutput = max(previousOutput, fusedOutput)
             output[outputOffset + index] = (monotonicOutput / sceneInput)
@@ -601,19 +549,13 @@ internal object DngHdrProfileGainTableGenerator {
         exposureGains: FloatArray,
         exposureGainEvs: FloatArray,
         fusionParameters: HdrExposureFusionParameters,
-        highlightRiskBand: HdrHighlightRiskBand,
     ): Float {
-        val effectiveWellExposedKey = lerp(
-            fusionParameters.wellExposedKey,
-            fusionParameters.riskyHighlightWellExposedKey,
-            highlightRiskBand.strength,
-        )
-        val sceneFromKeyEv = log2(max(sceneInput, CURVE_EPS) / effectiveWellExposedKey)
+        val sceneFromKeyEv = log2(max(sceneInput, CURVE_EPS) / fusionParameters.wellExposedKey)
         val darkestExposureGain = exposureGains.lastOrNull() ?: return 0f
         val tableInput = sceneInput * darkestExposureGain
         val highlightFusionStrength = smoothStep(
-            highlightRiskBand.start,
-            highlightRiskBand.end,
+            fusionParameters.highlightFusionStart,
+            fusionParameters.highlightFusionEnd,
             tableInput
         )
         var weightSum = 0f
@@ -756,7 +698,6 @@ internal object DngHdrProfileGainTableGenerator {
 internal data class HdrExposureFusionParameters(
     val autoExposureTarget: Float,
     val wellExposedKey: Float,
-    val riskyHighlightWellExposedKey: Float = wellExposedKey,
     val maxExposureGain: Float,
     val compactHdrExposureOffsetEv: Float = -0.40f,
     val highlightFusionStart: Float = 0.45f,
@@ -765,7 +706,6 @@ internal data class HdrExposureFusionParameters(
     init {
         require(autoExposureTarget.isFinite() && autoExposureTarget > 0f)
         require(wellExposedKey.isFinite() && wellExposedKey > 0f)
-        require(riskyHighlightWellExposedKey.isFinite() && riskyHighlightWellExposedKey > 0f)
         require(maxExposureGain.isFinite() && maxExposureGain >= 1f)
         require(compactHdrExposureOffsetEv.isFinite())
         require(highlightFusionStart.isFinite() && highlightFusionStart in 0f..1f)
@@ -773,9 +713,3 @@ internal data class HdrExposureFusionParameters(
         require(highlightFusionEnd > highlightFusionStart)
     }
 }
-
-internal data class HdrHighlightRiskBand(
-    val start: Float,
-    val end: Float,
-    val strength: Float,
-)

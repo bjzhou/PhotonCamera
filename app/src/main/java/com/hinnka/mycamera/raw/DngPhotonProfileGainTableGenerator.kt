@@ -37,7 +37,6 @@ internal object DngPhotonProfileGainTableGenerator {
             height = height,
             baselineExposureEv = baselineExposureEv,
             packedCellStats = packedCellStats,
-            denseGlobalStats = globalStats,
             tablePointCount = tablePointCount,
             diagnosticBand = diagnosticBand,
             fusionParameters = PHOTON_FUSION_PARAMETERS,

@@ -28,7 +28,6 @@ class DngPhotonProfileGainTableGeneratorTest {
             height = fixture.height,
             baselineExposureEv = fixture.baselineExposureEv,
             packedCellStats = fixture.packedStats,
-            denseGlobalStats = fixture.globalStats,
             fusionParameters = DngPhotonProfileGainTableGenerator.PHOTON_FUSION_PARAMETERS,
         ) ?: error("Expected direct Google PGTM")
 
