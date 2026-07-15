@@ -149,7 +149,9 @@ class DngPgtmGlobalStatsTest {
     }
 
     private companion object {
-        private const val GPU_HISTOGRAM_BIN_COUNT = 2048
+        // HDR stacker uses 1024 bins; the single-frame RAW path uses 2048.
+        // Validate against the lower-resolution layout as the stricter case.
+        private const val GPU_HISTOGRAM_BIN_COUNT = 1024
         private const val GPU_HISTOGRAM_MIN_EV = -16f
         private const val GPU_HISTOGRAM_MAX_EV = 8f
     }

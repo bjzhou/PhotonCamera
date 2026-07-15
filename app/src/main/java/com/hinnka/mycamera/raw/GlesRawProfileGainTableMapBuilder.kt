@@ -170,7 +170,8 @@ internal class GlesRawProfileGainTableMapBuilder {
                     baselineExposureEv = baselineExposureEv,
                     packedCellStats = packedCellStats,
                     globalStats = globalStats ?: error("GPU RAW PGTM global stats are empty"),
-                    diagnosticBand = diagnosticBand
+                    diagnosticBand = diagnosticBand,
+                    statsSource = "gpu-log-histogram-$GLOBAL_HISTOGRAM_BIN_COUNT"
                 )
 
                 RawProfileToneMapMode.GooglePixel -> DngHdrProfileGainTableGenerator.forCellStats(

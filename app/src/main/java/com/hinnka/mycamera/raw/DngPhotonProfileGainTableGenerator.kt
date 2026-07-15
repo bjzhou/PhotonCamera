@@ -66,6 +66,7 @@ internal object DngPhotonProfileGainTableGenerator {
         tablePointCount: Int = DEFAULT_TABLE_POINTS,
         diagnosticBand: DngHdrProfileGainTableGenerator.DiagnosticBand? = null,
         emitDiagnostics: Boolean = true,
+        statsSource: String = "global-samples",
     ): DngProfileGainTableMap? {
         if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite() || baselineExposureEv < MIN_BASELINE_EV) {
             return null
@@ -157,7 +158,7 @@ internal object DngPhotonProfileGainTableGenerator {
             PLog.d(
                 TAG,
                 "Built Photon PGTM: grid=${gridWidth}x${gridHeight}x$safePointCount " +
-                    "statsSource=global-samples globalSampleCount=${globalStats.sampleCount} " +
+                    "statsSource=$statsSource globalSampleCount=${globalStats.sampleCount} " +
                     "baselineEv=$safeBaselineEv " +
                     "tailRangeEv=${toneAnchors.tailHighlightRangeEv} " +
                     "exposureRangeEv=${toneAnchors.exposureHighlightRangeEv} " +

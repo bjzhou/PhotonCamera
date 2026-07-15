@@ -1270,17 +1270,36 @@ class GlesRawStacker(
         }
 
         val cellCount = pgtmGridWidth * pgtmGridHeight
-        val cellStatsFloatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
-        val globalSamplesFloatCount = if (profileToneMapMode == RawProfileToneMapMode.Photon) {
-            cellCount * PGTM_STATS_SAMPLE_COUNT
+        val collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon
+        val cellStatsWordCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+        val cellSumsOffset = if (collectGlobalStats) cellStatsWordCount else -1
+        val globalHistogramOffset = if (collectGlobalStats) {
+            cellSumsOffset + cellCount * PGTM_CELL_SUM_FLOAT_STRIDE
         } else {
-            0
+            -1
         }
-        val globalSamplesOffset = if (globalSamplesFloatCount > 0) cellStatsFloatCount else -1
-        val floatCount = cellStatsFloatCount + globalSamplesFloatCount
-        val byteCount = floatCount * 4
+        val globalCountersOffset = if (collectGlobalStats) {
+            globalHistogramOffset + PGTM_GLOBAL_HISTOGRAM_BIN_COUNT
+        } else {
+            -1
+        }
+        val wordCount = if (collectGlobalStats) {
+            globalCountersOffset + PGTM_GLOBAL_COUNTER_COUNT
+        } else {
+            cellStatsWordCount
+        }
+        val byteCount = wordCount * Int.SIZE_BYTES
+        val totalStartNs = System.nanoTime()
         return try {
             val statsBufferId = prepareReadbackScratchBuffer(byteCount)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, statsBufferId)
+            val zeroData = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.nativeOrder())
+            GLES31.glBufferSubData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                0,
+                byteCount,
+                zeroData,
+            )
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, PGTM_STATS_BUFFER_BINDING, statsBufferId)
             GLES31.glUseProgram(pgtmStatsProgram)
             bindTexture(pgtmStatsProgram, "uLinearRgb", 0, hdrLinearOutputTexture)
@@ -1298,8 +1317,16 @@ class GlesRawStacker(
                 pgtmGridHeight,
             )
             GLES31.glUniform1i(
-                uniformLocation(pgtmStatsProgram, "uGlobalSamplesOffset"),
-                globalSamplesOffset
+                uniformLocation(pgtmStatsProgram, "uCellSumsOffset"),
+                cellSumsOffset
+            )
+            GLES31.glUniform1i(
+                uniformLocation(pgtmStatsProgram, "uGlobalHistogramOffset"),
+                globalHistogramOffset
+            )
+            GLES31.glUniform1i(
+                uniformLocation(pgtmStatsProgram, "uGlobalCountersOffset"),
+                globalCountersOffset
             )
             GLES31.glUniform1f(
                 uniformLocation(pgtmStatsProgram, "uBaselineExposureGain"),
@@ -1312,6 +1339,7 @@ class GlesRawStacker(
                 transposeMatrix3x3(pgtmColorCorrectionMatrix),
                 0
             )
+            val dispatchStartNs = System.nanoTime()
             GLES31.glDispatchCompute(pgtmGridWidth, pgtmGridHeight, 1)
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
@@ -1325,36 +1353,56 @@ class GlesRawStacker(
                 byteCount,
                 GLES31.GL_MAP_READ_BIT
             ) ?: throw IllegalStateException("PGTM stats buffer map failed")
-            val statsAndSamples = try {
-                FloatArray(floatCount).also { values ->
+            val words = try {
+                IntArray(wordCount).also { values ->
                     val byteBuffer = mapped as? ByteBuffer
                         ?: throw IllegalStateException("PGTM stats buffer is not ByteBuffer")
-                    byteBuffer.order(ByteOrder.nativeOrder()).asFloatBuffer().get(values)
+                    byteBuffer.order(ByteOrder.nativeOrder()).asIntBuffer().get(values)
                 }
             } finally {
                 GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
             }
-            val packedCellStats = statsAndSamples.copyOf(cellStatsFloatCount)
-            val globalStats = if (globalSamplesOffset >= 0) {
-                var globalSampleCount = 0
+            val statsReadyNs = System.nanoTime()
+            val packedCellStats = FloatArray(cellStatsWordCount) { index ->
+                Float.fromBits(words[index])
+            }
+            val globalStats = if (collectGlobalStats) {
+                val sampleCount = words[globalCountersOffset + PGTM_COUNTER_SAMPLE_COUNT]
+                    .coerceIn(0, cellCount * PGTM_STATS_SAMPLE_COUNT)
+                val zeroCount = words[globalCountersOffset + PGTM_COUNTER_ZERO_COUNT]
+                    .coerceIn(0, sampleCount)
+                val highlightCount = words[globalCountersOffset + PGTM_COUNTER_HIGHLIGHT_COUNT]
+                    .coerceIn(0, sampleCount)
+                val maxInput = Float.fromBits(
+                    words[globalCountersOffset + PGTM_COUNTER_MAX_INPUT_BITS]
+                )
+                var linearSum = 0.0
+                var logSum = 0.0
                 for (cellIndex in 0 until cellCount) {
-                    val cellOffset = cellIndex * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
-                    val cellSampleCount = packedCellStats[cellOffset + 5]
-                        .roundToInt()
-                        .coerceIn(0, PGTM_STATS_SAMPLE_COUNT)
-                    val sourceOffset = globalSamplesOffset + cellIndex * PGTM_STATS_SAMPLE_COUNT
-                    for (sampleIndex in 0 until cellSampleCount) {
-                        statsAndSamples[globalSampleCount] = statsAndSamples[sourceOffset + sampleIndex]
-                        globalSampleCount += 1
-                    }
+                    val offset = cellSumsOffset + cellIndex * PGTM_CELL_SUM_FLOAT_STRIDE
+                    linearSum += Float.fromBits(words[offset]).toDouble()
+                    logSum += Float.fromBits(words[offset + 1]).toDouble()
                 }
-                DngPgtmGlobalStats.fromMutableSamples(statsAndSamples, globalSampleCount)
+                val globalHistogram = IntArray(PGTM_GLOBAL_HISTOGRAM_BIN_COUNT) { index ->
+                    words[globalHistogramOffset + index].coerceAtLeast(0)
+                }
+                DngPgtmGlobalStats.fromLogHistogram(
+                    logHistogram = globalHistogram,
+                    histogramMinEv = PGTM_GLOBAL_HISTOGRAM_MIN_EV,
+                    histogramMaxEv = PGTM_GLOBAL_HISTOGRAM_MAX_EV,
+                    sampleCount = sampleCount,
+                    zeroCount = zeroCount,
+                    highlightCount = highlightCount,
+                    maxInput = maxInput,
+                    linearSum = linearSum,
+                    logSum = logSum,
+                )
                     ?: throw IllegalStateException("GPU Photon PGTM global stats are empty")
             } else {
                 null
             }
             val diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU stacker")
-            when (profileToneMapMode) {
+            val map = when (profileToneMapMode) {
                 RawProfileToneMapMode.Photon -> DngPhotonProfileGainTableGenerator.forCellStats(
                     width = width,
                     height = height,
@@ -1362,7 +1410,8 @@ class GlesRawStacker(
                     packedCellStats = packedCellStats,
                     globalStats = globalStats
                         ?: throw IllegalStateException("GPU Photon PGTM global stats are missing"),
-                    diagnosticBand = diagnosticBand
+                    diagnosticBand = diagnosticBand,
+                    statsSource = "gpu-log-histogram-$PGTM_GLOBAL_HISTOGRAM_BIN_COUNT"
                 )
 
                 else -> DngHdrProfileGainTableGenerator.forCellStats(
@@ -1373,6 +1422,17 @@ class GlesRawStacker(
                     diagnosticBand = diagnosticBand
                 )
             }
+            val completeNs = System.nanoTime()
+            PLog.d(
+                TAG,
+                "GPU HDR PGTM built: mode=$profileToneMapMode grid=${pgtmGridWidth}x${pgtmGridHeight} " +
+                    "samples=${globalStats?.sampleCount ?: cellCount * PGTM_STATS_SAMPLE_COUNT} " +
+                    "readbackBytes=$byteCount " +
+                    "gpuAndReadbackMs=${(statsReadyNs - dispatchStartNs) / 1_000_000.0} " +
+                    "curveMs=${(completeNs - statsReadyNs) / 1_000_000.0} " +
+                    "totalMs=${(completeNs - totalStartNs) / 1_000_000.0}"
+            )
+            map
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to compute GPU HDR PGTM stats", e)
             null
@@ -5264,6 +5324,15 @@ class GlesRawStacker(
         private const val HDR_RGB_STRIPE_ROWS = 256
         private const val PGTM_STATS_BUFFER_BINDING = 7
         private const val PGTM_STATS_SAMPLE_COUNT = 16 * 16
+        private const val PGTM_CELL_SUM_FLOAT_STRIDE = 2
+        private const val PGTM_GLOBAL_HISTOGRAM_BIN_COUNT = 1024
+        private const val PGTM_GLOBAL_HISTOGRAM_MIN_EV = -16f
+        private const val PGTM_GLOBAL_HISTOGRAM_MAX_EV = 8f
+        private const val PGTM_GLOBAL_COUNTER_COUNT = 4
+        private const val PGTM_COUNTER_SAMPLE_COUNT = 0
+        private const val PGTM_COUNTER_ZERO_COUNT = 1
+        private const val PGTM_COUNTER_HIGHLIGHT_COUNT = 2
+        private const val PGTM_COUNTER_MAX_INPUT_BITS = 3
         private const val HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING = 8
         private const val HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE = 4
         private const val HDR_123_ALIGN_LEVEL = 2
@@ -8510,20 +8579,33 @@ class GlesRawStacker(
             uniform ivec2 uImageSize;
             uniform ivec4 uStatsBounds;
             uniform ivec2 uGridSize;
-            uniform int uGlobalSamplesOffset;
+            uniform int uCellSumsOffset;
+            uniform int uGlobalHistogramOffset;
+            uniform int uGlobalCountersOffset;
             uniform float uBaselineExposureGain;
             uniform mat3 uColorCorrectionMatrix;
             layout(std430, binding = $PGTM_STATS_BUFFER_BINDING) buffer PgtmStats {
-                float stats[];
+                uint data[];
             };
 
             const int HIST_BINS = 256;
             const int STATS_STRIDE = 8;
             const int SAMPLE_GRID = 16;
+            const int CELL_SUM_STRIDE = $PGTM_CELL_SUM_FLOAT_STRIDE;
+            const int GLOBAL_HISTOGRAM_BINS = $PGTM_GLOBAL_HISTOGRAM_BIN_COUNT;
+            const float GLOBAL_HISTOGRAM_MIN_EV = $PGTM_GLOBAL_HISTOGRAM_MIN_EV;
+            const float GLOBAL_HISTOGRAM_MAX_EV = $PGTM_GLOBAL_HISTOGRAM_MAX_EV;
+            const float INV_LOG_2 = 1.4426950408889634;
+            const int COUNTER_SAMPLE_COUNT = $PGTM_COUNTER_SAMPLE_COUNT;
+            const int COUNTER_ZERO_COUNT = $PGTM_COUNTER_ZERO_COUNT;
+            const int COUNTER_HIGHLIGHT_COUNT = $PGTM_COUNTER_HIGHLIGHT_COUNT;
+            const int COUNTER_MAX_INPUT_BITS = $PGTM_COUNTER_MAX_INPUT_BITS;
             shared uint hist[HIST_BINS];
+            shared uint globalLogHist[GLOBAL_HISTOGRAM_BINS];
             shared float inputSamples[HIST_BINS];
             shared uint sampleCount;
             shared uint highlightCount;
+            shared uint zeroCount;
 
             vec3 linearRgbAt(ivec2 p) {
                 p = clamp(p, ivec2(0), uImageSize - ivec2(1));
@@ -8566,9 +8648,13 @@ class GlesRawStacker(
                 if (localIndex < HIST_BINS) {
                     hist[localIndex] = 0u;
                 }
+                for (int bin = localIndex; bin < GLOBAL_HISTOGRAM_BINS; bin += HIST_BINS) {
+                    globalLogHist[bin] = 0u;
+                }
                 if (localIndex == 0) {
                     sampleCount = 0u;
                     highlightCount = 0u;
+                    zeroCount = 0u;
                 }
                 barrier();
 
@@ -8589,7 +8675,12 @@ class GlesRawStacker(
                         int cellIndex = cell.y * uGridSize.x + cell.x;
                         int offset = cellIndex * STATS_STRIDE;
                         for (int i = 0; i < STATS_STRIDE; ++i) {
-                            stats[offset + i] = 0.0;
+                            data[offset + i] = floatBitsToUint(0.0);
+                        }
+                        if (uCellSumsOffset >= 0) {
+                            int sumOffset = uCellSumsOffset + cellIndex * CELL_SUM_STRIDE;
+                            data[sumOffset] = floatBitsToUint(0.0);
+                            data[sumOffset + 1] = floatBitsToUint(0.0);
                         }
                     }
                     return;
@@ -8603,8 +8694,26 @@ class GlesRawStacker(
                 y = clamp(y - (y & 1), startY, max(startY, endY - 2));
                 float inputValue = pgtmInputAt(ivec2(x, y));
                 inputSamples[localIndex] = inputValue;
-                if (uGlobalSamplesOffset >= 0) {
-                    stats[uGlobalSamplesOffset + cellIndex * HIST_BINS + localIndex] = inputValue;
+                if (uGlobalHistogramOffset >= 0) {
+                    if (inputValue <= 0.0) {
+                        atomicAdd(zeroCount, 1u);
+                    } else {
+                        float ev = clamp(
+                            log(inputValue) * INV_LOG_2,
+                            GLOBAL_HISTOGRAM_MIN_EV,
+                            GLOBAL_HISTOGRAM_MAX_EV - 1e-5
+                        );
+                        int globalBin = clamp(
+                            int(floor(
+                                (ev - GLOBAL_HISTOGRAM_MIN_EV) /
+                                (GLOBAL_HISTOGRAM_MAX_EV - GLOBAL_HISTOGRAM_MIN_EV) *
+                                float(GLOBAL_HISTOGRAM_BINS)
+                            )),
+                            0,
+                            GLOBAL_HISTOGRAM_BINS - 1
+                        );
+                        atomicAdd(globalLogHist[globalBin], 1u);
+                    }
                 }
                 float clampedInput = clamp(inputValue, 0.0, 1.0);
                 uint bin = uint(clamp(int(floor(clampedInput * float(HIST_BINS - 1) + 0.5)), 0, HIST_BINS - 1));
@@ -8615,6 +8724,18 @@ class GlesRawStacker(
                 }
                 memoryBarrierShared();
                 barrier();
+
+                if (uGlobalHistogramOffset >= 0) {
+                    for (int globalBin = localIndex;
+                        globalBin < GLOBAL_HISTOGRAM_BINS;
+                        globalBin += HIST_BINS
+                    ) {
+                        uint count = globalLogHist[globalBin];
+                        if (count > 0u) {
+                            atomicAdd(data[uGlobalHistogramOffset + globalBin], count);
+                        }
+                    }
+                }
 
                 if (localIndex != 0) {
                     return;
@@ -8666,15 +8787,40 @@ class GlesRawStacker(
                     }
                 }
 
+                if (uGlobalCountersOffset >= 0) {
+                    atomicAdd(data[uGlobalCountersOffset + COUNTER_SAMPLE_COUNT], sampleCount);
+                    atomicAdd(data[uGlobalCountersOffset + COUNTER_ZERO_COUNT], zeroCount);
+                    atomicAdd(data[uGlobalCountersOffset + COUNTER_HIGHLIGHT_COUNT], highlightCount);
+                    atomicMax(
+                        data[uGlobalCountersOffset + COUNTER_MAX_INPUT_BITS],
+                        floatBitsToUint(p999Input)
+                    );
+                }
+
+                if (uCellSumsOffset >= 0) {
+                    float linearSum = 0.0;
+                    float logSum = 0.0;
+                    for (int i = 0; i < HIST_BINS; ++i) {
+                        float value = inputSamples[i];
+                        linearSum += value;
+                        logSum += log(max(value, 1e-6));
+                    }
+                    int sumOffset = uCellSumsOffset + cellIndex * CELL_SUM_STRIDE;
+                    data[sumOffset] = floatBitsToUint(linearSum);
+                    data[sumOffset + 1] = floatBitsToUint(logSum);
+                }
+
                 int offset = cellIndex * STATS_STRIDE;
-                stats[offset + 0] = samples > 0 ? p10 : 0.0;
-                stats[offset + 1] = samples > 0 ? p50 : 0.0;
-                stats[offset + 2] = samples > 0 ? p90 : 0.0;
-                stats[offset + 3] = samples > 0 ? p98 : 0.0;
-                stats[offset + 4] = samples > 0 ? float(highlightCount) / float(samples) : 0.0;
-                stats[offset + 5] = float(samples);
-                stats[offset + 6] = samples > 0 ? p995Input : 0.0;
-                stats[offset + 7] = samples > 0 ? p999Input : 0.0;
+                data[offset + 0] = floatBitsToUint(samples > 0 ? p10 : 0.0);
+                data[offset + 1] = floatBitsToUint(samples > 0 ? p50 : 0.0);
+                data[offset + 2] = floatBitsToUint(samples > 0 ? p90 : 0.0);
+                data[offset + 3] = floatBitsToUint(samples > 0 ? p98 : 0.0);
+                data[offset + 4] = floatBitsToUint(
+                    samples > 0 ? float(highlightCount) / float(samples) : 0.0
+                );
+                data[offset + 5] = floatBitsToUint(float(samples));
+                data[offset + 6] = floatBitsToUint(samples > 0 ? p995Input : 0.0);
+                data[offset + 7] = floatBitsToUint(samples > 0 ? p999Input : 0.0);
             }
         """.trimIndent()
 
