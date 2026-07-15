@@ -20,10 +20,24 @@ from analyze_google_pgtm import (
 )
 
 
-MAGIC = b"PGTFIX1\0"
+MAGIC = b"PGTFIX2\0"
 TAG_SUB_IFDS = 330
 TAG_PROFILE_GAIN_TABLE_MAP = 52525
 TAG_PROFILE_GAIN_TABLE_MAP2 = 52544
+
+# These are scene-semantic anchors rather than arbitrary table indices. Every non-terminal anchor
+# is converted to the embedded PGTM table domain with that DNG's own input-weight sum.
+SEMANTIC_ANCHORS = (
+    "black",
+    "shadow",
+    "dark",
+    "median",
+    "bright",
+    "highlight",
+    "white",
+    "specular",
+    "endpoint",
+)
 
 
 def read_pgtm_tag(tiff, ifd, tag):
@@ -220,7 +234,57 @@ def extract_packed_stats(tiff, ifd0, raw_ifd, raw_offset):
     return width, height, float(baseline), grid_h, grid_v, packed
 
 
+def gain_at(pgtm, cell, table_input):
+    point_count = pgtm["points_n"]
+    scaled = min(max(table_input, 0.0), 1.0) * max(point_count, 1)
+    index0 = max(0, min(point_count - 1, int(scaled)))
+    index1 = max(0, min(point_count - 1, index0 + 1))
+    fraction = scaled - index0
+    offset = cell * point_count
+    return (
+        pgtm["gains"][offset + index0] * (1.0 - fraction) +
+        pgtm["gains"][offset + index1] * fraction
+    )
+
+
+def semantic_table_inputs(packed_stats, cell, input_scale):
+    offset = cell * 8
+    # Mirror DngHdrProfileGainTableGenerator.packedStatsAt. The exact tail order statistics can
+    # be slightly below a histogram percentile at a quantization boundary; they describe the
+    # same ordered signal axis and must therefore be made non-decreasing before sampling PGTM.
+    p10 = min(max(packed_stats[offset], 0.0), 1.0)
+    p50 = max(p10, min(max(packed_stats[offset + 1], 0.0), 1.0))
+    p90 = max(p50, min(max(packed_stats[offset + 2], 0.0), 1.0))
+    p98 = max(p90, min(max(packed_stats[offset + 3], 0.0), 1.0))
+    raw_p995 = packed_stats[offset + 6]
+    p995 = max(p98, raw_p995 if raw_p995 > 0.0 else p98)
+    raw_p999 = packed_stats[offset + 7]
+    p999 = max(p995, raw_p999 if raw_p999 > 0.0 else p995)
+    return (
+        0.0,
+        p10 * input_scale,
+        0.5 * (p10 + p50) * input_scale,
+        p50 * input_scale,
+        p90 * input_scale,
+        p98 * input_scale,
+        p995 * input_scale,
+        p999 * input_scale,
+        1.0,
+    )
+
+
+def sample_semantic_gains(pgtm, packed_stats):
+    cell_count = pgtm["map_h"] * pgtm["map_v"]
+    input_scale = sum(pgtm["weights"])
+    return [
+        gain_at(pgtm, cell, table_input)
+        for cell in range(cell_count)
+        for table_input in semantic_table_inputs(packed_stats, cell, input_scale)
+    ]
+
+
 def write_fixture(path, width, height, baseline, pgtm, packed_stats):
+    sampled_gains = sample_semantic_gains(pgtm, packed_stats)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as out:
         out.write(MAGIC)
@@ -231,44 +295,51 @@ def write_fixture(path, width, height, baseline, pgtm, packed_stats):
             baseline,
             pgtm["map_h"],
             pgtm["map_v"],
-            pgtm["points_n"],
+            len(SEMANTIC_ANCHORS),
             len(packed_stats),
-            len(pgtm["gains"]),
+            len(sampled_gains),
         ))
         out.write(struct.pack("<5f", *pgtm["weights"]))
         out.write(struct.pack("<f", float(pgtm["gamma"])))
         out.write(struct.pack(f"<{len(packed_stats)}f", *packed_stats))
-        out.write(struct.pack(f"<{len(pgtm['gains'])}f", *pgtm["gains"]))
+        out.write(struct.pack(f"<{len(sampled_gains)}f", *sampled_gains))
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("dng", type=Path)
     parser.add_argument("fixture", type=Path)
+    parser.add_argument(
+        "--source-tag",
+        type=int,
+        choices=(TAG_PROFILE_GAIN_TABLE_MAP, TAG_PROFILE_GAIN_TABLE_MAP2),
+        default=TAG_PROFILE_GAIN_TABLE_MAP,
+        help="embedded PGTM tag used only for reference semantic gains",
+    )
     args = parser.parse_args()
 
     tiff = Tiff(args.dng)
     ifd0, ifds = ifds_for(tiff)
     raw_offset, raw_ifd = find_raw_ifd(tiff, ifds)
-    google_pgtm = find_pgtm(tiff, ifds, TAG_PROFILE_GAIN_TABLE_MAP)
-    if google_pgtm is None:
-        raise ValueError("DNG does not contain Google ProfileGainTableMap")
+    reference_pgtm = find_pgtm(tiff, ifds, args.source_tag)
+    if reference_pgtm is None:
+        raise ValueError(f"DNG does not contain ProfileGainTableMap tag {args.source_tag}")
     width, height, baseline, grid_h, grid_v, packed_stats = extract_packed_stats(
         tiff=tiff,
         ifd0=ifd0,
         raw_ifd=raw_ifd,
         raw_offset=raw_offset,
     )
-    if (grid_h, grid_v) != (google_pgtm["map_h"], google_pgtm["map_v"]):
+    if (grid_h, grid_v) != (reference_pgtm["map_h"], reference_pgtm["map_v"]):
         raise ValueError(
             f"app grid {grid_h}x{grid_v} does not match PGTM grid "
-            f"{google_pgtm['map_h']}x{google_pgtm['map_v']}"
+            f"{reference_pgtm['map_h']}x{reference_pgtm['map_v']}"
         )
-    write_fixture(args.fixture, width, height, baseline, google_pgtm, packed_stats)
+    write_fixture(args.fixture, width, height, baseline, reference_pgtm, packed_stats)
     print(
         f"wrote {args.fixture} width={width} height={height} baseline={baseline:.6f} "
-        f"grid={grid_h}x{grid_v}x{google_pgtm['points_n']} "
-        f"stats={len(packed_stats)} gains={len(google_pgtm['gains'])}"
+        f"grid={grid_h}x{grid_v} semanticAnchors={len(SEMANTIC_ANCHORS)} "
+        f"stats={len(packed_stats)} sampledGains={grid_h * grid_v * len(SEMANTIC_ANCHORS)}"
     )
 
 

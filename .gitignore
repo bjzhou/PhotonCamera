@@ -16,3 +16,4 @@ app/release.jks
 /agc-photon-lut
 /third_party
 __pycache__
+/app/src/test/resources/pgtm/
