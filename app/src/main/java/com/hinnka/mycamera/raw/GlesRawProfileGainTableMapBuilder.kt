@@ -160,7 +160,7 @@ internal class GlesRawProfileGainTableMapBuilder {
                 maxInput = maxInput,
                 linearSum = linearSum,
                 logSum = logSum
-            )
+            ) ?: error("GPU RAW PGTM global stats are empty")
             val diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU RAW")
             val baselineExposureEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
             val map = when (profileToneMapMode) {
@@ -169,7 +169,7 @@ internal class GlesRawProfileGainTableMapBuilder {
                     height = height,
                     baselineExposureEv = baselineExposureEv,
                     packedCellStats = packedCellStats,
-                    globalStats = globalStats ?: error("GPU RAW PGTM global stats are empty"),
+                    globalStats = globalStats,
                     diagnosticBand = diagnosticBand,
                     statsSource = "gpu-log-histogram-$GLOBAL_HISTOGRAM_BIN_COUNT"
                 )
@@ -179,6 +179,7 @@ internal class GlesRawProfileGainTableMapBuilder {
                     height = height,
                     baselineExposureEv = baselineExposureEv,
                     packedCellStats = packedCellStats,
+                    denseGlobalStats = globalStats,
                     diagnosticBand = diagnosticBand
                 )
 
@@ -186,6 +187,19 @@ internal class GlesRawProfileGainTableMapBuilder {
                 RawProfileToneMapMode.OppoMaster -> null
             }
             val completeNs = System.nanoTime()
+            if (map != null && profileToneMapMode == RawProfileToneMapMode.GooglePixel) {
+                val risk = DngHdrProfileGainTableGenerator.highlightRiskBandFor(
+                    stats = globalStats,
+                    inputScale = map.mapInputWeights.sum(),
+                )
+                PLog.d(
+                    TAG,
+                    "Google PGTM highlight risk: strength=${risk.strength} " +
+                        "tableBand=${risk.start}..${risk.end} p90=${globalStats.p90} " +
+                        "p98=${globalStats.p98} p995=${globalStats.p995} " +
+                        "p999=${globalStats.p999} fraction=${globalStats.highlightFraction}"
+                )
+            }
             PLog.d(
                 TAG,
                 "GPU RAW PGTM built: mode=$profileToneMapMode grid=${gridWidth}x${gridHeight} " +

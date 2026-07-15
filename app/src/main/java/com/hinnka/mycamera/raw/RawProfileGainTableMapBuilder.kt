@@ -34,7 +34,8 @@ internal object RawProfileGainTableMapBuilder {
             metadata = metadata,
             samplesPerPixel = samplesPerPixel,
             statsBounds = statsBounds,
-            collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon
+            collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon ||
+                profileToneMapMode == RawProfileToneMapMode.GooglePixel
         ) ?: return null
         val diagnosticBand = DngPgtmDiagnostic.activeBandForSource(TAG)
         val baselineExposureEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
@@ -44,6 +45,7 @@ internal object RawProfileGainTableMapBuilder {
                 height = height,
                 baselineExposureEv = baselineExposureEv,
                 packedCellStats = stats.packedCellStats,
+                denseGlobalStats = stats.globalStats ?: return null,
                 diagnosticBand = diagnosticBand
             )
 

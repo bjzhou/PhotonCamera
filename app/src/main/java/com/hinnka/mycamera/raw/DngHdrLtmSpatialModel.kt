@@ -16,7 +16,6 @@ import kotlin.math.sqrt
 internal object DngHdrLtmSpatialModel {
     private const val LEVEL_EPS = 0.006f
     private const val TAIL_EPS = 0.04f
-    private const val MAX_LTM_GAIN = 6.18f
     private const val MAX_LOCAL_EXPOSURE_OFFSET_EV = 1.25f
 
     fun buildExposurePlans(
@@ -24,6 +23,7 @@ internal object DngHdrLtmSpatialModel {
         grid: HdrPgtmGrid,
         global: HdrPgtmCellStats,
         globalPlan: HdrLtmExposurePlan,
+        maxExposureGain: Float,
     ): Array<HdrLtmExposurePlan> {
         val globalFeature = ToneFeature.from(global)
         val features = Array(cells.size) { index ->
@@ -55,7 +55,8 @@ internal object DngHdrLtmSpatialModel {
                     referenceFeature = referenceFeature,
                     localFeature = neighborhoods[index],
                     sampleWeight = cell.sampleWeight,
-                    residualScale = residualScale
+                    residualScale = residualScale,
+                    maxExposureGain = maxExposureGain,
                 )
             }
         }
@@ -67,6 +68,7 @@ internal object DngHdrLtmSpatialModel {
         localFeature: ToneFeature,
         sampleWeight: Float,
         residualScale: Float,
+        maxExposureGain: Float,
     ): HdrLtmExposurePlan {
         val residualEv =
             0.0070524f * (localFeature.logP10 - referenceFeature.logP10) +
@@ -83,7 +85,7 @@ internal object DngHdrLtmSpatialModel {
             .coerceIn(-MAX_LOCAL_EXPOSURE_OFFSET_EV, MAX_LOCAL_EXPOSURE_OFFSET_EV)
         return globalPlan.copy(
             brightestExposureGain = (globalPlan.brightestExposureGain * 2.0f.pow(exposureOffsetEv))
-                .coerceIn(globalPlan.darkestExposureGain, MAX_LTM_GAIN)
+                .coerceIn(globalPlan.darkestExposureGain, maxExposureGain)
         )
     }
 
