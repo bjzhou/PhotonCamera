@@ -5,6 +5,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
 
@@ -66,7 +67,90 @@ class DngPgtmGlobalStatsTest {
         )
     }
 
+    @Test
+    fun gpuLogHistogramPreservesSceneWideStatistics() {
+        val samples = FloatArray(1_000) { index -> (index + 1).toFloat() / 1_000f }
+        val histogram = buildGpuLogHistogram(samples)
+        val linearSum = samples.sumOf { it.toDouble() }
+        val logSum = samples.sumOf { ln(it.coerceAtLeast(1e-6f).toDouble()) }
+
+        val stats = DngPgtmGlobalStats.fromLogHistogram(
+            logHistogram = histogram,
+            histogramMinEv = GPU_HISTOGRAM_MIN_EV,
+            histogramMaxEv = GPU_HISTOGRAM_MAX_EV,
+            sampleCount = samples.size,
+            zeroCount = 0,
+            highlightCount = samples.count { it >= 0.92f },
+            maxInput = samples.max(),
+            linearSum = linearSum,
+            logSum = logSum
+        ) ?: error("Expected GPU histogram stats")
+
+        assertEquals(0.100f, stats.p10, 0.002f)
+        assertEquals(0.500f, stats.p50, 0.004f)
+        assertEquals(0.900f, stats.p90, 0.006f)
+        assertEquals(0.980f, stats.p98, 0.008f)
+        assertEquals(0.995f, stats.p995, 0.008f)
+        assertEquals(0.999f, stats.p999, 0.008f)
+        assertEquals(1.000f, stats.maxInput, 1e-6f)
+        assertEquals(0.081f, stats.highlightFraction, 1e-6f)
+        assertEquals(0.5005f, stats.linearMean, 1e-6f)
+        assertEquals(
+            exp(logSum / samples.size.toDouble()).toFloat(),
+            stats.logAverage,
+            1e-6f
+        )
+        assertEquals(samples.size, stats.sampleCount)
+        assertTrue(stats.shadowFoot in 0f..stats.shadowEdge)
+    }
+
+    @Test
+    fun gpuLogHistogramKeepsZerosInLinearPercentilesOnly() {
+        val samples = FloatArray(100) { index -> if (index < 20) 0f else 0.25f }
+        val histogram = buildGpuLogHistogram(samples)
+        val stats = DngPgtmGlobalStats.fromLogHistogram(
+            logHistogram = histogram,
+            histogramMinEv = GPU_HISTOGRAM_MIN_EV,
+            histogramMaxEv = GPU_HISTOGRAM_MAX_EV,
+            sampleCount = samples.size,
+            zeroCount = 20,
+            highlightCount = 0,
+            maxInput = 0.25f,
+            linearSum = samples.sumOf { it.toDouble() },
+            logSum = samples.sumOf { ln(it.coerceAtLeast(1e-6f).toDouble()) }
+        ) ?: error("Expected GPU histogram stats")
+
+        assertEquals(0f, stats.p10, 0f)
+        assertEquals(0.25f, stats.p50, 0.003f)
+        assertTrue(stats.shadowEdge > 0f)
+        assertTrue(stats.shadowFoot in 0f..stats.shadowEdge)
+    }
+
+    private fun buildGpuLogHistogram(samples: FloatArray): IntArray {
+        val histogram = IntArray(GPU_HISTOGRAM_BIN_COUNT)
+        samples.forEach { value ->
+            if (value <= 0f) return@forEach
+            val ev = log2(value).coerceIn(
+                GPU_HISTOGRAM_MIN_EV,
+                GPU_HISTOGRAM_MAX_EV - 1e-5f
+            )
+            val bin = floor(
+                (ev - GPU_HISTOGRAM_MIN_EV) /
+                    (GPU_HISTOGRAM_MAX_EV - GPU_HISTOGRAM_MIN_EV) *
+                    GPU_HISTOGRAM_BIN_COUNT.toFloat()
+            ).toInt().coerceIn(0, histogram.lastIndex)
+            histogram[bin] += 1
+        }
+        return histogram
+    }
+
     private fun log2(value: Float): Float {
         return (ln(value.toDouble()) / ln(2.0)).toFloat()
+    }
+
+    private companion object {
+        private const val GPU_HISTOGRAM_BIN_COUNT = 2048
+        private const val GPU_HISTOGRAM_MIN_EV = -16f
+        private const val GPU_HISTOGRAM_MAX_EV = 8f
     }
 }

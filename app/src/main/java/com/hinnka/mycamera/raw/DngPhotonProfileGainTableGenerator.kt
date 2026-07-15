@@ -103,13 +103,17 @@ internal object DngPhotonProfileGainTableGenerator {
             baselineExposureEv = safeBaselineEv
         )
         val inputScale = sanitizeInputScale(1f / toneAnchors.whitePoint)
+        val curveSamples = buildPhotonCurveSamples(
+            pointCount = safePointCount,
+            inputScale = inputScale,
+            toneAnchors = toneAnchors
+        )
         val gains = FloatArray(cellCount * safePointCount)
         for (cellIndex in 0 until cellCount) {
             writePhotonCurve(
                 output = gains,
                 outputOffset = cellIndex * safePointCount,
-                pointCount = safePointCount,
-                inputScale = inputScale,
+                curveSamples = curveSamples,
                 toneAnchors = toneAnchors,
                 global = global,
                 local = cells[cellIndex] ?: global
@@ -436,31 +440,73 @@ internal object DngPhotonProfileGainTableGenerator {
     private fun writePhotonCurve(
         output: FloatArray,
         outputOffset: Int,
-        pointCount: Int,
-        inputScale: Float,
+        curveSamples: PhotonCurveSamples,
         toneAnchors: PhotonToneAnchors,
         global: PhotonPgtmCellStats,
         local: PhotonPgtmCellStats,
     ) {
-        val safeInputScale = sanitizeInputScale(inputScale)
+        val pointCount = curveSamples.sceneLinear.size
+        val localParams = buildLocalMicroContrastParams(
+            toneAnchors = toneAnchors,
+            global = global,
+            local = local
+        )
         var previousOutput = 0f
         val lowTableInput = 1f / max(pointCount - 1, 1).toFloat()
-        val lowSceneLinear = sceneLinearForTableInput(lowTableInput, safeInputScale)
-        val lowGain = (photonToneOutput(lowSceneLinear, toneAnchors, global, local) / lowSceneLinear)
+        val lowSceneLinear = sceneLinearForTableInput(lowTableInput, curveSamples.inputScale)
+        val lowBaseOutput = photonGlobalToneOutput(lowSceneLinear, toneAnchors)
+        val lowOutput = applyLocalMicroContrast(
+            baseOutput = lowBaseOutput,
+            sceneLog2 = log2(lowSceneLinear),
+            tonalWindow = localMicroContrastTonalWindow(lowSceneLinear, toneAnchors),
+            params = localParams
+        )
+        val lowGain = (lowOutput / lowSceneLinear)
             .coerceIn(0.05f, MAX_GAIN_VALUE)
         for (index in 0 until pointCount) {
-            val tableInput = tableInputForIndex(index, pointCount)
-            if (tableInput <= MIN_CURVE_INPUT) {
+            val sceneLinear = curveSamples.sceneLinear[index]
+            if (sceneLinear <= MIN_CURVE_INPUT) {
                 output[outputOffset + index] = lowGain
                 continue
             }
-            val sceneLinear = sceneLinearForTableInput(tableInput, safeInputScale)
-            val targetOutput = photonToneOutput(sceneLinear, toneAnchors, global, local)
+            val targetOutput = applyLocalMicroContrast(
+                baseOutput = curveSamples.baseOutput[index],
+                sceneLog2 = curveSamples.sceneLog2[index],
+                tonalWindow = curveSamples.tonalWindow[index],
+                params = localParams
+            )
             val monotonicOutput = max(previousOutput, targetOutput)
             output[outputOffset + index] = (monotonicOutput / max(sceneLinear, MIN_CURVE_INPUT))
                 .coerceIn(0.05f, MAX_GAIN_VALUE)
             previousOutput = monotonicOutput
         }
+    }
+
+    private fun buildPhotonCurveSamples(
+        pointCount: Int,
+        inputScale: Float,
+        toneAnchors: PhotonToneAnchors,
+    ): PhotonCurveSamples {
+        val safeInputScale = sanitizeInputScale(inputScale)
+        val sceneLinear = FloatArray(pointCount)
+        val baseOutput = FloatArray(pointCount)
+        val sceneLog2 = FloatArray(pointCount)
+        val tonalWindow = FloatArray(pointCount)
+        for (index in 0 until pointCount) {
+            val tableInput = tableInputForIndex(index, pointCount)
+            val scene = sceneLinearForTableInput(tableInput, safeInputScale)
+            sceneLinear[index] = scene
+            baseOutput[index] = photonGlobalToneOutput(scene, toneAnchors)
+            sceneLog2[index] = if (scene > 0f) log2(scene) else Float.NEGATIVE_INFINITY
+            tonalWindow[index] = localMicroContrastTonalWindow(scene, toneAnchors)
+        }
+        return PhotonCurveSamples(
+            inputScale = safeInputScale,
+            sceneLinear = sceneLinear,
+            baseOutput = baseOutput,
+            sceneLog2 = sceneLog2,
+            tonalWindow = tonalWindow
+        )
     }
 
     private fun photonToneOutput(
@@ -558,6 +604,20 @@ internal object DngPhotonProfileGainTableGenerator {
         local: PhotonPgtmCellStats,
     ): Float {
         if (baseOutput <= 0f || baseOutput >= 1f) return baseOutput
+        val params = buildLocalMicroContrastParams(toneAnchors, global, local)
+        return applyLocalMicroContrast(
+            baseOutput = baseOutput,
+            sceneLog2 = log2(sceneLinear),
+            tonalWindow = localMicroContrastTonalWindow(sceneLinear, toneAnchors),
+            params = params
+        )
+    }
+
+    private fun buildLocalMicroContrastParams(
+        toneAnchors: PhotonToneAnchors,
+        global: PhotonPgtmCellStats,
+        local: PhotonPgtmCellStats,
+    ): LocalMicroContrastParams {
         val localRangeEv = log2((local.p90 + 0.008f) / (local.p10 + 0.008f))
             .coerceIn(0f, 8f)
         val globalRangeEv = log2((global.p90 + 0.008f) / (global.p10 + 0.008f))
@@ -567,21 +627,44 @@ internal object DngPhotonProfileGainTableGenerator {
         val highlightDamping = 1f - 0.38f * smoothStep(0.14f, 0.38f, global.highlightFraction)
         val strengthEv = MAX_LOCAL_MICRO_CONTRAST_EV * localDetail *
             lerp(0.72f, 1f, relativeDetail) * highlightDamping
-        if (strengthEv <= 1e-4f) return baseOutput
+        if (strengthEv <= 1e-4f) {
+            return LocalMicroContrastParams(strengthEv = 0f, pivotLog2 = 0f)
+        }
 
         val localPivot = local.p50.coerceIn(
             toneAnchors.middleGrayPoint * 0.45f,
             toneAnchors.middleGrayPoint * 1.65f
         )
-        val pivot = 2.0f.pow(
-            lerp(
+        return LocalMicroContrastParams(
+            strengthEv = strengthEv,
+            pivotLog2 = lerp(
                 log2(toneAnchors.middleGrayPoint),
                 log2(localPivot),
                 0.35f
             )
         )
-        val signedDistance = (log2(sceneLinear / pivot) / 1.45f)
+    }
+
+    private fun applyLocalMicroContrast(
+        baseOutput: Float,
+        sceneLog2: Float,
+        tonalWindow: Float,
+        params: LocalMicroContrastParams,
+    ): Float {
+        if (baseOutput <= 0f || baseOutput >= 1f || params.strengthEv <= 1e-4f) {
+            return baseOutput
+        }
+        val signedDistance = ((sceneLog2 - params.pivotLog2) / 1.45f)
             .coerceIn(-1f, 1f)
+        val adjusted = baseOutput * 2.0f.pow(params.strengthEv * signedDistance * tonalWindow)
+        return adjusted.coerceIn(0f, 1f)
+    }
+
+    private fun localMicroContrastTonalWindow(
+        sceneLinear: Float,
+        toneAnchors: PhotonToneAnchors,
+    ): Float {
+        if (sceneLinear <= 0f) return 0f
         val blackFeatherEnd = max(toneAnchors.blackPoint * 4f, 0.018f)
         val highlightFeatherStart = max(
             toneAnchors.middleGrayPoint * 2.4f,
@@ -591,10 +674,8 @@ internal object DngPhotonProfileGainTableGenerator {
             highlightFeatherStart + 1e-4f,
             toneAnchors.whitePoint * 0.82f
         )
-        val tonalWindow = smoothStep(toneAnchors.blackPoint, blackFeatherEnd, sceneLinear) *
+        return smoothStep(toneAnchors.blackPoint, blackFeatherEnd, sceneLinear) *
             (1f - smoothStep(highlightFeatherStart, highlightFeatherEnd, sceneLinear))
-        val adjusted = baseOutput * 2.0f.pow(strengthEv * signedDistance * tonalWindow)
-        return adjusted.coerceIn(0f, 1f)
     }
 
     private fun photonPgtmInputWeights(inputScale: Float): FloatArray {
@@ -694,6 +775,19 @@ internal object DngPhotonProfileGainTableGenerator {
         val p999: Float,
         val maxInput: Float,
         val sampleWeight: Float,
+    )
+
+    private data class PhotonCurveSamples(
+        val inputScale: Float,
+        val sceneLinear: FloatArray,
+        val baseOutput: FloatArray,
+        val sceneLog2: FloatArray,
+        val tonalWindow: FloatArray,
+    )
+
+    private data class LocalMicroContrastParams(
+        val strengthEv: Float,
+        val pivotLog2: Float,
     )
 
     private data class PhotonToneAnchors(

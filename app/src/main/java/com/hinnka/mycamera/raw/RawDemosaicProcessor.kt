@@ -270,6 +270,7 @@ class RawDemosaicProcessor {
     private var rawHdrLinearAccumulateProgram = 0
     private var rawHdrLinearNormalizeProgram = 0
     private var rawHdrLinearPreviewProgram = 0
+    private val rawProfileGainTableGpuBuilder = GlesRawProfileGainTableMapBuilder()
     private var filmicHrMaskProgram = 0
     private var filmicHrInpaintNoiseProgram = 0
     private var filmicHrInitReconstructProgram = 0
@@ -1279,6 +1280,7 @@ class RawDemosaicProcessor {
         var dngRawDataCleanup: DngRawData? = null
         var embeddedDngJpegPreview: Bitmap? = null
         var dngWarpRectilinear: FloatArray? = null
+        var rawTexturePreparedForPgtm = false
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
         val profileWorkingColorSpace = ColorSpace.ProPhoto
@@ -1450,9 +1452,6 @@ class RawDemosaicProcessor {
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
         val autoExposurePreview = capturePreviewThumbnail
             ?: embeddedDngJpegPreview.takeIf { useEmbeddedPreviewForAutoExposure }
-        if (capturePreviewThumbnail == null && autoExposurePreview != null) {
-            PLog.d(TAG, "Using embedded DNG JPEG preview for RAW auto exposure")
-        }
         val rawAeContentBounds = resolveRawAeContentBounds(
             rawSourceBounds = outputSourceBounds,
             outputRotation = actualRotation,
@@ -1564,16 +1563,48 @@ class RawDemosaicProcessor {
             PLog.d(TAG, "Using embedded $embeddedProfileToneMapMode DNG PGTM/ProfileToneCurve")
         }
         if (generateProfileGainToneMap) {
-            val generatedProfileGainTableMap = RawProfileGainTableMapBuilder.build(
-                rawData = actualRawData,
-                width = actualWidth,
-                height = actualHeight,
-                rowStride = actualRowStride,
-                metadata = actualMetadata,
-                samplesPerPixel = actualSamplesPerPixel,
-                statsBounds = outputSourceBounds,
-                profileToneMapMode = requestedProfileToneMapMode
-            )
+            val generatedProfileGainTableMap = try {
+                val initialized = isInitialized || initialize()
+                if (!initialized) {
+                    null
+                } else if (actualWidth > maxTextureSize || actualHeight > maxTextureSize) {
+                    PLog.e(
+                        TAG,
+                        "GPU PGTM input ${actualWidth}x$actualHeight exceeds " +
+                            "GL_MAX_TEXTURE_SIZE=$maxTextureSize"
+                    )
+                    null
+                } else {
+                    if (actualSamplesPerPixel >= 3) {
+                        uploadLinearRawRgbTextureFromBuffer(
+                            actualRawData,
+                            actualWidth,
+                            actualHeight,
+                            actualRowStride
+                        )
+                    } else {
+                        uploadRawTextureFromBuffer(
+                            actualRawData,
+                            actualWidth,
+                            actualHeight,
+                            actualRowStride
+                        )
+                    }
+                    rawTexturePreparedForPgtm = true
+                    rawProfileGainTableGpuBuilder.build(
+                        rawTextureId = rawTextureId,
+                        width = actualWidth,
+                        height = actualHeight,
+                        metadata = actualMetadata,
+                        samplesPerPixel = actualSamplesPerPixel,
+                        statsBounds = outputSourceBounds,
+                        profileToneMapMode = requestedProfileToneMapMode
+                    )
+                }
+            } catch (error: Exception) {
+                PLog.w(TAG, "Failed to prepare GPU RAW PGTM generation", error)
+                null
+            }
             if (generatedProfileGainTableMap?.isValid == true) {
                 actualMetadata = actualMetadata.copy(profileGainTableMap = generatedProfileGainTableMap)
                 PLog.d(
@@ -1634,6 +1665,9 @@ class RawDemosaicProcessor {
             }
             else -> profileBaseDcpRenderPlan
         }
+        val photonToneCurveActive = DngProfileToneCurve.isPhotonPgtmToneCurveLut(
+            activeDcpRenderPlan?.toneCurveLut
+        )
         val profilePlanSource = when {
             profileGainToneMapActive -> when {
                 dcpRenderPlan != null -> "provided+${requestedProfileToneMapMode.name.lowercase()}-tone-map"
@@ -1693,7 +1727,14 @@ class RawDemosaicProcessor {
         )
         val viewfinderThumbnailMeteringImage = when {
             !rawAutoExposure -> null
+            photonToneCurveActive -> {
+                PLog.d(TAG, "RAW auto exposure disabled: Photon tone curve is active")
+                null
+            }
             else -> {
+                if (capturePreviewThumbnail == null && autoExposurePreview != null) {
+                    PLog.d(TAG, "Using embedded DNG JPEG preview for RAW auto exposure")
+                }
                 analyzeSrgbThumbnailForMetering(
                     autoExposurePreview,
                     rawAeContentBounds?.thumbnailBounds
@@ -1739,12 +1780,14 @@ class RawDemosaicProcessor {
             // 4. 第一步：全分辨率处理 (Linear CCM / RCD Compute Shader Demosaic)
             setupFullResFramebuffer(actualWidth, actualHeight)
             if (actualSamplesPerPixel == 3) {
-                uploadLinearRawRgbTextureFromBuffer(
-                    actualRawData,
-                    actualWidth,
-                    actualHeight,
-                    actualRowStride
-                )
+                if (!rawTexturePreparedForPgtm) {
+                    uploadLinearRawRgbTextureFromBuffer(
+                        actualRawData,
+                        actualWidth,
+                        actualHeight,
+                        actualRowStride
+                    )
+                }
                 actualRawData = null
                 renderLinearRawRgbToFramebuffer(
                     sourceTextureId = rawTextureId,
@@ -1758,12 +1801,14 @@ class RawDemosaicProcessor {
                 }
                 PLog.d(TAG, "LinearRaw RGB input prepared on GPU: ${actualWidth}x${actualHeight}")
             } else {
-                uploadRawTextureFromBuffer(
-                    actualRawData,
-                    actualWidth,
-                    actualHeight,
-                    actualRowStride
-                )
+                if (!rawTexturePreparedForPgtm) {
+                    uploadRawTextureFromBuffer(
+                        actualRawData,
+                        actualWidth,
+                        actualHeight,
+                        actualRowStride
+                    )
+                }
                 // GPU 已消费 rawData，立即释放 CPU 侧引用，帮助 GC 回收（超分时约 288 MB）
                 actualRawData = null
 
@@ -3316,6 +3361,7 @@ class RawDemosaicProcessor {
         quadChromaProgram = compileComputeProgram(QuadBayerShaders.CHROMA, "QUAD_CHROMA")
         quadRefineProgram = compileComputeProgram(QuadBayerShaders.REFINE, "QUAD_REFINE")
         quadWriteOutputProgram = compileComputeProgram(QuadBayerShaders.WRITE_OUTPUT, "QUAD_WRITE_OUTPUT")
+        rawProfileGainTableGpuBuilder.initialize()
 
         val fShaderLinearRcd = compileShader(
             GLES30.GL_FRAGMENT_SHADER,
@@ -8582,6 +8628,7 @@ class RawDemosaicProcessor {
         if (rawHdrLinearAccumulateProgram != 0) GLES31.glDeleteProgram(rawHdrLinearAccumulateProgram)
         if (rawHdrLinearNormalizeProgram != 0) GLES31.glDeleteProgram(rawHdrLinearNormalizeProgram)
         if (rawHdrLinearPreviewProgram != 0) GLES31.glDeleteProgram(rawHdrLinearPreviewProgram)
+        rawProfileGainTableGpuBuilder.release()
 
         // darktable denoiseprofile compute programs
         if (denoisePreconditionV2Program != 0) GLES31.glDeleteProgram(denoisePreconditionV2Program)

@@ -42,6 +42,114 @@ internal data class DngPgtmGlobalStats(
         private const val SHADOW_FOOT_DENSITY_RATIO = 0.15f
 
         /**
+         * Builds the scene-wide statistics from the compact log-EV histogram
+         * produced by the GLES PGTM statistics pass. Dense image sampling and
+         * percentile population counting stay on the GPU; only this small
+         * histogram and per-workgroup sums cross back to the CPU.
+         */
+        fun fromLogHistogram(
+            logHistogram: IntArray,
+            histogramMinEv: Float,
+            histogramMaxEv: Float,
+            sampleCount: Int,
+            zeroCount: Int,
+            highlightCount: Int,
+            maxInput: Float,
+            linearSum: Double,
+            logSum: Double,
+        ): DngPgtmGlobalStats? {
+            if (logHistogram.isEmpty() ||
+                !histogramMinEv.isFinite() ||
+                !histogramMaxEv.isFinite() ||
+                histogramMaxEv <= histogramMinEv ||
+                sampleCount <= 0
+            ) {
+                return null
+            }
+            val safeZeroCount = zeroCount.coerceIn(0, sampleCount)
+            val positiveCount = logHistogram.sumOf { it.coerceAtLeast(0).toLong() }
+                .coerceAtMost((sampleCount - safeZeroCount).toLong())
+                .toInt()
+            val coarseHistogram = FloatArray(LOG_HISTOGRAM_BIN_COUNT)
+            val fineBinEv = (histogramMaxEv - histogramMinEv) / logHistogram.size.toFloat()
+            logHistogram.forEachIndexed { index, rawCount ->
+                val count = rawCount.coerceAtLeast(0)
+                if (count == 0) return@forEachIndexed
+                val ev = histogramMinEv + (index.toFloat() + 0.5f) * fineBinEv
+                val coarseBin = floor(
+                    (ev - LOG_HISTOGRAM_MIN_EV) / LOG_HISTOGRAM_BIN_EV
+                ).toInt().coerceIn(0, coarseHistogram.lastIndex)
+                coarseHistogram[coarseBin] += count.toFloat()
+            }
+            val shadowSlope = shadowSlopeFromHistogram(coarseHistogram, positiveCount)
+            val safeMaxInput = maxInput.takeIf { it.isFinite() && it >= 0f } ?: 0f
+            val p10 = percentileFromLogHistogram(
+                logHistogram,
+                histogramMinEv,
+                histogramMaxEv,
+                sampleCount,
+                safeZeroCount,
+                0.10f
+            ).coerceAtMost(safeMaxInput)
+            val p50 = percentileFromLogHistogram(
+                logHistogram,
+                histogramMinEv,
+                histogramMaxEv,
+                sampleCount,
+                safeZeroCount,
+                0.50f
+            ).coerceIn(p10, safeMaxInput)
+            val p90 = percentileFromLogHistogram(
+                logHistogram,
+                histogramMinEv,
+                histogramMaxEv,
+                sampleCount,
+                safeZeroCount,
+                0.90f
+            ).coerceIn(p50, safeMaxInput)
+            val p98 = percentileFromLogHistogram(
+                logHistogram,
+                histogramMinEv,
+                histogramMaxEv,
+                sampleCount,
+                safeZeroCount,
+                0.98f
+            ).coerceIn(p90, safeMaxInput)
+            val p995 = percentileFromLogHistogram(
+                logHistogram,
+                histogramMinEv,
+                histogramMaxEv,
+                sampleCount,
+                safeZeroCount,
+                0.995f
+            ).coerceIn(p98, safeMaxInput)
+            val p999 = percentileFromLogHistogram(
+                logHistogram,
+                histogramMinEv,
+                histogramMaxEv,
+                sampleCount,
+                safeZeroCount,
+                0.999f
+            ).coerceIn(p995, safeMaxInput)
+            return DngPgtmGlobalStats(
+                p10 = p10,
+                p50 = p50,
+                p90 = p90,
+                p98 = p98,
+                p995 = p995,
+                p999 = p999,
+                maxInput = safeMaxInput,
+                highlightFraction = highlightCount.coerceIn(0, sampleCount).toFloat() /
+                    sampleCount.toFloat(),
+                linearMean = (linearSum / sampleCount.toDouble()).toFloat(),
+                logAverage = exp(logSum / sampleCount.toDouble()).toFloat(),
+                shadowEdge = shadowSlope.edge,
+                shadowFoot = shadowSlope.foot,
+                sampleCount = sampleCount
+            )
+        }
+
+        /**
          * Compacts and sorts [samples] in place. The caller must not reuse the
          * original sample order after this call.
          */
@@ -112,6 +220,18 @@ internal data class DngPgtmGlobalStats(
                 return ShadowSlope(edge = minimum, foot = minimum)
             }
 
+            return shadowSlopeFromHistogram(histogram, positiveCount)
+        }
+
+        private fun shadowSlopeFromHistogram(
+            histogram: FloatArray,
+            positiveCount: Int,
+        ): ShadowSlope {
+            if (positiveCount <= 0) {
+                val minimum = 2.0f.pow(LOG_HISTOGRAM_MIN_EV)
+                return ShadowSlope(edge = minimum, foot = minimum)
+            }
+
             val smoothed = smoothHistogram(histogram)
             val searchStart = percentileBin(
                 histogram,
@@ -163,6 +283,36 @@ internal data class DngPgtmGlobalStats(
                 edge = 2.0f.pow(edgeEv),
                 foot = 2.0f.pow(footEv.coerceAtMost(edgeEv))
             )
+        }
+
+        private fun percentileFromLogHistogram(
+            histogram: IntArray,
+            histogramMinEv: Float,
+            histogramMaxEv: Float,
+            sampleCount: Int,
+            zeroCount: Int,
+            percentile: Float,
+        ): Float {
+            val target = ceil(sampleCount.toFloat() * percentile.coerceIn(0f, 1f)).toInt()
+                .coerceIn(1, sampleCount)
+            if (target <= zeroCount) return 0f
+            val positiveTarget = target - zeroCount
+            var cumulative = 0
+            val binWidthEv = (histogramMaxEv - histogramMinEv) / histogram.size.toFloat()
+            for (index in histogram.indices) {
+                val count = histogram[index].coerceAtLeast(0)
+                if (count == 0) continue
+                val previous = cumulative
+                cumulative += count
+                if (cumulative >= positiveTarget) {
+                    val withinBin = ((positiveTarget - previous).toFloat() - 0.5f) /
+                        count.toFloat()
+                    val ev = histogramMinEv +
+                        (index.toFloat() + withinBin.coerceIn(0f, 1f)) * binWidthEv
+                    return 2.0f.pow(ev)
+                }
+            }
+            return 2.0f.pow(histogramMaxEv)
         }
 
         private fun smoothHistogram(histogram: FloatArray): FloatArray {
