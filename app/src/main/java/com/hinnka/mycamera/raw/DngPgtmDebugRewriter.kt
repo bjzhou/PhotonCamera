@@ -15,15 +15,18 @@ internal object DngPgtmDebugRewriter {
 
     private const val TIFF_CLASSIC_MAGIC = 42
     private const val TYPE_BYTE = 1
-    private const val TYPE_ASCII = 2
     private const val TYPE_LONG = 4
     private const val TYPE_FLOAT = 11
     private const val TYPE_UNDEFINED = 7
 
+    private const val TAG_NEW_SUBFILE_TYPE = 254
+    private const val TAG_XMP = DngCameraRawProfileXmp.TAG_XMP
+    private const val TAG_SUB_IFDS = 330
     private const val TAG_DNG_VERSION = 50706
     private const val TAG_PROFILE_NAME = 50936
     private const val TAG_PROFILE_TONE_CURVE = 50940
     private const val TAG_DEFAULT_BLACK_RENDER = 51110
+    private const val TAG_PROFILE_GAIN_TABLE_MAP = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP
     private const val TAG_PROFILE_GAIN_TABLE_MAP_2 = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2
 
     fun rewriteGeneratedPgtmOnRawRefreshIfEnabled(
@@ -34,10 +37,10 @@ internal object DngPgtmDebugRewriter {
         if (!BuildConfig.DEBUG || !REWRITE_GENERATED_PGTM_ON_RAW_REFRESH) return false
         val file = dngFile ?: return false
         val map = profileGainTableMap?.takeIf { it.isValid } ?: return false
-        return rewriteProfileGainTableMap2(file, map, profileToneMapMode)
+        return rewriteProfileGainTableMap(file, map, profileToneMapMode)
     }
 
-    fun rewriteProfileGainTableMap2(
+    fun rewriteProfileGainTableMap(
         dngFile: File,
         profileGainTableMap: DngProfileGainTableMap,
         profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
@@ -56,22 +59,47 @@ internal object DngPgtmDebugRewriter {
                 }
                 val ifd0Offset = raf.readUnsignedInt(byteOrder)
                 val ifd0 = readIfd(raf, ifd0Offset, byteOrder) ?: return@use false
-                val profileName = profileNameForToneMapMode(profileToneMapMode)
-                val profileNameBytes = asciiBytes(profileName)
+                val subIfdOffsets = readLongValues(
+                    raf,
+                    ifd0.entries.firstOrNull { it.tag == TAG_SUB_IFDS },
+                    byteOrder,
+                ) ?: return@use false
+                val rawSubIfdIndex = subIfdOffsets.indices.firstOrNull { index ->
+                    val candidate = readIfd(raf, subIfdOffsets[index], byteOrder)
+                    candidate?.entries?.firstOrNull { it.tag == TAG_NEW_SUBFILE_TYPE }
+                        ?.let { readInlineLong(it, byteOrder) == 0L } == true
+                } ?: return@use false
+                val rawIfdOffset = subIfdOffsets[rawSubIfdIndex]
+                val rawIfd = readIfd(raf, rawIfdOffset, byteOrder) ?: return@use false
+                val profileLookName = profileLookNameForToneMapMode(profileToneMapMode)
+                val cameraRawProfileXmp = DngCameraRawProfileXmp.build(
+                    profileLookName = profileLookName,
+                )
                 val toneCurvePoints = profileToneCurveForToneMapMode(profileToneMapMode)
                 val pgtmPayload = profileGainTableMap.encodeProfileGainTableMap2(byteOrder)
+                val newRawIfdOffset = appendIfdWithReplacements(
+                    raf = raf,
+                    original = rawIfd,
+                    replacements = emptyList(),
+                    removedTags = setOf(
+                        TAG_PROFILE_GAIN_TABLE_MAP,
+                        TAG_PROFILE_GAIN_TABLE_MAP_2,
+                    ),
+                    byteOrder = byteOrder,
+                ) ?: return@use false
+                subIfdOffsets[rawSubIfdIndex] = newRawIfdOffset
                 val replacements = listOf(
+                    TiffValue(
+                        tag = TAG_XMP,
+                        type = TYPE_BYTE,
+                        count = cameraRawProfileXmp.size.toLong(),
+                        bytes = cameraRawProfileXmp,
+                    ),
                     TiffValue(
                         tag = TAG_DNG_VERSION,
                         type = TYPE_BYTE,
                         count = 4,
                         bytes = byteArrayOf(1, 7, 0, 0)
-                    ),
-                    TiffValue(
-                        tag = TAG_PROFILE_NAME,
-                        type = TYPE_ASCII,
-                        count = profileNameBytes.size.toLong(),
-                        bytes = profileNameBytes
                     ),
                     TiffValue(
                         tag = TAG_PROFILE_TONE_CURVE,
@@ -86,28 +114,43 @@ internal object DngPgtmDebugRewriter {
                         tag = TAG_DEFAULT_BLACK_RENDER,
                         type = TYPE_LONG,
                         count = 1,
-                        bytes = uintBytes(0, byteOrder)
+                        bytes = uintBytes(1, byteOrder)
                     ),
                     TiffValue(
                         tag = TAG_PROFILE_GAIN_TABLE_MAP_2,
                         type = TYPE_UNDEFINED,
                         count = pgtmPayload.size.toLong(),
-                        bytes = pgtmPayload
+                        bytes = pgtmPayload,
+                    ),
+                    TiffValue(
+                        tag = TAG_SUB_IFDS,
+                        type = TYPE_LONG,
+                        count = subIfdOffsets.size.toLong(),
+                        bytes = encodeLongArray(subIfdOffsets, byteOrder),
                     )
                 )
-                val newIfdOffset = appendIfd0WithReplacements(
+                val newIfdOffset = appendIfdWithReplacements(
                     raf = raf,
                     original = ifd0,
                     replacements = replacements,
+                    removedTags = setOf(
+                        TAG_PROFILE_NAME,
+                        TAG_PROFILE_GAIN_TABLE_MAP,
+                        TAG_PROFILE_GAIN_TABLE_MAP_2,
+                    ),
                     byteOrder = byteOrder
                 ) ?: return@use false
                 raf.seek(4)
                 raf.writeUInt(newIfdOffset, byteOrder)
                 logInfo(
                     "Rewrote debug DNG PGTM: file=${dngFile.name} " +
-                        "profile=$profileName " +
+                        "profile=anonymous-embedded look=$profileLookName " +
+                        "cameraRawLook=pgtm=100,toneCurve=100 " +
+                        "tag=${DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2} " +
                         "grid=${profileGainTableMap.mapPointsH}x${profileGainTableMap.mapPointsV}x" +
-                        "${profileGainTableMap.mapPointsN} ifd0=$ifd0Offset->$newIfdOffset"
+                        "${profileGainTableMap.mapPointsN} gamma=${profileGainTableMap.gamma} " +
+                        "rawIfd=$rawIfdOffset->$newRawIfdOffset " +
+                        "ifd0=$ifd0Offset->$newIfdOffset"
                 )
                 true
             }
@@ -130,7 +173,7 @@ internal object DngPgtmDebugRewriter {
         }
     }
 
-    private fun profileNameForToneMapMode(mode: RawProfileToneMapMode): String {
+    private fun profileLookNameForToneMapMode(mode: RawProfileToneMapMode): String {
         return when (mode) {
             RawProfileToneMapMode.Photon -> DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
             else -> DngProfileToneCurve.GOOGLE_HDR_PROFILE_NAME
@@ -144,21 +187,18 @@ internal object DngPgtmDebugRewriter {
         }
     }
 
-    private fun asciiBytes(value: String): ByteArray {
-        return (value + "\u0000").toByteArray(Charsets.US_ASCII)
-    }
-
-    private fun appendIfd0WithReplacements(
+    private fun appendIfdWithReplacements(
         raf: RandomAccessFile,
         original: TiffIfd,
         replacements: List<TiffValue>,
+        removedTags: Set<Int> = emptySet(),
         byteOrder: ByteOrder,
     ): Long? {
-        if (replacements.isEmpty()) return null
+        if (replacements.isEmpty() && removedTags.isEmpty()) return null
         val replacementByTag = replacements.associateBy { it.tag }
         val merged = LinkedHashMap<Int, IfdValue>()
         original.entries.forEach { entry ->
-            if (entry.tag !in replacementByTag) {
+            if (entry.tag !in replacementByTag && entry.tag !in removedTags) {
                 merged[entry.tag] = IfdValue.Existing(entry)
             }
         }
@@ -259,6 +299,35 @@ internal object DngPgtmDebugRewriter {
         values.forEach { value -> buffer.putFloat(value.takeIf { it.isFinite() } ?: 0f) }
         return buffer.array()
     }
+
+    private fun encodeLongArray(values: LongArray, byteOrder: ByteOrder): ByteArray {
+        val buffer = ByteBuffer.allocate(values.size * 4).order(byteOrder)
+        values.forEach { buffer.putInt((it and UINT_MAX).toInt()) }
+        return buffer.array()
+    }
+
+    private fun readLongValues(
+        raf: RandomAccessFile,
+        entry: TiffEntry?,
+        byteOrder: ByteOrder,
+    ): LongArray? {
+        if (entry == null || entry.type != TYPE_LONG || entry.count <= 0L ||
+            entry.count > MAX_IFD_ENTRY_COUNT.toLong()
+        ) {
+            return null
+        }
+        if (entry.count == 1L) {
+            return longArrayOf(readInlineLong(entry, byteOrder))
+        }
+        val offset = readInlineLong(entry, byteOrder)
+        val byteCount = entry.count * 4L
+        if (offset <= 0L || offset + byteCount > raf.length()) return null
+        raf.seek(offset)
+        return LongArray(entry.count.toInt()) { raf.readUnsignedInt(byteOrder) }
+    }
+
+    private fun readInlineLong(entry: TiffEntry, byteOrder: ByteOrder): Long =
+        ByteBuffer.wrap(entry.inlineOrOffset).order(byteOrder).int.toLong() and UINT_MAX
 
     private fun inlineValue(value: ByteArray): ByteArray =
         ByteArray(4).also { value.copyInto(it, endIndex = value.size.coerceAtMost(4)) }

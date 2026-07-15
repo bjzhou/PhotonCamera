@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.utils
 
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
@@ -10,6 +11,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
+import com.hinnka.mycamera.raw.DngCameraRawProfileXmp
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -23,6 +25,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.math.sqrt
@@ -72,6 +75,8 @@ object SuperResolutionDngWriter {
     private const val TAG_PLANAR_CONFIGURATION = 284
     private const val TAG_SOFTWARE = 305
     private const val TAG_DATETIME = 306
+    private const val TAG_SUB_IFDS = 330
+    private const val TAG_XMP = DngCameraRawProfileXmp.TAG_XMP
     private const val TAG_EXIF_IFD_POINTER = 34665
     private const val TAG_EXPOSURE_TIME = 33434
     private const val TAG_F_NUMBER = 33437
@@ -99,7 +104,6 @@ object SuperResolutionDngWriter {
     private const val TAG_COLOR_MATRIX_2 = 50722
     private const val TAG_CAMERA_CALIBRATION_1 = 50723
     private const val TAG_CAMERA_CALIBRATION_2 = 50724
-    private const val TAG_PROFILE_NAME = 50936
     private const val TAG_PROFILE_TONE_CURVE = 50940
     private const val TAG_AS_SHOT_NEUTRAL = 50728
     private const val TAG_BASELINE_EXPOSURE = 50730
@@ -111,7 +115,7 @@ object SuperResolutionDngWriter {
     private const val TAG_NOISE_PROFILE = 51041
     private const val TAG_DEFAULT_BLACK_RENDER = 51110
     private const val TAG_PROFILE_GAIN_TABLE_MAP_2 = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2
-
+    private const val PREVIEW_MAX_EDGE = 512
     init {
         runCatching { System.loadLibrary("my-native-lib") }
     }
@@ -232,6 +236,15 @@ object SuperResolutionDngWriter {
             }
             val imageByteCount = imageBytes?.size?.toLong() ?: uncompressedByteCount
 
+            val writtenProfileGainTableMap = profileGainTableMap
+                ?.takeIf { it.isValid }
+                ?.let { map ->
+                    if (map.sourceTag == DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2) {
+                        map
+                    } else {
+                        map.copy(sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2)
+                    }
+                }
             val directories = buildEntries(
                 width = width,
                 height = height,
@@ -246,7 +259,7 @@ object SuperResolutionDngWriter {
                 whiteLevel = encodedWhiteLevel,
                 imageByteCount = imageByteCount,
                 baselineExposureEv = baselineExposureEv,
-                profileGainTableMap = profileGainTableMap?.takeIf { it.isValid },
+                profileGainTableMap = writtenProfileGainTableMap,
                 profileName = profileName,
                 profileToneCurve = profileToneCurve,
                 imageLayout = imageLayout,
@@ -272,7 +285,13 @@ object SuperResolutionDngWriter {
                     "rowStepSamples=$rowStepSamples colStepSamples=$colStepSamples " +
                     "blackLevel=${encodedBlackLevel.joinToString()} whiteLevel=$encodedWhiteLevel " +
                     "baselineExposureEv=$baselineExposureEv " +
-                    "profileGainTable=${profileGainTableMap?.takeIf { it.isValid }?.let { "${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN}" } ?: "none"}"
+                    "ifdLayout=raw-ifd0 preview=none " +
+                    "defaultBlackRender=${if (writtenProfileGainTableMap != null) "none" else "default"} " +
+                    "profileToneCurvePoints=${profileToneCurve?.size?.div(2) ?: 0} " +
+                    "cameraRawLook=${if (writtenProfileGainTableMap != null) "pgtm=100,toneCurve=100" else "none"} " +
+                    "profileGainTable=${writtenProfileGainTableMap?.let {
+                        "tag=${it.sourceTag} ${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN} gamma=${it.gamma}"
+                    } ?: "none"}"
             )
             true
         }.onFailure {
@@ -379,6 +398,13 @@ object SuperResolutionDngWriter {
             }
             listOf(red, green, blue)
         }
+        val profileLookName = profileName?.takeIf { it.isNotBlank() }
+            ?: DngProfileToneCurve.GOOGLE_HDR_PROFILE_NAME
+        val cameraRawProfileXmp = profileGainTableMap?.let {
+            DngCameraRawProfileXmp.build(
+                profileLookName = profileLookName,
+            )
+        }
 
         val exifEntries = buildList {
             exposureTimeSeconds?.let { add(rationalArray(TAG_EXPOSURE_TIME, listOf(it))) }
@@ -411,6 +437,7 @@ object SuperResolutionDngWriter {
             add(long(TAG_ROWS_PER_STRIP, height.toLong()))
             add(long(TAG_STRIP_BYTE_COUNTS, imageByteCount))
             add(short(TAG_PLANAR_CONFIGURATION, 1))
+            cameraRawProfileXmp?.let { add(byteArray(TAG_XMP, it)) }
             add(ascii(TAG_SOFTWARE, "PhotonCamera"))
             add(ascii(TAG_DATETIME, dateTime))
             if (exifEntries.isNotEmpty()) {
@@ -425,10 +452,10 @@ object SuperResolutionDngWriter {
                 !isCfa -> byteArrayOf(1, 6, 0, 0)
                 else -> byteArrayOf(1, 4, 0, 0)
             }))
-            add(byteArray(TAG_DNG_BACKWARD_VERSION, if (isCfa) {
-                byteArrayOf(1, 1, 0, 0)
-            } else {
-                byteArrayOf(1, 3, 0, 0)
+            add(byteArray(TAG_DNG_BACKWARD_VERSION, when {
+                profileGainTableMap != null -> byteArrayOf(1, 3, 0, 0)
+                isCfa -> byteArrayOf(1, 1, 0, 0)
+                else -> byteArrayOf(1, 3, 0, 0)
             }))
             add(ascii(TAG_UNIQUE_CAMERA_MODEL, cameraModel))
             if (isCfa) {
@@ -453,14 +480,12 @@ object SuperResolutionDngWriter {
             }
             add(rationalArray(TAG_AS_SHOT_NEUTRAL, asShotNeutral(captureResult)))
             if (profileGainTableMap != null) {
-                add(long(TAG_DEFAULT_BLACK_RENDER, 0))
+                add(long(TAG_DEFAULT_BLACK_RENDER, 1))
             } else if (!isCfa) {
                 add(long(TAG_DEFAULT_BLACK_RENDER, 1))
             }
             add(sRationalArray(TAG_BASELINE_EXPOSURE, listOf(resolvedBaselineExposureEv.toDouble())))
             if (profileGainTableMap != null) {
-                add(ascii(TAG_PROFILE_NAME, profileName?.takeIf { it.isNotBlank() }
-                    ?: DngProfileToneCurve.GOOGLE_HDR_PROFILE_NAME))
                 add(floatArray(TAG_PROFILE_TONE_CURVE, profileToneCurve?.takeIf { it.size >= 4 }
                     ?: DngProfileToneCurve.googleHdrToneCurvePoints()))
             }
@@ -513,7 +538,23 @@ object SuperResolutionDngWriter {
     private fun buildHeader(
         primaryEntries: List<TiffEntry>,
         exifEntries: List<TiffEntry>,
+    ): ByteArray = buildHeader(
+        primaryEntries = primaryEntries,
+        exifEntries = exifEntries,
+        rawEntries = emptyList(),
+        previewByteCount = 0,
+    )
+
+    private fun buildHeader(
+        primaryEntries: List<TiffEntry>,
+        exifEntries: List<TiffEntry>,
+        rawEntries: List<TiffEntry>,
+        previewByteCount: Int,
     ): ByteArray {
+        require(previewByteCount >= 0)
+        require(rawEntries.isNotEmpty() || previewByteCount == 0) {
+            "Preview image requires a RAW SubIFD"
+        }
         val primaryEntryCount = primaryEntries.size
         val primaryDataBaseOffset = 8 + 2 + primaryEntryCount * 12 + 4
         val (encodedPrimaryEntries, primaryData) = encodeDirectoryEntries(
@@ -535,8 +576,25 @@ object SuperResolutionDngWriter {
             entries = exifEntries,
             dataBaseOffset = exifDataBaseOffset,
         )
-        val rawOffset = exifDataBaseOffset + exifData.size
-        val out = ByteArrayOutputStream(rawOffset)
+        val rawIfdOffset = if (rawEntries.isNotEmpty()) {
+            exifDataBaseOffset + exifData.size
+        } else {
+            0
+        }
+        val rawDataBaseOffset = if (rawEntries.isNotEmpty()) {
+            rawIfdOffset + 2 + rawEntries.size * 12 + 4
+        } else {
+            exifDataBaseOffset + exifData.size
+        }
+        val (encodedRawEntries, rawIfdData) = encodeDirectoryEntries(
+            entries = rawEntries,
+            dataBaseOffset = rawDataBaseOffset,
+        )
+        val previewOffset = rawDataBaseOffset + rawIfdData.size
+        val previewPadding = if ((previewByteCount and 1) != 0) 1 else 0
+        val rawOffset = previewOffset + previewByteCount + previewPadding
+        val headerEndOffset = if (rawEntries.isNotEmpty()) previewOffset else rawOffset
+        val out = ByteArrayOutputStream(headerEndOffset)
         out.write(byteArrayOf('I'.code.toByte(), 'I'.code.toByte()))
         out.write(ushortBytes(42))
         out.write(uintBytes(8))
@@ -546,8 +604,11 @@ object SuperResolutionDngWriter {
             out.write(ushortBytes(encoded.entry.type))
             out.write(uintBytes(encoded.entry.count))
             val value = when (encoded.entry.tag) {
-                TAG_STRIP_OFFSETS -> uintBytes(rawOffset.toLong())
+                TAG_STRIP_OFFSETS -> uintBytes(
+                    if (rawEntries.isNotEmpty()) previewOffset.toLong() else rawOffset.toLong()
+                )
                 TAG_EXIF_IFD_POINTER -> uintBytes(exifIfdOffset.toLong())
+                TAG_SUB_IFDS -> uintBytes(rawIfdOffset.toLong())
                 else -> encoded.valueOrOffset
             }
             out.write(value)
@@ -569,10 +630,168 @@ object SuperResolutionDngWriter {
             out.write(uintBytes(0))
             out.write(exifData)
         }
-        check(out.size() == rawOffset) {
-            "RAW strip offset mismatch: expected=$rawOffset actual=${out.size()}"
+
+        if (rawEntries.isNotEmpty()) {
+            check(out.size() == rawIfdOffset) {
+                "RAW SubIFD offset mismatch: expected=$rawIfdOffset actual=${out.size()}"
+            }
+            out.write(ushortBytes(rawEntries.size))
+            for (encoded in encodedRawEntries) {
+                out.write(ushortBytes(encoded.entry.tag))
+                out.write(ushortBytes(encoded.entry.type))
+                out.write(uintBytes(encoded.entry.count))
+                val value = if (encoded.entry.tag == TAG_STRIP_OFFSETS) {
+                    uintBytes(rawOffset.toLong())
+                } else {
+                    encoded.valueOrOffset
+                }
+                out.write(value)
+            }
+            out.write(uintBytes(0))
+            out.write(rawIfdData)
+        }
+        check(out.size() == headerEndOffset) {
+            "DNG header offset mismatch: expected=$headerEndOffset actual=${out.size()}"
         }
         return out.toByteArray()
+    }
+
+    private fun buildPreview(
+        source: Bitmap?,
+        rawBuffer: ByteBuffer,
+        rawWidth: Int,
+        rawHeight: Int,
+        imageLayout: ImageLayout,
+        rowStepSamples: Int,
+        colStepSamples: Int,
+        blackLevel: FloatArray,
+        whiteLevel: Int,
+    ): DngPreview {
+        if (source == null || source.isRecycled || source.width <= 0 || source.height <= 0) {
+            return buildRawPreview(
+                rawBuffer = rawBuffer,
+                rawWidth = rawWidth,
+                rawHeight = rawHeight,
+                imageLayout = imageLayout,
+                rowStepSamples = rowStepSamples,
+                colStepSamples = colStepSamples,
+                blackLevel = blackLevel,
+                whiteLevel = whiteLevel,
+            )
+        }
+        val scale = minOf(
+            PREVIEW_MAX_EDGE.toFloat() / source.width.toFloat(),
+            PREVIEW_MAX_EDGE.toFloat() / source.height.toFloat(),
+            1f,
+        )
+        val width = (source.width * scale).roundToInt().coerceAtLeast(1)
+        val height = (source.height * scale).roundToInt().coerceAtLeast(1)
+        val sizedBitmap = if (width == source.width && height == source.height) {
+            source
+        } else {
+            Bitmap.createScaledBitmap(source, width, height, true)
+        }
+        val readableBitmap = if (sizedBitmap.config == Bitmap.Config.HARDWARE) {
+            requireNotNull(sizedBitmap.copy(Bitmap.Config.ARGB_8888, false)) {
+                "Unable to copy hardware DNG preview bitmap"
+            }
+        } else {
+            sizedBitmap
+        }
+        return try {
+            val pixels = IntArray(width * height)
+            readableBitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+            val rgb = ByteArray(pixels.size * 3)
+            var outputIndex = 0
+            for (pixel in pixels) {
+                rgb[outputIndex++] = ((pixel ushr 16) and 0xFF).toByte()
+                rgb[outputIndex++] = ((pixel ushr 8) and 0xFF).toByte()
+                rgb[outputIndex++] = (pixel and 0xFF).toByte()
+            }
+            DngPreview(width = width, height = height, bytes = rgb, source = "bitmap")
+        } finally {
+            if (readableBitmap !== sizedBitmap) readableBitmap.recycle()
+            if (sizedBitmap !== source) sizedBitmap.recycle()
+        }
+    }
+
+    private fun buildRawPreview(
+        rawBuffer: ByteBuffer,
+        rawWidth: Int,
+        rawHeight: Int,
+        imageLayout: ImageLayout,
+        rowStepSamples: Int,
+        colStepSamples: Int,
+        blackLevel: FloatArray,
+        whiteLevel: Int,
+    ): DngPreview {
+        require(rawWidth > 0 && rawHeight > 0)
+        val samplesPerPixel = imageLayout.samplesPerPixel
+        val lastSampleIndex = (rawHeight - 1).toLong() * rowStepSamples.toLong() +
+            (rawWidth - 1).toLong() * colStepSamples.toLong() +
+            (samplesPerPixel - 1).toLong()
+        require(lastSampleIndex >= 0L && (lastSampleIndex + 1L) * 2L <= rawBuffer.capacity().toLong()) {
+            "RAW preview source exceeds input buffer"
+        }
+        val scale = minOf(
+            PREVIEW_MAX_EDGE.toFloat() / rawWidth.toFloat(),
+            PREVIEW_MAX_EDGE.toFloat() / rawHeight.toFloat(),
+            1f,
+        )
+        val width = (rawWidth * scale).roundToInt().coerceAtLeast(1)
+        val height = (rawHeight * scale).roundToInt().coerceAtLeast(1)
+        val input = rawBuffer.duplicate().order(ByteOrder.nativeOrder())
+        val rgb = ByteArray(width * height * 3)
+        var outputIndex = 0
+        for (previewY in 0 until height) {
+            val sourceY = (((previewY + 0.5f) * rawHeight) / height)
+                .toInt()
+                .coerceIn(0, rawHeight - 1)
+            for (previewX in 0 until width) {
+                val sourceX = (((previewX + 0.5f) * rawWidth) / width)
+                    .toInt()
+                    .coerceIn(0, rawWidth - 1)
+                val sampleOffset = sourceY * rowStepSamples + sourceX * colStepSamples
+                if (samplesPerPixel == 1) {
+                    val gray = previewSample(
+                        input = input,
+                        sampleIndex = sampleOffset,
+                        blackLevel = blackLevel.firstOrNull() ?: 0f,
+                        whiteLevel = whiteLevel,
+                    )
+                    rgb[outputIndex++] = gray
+                    rgb[outputIndex++] = gray
+                    rgb[outputIndex++] = gray
+                } else {
+                    repeat(3) { channel ->
+                        rgb[outputIndex++] = previewSample(
+                            input = input,
+                            sampleIndex = sampleOffset + channel,
+                            blackLevel = blackLevel.getOrElse(channel) { blackLevel.firstOrNull() ?: 0f },
+                            whiteLevel = whiteLevel,
+                        )
+                    }
+                }
+            }
+        }
+        return DngPreview(width = width, height = height, bytes = rgb, source = "raw")
+    }
+
+    private fun previewSample(
+        input: ByteBuffer,
+        sampleIndex: Int,
+        blackLevel: Float,
+        whiteLevel: Int,
+    ): Byte {
+        val raw = input.getShort(sampleIndex * 2).toInt() and 0xFFFF
+        val range = (whiteLevel.toFloat() - blackLevel).coerceAtLeast(1f)
+        val linear = ((raw.toFloat() - blackLevel) / range).coerceIn(0f, 1f)
+        val encoded = if (linear <= 0.0031308f) {
+            linear * 12.92f
+        } else {
+            1.055f * linear.toDouble().pow(1.0 / 2.4).toFloat() - 0.055f
+        }
+        return (encoded.coerceIn(0f, 1f) * 255f).roundToInt().toByte()
     }
 
     private fun writeRawImage(outputStream: OutputStream, rawBuffer: ByteBuffer, byteCount: Int) {
@@ -1211,6 +1430,13 @@ object SuperResolutionDngWriter {
     private data class TiffDirectories(
         val primaryEntries: List<TiffEntry>,
         val exifEntries: List<TiffEntry>,
+    )
+
+    private data class DngPreview(
+        val width: Int,
+        val height: Int,
+        val bytes: ByteArray,
+        val source: String,
     )
 
     private data class EncodedEntry(

@@ -1467,8 +1467,7 @@ class RawDemosaicProcessor {
             }
 
             embeddedProfileToneCurveLut != null &&
-                DngProfileToneCurve.isPhotonPgtmToneCurveLut(embeddedProfileToneCurveLut) &&
-                DngEmbeddedProfile.isPhotonPgtmProfileName(embeddedDngProfileName) -> {
+                DngProfileToneCurve.isPhotonPgtmToneCurveLut(embeddedProfileToneCurveLut) -> {
                 RawProfileToneMapMode.Photon
             }
 
@@ -1612,7 +1611,9 @@ class RawDemosaicProcessor {
                     "Generated $requestedProfileToneMapMode PGTM for RAW: " +
                         "grid=${generatedProfileGainTableMap.mapPointsH}x" +
                         "${generatedProfileGainTableMap.mapPointsV}x" +
-                        "${generatedProfileGainTableMap.mapPointsN}"
+                        "${generatedProfileGainTableMap.mapPointsN} " +
+                        "tag=${generatedProfileGainTableMap.sourceTag} " +
+                        "gamma=${generatedProfileGainTableMap.gamma}"
                 )
                 DngPgtmDebugRewriter.rewriteGeneratedPgtmOnRawRefreshIfEnabled(
                     dngFile = dngFile,

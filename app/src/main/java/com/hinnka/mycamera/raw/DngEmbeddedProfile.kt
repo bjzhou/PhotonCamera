@@ -97,8 +97,7 @@ internal object DngEmbeddedProfile {
 
     fun hasPhotonPgtmProfile(file: File): Boolean {
         val profile = readFrom(file) ?: return false
-        return isPhotonPgtmProfileName(profile.profileName) &&
-            DngProfileToneCurve.isPhotonPgtmToneCurve(profile.toneCurve)
+        return DngProfileToneCurve.isPhotonPgtmToneCurve(profile.toneCurve)
     }
 
     fun hasGoogleHdrToneCurve(file: File): Boolean {

@@ -6,6 +6,7 @@ internal object DngProfileToneCurve {
 
     private const val POINT_TOLERANCE = 2e-4f
     private const val LUT_TOLERANCE = 2e-3f
+    private const val DNG_PROFILE_TONE_CURVE_POINT_COUNT = 257
 
     private val LINEAR_TONE_CURVE_POINTS = floatArrayOf(0f, 0f, 1f, 1f)
 
@@ -140,7 +141,16 @@ internal object DngProfileToneCurve {
     }
 
     fun photonPgtmToneCurvePoints(): FloatArray {
-        return PHOTON_PGTM_TONE_CURVE_POINTS.copyOf()
+        val values = DcpToneCurve(PHOTON_PGTM_TONE_CURVE_POINTS)
+            .toLut(DNG_PROFILE_TONE_CURVE_POINT_COUNT)
+        return FloatArray(DNG_PROFILE_TONE_CURVE_POINT_COUNT * 2) { index ->
+            val pointIndex = index / 2
+            if ((index and 1) == 0) {
+                pointIndex.toFloat() / (DNG_PROFILE_TONE_CURVE_POINT_COUNT - 1).toFloat()
+            } else {
+                values[pointIndex]
+            }
+        }
     }
 
     fun photonPgtmToneCurveLut(sampleCount: Int = 256): FloatArray {

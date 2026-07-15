@@ -37,6 +37,25 @@ class SuperResolutionDngWriterIfdTest {
         assertTrue(exifIfd.getValue(TAG_DATETIME_ORIGINAL).valueOrOffset > exifIfdOffset)
     }
 
+    @Test
+    fun `profile DNG keeps Camera Raw Look and PGTM2 in raw IFD0 without preview`() {
+        val primaryEntries = listOf(
+            tiffEntry(TAG_XMP, TYPE_BYTE, 8, "PGTM-XMP".toByteArray(Charsets.US_ASCII)),
+            tiffEntry(TAG_STRIP_OFFSETS, TYPE_LONG, 1, uintBytes(0)),
+            tiffEntry(TAG_STRIP_BYTE_COUNTS, TYPE_LONG, 1, uintBytes(32)),
+            tiffEntry(TAG_PROFILE_GAIN_TABLE_MAP_2, TYPE_UNDEFINED, 8, ByteArray(8) { it.toByte() }),
+        ).sortedBy(::entryTag)
+
+        val header = buildHeader(primaryEntries, emptyList())
+        val ifd0 = readIfd(header, 8)
+
+        assertEquals(header.size, ifd0.getValue(TAG_STRIP_OFFSETS).valueOrOffset)
+        assertTrue(ifd0.containsKey(TAG_PROFILE_GAIN_TABLE_MAP_2))
+        assertTrue(ifd0.containsKey(TAG_XMP))
+        assertFalse(ifd0.containsKey(TAG_SUB_IFDS))
+        assertTrue(ifd0.getValue(TAG_PROFILE_GAIN_TABLE_MAP_2).valueOrOffset > 8)
+    }
+
     private fun buildHeader(primaryEntries: List<Any>, exifEntries: List<Any>): ByteArray {
         val method = SuperResolutionDngWriter::class.java.declaredMethods.single {
             it.name == "buildHeader" && it.parameterTypes.size == 2
@@ -93,12 +112,18 @@ class SuperResolutionDngWriterIfdTest {
 
     private companion object {
         const val TYPE_ASCII = 2
+        const val TYPE_BYTE = 1
         const val TYPE_LONG = 4
         const val TYPE_RATIONAL = 5
+        const val TYPE_UNDEFINED = 7
         const val TAG_MAKE = 271
         const val TAG_STRIP_OFFSETS = 273
+        const val TAG_STRIP_BYTE_COUNTS = 279
+        const val TAG_SUB_IFDS = 330
+        const val TAG_XMP = 700
         const val TAG_EXIF_IFD_POINTER = 34665
         const val TAG_DATETIME_ORIGINAL = 36867
         const val TAG_FOCAL_LENGTH = 37386
+        const val TAG_PROFILE_GAIN_TABLE_MAP_2 = 52544
     }
 }

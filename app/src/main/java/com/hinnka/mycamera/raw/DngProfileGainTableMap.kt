@@ -21,16 +21,22 @@ data class DngProfileGainTableMap(
     val sourceTag: Int = TAG_PROFILE_GAIN_TABLE_MAP2,
 ) {
     val isValid: Boolean
-        get() = mapPointsV > 0 &&
-            mapPointsH > 0 &&
-            mapPointsN > 0 &&
-            mapSpacingV > 0.0 &&
-            mapSpacingH > 0.0 &&
-            mapInputWeights.size == MAP_INPUT_WEIGHT_COUNT &&
-            mapInputWeights.all { it.isFinite() } &&
-            gamma in MIN_GAMMA..MAX_GAMMA &&
-            gains.size == mapPointsV * mapPointsH * mapPointsN &&
-            gains.all { it.isFinite() && it in MIN_GAIN_VALUE..MAX_GAIN_VALUE }
+        get() {
+            val gainCount = mapPointsV.toLong() * mapPointsH.toLong() * mapPointsN.toLong()
+            return mapPointsV > 0 &&
+                mapPointsH > 0 &&
+                mapPointsN > 0 &&
+                mapSpacingV.isFinite() && mapSpacingV > 0.0 &&
+                mapSpacingH.isFinite() && mapSpacingH > 0.0 &&
+                mapOriginV.isFinite() &&
+                mapOriginH.isFinite() &&
+                mapInputWeights.size == MAP_INPUT_WEIGHT_COUNT &&
+                mapInputWeights.all { it.isFinite() } &&
+                gamma in MIN_GAMMA..MAX_GAMMA &&
+                gainCount in 1 until MAX_PROFILE_GAIN_TABLE_MAP_POINTS &&
+                gains.size.toLong() == gainCount &&
+                gains.all { it.isFinite() && it in MIN_GAIN_VALUE..MAX_GAIN_VALUE }
+        }
 
     fun encodeProfileGainTableMap2(byteOrder: ByteOrder): ByteArray {
         require(isValid) { "Invalid ProfileGainTableMap2" }
@@ -43,6 +49,16 @@ data class DngProfileGainTableMap(
         val buffer = ByteBuffer
             .allocate(PROFILE_GAIN_TABLE_MAP2_HEADER_BYTES + gains.size * FLOAT_BYTES)
             .order(byteOrder)
+        putCommonHeader(buffer)
+        buffer.putInt(DATA_TYPE_FLOAT32)
+        buffer.putFloat(gamma)
+        buffer.putFloat(gainMin)
+        buffer.putFloat(gainMax)
+        gains.forEach { buffer.putFloat(it) }
+        return buffer.array()
+    }
+
+    private fun putCommonHeader(buffer: ByteBuffer) {
         buffer.putInt(mapPointsV)
         buffer.putInt(mapPointsH)
         buffer.putDouble(mapSpacingV)
@@ -53,12 +69,6 @@ data class DngProfileGainTableMap(
         repeat(MAP_INPUT_WEIGHT_COUNT) { index ->
             buffer.putFloat(mapInputWeights[index])
         }
-        buffer.putInt(DATA_TYPE_FLOAT32)
-        buffer.putFloat(gamma)
-        buffer.putFloat(gainMin)
-        buffer.putFloat(gainMax)
-        gains.forEach { buffer.putFloat(it) }
-        return buffer.array()
     }
 
     override fun equals(other: Any?): Boolean {
@@ -106,6 +116,7 @@ data class DngProfileGainTableMap(
         private const val MAP_INPUT_WEIGHT_COUNT = 5
         private const val PROFILE_GAIN_TABLE_MAP_HEADER_BYTES = 64
         private const val PROFILE_GAIN_TABLE_MAP2_HEADER_BYTES = 80
+        private const val MAX_PROFILE_GAIN_TABLE_MAP_POINTS = 16_777_216L
         private const val FLOAT_BYTES = 4
 
         private const val DATA_TYPE_UINT8 = 0
