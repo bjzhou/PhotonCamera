@@ -10,26 +10,9 @@ import kotlin.math.pow
 
 class DngPhotonProfileGainTableGeneratorTest {
     @Test
-    fun compatibleFieldCalibrationScenesStayWithinPointTwelveEv() {
+    fun compatibleWideRangeFieldCalibrationStaysWithinPointTwelveEv() {
         assertFieldCalibrationCases(
             listOf(
-                ExposureCalibrationCase(
-                    name = "14:18 baseline-0 low-range",
-                    baselineExposureEv = 0f,
-                    p10 = 0.035187688f,
-                    p50 = 0.08524494f,
-                    p90 = 0.14404307f,
-                    p98 = 0.16417652f,
-                    p995 = 0.17360601f,
-                    p999 = 0.18164334f,
-                    maxInput = 0.20776238f,
-                    linearMean = null,
-                    logAverage = null,
-                    highlightFraction = 0f,
-                    reportedObservedRangeEv = 2.3679657f,
-                    reportedExposureLiftEv = 0.66f,
-                    reportedBrightnessErrorEv = 0.39f
-                ),
                 ExposureCalibrationCase(
                     name = "14:22 baseline-0 wide-range",
                     baselineExposureEv = 0f,
@@ -49,6 +32,227 @@ class DngPhotonProfileGainTableGeneratorTest {
                 )
             )
         )
+    }
+
+    @Ignore(
+        "This persisted field case predates log-average diagnostics. The new " +
+            "exposure model requires the measured log average and must not " +
+            "reconstruct it from p50."
+    )
+    @Test
+    fun lowRangeFieldCalibrationWithoutLogAverage() {
+        assertFieldCalibrationCases(
+            listOf(
+                ExposureCalibrationCase(
+                    name = "14:18 baseline-0 low-range",
+                    baselineExposureEv = 0f,
+                    p10 = 0.035187688f,
+                    p50 = 0.08524494f,
+                    p90 = 0.14404307f,
+                    p98 = 0.16417652f,
+                    p995 = 0.17360601f,
+                    p999 = 0.18164334f,
+                    maxInput = 0.20776238f,
+                    linearMean = null,
+                    logAverage = null,
+                    highlightFraction = 0f,
+                    reportedObservedRangeEv = 2.3679657f,
+                    reportedExposureLiftEv = 0.66f,
+                    reportedBrightnessErrorEv = 0.39f
+                )
+            )
+        )
+    }
+
+    @Test
+    fun highlightRangeSeparatesOldScenesAndStabilizesNearIdenticalDngs() {
+        val oldWideRange = log2(0.5752382f / 0.09985464f)
+        val oldNarrowRange = log2(0.2313348f / 0.07818398f)
+        assertTrue(
+            "oldWide=$oldWideRange oldNarrow=$oldNarrowRange",
+            oldWideRange - oldNarrowRange > 0.90f
+        )
+
+        val dng2840LogAverage = 0.0932018935f
+        val dng2840P999 = 0.3981607637f
+        val dng2842LogAverage = 0.07615876645f
+        val dng2842P999 = 0.3566421426f
+        val dng2840Range = log2(dng2840P999 / dng2840LogAverage)
+        val dng2842Range = log2(dng2842P999 / dng2842LogAverage)
+        assertTrue(
+            "dng2840=$dng2840Range dng2842=$dng2842Range",
+            kotlin.math.abs(dng2842Range - dng2840Range) < 0.15f
+        )
+
+        val dng2840DisplayEv = log2(dng2840LogAverage) +
+            DngPhotonProfileGainTableGenerator.displayExposureLiftEv(dng2840Range)
+        val dng2842DisplayEv = log2(dng2842LogAverage) +
+            DngPhotonProfileGainTableGenerator.displayExposureLiftEv(dng2842Range)
+        assertTrue(
+            "dng2840DisplayEv=$dng2840DisplayEv dng2842DisplayEv=$dng2842DisplayEv",
+            kotlin.math.abs(dng2842DisplayEv - dng2840DisplayEv) <= 0.12f
+        )
+
+        val normalHighlightCases = listOf(
+            DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+                p90 = 0.263932749f,
+                p98 = 0.3304134763f,
+                p995 = 0.3685588609f,
+                p999 = 0.3981607637f,
+                sceneMiddle = 0.0932018935f
+            ),
+            DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+                p90 = 0.2486532208f,
+                p98 = 0.2975876967f,
+                p995 = 0.3287509693f,
+                p999 = 0.3566421426f,
+                sceneMiddle = 0.07615876645f
+            ),
+            DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+                p90 = 0.35547075f,
+                p98 = 0.4203099f,
+                p995 = 0.44679728f,
+                p999 = 0.46304873f,
+                sceneMiddle = 0.039605092f
+            ),
+            DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+                p90 = 0.21021318f,
+                p98 = 0.24911182f,
+                p995 = 0.27169982f,
+                p999 = 0.5752382f,
+                sceneMiddle = 0.09985464f
+            ),
+            DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+                p90 = 0.13890508f,
+                p98 = 0.18092623f,
+                p995 = 0.2126976f,
+                p999 = 0.2313348f,
+                sceneMiddle = 0.07818398f
+            )
+        )
+        normalHighlightCases.forEach { ranges ->
+            assertTrue("sparseStrength=${ranges.sparseStrength}", ranges.sparseStrength == 0f)
+            assertTrue(
+                "tail=${ranges.tailRangeEv} exposure=${ranges.exposureRangeEv}",
+                kotlin.math.abs(ranges.exposureRangeEv - ranges.tailRangeEv) < 1e-5f
+            )
+        }
+    }
+
+    @Test
+    fun separatedSparseHighlightsUseLogCenterAcrossHighlightGap() {
+        val ranges = DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+            p90 = 0.20524885f,
+            p98 = 0.45892385f,
+            p995 = 0.5724387f,
+            p999 = 0.6364626f,
+            sceneMiddle = 0.09018845f
+        )
+        val tailLift = DngPhotonProfileGainTableGenerator.displayExposureLiftEv(
+            ranges.tailRangeEv
+        )
+        val exposureLift = DngPhotonProfileGainTableGenerator.displayExposureLiftEv(
+            ranges.exposureRangeEv
+        )
+
+        assertTrue("tailRange=${ranges.tailRangeEv}", ranges.tailRangeEv in 2.81f..2.83f)
+        assertTrue(
+            "exposureRange=${ranges.exposureRangeEv}",
+            ranges.exposureRangeEv in 1.76f..1.78f
+        )
+        assertTrue("sparseStrength=${ranges.sparseStrength}", ranges.sparseStrength == 1f)
+        assertTrue(
+            "tailLift=$tailLift exposureLift=$exposureLift",
+            exposureLift - tailLift in -1.39f..-1.37f
+        )
+    }
+
+    @Test
+    fun stronglySeparatedNearWhiteHighlightsDoNotForceMaximumExposureLift() {
+        val ranges = DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+            p90 = 0.21023509f,
+            p98 = 0.8875543f,
+            p995 = 1.0032426f,
+            p999 = 1.0724883f,
+            sceneMiddle = 0.06121027f
+        )
+        val exposureLift = DngPhotonProfileGainTableGenerator.displayExposureLiftEv(
+            ranges.exposureRangeEv
+        )
+        val displayMiddle = 0.06121027f * 2.0f.pow(exposureLift)
+
+        assertTrue("gap=${ranges.highlightGapEv}", ranges.highlightGapEv in 2.07f..2.09f)
+        assertTrue("sparseStrength=${ranges.sparseStrength}", ranges.sparseStrength == 1f)
+        assertTrue(
+            "exposureReference=${ranges.exposureReference}",
+            ranges.exposureReference in 0.431f..0.433f
+        )
+        assertTrue(
+            "exposureRange=${ranges.exposureRangeEv}",
+            ranges.exposureRangeEv in 2.81f..2.83f
+        )
+        assertTrue("exposureLift=$exposureLift", exposureLift in 1.65f..1.67f)
+        assertTrue("displayMiddle=$displayMiddle", displayMiddle in 0.192f..0.194f)
+    }
+
+    @Test
+    fun baselineExposureHeadroomRemainsInsideProfileGainTableDomain() {
+        val width = 1280
+        val height = 960
+        val grid = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
+        val cellCount = grid[0] * grid[1]
+        val stats = FloatArray(
+            cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+        )
+        repeat(cellCount) { cell ->
+            val offset = cell * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+            stats[offset] = 0.008017952f
+            stats[offset + 1] = 0.06326936f
+            stats[offset + 2] = 1f
+            stats[offset + 3] = 1f
+            stats[offset + 4] = 0.13241959f
+            stats[offset + 5] = 256f
+            stats[offset + 6] = 12.278543f
+            stats[offset + 7] = 14.262961f
+        }
+        val baselineGain = 2.0f.pow(3.000001f)
+        val map = DngPhotonProfileGainTableGenerator.forCellStats(
+            width = width,
+            height = height,
+            baselineExposureEv = 3.000001f,
+            packedCellStats = stats,
+            globalStats = testGlobalStats(
+                p10 = 0.008017952f,
+                p50 = 0.06326936f,
+                p90 = 1f,
+                p98 = 1f,
+                p995 = 12.278543f,
+                p999 = 14.262961f,
+                maxInput = 14.262961f,
+                highlightFraction = 0.13241959f,
+                linearMean = 0.51709765f,
+                logAverage = 0.07712941f,
+                shadowEdge = 0.025163911f,
+                shadowFoot = 0.0035361373f
+            ),
+            emitDiagnostics = false
+        ) ?: error("Expected Photon PGTM")
+
+        val inputScale = map.mapInputWeights.sum()
+        val sceneWhite = 1f / inputScale
+        val rawRight = sceneWhite / baselineGain
+        val displayAtNominalWhite = finalOutputForScene(map, inputScale, 1.3f)
+        val displayAtRawWhite = finalOutputForScene(map, inputScale, baselineGain)
+        val displayAtDomainRight = finalOutputForScene(map, inputScale, sceneWhite)
+
+        assertTrue("sceneWhite=$sceneWhite", sceneWhite in 10.39f..10.41f)
+        assertTrue("rawRight=$rawRight", rawRight in 1.299f..1.301f)
+        assertTrue(
+            "nominal=$displayAtNominalWhite rawWhite=$displayAtRawWhite",
+            displayAtRawWhite > displayAtNominalWhite + 0.05f
+        )
+        assertTrue("domainRight=$displayAtDomainRight", displayAtDomainRight in 0.99f..1.01f)
+        assertCurvesAreFiniteAndMonotonic(map, sceneWhite)
     }
 
     @Ignore(
@@ -100,7 +304,7 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun moderateRangeTailCompressesToEightEvAndRaisesSceneMedian() {
+    fun sparseHighlightTailSelectsNineEvAndRaisesSceneMedian() {
         val width = 2800
         val height = 2102
         val grid = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
@@ -138,11 +342,13 @@ class DngPhotonProfileGainTableGeneratorTest {
 
         val inputScale = map.mapInputWeights.sum()
         val sceneWhite = 1f / inputScale
-        val nominalRawRight = 1f / 2.0f.pow(0.64f)
-        val rawRight = sceneWhite * nominalRawRight
+        val baselineGain = 2.0f.pow(0.64f)
+        val rawRight = sceneWhite / baselineGain
         val sourceBlackPoint = max(
-            0.045098f / 2.0f.pow(4f),
-            sceneWhite / 2.0f.pow(8.75f)
+            0.045098f / 2.0f.pow(
+                DngPhotonProfileGainTableGenerator.SHADOW_FOOT_HEADROOM_EV
+            ),
+            rawRight / 2.0f.pow(9.75f)
         )
         val blackOutput = sourceBlackPoint * medianGain(
             map,
@@ -160,13 +366,16 @@ class DngPhotonProfileGainTableGeneratorTest {
         val outputDynamicRangeEv = log2(finalWhiteOutput / finalBlackOutput)
 
         assertTrue("gamma=${map.gamma}", map.gamma == 0.5f)
-        assertTrue("sceneWhite=$sceneWhite", sceneWhite in 1f..1.3001f)
         assertTrue(
-            "rawRight=$rawRight nominal=$nominalRawRight",
-            rawRight / nominalRawRight in 1f..1.3001f
+            "sceneWhite=$sceneWhite baselineGain=$baselineGain",
+            sceneWhite / baselineGain in 1f..1.3001f
         )
-        assertTrue("outputDynamicRangeEv=$outputDynamicRangeEv", outputDynamicRangeEv in 7.8f..8.2f)
-        assertTrue("finalMiddleOutput=$finalMiddleOutput", finalMiddleOutput in 0.165f..0.185f)
+        assertTrue(
+            "rawRight=$rawRight",
+            rawRight in 1f..1.3001f
+        )
+        assertTrue("outputDynamicRangeEv=$outputDynamicRangeEv", outputDynamicRangeEv in 8.8f..9.2f)
+        assertTrue("finalMiddleOutput=$finalMiddleOutput", finalMiddleOutput in 0.285f..0.305f)
         assertTrue(
             "sceneMedian=$sceneMedian finalMiddleOutput=$finalMiddleOutput",
             finalMiddleOutput > sceneMedian * 1.45f
@@ -233,9 +442,9 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun everyTierCompressesToItsDisplayRangeAndRaisesTheSceneMedian() {
+    fun everyTierCompressesToItsDisplayRangeAndUsesHighlightAwareMiddle() {
         val cases = listOf(
-            TierCase(0.10f, 0.15f, 0.40f, 0.60f, 0.75f, 8f, 0.18087f),
+            TierCase(0.10f, 0.15f, 0.40f, 0.60f, 0.75f, 8f, 0.26f),
             TierCase(0.020f, 0.10f, 0.50f, 0.75f, 1.05f, 8.5f, 0.28f),
             TierCase(0.015f, 0.08f, 0.55f, 0.80f, 1.15f, 9f, 0.30f),
             TierCase(0.012f, 0.07f, 0.55f, 0.85f, 1.20f, 9.5f, 0.32f)
@@ -245,7 +454,9 @@ class DngPhotonProfileGainTableGeneratorTest {
             val inputScale = map.mapInputWeights.sum()
             val sceneWhite = 1f / inputScale
             val sourceBlack = max(
-                tier.p10 / 2.0f.pow(4f),
+                (tier.p10 * 0.25f) / 2.0f.pow(
+                    DngPhotonProfileGainTableGenerator.SHADOW_FOOT_HEADROOM_EV
+                ),
                 sceneWhite / 2.0f.pow(tier.dynamicRangeEv + 0.75f)
             )
             val pgtmBlack = sourceBlack * medianGain(
@@ -261,14 +472,28 @@ class DngPhotonProfileGainTableGeneratorTest {
             val finalMiddle = samplePhotonProfileCurve(pgtmMiddle)
             val finalWhite = samplePhotonProfileCurve(pgtmWhite)
             val outputRangeEv = log2(finalWhite / finalBlack)
+            val highlightRanges = DngPhotonProfileGainTableGenerator.photonHighlightRanges(
+                p90 = tier.p90,
+                p98 = tier.p98,
+                p995 = tier.tailP99 * 0.92f,
+                p999 = tier.tailP99,
+                sceneMiddle = tier.p50
+            )
+            val expectedLift = DngPhotonProfileGainTableGenerator.displayExposureLiftEv(
+                highlightRanges.exposureRangeEv
+            )
+            val expectedMiddle = (tier.p50 * 2.0f.pow(expectedLift)).coerceIn(
+                4f / 2.0f.pow(tier.dynamicRangeEv),
+                tier.displayMiddleGray
+            )
 
             assertTrue(
                 "tier=${tier.dynamicRangeEv} outputRangeEv=$outputRangeEv",
                 outputRangeEv in (tier.dynamicRangeEv - 0.20f)..(tier.dynamicRangeEv + 0.20f)
             )
             assertTrue(
-                "tier=${tier.dynamicRangeEv} finalMiddle=$finalMiddle",
-                finalMiddle in (tier.displayMiddleGray - 0.015f)..(tier.displayMiddleGray + 0.015f)
+                "tier=${tier.dynamicRangeEv} finalMiddle=$finalMiddle expectedMiddle=$expectedMiddle",
+                finalMiddle in (expectedMiddle - 0.015f)..(expectedMiddle + 0.015f)
             )
             assertTrue(
                 "tier=${tier.dynamicRangeEv} p50=${tier.p50} finalMiddle=$finalMiddle",
@@ -329,7 +554,9 @@ class DngPhotonProfileGainTableGeneratorTest {
                 p995 = tier.tailP99 * 0.92f,
                 p999 = tier.tailP99,
                 maxInput = tier.tailP99,
-                highlightFraction = 0f
+                highlightFraction = 0f,
+                shadowEdge = tier.p10 * 0.5f,
+                shadowFoot = tier.p10 * 0.25f
             ),
             emitDiagnostics = false
         ) ?: error("Expected Photon PGTM for tier ${tier.dynamicRangeEv}")
@@ -344,6 +571,10 @@ class DngPhotonProfileGainTableGeneratorTest {
         p999: Float,
         maxInput: Float,
         highlightFraction: Float = 0f,
+        linearMean: Float = p50,
+        logAverage: Float = p50,
+        shadowEdge: Float = p10,
+        shadowFoot: Float = p10,
     ): DngPgtmGlobalStats {
         return DngPgtmGlobalStats(
             p10 = p10,
@@ -354,8 +585,10 @@ class DngPhotonProfileGainTableGeneratorTest {
             p999 = p999,
             maxInput = maxInput,
             highlightFraction = highlightFraction,
-            linearMean = p50,
-            logAverage = p50,
+            linearMean = linearMean,
+            logAverage = logAverage,
+            shadowEdge = shadowEdge,
+            shadowFoot = shadowFoot,
             sampleCount = 256
         )
     }
@@ -446,25 +679,31 @@ class DngPhotonProfileGainTableGeneratorTest {
 
     private fun assertFieldCalibrationCases(cases: List<ExposureCalibrationCase>) {
         cases.forEach { case ->
-            val calculatedObservedRangeEv = log2(
+            val calculatedLegacyRangeEv = log2(
                 max(case.p999, max(case.p995, case.p98)) /
                     max(case.p10, 0.002f)
             )
+            val logAverage = case.logAverage
+                ?: error("${case.name}: logAverage is required by the highlight-range model")
+            val calculatedHighlightRangeEv = log2(
+                max(case.p999, logAverage) / logAverage
+            )
             val actualExposureLiftEv =
-                DngPhotonProfileGainTableGenerator.displayExposureLiftEv(calculatedObservedRangeEv)
+                DngPhotonProfileGainTableGenerator.displayExposureLiftEv(calculatedHighlightRangeEv)
             val expectedExposureLiftEv =
                 case.reportedExposureLiftEv - case.reportedBrightnessErrorEv
             val residualEv = actualExposureLiftEv - expectedExposureLiftEv
 
             assertTrue(
-                "${case.name}: observed=$calculatedObservedRangeEv " +
+                "${case.name}: legacyObserved=$calculatedLegacyRangeEv " +
                     "reported=${case.reportedObservedRangeEv}",
                 kotlin.math.abs(
-                    calculatedObservedRangeEv - case.reportedObservedRangeEv
+                    calculatedLegacyRangeEv - case.reportedObservedRangeEv
                 ) <= 0.002f
             )
             assertTrue(
-                "${case.name}: actualLift=$actualExposureLiftEv " +
+                "${case.name}: highlightRange=$calculatedHighlightRangeEv " +
+                    "actualLift=$actualExposureLiftEv " +
                     "expectedLift=$expectedExposureLiftEv residual=$residualEv",
                 residualEv in -0.12f..0.12f
             )

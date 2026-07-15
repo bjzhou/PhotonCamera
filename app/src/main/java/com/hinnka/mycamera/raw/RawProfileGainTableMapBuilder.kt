@@ -10,7 +10,6 @@ import kotlin.math.max
 internal object RawProfileGainTableMapBuilder {
     private const val TAG = "RawProfileGainTableMapBuilder"
     private const val SAMPLE_GRID = 16
-    private const val HIST_BINS = 256
 
     private data class BuiltPgtmStats(
         val packedCellStats: FloatArray,
@@ -98,7 +97,6 @@ internal object RawProfileGainTableMapBuilder {
 
         val baselineGain = DngBaselineExposure.exactGain(metadata.baselineExposure)
         val stats = FloatArray(gridWidth * gridHeight * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE)
-        val hist = IntArray(HIST_BINS)
         val inputSamples = FloatArray(SAMPLE_GRID * SAMPLE_GRID)
         val globalSamples = if (collectGlobalStats) {
             FloatArray(gridWidth * gridHeight * SAMPLE_GRID * SAMPLE_GRID)
@@ -110,7 +108,6 @@ internal object RawProfileGainTableMapBuilder {
         val statsHeight = safeStatsBounds.height()
         for (cellY in 0 until gridHeight) {
             for (cellX in 0 until gridWidth) {
-                java.util.Arrays.fill(hist, 0)
                 var sampleCount = 0
                 var highlightCount = 0
                 var startX = safeStatsBounds.left + (cellX * statsWidth) / gridWidth
@@ -153,11 +150,6 @@ internal object RawProfileGainTableMapBuilder {
                             globalSamples[globalSampleCount] = inputValue
                             globalSampleCount += 1
                         }
-                        val clampedInput = inputValue.coerceIn(0f, 1f)
-                        val bin = (clampedInput * (HIST_BINS - 1).toFloat() + 0.5f)
-                            .toInt()
-                            .coerceIn(0, HIST_BINS - 1)
-                        hist[bin] += 1
                         sampleCount += 1
                         if (inputValue >= 0.92f) {
                             highlightCount += 1
@@ -165,18 +157,19 @@ internal object RawProfileGainTableMapBuilder {
                     }
                 }
 
-                stats[offset] = percentileFromHist(hist, sampleCount, 0.10f)
-                stats[offset + 1] = percentileFromHist(hist, sampleCount, 0.50f)
-                stats[offset + 2] = percentileFromHist(hist, sampleCount, 0.90f)
-                stats[offset + 3] = percentileFromHist(hist, sampleCount, 0.98f)
+                java.util.Arrays.sort(inputSamples, 0, sampleCount)
+                stats[offset] = percentileFromSortedSamples(inputSamples, sampleCount, 0.10f)
+                stats[offset + 1] = percentileFromSortedSamples(inputSamples, sampleCount, 0.50f)
+                stats[offset + 2] = percentileFromSortedSamples(inputSamples, sampleCount, 0.90f)
+                stats[offset + 3] = percentileFromSortedSamples(inputSamples, sampleCount, 0.98f)
                 stats[offset + 4] = if (sampleCount > 0) {
                     highlightCount.toFloat() / sampleCount.toFloat()
                 } else {
                     0f
                 }
                 stats[offset + 5] = sampleCount.toFloat()
-                stats[offset + 6] = percentileFromSamples(inputSamples, sampleCount, 0.995f)
-                stats[offset + 7] = percentileFromSamples(inputSamples, sampleCount, 0.999f)
+                stats[offset + 6] = percentileFromSortedSamples(inputSamples, sampleCount, 0.995f)
+                stats[offset + 7] = percentileFromSortedSamples(inputSamples, sampleCount, 0.999f)
             }
         }
         val globalStats = globalSamples?.let { samples ->
@@ -351,23 +344,12 @@ internal object RawProfileGainTableMapBuilder {
         return ((raw.toFloat() - black) / range).coerceIn(0f, 1f)
     }
 
-    private fun percentileFromHist(hist: IntArray, sampleCount: Int, percentile: Float): Float {
+    private fun percentileFromSortedSamples(
+        samples: FloatArray,
+        sampleCount: Int,
+        percentile: Float,
+    ): Float {
         if (sampleCount <= 0) return 0f
-        val target = ceil(sampleCount.toFloat() * percentile.coerceIn(0f, 1f)).toInt()
-            .coerceAtLeast(1)
-        var cumulative = 0
-        hist.forEachIndexed { index, count ->
-            cumulative += count
-            if (cumulative >= target) {
-                return index.toFloat() / (hist.size - 1).toFloat()
-            }
-        }
-        return 1f
-    }
-
-    private fun percentileFromSamples(samples: FloatArray, sampleCount: Int, percentile: Float): Float {
-        if (sampleCount <= 0) return 0f
-        java.util.Arrays.sort(samples, 0, sampleCount)
         val index = ceil(sampleCount.toFloat() * percentile.coerceIn(0f, 1f)).toInt()
             .coerceIn(1, sampleCount) - 1
         return samples[index].takeIf { it.isFinite() && it > 0f } ?: 0f

@@ -23,27 +23,28 @@ internal object DngPhotonProfileGainTableGenerator {
     // 257 points; a linear table would place its first sample only 8 EV down.
     private const val TABLE_INPUT_GAMMA = 0.5f
     private const val MAX_SCENE_MIDDLE_GRAY = 0.18f
-    private const val SOURCE_SHADOW_HEADROOM_EV = 4f
+    internal const val SHADOW_FOOT_HEADROOM_EV = 1.2f
     private const val MIN_SOURCE_COMPRESSION_EV = 0.75f
     private const val MAX_SOURCE_DYNAMIC_RANGE_EV = 12.5f
     private const val STANDARD_DYNAMIC_RANGE_EV = 8f
     private const val WIDE_DYNAMIC_RANGE_EV = 8.5f
     private const val HDR_DYNAMIC_RANGE_EV = 9f
     private const val EXTENDED_HDR_DYNAMIC_RANGE_EV = 9.5f
-    private const val WIDE_RANGE_THRESHOLD_EV = 5.5f
-    private const val HDR_RANGE_THRESHOLD_EV = 6f
-    private const val EXTENDED_HDR_RANGE_THRESHOLD_EV = 6.5f
+    private const val WIDE_HIGHLIGHT_RANGE_THRESHOLD_EV = 2.5f
+    private const val HDR_HIGHLIGHT_RANGE_THRESHOLD_EV = 3.5f
+    private const val EXTENDED_HDR_HIGHLIGHT_RANGE_THRESHOLD_EV = 4f
     private const val MIN_DYNAMIC_RANGE_EV = STANDARD_DYNAMIC_RANGE_EV
     private const val MAX_DYNAMIC_RANGE_EV = EXTENDED_HDR_DYNAMIC_RANGE_EV
-    private const val MIN_STATS_BLACK_POINT = 0.002f
     private const val STANDARD_DISPLAY_MIDDLE_GRAY = 0.26f
     private const val WIDE_DISPLAY_MIDDLE_GRAY = 0.28f
     private const val HDR_DISPLAY_MIDDLE_GRAY = 0.30f
     private const val EXTENDED_HDR_DISPLAY_MIDDLE_GRAY = 0.32f
     private const val MIN_DISPLAY_EXPOSURE_LIFT_EV = 0.27f
     private const val MAX_DISPLAY_EXPOSURE_LIFT_EV = 2.24f
-    private const val DISPLAY_EXPOSURE_TRANSITION_START_EV = 4.6f
-    private const val DISPLAY_EXPOSURE_TRANSITION_END_EV = 6.3f
+    private const val DISPLAY_EXPOSURE_TRANSITION_START_EV = 1.7f
+    private const val DISPLAY_EXPOSURE_TRANSITION_END_EV = 3.45f
+    private const val SPARSE_HIGHLIGHT_GAP_START_EV = 0.45f
+    private const val SPARSE_HIGHLIGHT_GAP_FULL_EV = 0.90f
     private const val MIN_HIGHLIGHT_ENDPOINT_SLOPE_RATIO = 0.65f
     private const val MAX_HIGHLIGHT_ENDPOINT_SLOPE_RATIO = 0.88f
     private const val MAX_LOCAL_MICRO_CONTRAST_EV = 0.22f
@@ -98,6 +99,7 @@ internal object DngPhotonProfileGainTableGenerator {
         val toneAnchors = buildPhotonToneAnchors(
             global = global,
             exposureAnchor = globalStats.logAverage,
+            shadowFoot = globalStats.shadowFoot,
             baselineExposureEv = safeBaselineEv
         )
         val inputScale = sanitizeInputScale(1f / toneAnchors.whitePoint)
@@ -140,21 +142,24 @@ internal object DngPhotonProfileGainTableGenerator {
             val appliedP50Output = p50Input * appliedP50Gain
             val finalDisplayP50 = photonProfileOutputForInput(appliedP50Output)
             val anchorMiddleGain = toneAnchors.middleGrayOutput / toneAnchors.middleGrayPoint
-            val exposureLiftEv = displayExposureLiftEv(toneAnchors.observedDynamicRangeEv)
+            val exposureLiftEv = displayExposureLiftEv(toneAnchors.exposureHighlightRangeEv)
+            val domainOverflowEv = log2(
+                max(global.p999, toneAnchors.whitePoint) / toneAnchors.whitePoint
+            ).coerceAtLeast(0f)
             val observedShadowRangeEv = log2(
-                max(global.p50, MIN_CURVE_INPUT) / max(global.p10, MIN_STATS_BLACK_POINT)
-            )
-            val observedHighlightRangeEv = log2(
-                max(global.p999, global.p50) / max(global.p50, MIN_CURVE_INPUT)
+                max(globalStats.logAverage, globalStats.shadowFoot) /
+                    max(globalStats.shadowFoot, MIN_CURVE_INPUT)
             )
             PLog.d(
                 TAG,
                 "Built Photon PGTM: grid=${gridWidth}x${gridHeight}x$safePointCount " +
                     "statsSource=global-samples globalSampleCount=${globalStats.sampleCount} " +
-                    "baselineEv=$safeBaselineEv observedRangeEv=${toneAnchors.observedDynamicRangeEv} " +
+                    "baselineEv=$safeBaselineEv " +
+                    "tailRangeEv=${toneAnchors.tailHighlightRangeEv} " +
+                    "exposureRangeEv=${toneAnchors.exposureHighlightRangeEv} " +
                     "curveRangeEv=${toneAnchors.curveDynamicRangeEv} " +
                     "targetRangeEv=${toneAnchors.targetDynamicRangeEv} " +
-                    "shadowRangeEv=$observedShadowRangeEv highlightRangeEv=$observedHighlightRangeEv " +
+                    "shadowRangeEv=$observedShadowRangeEv " +
                     "relativeEv=${toneAnchors.blackRelativeExposure}.." +
                     "${toneAnchors.whiteRelativeExposure} " +
                     "source=${toneAnchors.blackPoint},${toneAnchors.middleGrayPoint}," +
@@ -163,10 +168,15 @@ internal object DngPhotonProfileGainTableGenerator {
                     "${toneAnchors.displayMiddleGray},1.0 " +
                     "tierDisplayMiddle=${toneAnchors.tierDisplayMiddleGray} " +
                     "rawRight=${toneAnchors.rawWhitePoint} inputScale=$inputScale " +
+                    "domainOverflowEv=$domainOverflowEv " +
                     "p10=${global.p10} p50=${global.p50} p90=${global.p90} " +
                     "p98=${global.p98} p995=${global.p995} p999=${global.p999} " +
                     "maxInput=${global.maxInput} " +
                     "linearMean=${globalStats.linearMean} logAverage=${globalStats.logAverage} " +
+                    "shadowEdge=${globalStats.shadowEdge} shadowFoot=${globalStats.shadowFoot} " +
+                    "exposureHighlight=${toneAnchors.exposureHighlightReference} " +
+                    "highlightGapEv=${toneAnchors.highlightGapEv} " +
+                    "sparseHighlightStrength=${toneAnchors.sparseHighlightStrength} " +
                     "highlightFraction=${global.highlightFraction}"
             )
             PLog.d(
@@ -178,8 +188,10 @@ internal object DngPhotonProfileGainTableGenerator {
                     "appliedP50Gain=$appliedP50Gain pgtmP50=$appliedP50Output " +
                     "displayP50=$finalDisplayP50 targetDisplayMiddle=${toneAnchors.displayMiddleGray} " +
                     "tierDisplayMiddle=${toneAnchors.tierDisplayMiddleGray} " +
+                    "tailRangeEv=${toneAnchors.tailHighlightRangeEv} " +
+                    "exposureRangeEv=${toneAnchors.exposureHighlightRangeEv} " +
                     "exposureLiftEv=$exposureLiftEv " +
-                    "whiteAdjustment=${toneAnchors.whitePoint / BASE_WHITE_POINT} " +
+                    "whiteAdjustment=${toneAnchors.rawWhitePoint / BASE_WHITE_POINT} " +
                     "maxGain=$MAX_GAIN_VALUE"
             )
         }
@@ -187,10 +199,10 @@ internal object DngPhotonProfileGainTableGenerator {
     }
 
     private fun packedStatsAt(stats: FloatArray, offset: Int, sampleWeight: Float): PhotonPgtmCellStats {
-        val p10 = safe01(stats[offset])
-        val p50 = max(p10, safe01(stats[offset + 1]))
-        val p90 = max(p50, safe01(stats[offset + 2]))
-        val p98 = max(p90, safe01(stats[offset + 3]))
+        val p10 = safePositive(stats[offset], 0f)
+        val p50 = max(p10, safePositive(stats[offset + 1], p10))
+        val p90 = max(p50, safePositive(stats[offset + 2], p50))
+        val p98 = max(p90, safePositive(stats[offset + 3], p90))
         val p995 = max(p98, safePositive(stats[offset + 6], p98))
         val p999 = max(p995, safePositive(stats[offset + 7], p995))
         return PhotonPgtmCellStats(
@@ -208,10 +220,10 @@ internal object DngPhotonProfileGainTableGenerator {
 
     private fun DngPgtmGlobalStats.toPhotonCellStats(): PhotonPgtmCellStats? {
         if (sampleCount <= 0) return null
-        val safeP10 = safe01(p10)
-        val safeP50 = max(safeP10, safe01(p50))
-        val safeP90 = max(safeP50, safe01(p90))
-        val safeP98 = max(safeP90, safe01(p98))
+        val safeP10 = safePositive(p10, 0f)
+        val safeP50 = max(safeP10, safePositive(p50, safeP10))
+        val safeP90 = max(safeP50, safePositive(p90, safeP50))
+        val safeP98 = max(safeP90, safePositive(p98, safeP90))
         val safeP995 = max(safeP98, safePositive(p995, safeP98))
         val safeP999 = max(safeP995, safePositive(p999, safeP995))
         return PhotonPgtmCellStats(
@@ -230,15 +242,22 @@ internal object DngPhotonProfileGainTableGenerator {
     private fun buildPhotonToneAnchors(
         global: PhotonPgtmCellStats,
         exposureAnchor: Float,
+        shadowFoot: Float,
         baselineExposureEv: Float,
     ): PhotonToneAnchors {
-        val observedDynamicRangeEv = photonObservedDynamicRangeEv(global)
-        val targetDynamicRangeEv = photonDynamicRangeTier(observedDynamicRangeEv)
+        val highlightRanges = photonHighlightRanges(
+            p90 = global.p90,
+            p98 = global.p98,
+            p995 = global.p995,
+            p999 = global.p999,
+            sceneMiddle = exposureAnchor
+        )
+        val targetDynamicRangeEv = photonDynamicRangeTier(highlightRanges.tailRangeEv)
         val displayBlackPoint = 1f / 2.0f.pow(targetDynamicRangeEv)
         val tierDisplayMiddleGray = displayMiddleGrayForTier(targetDynamicRangeEv)
-        val displayMiddleGray = displayMiddleGrayForDynamicRange(
+        val displayMiddleGray = displayMiddleGrayForHighlightRange(
             exposureAnchor = exposureAnchor,
-            observedRangeEv = observedDynamicRangeEv,
+            highlightRangeEv = highlightRanges.exposureRangeEv,
             displayBlackPoint = displayBlackPoint,
             tierDisplayMiddleGray = tierDisplayMiddleGray
         )
@@ -247,31 +266,35 @@ internal object DngPhotonProfileGainTableGenerator {
         val whitePointAdjustment = photonWhitePointAdjustment(global, targetDynamicRangeEv)
         val baselineGain = 2.0f.pow(baselineExposureEv.coerceIn(MIN_BASELINE_EV, MAX_BASELINE_EV))
 
-        // ProfileGainTableMap is evaluated with baseline gain applied to its
-        // input. A scene-domain white of 1 therefore corresponds to raw-linear
-        // 1 / baselineGain. Highlight statistics may extend that endpoint, but
-        // the extension is deliberately capped at 30%.
-        val rawWhitePoint = (BASE_WHITE_POINT / baselineGain) * whitePointAdjustment
+        // ProfileGainTableMap lookup is evaluated after BaselineExposure even
+        // when the gain itself is applied before it. Cover the raw-linear white
+        // domain, including at most 30% profile-RGB overrange, so positive
+        // BaselineExposure does not collapse its recoverable highlight headroom
+        // into the final table entry.
+        val blackRangeWhiteReference = BASE_WHITE_POINT * whitePointAdjustment
+        val rawWhitePoint = blackRangeWhiteReference
         val whitePoint = rawWhitePoint * baselineGain
 
-        // p10 is a shadow percentile, not the scene black. Reserve up to four
-        // stops below it without extending the curve domain beyond the selected
-        // output range plus the deliberate compression headroom.
-        val percentileBlackPoint = max(global.p10, MIN_STATS_BLACK_POINT) /
-            2.0f.pow(SOURCE_SHADOW_HEADROOM_EV)
-        val compressionBlackPoint = whitePoint /
+        // The EV-histogram foot identifies the perceptual shadow onset. Keep a
+        // short toe reserve below it; unlike p10, this point is based on image
+        // structure and never participates in exposure lift. Black placement is
+        // normalized to the raw-white reference, not to the expanded Baseline-
+        // Exposure lookup domain, so extending highlights cannot move exposure.
+        val slopeBlackPoint = max(shadowFoot, MIN_CURVE_INPUT) /
+            2.0f.pow(SHADOW_FOOT_HEADROOM_EV)
+        val compressionBlackPoint = blackRangeWhiteReference /
             2.0f.pow(targetDynamicRangeEv + MIN_SOURCE_COMPRESSION_EV)
         val gainLimitedBlackPoint = blackOutput / MAX_GAIN_VALUE
         val minimumBlackPoint = max(
-            whitePoint / 2.0f.pow(MAX_SOURCE_DYNAMIC_RANGE_EV),
+            blackRangeWhiteReference / 2.0f.pow(MAX_SOURCE_DYNAMIC_RANGE_EV),
             gainLimitedBlackPoint
         )
-        val blackPoint = max(percentileBlackPoint, compressionBlackPoint)
-            .coerceIn(minimumBlackPoint, whitePoint * 0.25f)
+        val blackPoint = max(slopeBlackPoint, compressionBlackPoint)
+            .coerceIn(minimumBlackPoint, blackRangeWhiteReference * 0.25f)
 
         // Exposure normalization is global: map the perceptual log-average
-        // luminance (never a value above canonical 18% gray) through the scene-range exposure
-        // curve, within the selected tier's perceptual middle-gray ceiling.
+        // luminance (never a value above canonical 18% gray) through the
+        // highlight-range exposure curve, within the selected tier's ceiling.
         val minimumMiddleGrayPoint = max(
             blackPoint * 4f,
             middleGrayOutput / MAX_GAIN_VALUE
@@ -285,7 +308,11 @@ internal object DngPhotonProfileGainTableGenerator {
         val blackRelativeExposure = log2(blackPoint / middleGrayPoint)
         val curveDynamicRangeEv = whiteRelativeExposure - blackRelativeExposure
         return PhotonToneAnchors(
-            observedDynamicRangeEv = observedDynamicRangeEv,
+            tailHighlightRangeEv = highlightRanges.tailRangeEv,
+            exposureHighlightRangeEv = highlightRanges.exposureRangeEv,
+            exposureHighlightReference = highlightRanges.exposureReference,
+            highlightGapEv = highlightRanges.highlightGapEv,
+            sparseHighlightStrength = highlightRanges.sparseStrength,
             targetDynamicRangeEv = targetDynamicRangeEv,
             curveDynamicRangeEv = curveDynamicRangeEv,
             blackRelativeExposure = blackRelativeExposure,
@@ -311,24 +338,24 @@ internal object DngPhotonProfileGainTableGenerator {
         }
     }
 
-    private fun displayMiddleGrayForDynamicRange(
+    private fun displayMiddleGrayForHighlightRange(
         exposureAnchor: Float,
-        observedRangeEv: Float,
+        highlightRangeEv: Float,
         displayBlackPoint: Float,
         tierDisplayMiddleGray: Float,
     ): Float {
-        val exposureLiftEv = displayExposureLiftEv(observedRangeEv)
+        val exposureLiftEv = displayExposureLiftEv(highlightRangeEv)
         return (exposureAnchor * 2.0f.pow(exposureLiftEv)).coerceIn(
             displayBlackPoint * 4f,
             tierDisplayMiddleGray
         )
     }
 
-    internal fun displayExposureLiftEv(observedRangeEv: Float): Float {
+    internal fun displayExposureLiftEv(highlightRangeEv: Float): Float {
         val rangeStrength = smoothStep(
             DISPLAY_EXPOSURE_TRANSITION_START_EV,
             DISPLAY_EXPOSURE_TRANSITION_END_EV,
-            observedRangeEv
+            highlightRangeEv
         )
         return lerp(
             MIN_DISPLAY_EXPOSURE_LIFT_EV,
@@ -337,20 +364,52 @@ internal object DngPhotonProfileGainTableGenerator {
         )
     }
 
-    private fun photonObservedDynamicRangeEv(global: PhotonPgtmCellStats): Float {
-        val shadowReference = max(global.p10, MIN_STATS_BLACK_POINT)
-        val percentileWhite = max(global.p98, global.p90)
-        val tailWhite = max(global.p999, max(global.p995, percentileWhite))
-        val percentileRangeEv = log2(max(percentileWhite, shadowReference) / shadowReference)
-        val tailRangeEv = log2(max(tailWhite, shadowReference) / shadowReference)
-        return max(percentileRangeEv, tailRangeEv)
+    internal fun photonHighlightRanges(
+        p90: Float,
+        p98: Float,
+        p995: Float,
+        p999: Float,
+        sceneMiddle: Float,
+    ): PhotonHighlightRanges {
+        val safeMiddle = max(sceneMiddle, MIN_CURVE_INPUT)
+        val safeP90 = max(p90, safeMiddle)
+        val safeP98 = max(p98, safeP90)
+        val safeP995 = max(p995, safeP98)
+        val safeP999 = max(p999, safeP995)
+        val highlightGapEv = log2(safeP98 / safeP90).coerceAtLeast(0f)
+        val sparseStrength = smoothStep(
+            SPARSE_HIGHLIGHT_GAP_START_EV,
+            SPARSE_HIGHLIGHT_GAP_FULL_EV,
+            highlightGapEv
+        )
+
+        // p999 remains the compression endpoint. When the upper 2% is
+        // separated from the main highlight population by a large EV gap,
+        // drive whole-frame exposure from the log-center across that gap
+        // instead of from percentiles that are both inside the sparse bright
+        // population. This preserves the tail without letting a window or
+        // specular region brighten the rest of the image.
+        val denseHighlightReference = 2.0f.pow(
+            0.5f * (log2(safeP90) + log2(safeP98))
+        )
+        val exposureReference = 2.0f.pow(
+            lerp(log2(safeP999), log2(denseHighlightReference), sparseStrength)
+        )
+        return PhotonHighlightRanges(
+            tailRangeEv = log2(safeP999 / safeMiddle).coerceAtLeast(0f),
+            exposureRangeEv = log2(exposureReference / safeMiddle).coerceAtLeast(0f),
+            exposureReference = exposureReference,
+            highlightGapEv = highlightGapEv,
+            sparseStrength = sparseStrength
+        )
     }
 
-    private fun photonDynamicRangeTier(observedRangeEv: Float): Float {
+    private fun photonDynamicRangeTier(highlightRangeEv: Float): Float {
         val tier = when {
-            observedRangeEv >= EXTENDED_HDR_RANGE_THRESHOLD_EV -> EXTENDED_HDR_DYNAMIC_RANGE_EV
-            observedRangeEv >= HDR_RANGE_THRESHOLD_EV -> HDR_DYNAMIC_RANGE_EV
-            observedRangeEv >= WIDE_RANGE_THRESHOLD_EV -> WIDE_DYNAMIC_RANGE_EV
+            highlightRangeEv >= EXTENDED_HDR_HIGHLIGHT_RANGE_THRESHOLD_EV ->
+                EXTENDED_HDR_DYNAMIC_RANGE_EV
+            highlightRangeEv >= HDR_HIGHLIGHT_RANGE_THRESHOLD_EV -> HDR_DYNAMIC_RANGE_EV
+            highlightRangeEv >= WIDE_HIGHLIGHT_RANGE_THRESHOLD_EV -> WIDE_DYNAMIC_RANGE_EV
             else -> STANDARD_DYNAMIC_RANGE_EV
         }
         return tier.coerceIn(MIN_DYNAMIC_RANGE_EV, MAX_DYNAMIC_RANGE_EV)
@@ -562,7 +621,7 @@ internal object DngPhotonProfileGainTableGenerator {
 
     private fun sanitizeInputScale(inputScale: Float): Float {
         return inputScale.takeIf { it.isFinite() }
-            ?.coerceIn(1f / MAX_WHITE_POINT_ADJUSTMENT, 1.0f)
+            ?.coerceIn(MIN_CURVE_INPUT, 1.0f)
             ?: 1.0f
     }
 
@@ -638,7 +697,11 @@ internal object DngPhotonProfileGainTableGenerator {
     )
 
     private data class PhotonToneAnchors(
-        val observedDynamicRangeEv: Float,
+        val tailHighlightRangeEv: Float,
+        val exposureHighlightRangeEv: Float,
+        val exposureHighlightReference: Float,
+        val highlightGapEv: Float,
+        val sparseHighlightStrength: Float,
         val targetDynamicRangeEv: Float,
         val curveDynamicRangeEv: Float,
         val blackRelativeExposure: Float,
@@ -652,5 +715,13 @@ internal object DngPhotonProfileGainTableGenerator {
         val tierDisplayMiddleGray: Float,
         val whitePoint: Float,
         val rawWhitePoint: Float,
+    )
+
+    internal data class PhotonHighlightRanges(
+        val tailRangeEv: Float,
+        val exposureRangeEv: Float,
+        val exposureReference: Float,
+        val highlightGapEv: Float,
+        val sparseStrength: Float,
     )
 }
