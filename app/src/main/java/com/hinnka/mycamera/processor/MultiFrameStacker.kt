@@ -325,20 +325,16 @@ object MultiFrameStacker {
         val useNativeSuperResolution = outputScale > 1.0f
 
         if (useGpuAcceleration) {
-            val mode = if (enableSuperResolution) RawStackMode.MFSR else RawStackMode.MFNR
-            RawStackRuntimeDebug.i(TAG) { "Using GLES RAW stacker mode=$mode" }
+            RawStackRuntimeDebug.i(TAG) {
+                "Using unified GLES RAW Radiance fusion outputScale=$outputScale"
+            }
             val stackLensShading = validLensShadingOrNull(
                 lensShading = lensShading,
                 width = lensShadingWidth,
                 height = lensShadingHeight,
                 enabled = applyLensShadingCorrection,
             )
-            val tuning = RawStackTuningResolver.resolve(
-                mode = mode,
-                frameCount = images.size,
-                superResolutionScale = outputScale,
-            )
-            return GlesRawStacker(
+            return GlesRawRadianceFusion(
                 width = width,
                 height = height,
                 cfaPattern = cfaPattern,
@@ -350,7 +346,7 @@ object MultiFrameStacker {
                 lensShading = stackLensShading,
                 lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
                 lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
-                tuning = tuning,
+                outputScale = outputScale,
                 debugConfig = RawStackRuntimeDebug.debugConfig,
             ).processFrames(frames)
         }
