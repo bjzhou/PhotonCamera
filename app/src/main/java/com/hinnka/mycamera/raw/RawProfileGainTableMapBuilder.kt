@@ -76,6 +76,9 @@ internal object RawProfileGainTableMapBuilder {
                 baselineExposureEv = baselineExposureEv,
                 packedCellStats = packedCellStats,
                 diagnosticBand = diagnosticBand,
+                fusionParameters = if (profileToneMapMode == RawProfileToneMapMode.Photon)
+                    DngHdrProfileGainTableGenerator.PHOTON_FUSION_PARAMETERS
+                else DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS
             ) ?: run {
                 PLog.w(
                     TAG,

@@ -76,6 +76,15 @@ internal object DngHdrProfileGainTableGenerator {
         highlightFusionStart = HIGHLIGHT_FUSION_START,
         highlightFusionEnd = HIGHLIGHT_FUSION_END,
     )
+
+    internal val PHOTON_FUSION_PARAMETERS = HdrExposureFusionParameters(
+        autoExposureTarget = 0.35f,
+        wellExposedKey = 0.5f,
+        maxExposureGain = MAX_LTM_GAIN,
+        highlightFusionStart = HIGHLIGHT_FUSION_START,
+        highlightFusionEnd = HIGHLIGHT_FUSION_END,
+    )
+
     private val WELL_EXPOSED_WEIGHT_LUT = FloatArray(
         (WEIGHT_LUT_MAX_DISTANCE_EV * WEIGHT_LUT_STEPS_PER_EV).toInt() + 1
     ) { index ->
