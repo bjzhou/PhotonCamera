@@ -2271,7 +2271,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     if (_latestPhoto.value?.id == mediaData.id) {
                         _latestPhoto.value = _latestPhoto.value?.copy(metadata = updated)
                     }
-                    photoRefreshKeys[mediaData.id] = System.currentTimeMillis()
                 }
                 onComplete?.invoke(updated != null)
             }

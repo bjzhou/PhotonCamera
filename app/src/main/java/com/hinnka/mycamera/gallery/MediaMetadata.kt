@@ -23,6 +23,16 @@ import kotlin.math.log2
 
 const val TONEMAP_MODE_NATURAL_LIGHT = "NATURAL_LIGHT"
 
+private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
+    if (!isNull("rawAutoExposureMode")) {
+        when (optString("rawAutoExposureMode")) {
+            "OFF" -> return false
+            "VIEWFINDER_MATCH", "DYNAMIC_SCENE_ESTIMATION" -> return true
+        }
+    }
+    return if (isNull("rawAutoExposure")) null else optBoolean("rawAutoExposure")
+}
+
 /**
  * 照片元数据
  *
@@ -296,7 +306,7 @@ data class MediaMetadata(
                     captureNoiseReductionLevel = if (obj.isNull("captureNoiseReductionLevel")) null else obj.optInt("captureNoiseReductionLevel"),
                     rawDenoiseValue = if (obj.isNull("denoiseValue")) null else obj.optDouble("denoiseValue").toFloat(),
                     rawExposureCompensation = if (obj.isNull("rawExposureCompensation")) null else obj.optDouble("rawExposureCompensation").toFloat(),
-                    rawAutoExposure = if (obj.isNull("rawAutoExposure")) null else obj.optBoolean("rawAutoExposure"),
+                    rawAutoExposure = obj.optCompatibleRawAutoExposure(),
                     rawHighlightsAdjustment = if (obj.isNull("rawHighlightsAdjustment")) null else obj.optDouble("rawHighlightsAdjustment").toFloat(),
                     rawShadowsAdjustment = if (obj.isNull("rawShadowsAdjustment")) null else obj.optDouble("rawShadowsAdjustment").toFloat(),
                     rawBlackPointCorrection = if (obj.isNull("rawBlackPointCorrection")) null else obj.optDouble("rawBlackPointCorrection").toFloat(),

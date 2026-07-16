@@ -156,7 +156,7 @@ internal object DngHdrProfileGainTableGenerator {
         brightnessTarget: HdrExposureFusionBrightnessTarget? = null,
         resolutionDiagnostics: ((HdrExposureFusionResolutionDiagnostics) -> Unit)? = null,
     ): DngProfileGainTableMap? {
-        if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite() || baselineExposureEv < 0f) {
+        if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite()) {
             return null
         }
         val grid = chooseLtmGrid(width, height)

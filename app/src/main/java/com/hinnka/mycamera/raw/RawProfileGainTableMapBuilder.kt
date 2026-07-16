@@ -13,58 +13,84 @@ internal object RawProfileGainTableMapBuilder {
 
     private data class BuiltPgtmStats(
         val packedCellStats: FloatArray,
-        val globalStats: DngPgtmGlobalStats?,
     )
 
-    fun build(
+    fun prepareForDngWrite(
         rawData: ByteBuffer,
         width: Int,
         height: Int,
         rowStride: Int,
         metadata: RawMetadata,
         samplesPerPixel: Int = 1,
-        statsBounds: Rect? = null,
-        profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
+        options: RawDngProfilePreparationOptions = RawDngProfilePreparationOptions(),
         colorCorrectionMatrix: FloatArray = metadata.colorCorrectionMatrix,
         cameraWhite: FloatArray = metadata.cameraWhite,
         hueSatMap: DcpHueSatMap? = null,
-    ): DngProfileGainTableMap? {
-        val stats = buildPackedCellStats(
+    ): RawDngProfilePreparation? {
+        val baselineExposureEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
+        val generatePgtm = options.profileToneMapMode == RawProfileToneMapMode.Photon ||
+            options.profileToneMapMode == RawProfileToneMapMode.GooglePixel
+        if (!generatePgtm) {
+            return RawDngProfilePreparation(
+                baselineExposureEv = baselineExposureEv,
+                profileGainTableMap = null,
+            )
+        }
+
+        val statsMetadata = metadata.copy(baselineExposure = baselineExposureEv)
+        val initialStats = buildPackedCellStats(
             rawData = rawData,
             width = width,
             height = height,
             rowStride = rowStride,
-            metadata = metadata,
+            metadata = statsMetadata,
             samplesPerPixel = samplesPerPixel,
-            statsBounds = statsBounds,
+            statsBounds = options.statsBounds,
             colorCorrectionMatrix = colorCorrectionMatrix,
             cameraWhite = cameraWhite,
             hueSatMap = hueSatMap,
-            collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon
         ) ?: return null
+        return prepareFromStats(
+            width = width,
+            height = height,
+            baselineExposureEv = baselineExposureEv,
+            profileToneMapMode = options.profileToneMapMode,
+            packedCellStats = initialStats.packedCellStats,
+        )
+    }
+
+    internal fun prepareFromStats(
+        width: Int,
+        height: Int,
+        baselineExposureEv: Float,
+        profileToneMapMode: RawProfileToneMapMode,
+        packedCellStats: FloatArray,
+    ): RawDngProfilePreparation? {
+        val generatePgtm = profileToneMapMode == RawProfileToneMapMode.Photon ||
+            profileToneMapMode == RawProfileToneMapMode.GooglePixel
         val diagnosticBand = DngPgtmDiagnostic.activeBandForSource(TAG)
-        val baselineExposureEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
-        return when (profileToneMapMode) {
-            RawProfileToneMapMode.GooglePixel -> DngHdrProfileGainTableGenerator.forCellStats(
+        val profileGainTableMap = if (generatePgtm) {
+            DngHdrProfileGainTableGenerator.forCellStats(
                 width = width,
                 height = height,
                 baselineExposureEv = baselineExposureEv,
-                packedCellStats = stats.packedCellStats,
-                diagnosticBand = diagnosticBand
-            )
-
-            RawProfileToneMapMode.Photon -> DngPhotonProfileGainTableGenerator.forCellStats(
-                width = width,
-                height = height,
-                baselineExposureEv = baselineExposureEv,
-                packedCellStats = stats.packedCellStats,
-                globalStats = stats.globalStats ?: return null,
-                diagnosticBand = diagnosticBand
-            )
-
-            RawProfileToneMapMode.Default,
-            RawProfileToneMapMode.OppoMaster -> null
+                packedCellStats = packedCellStats,
+                diagnosticBand = diagnosticBand,
+            ) ?: run {
+                PLog.w(
+                    TAG,
+                    "PGTM generation failed: mode=$profileToneMapMode " +
+                        "baselineExposureEv=$baselineExposureEv size=${width}x$height"
+                )
+                return null
+            }
+        } else {
+            null
         }
+        return RawDngProfilePreparation(
+            baselineExposureEv = baselineExposureEv,
+            profileGainTableMap = profileGainTableMap,
+        )
     }
 
     private fun buildPackedCellStats(
@@ -78,7 +104,6 @@ internal object RawProfileGainTableMapBuilder {
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
         hueSatMap: DcpHueSatMap?,
-        collectGlobalStats: Boolean,
     ): BuiltPgtmStats? {
         if (width <= 0 || height <= 0 || metadata.whiteLevel <= 0f) return null
         val sampleCountPerPixel = samplesPerPixel.coerceAtLeast(1)
@@ -107,12 +132,6 @@ internal object RawProfileGainTableMapBuilder {
         val baselineGain = DngBaselineExposure.exactGain(metadata.baselineExposure)
         val stats = FloatArray(gridWidth * gridHeight * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE)
         val inputSamples = FloatArray(SAMPLE_GRID * SAMPLE_GRID)
-        val globalSamples = if (collectGlobalStats) {
-            FloatArray(gridWidth * gridHeight * SAMPLE_GRID * SAMPLE_GRID)
-        } else {
-            null
-        }
-        var globalSampleCount = 0
         val statsWidth = safeStatsBounds.width()
         val statsHeight = safeStatsBounds.height()
         for (cellY in 0 until gridHeight) {
@@ -158,10 +177,6 @@ internal object RawProfileGainTableMapBuilder {
                             hueSatMap = hueSatMap,
                         )
                         inputSamples[sampleCount] = inputValue
-                        if (globalSamples != null) {
-                            globalSamples[globalSampleCount] = inputValue
-                            globalSampleCount += 1
-                        }
                         sampleCount += 1
                         if (inputValue >= 0.92f) {
                             highlightCount += 1
@@ -184,15 +199,8 @@ internal object RawProfileGainTableMapBuilder {
                 stats[offset + 7] = percentileFromSortedSamples(inputSamples, sampleCount, 0.999f)
             }
         }
-        val globalStats = globalSamples?.let { samples ->
-            DngPgtmGlobalStats.fromMutableSamples(
-                samples = samples,
-                sampleCount = globalSampleCount
-            ) ?: return null
-        }
         return BuiltPgtmStats(
             packedCellStats = stats,
-            globalStats = globalStats
         )
     }
 

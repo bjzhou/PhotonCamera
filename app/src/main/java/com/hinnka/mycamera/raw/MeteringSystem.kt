@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.raw
 
-import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.pow
@@ -16,7 +15,6 @@ object MeteringSystem {
     private const val DISPLAY_TARGET_LUMA = 0.18f
     private const val LUMA_FLOOR = 0.001f
     private const val MAX_LINEAR_LUMA = 16.0f
-    private const val AUTO_DEVELOP_EPSILON = 0.0001f
     private const val SRGB_TRANSFER_THRESHOLD = 0.04045f
     private const val SRGB_LINEAR_SCALE = 12.92f
     private const val SRGB_TRANSFER_A = 0.055f
@@ -79,18 +77,6 @@ object MeteringSystem {
         }
     }
 
-    data class ShadowsHighlightsParams(
-        val highlights: Float,
-        val shadows: Float,
-    ) {
-        companion object {
-            val NEUTRAL = ShadowsHighlightsParams(
-                highlights = 0f,
-                shadows = 0f,
-            )
-        }
-    }
-
     data class SrgbThumbnailMeteringStats(
         val width: Int,
         val height: Int,
@@ -106,16 +92,6 @@ object MeteringSystem {
         val clipHigh: Float,
         val highlightCompression: HighlightCompressionEstimate
     )
-
-    fun hasManualRawDevelopAdjustments(
-        rawExposureCompensation: Float,
-        rawHighlightsAdjustment: Float,
-        rawShadowsAdjustment: Float
-    ): Boolean {
-        return abs(rawExposureCompensation) > AUTO_DEVELOP_EPSILON ||
-            abs(rawHighlightsAdjustment) > AUTO_DEVELOP_EPSILON ||
-            abs(rawShadowsAdjustment) > AUTO_DEVELOP_EPSILON
-    }
 
     fun analyzeSrgbThumbnail(
         width: Int,

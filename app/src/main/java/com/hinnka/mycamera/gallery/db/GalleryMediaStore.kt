@@ -221,6 +221,7 @@ object GalleryMediaStore {
             rawDenoiseValue = metadata.rawDenoiseValue,
             rawExposureCompensation = metadata.rawExposureCompensation,
             rawAutoExposure = metadata.rawAutoExposure,
+            rawAutoExposureMode = null,
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection,
@@ -384,6 +385,9 @@ object GalleryMediaStore {
     }
 
     private fun GalleryMediaEntity.toMetadata(): MediaMetadata {
+        val resolvedRawAutoExposure = rawAutoExposureMode?.let { mode ->
+            !mode.equals("OFF", ignoreCase = true)
+        } ?: rawAutoExposure
         return MediaMetadata(
             version = version.takeIf { it > 0 } ?: MediaMetadata().version,
             mediaType = runCatching { MediaType.valueOf(mediaType) }.getOrDefault(MediaType.IMAGE),
@@ -399,7 +403,7 @@ object GalleryMediaStore {
             captureNoiseReductionLevel = captureNoiseReductionLevel,
             rawDenoiseValue = rawDenoiseValue,
             rawExposureCompensation = rawExposureCompensation,
-            rawAutoExposure = rawAutoExposure,
+            rawAutoExposure = resolvedRawAutoExposure,
             rawHighlightsAdjustment = rawHighlightsAdjustment,
             rawShadowsAdjustment = rawShadowsAdjustment,
             rawBlackPointCorrection = rawBlackPointCorrection,

@@ -84,11 +84,6 @@ class PhotoProcessor(
             }
     }
 
-    private suspend fun resolveRawAutoExposure(metadata: MediaMetadata): Boolean {
-        return metadata.rawAutoExposure
-            ?: (userPreferencesRepository.userPreferences.firstOrNull()?.rawAutoExposure ?: true)
-    }
-
     private fun resolveNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.noiseReduction ?: (if (metadata.isImported) 0f else fallback)
     }
@@ -432,7 +427,6 @@ class PhotoProcessor(
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
-        onRawAutoAdjustments: ((RawDemosaicProcessor.RawAutoAdjustments) -> Unit)? = null,
         onRawMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? {
         val dngFile = GalleryManager.getDngFile(context, photoId)
@@ -464,7 +458,6 @@ class PhotoProcessor(
                 sharpening,
                 noiseReduction,
                 chromaNoiseReduction,
-                onRawAutoAdjustments,
                 onRawMetadata
             )
         } else if (GalleryManager.getOriginalImageFile(context, photoId) != null) {
@@ -503,7 +496,6 @@ class PhotoProcessor(
             rotation = metadata.rotation,
             exposureBias = metadata.exposureBias ?: 0f,
             rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
-            rawAutoExposure = resolveRawAutoExposure(metadata),
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
@@ -558,7 +550,6 @@ class PhotoProcessor(
         sharpening: Float = 0f,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
-        onRawAutoAdjustments: ((RawDemosaicProcessor.RawAutoAdjustments) -> Unit)? = null,
         onRawMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(Dispatchers.IO) {
         var result: Bitmap?
@@ -584,7 +575,6 @@ class PhotoProcessor(
             metadata.rotation,
             metadata.exposureBias ?: 0f,
             rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
-            rawAutoExposure = resolveRawAutoExposure(metadata),
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
@@ -610,7 +600,6 @@ class PhotoProcessor(
                 mDensityGain = metadata.spectralFilmMDensityGain,
                 yDensityGain = metadata.spectralFilmYDensityGain
             ),
-            onRawAutoAdjustments = onRawAutoAdjustments,
             onMetadata = onRawMetadata
         )
 

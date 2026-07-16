@@ -59,6 +59,16 @@ private fun sanitizeTonemapMode(mode: String): String {
     }
 }
 
+private fun resolveStoredRawAutoExposure(mode: String?, legacyValue: Boolean?): Boolean {
+    return when {
+        mode.equals("OFF", ignoreCase = true) -> false
+        mode.equals("VIEWFINDER_MATCH", ignoreCase = true) -> true
+        // Migrate the removed dynamic-scene option to the remaining viewfinder matcher.
+        mode.equals("DYNAMIC_SCENE_ESTIMATION", ignoreCase = true) -> true
+        else -> legacyValue ?: true
+    }
+}
+
 enum class VolumeKeyAction {
     NONE,
     CAPTURE,
@@ -301,6 +311,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_NLM_NOISE_FACTOR_KEY = floatPreferencesKey("raw_nlm_noise_factor")
         private val RAW_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_exposure_compensation")
         private val RAW_AUTO_EXPOSURE_KEY = booleanPreferencesKey("raw_auto_exposure")
+        private val RAW_AUTO_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_auto_exposure_mode")
         private val RAW_HIGHLIGHTS_ADJUSTMENT_KEY = floatPreferencesKey("raw_highlights_adjustment")
         private val RAW_SHADOWS_ADJUSTMENT_KEY = floatPreferencesKey("raw_shadows_adjustment")
         private val RAW_MIN_SHUTTER_SPEED_NS_KEY = longPreferencesKey("raw_min_shutter_speed_ns")
@@ -477,7 +488,10 @@ class UserPreferencesRepository(private val context: Context) {
                 ).normalized(),
                 rawNlmNoiseFactor = preferences[RAW_NLM_NOISE_FACTOR_KEY] ?: 0f,
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
-                rawAutoExposure = preferences[RAW_AUTO_EXPOSURE_KEY] ?: true,
+                rawAutoExposure = resolveStoredRawAutoExposure(
+                    mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
+                    legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
+                ),
                 rawHighlightsAdjustment = preferences[RAW_HIGHLIGHTS_ADJUSTMENT_KEY] ?: 0f,
                 rawShadowsAdjustment = preferences[RAW_SHADOWS_ADJUSTMENT_KEY] ?: 0f,
                 rawMinShutterSpeedNs = preferences[RAW_MIN_SHUTTER_SPEED_NS_KEY] ?: 0L,
@@ -988,6 +1002,11 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawAutoExposure(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[RAW_AUTO_EXPOSURE_KEY] = enabled
+            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (enabled) {
+                "VIEWFINDER_MATCH"
+            } else {
+                "OFF"
+            }
         }
     }
 
@@ -999,7 +1018,16 @@ class UserPreferencesRepository(private val context: Context) {
             }
             preferences[TONEMAP_MODE] = "SYSTEM_DEFAULT"
             preferences[NATURAL_LIGHT_ENABLED] = false
-            preferences[RAW_AUTO_EXPOSURE_KEY] = true
+            val rawAutoExposure = resolveStoredRawAutoExposure(
+                mode = preferences[RAW_AUTO_EXPOSURE_MODE_KEY],
+                legacyValue = preferences[RAW_AUTO_EXPOSURE_KEY],
+            )
+            preferences[RAW_AUTO_EXPOSURE_KEY] = rawAutoExposure
+            preferences[RAW_AUTO_EXPOSURE_MODE_KEY] = if (rawAutoExposure) {
+                "VIEWFINDER_MATCH"
+            } else {
+                "OFF"
+            }
             preferences[CAMERA_STARTUP_DEFAULTS_RESTORED_V1] = true
             restored = true
         }

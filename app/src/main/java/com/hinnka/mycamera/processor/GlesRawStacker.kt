@@ -11,7 +11,6 @@ import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngHdrProfileGainTableGenerator
-import com.hinnka.mycamera.raw.DngPhotonProfileGainTableGenerator
 import com.hinnka.mycamera.raw.DngPgtmDiagnostic
 import com.hinnka.mycamera.raw.DngPgtmGlobalStats
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
@@ -614,7 +613,6 @@ class GlesRawStacker(
             val referenceExposureProduct = validExposureProduct(normalFrames.first().exposureProduct)
             val referenceOutputScale = hdrExposureScale(shortExposureProduct, referenceExposureProduct)
             val shortAlignmentScale = hdrExposureScale(referenceExposureProduct, shortExposureProduct)
-            val rawHdrBaselineExposureEv = hdrBaselineExposureEv(shortExposureProduct, referenceExposureProduct)
             val alignmentScales = normalFrames.map {
                 hdrExposureScale(referenceExposureProduct, validExposureProduct(it.exposureProduct))
             }
@@ -683,7 +681,6 @@ class GlesRawStacker(
             )
             val readTiming = readHdrLinearOutput(outputBuffer)
             outputBuffer.rewind()
-            val profileGainTableMap = computeHdrProfileGainTableMap(rawHdrBaselineExposureEv)
             val diagnostics = if (hwmfDebug.collectMetrics) {
                 collectFinalDiagnostics(
                     frameCount = normalFrames.size + 1,
@@ -707,12 +704,8 @@ class GlesRawStacker(
                 isNormalizedSensorData = true,
                 blackLevel = normalizedBlackLevel.copyOf(),
                 fusedBayerUsesNativeAllocator = true,
-                profileGainTableMap = profileGainTableMap,
-                profileToneMapMode = if (profileGainTableMap != null) {
-                    profileToneMapMode
-                } else {
-                    RawProfileToneMapMode.Default
-                },
+                profileGainTableMap = null,
+                profileToneMapMode = RawProfileToneMapMode.Default,
                 diagnostics = diagnostics,
                 bufferLayout = RawStackBufferLayout.LINEAR_RGB,
                 inputRowStepSamples = width * 4,
@@ -891,7 +884,6 @@ class GlesRawStacker(
             rcdStripeStep42Program = linkComputeProgram(RcdShaders.STEP_4_2, "raw_hdr_rcd_step42")
             rcdStripeStep43Program = linkComputeProgram(RcdShaders.STEP_4_3, "raw_hdr_rcd_step43")
         }
-        pgtmStatsProgram = linkComputeProgram(PGTM_STATS_COMPUTE_SHADER, "raw_hdr_pgtm_stats")
     }
 
     private fun validateOutputTextureLimits() {
@@ -1250,7 +1242,9 @@ class GlesRawStacker(
         }.coerceIn(0f, 8f)
     }
 
-    private fun computeHdrProfileGainTableMap(baselineExposureEv: Float): com.hinnka.mycamera.raw.DngProfileGainTableMap? {
+    private fun computeHdrProfileGainTableMap(
+        baselineExposureEv: Float,
+    ): com.hinnka.mycamera.raw.DngProfileGainTableMap? {
         if (!baselineExposureEv.isFinite() || baselineExposureEv <= 0.05f || pgtmStatsProgram == 0) {
             return null
         }
@@ -1270,7 +1264,7 @@ class GlesRawStacker(
         }
 
         val cellCount = pgtmGridWidth * pgtmGridHeight
-        val collectGlobalStats = profileToneMapMode == RawProfileToneMapMode.Photon
+        val collectGlobalStats = false
         val cellStatsWordCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
         val cellSumsOffset = if (collectGlobalStats) cellStatsWordCount else -1
         val globalHistogramOffset = if (collectGlobalStats) {
@@ -1402,26 +1396,13 @@ class GlesRawStacker(
                 null
             }
             val diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU stacker")
-            val map = when (profileToneMapMode) {
-                RawProfileToneMapMode.Photon -> DngPhotonProfileGainTableGenerator.forCellStats(
-                    width = width,
-                    height = height,
-                    baselineExposureEv = baselineExposureEv,
-                    packedCellStats = packedCellStats,
-                    globalStats = globalStats
-                        ?: throw IllegalStateException("GPU Photon PGTM global stats are missing"),
-                    diagnosticBand = diagnosticBand,
-                    statsSource = "gpu-log-histogram-$PGTM_GLOBAL_HISTOGRAM_BIN_COUNT"
-                )
-
-                else -> DngHdrProfileGainTableGenerator.forCellStats(
-                    width = width,
-                    height = height,
-                    baselineExposureEv = baselineExposureEv,
-                    packedCellStats = packedCellStats,
-                    diagnosticBand = diagnosticBand
-                )
-            }
+            val generation = DngHdrProfileGainTableGenerator.forCellStats(
+                width = width,
+                height = height,
+                baselineExposureEv = baselineExposureEv,
+                packedCellStats = packedCellStats,
+                diagnosticBand = diagnosticBand,
+            )
             val completeNs = System.nanoTime()
             PLog.d(
                 TAG,
@@ -1432,7 +1413,7 @@ class GlesRawStacker(
                     "curveMs=${(completeNs - statsReadyNs) / 1_000_000.0} " +
                     "totalMs=${(completeNs - totalStartNs) / 1_000_000.0}"
             )
-            map
+            generation
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to compute GPU HDR PGTM stats", e)
             null

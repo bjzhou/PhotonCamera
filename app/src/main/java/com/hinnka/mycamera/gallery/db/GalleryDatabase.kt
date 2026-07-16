@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 23,
+    version = 24,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -181,6 +181,22 @@ abstract class GalleryDatabase : RoomDatabase() {
         private val MIGRATION_22_23 = object : androidx.room.migration.Migration(22, 23) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawPhotonPgtmToneMap INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        private val MIGRATION_23_24 = object : androidx.room.migration.Migration(23, 24) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawAutoExposureMode TEXT")
+                db.execSQL(
+                    """
+                    UPDATE gallery_media
+                    SET rawAutoExposureMode = CASE
+                        WHEN rawAutoExposure = 1 THEN 'VIEWFINDER_MATCH'
+                        WHEN rawAutoExposure = 0 THEN 'OFF'
+                        ELSE NULL
+                    END
+                    """.trimIndent()
+                )
             }
         }
 
@@ -538,7 +554,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_19_20,
                         MIGRATION_20_21,
                         MIGRATION_21_22,
-                        MIGRATION_22_23
+                        MIGRATION_22_23,
+                        MIGRATION_23_24
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

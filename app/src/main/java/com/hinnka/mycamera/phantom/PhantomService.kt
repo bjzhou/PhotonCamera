@@ -671,13 +671,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             val processedBitmap = photoProcessor.process(
                 context, photoId, updatedMetadata,
                 0f, 0f, 0f,
-                onRawAutoAdjustments = { adjustments ->
-                    updatedMetadata = updatedMetadata.copy(
-                        rawExposureCompensation = adjustments.exposureCompensation,
-                        rawHighlightsAdjustment = adjustments.highlights,
-                        rawShadowsAdjustment = adjustments.shadows
-                    )
-                },
                 onRawMetadata = { raw ->
                     updatedMetadata = updatedMetadata.merge(raw)
                 }

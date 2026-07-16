@@ -248,6 +248,7 @@ fun GalleryEditScreen(
 
     fun currentPreviewSignature(fast: Boolean = false): PreviewRenderSignature? {
         val photo = editSourcePhoto ?: return null
+        val rawDevelopIsBaked = isRaw
         return PreviewRenderSignature(
             photoId = photo.id,
             refreshKey = refreshKey,
@@ -258,26 +259,26 @@ fun GalleryEditScreen(
             editLutConfig = editLutConfig,
             editFrameId = editFrameId,
             editFrameCustomProperties = editFrameCustomProperties.toMap(),
-            editSharpening = editSharpening,
-            editNoiseReduction = if (fast) 0f else editNoiseReduction,
-            editChromaNoiseReduction = if (fast) 0f else editChromaNoiseReduction,
-            editRawExposureCompensation = if (fast) 0f else editRawExposureCompensation,
-            editRawAutoExposure = if (fast) false else editRawAutoExposure,
-            editRawHighlightsAdjustment = if (fast) 0f else editRawHighlightsAdjustment,
-            editRawShadowsAdjustment = if (fast) 0f else editRawShadowsAdjustment,
-            editRawBlackPointCorrection = if (fast) 0f else editRawBlackPointCorrection,
-            editRawWhitePointCorrection = if (fast) 0f else editRawWhitePointCorrection,
-            editRawLensShadingCorrectionEnabled = if (fast) false else editRawLensShadingCorrectionEnabled,
-            editRawDROMode = if (fast) "" else editRawDROMode,
-            editRawBlackLevelMode = if (fast) "" else editRawBlackLevelMode,
-            editRawCustomBlackLevel = if (fast) 0f else editRawCustomBlackLevel,
-            editRawWhiteLevelMode = if (fast) "" else editRawWhiteLevelMode,
-            editRawCustomWhiteLevel = if (fast) 0f else editRawCustomWhiteLevel,
-            editRawCfaCorrectionMode = if (fast) "" else editRawCfaCorrectionMode,
-            editRawDcpId = if (fast) null else editRawDcpId,
-            editRawRenderingEngine = if (fast) "" else editRawColorEngine.name,
-            editRawBaselineLutId = editRawBaselineLutId,
-            editRawBaselineRecipeParams = editRawBaselineRecipeParams,
+            editSharpening = if (rawDevelopIsBaked) 0f else editSharpening,
+            editNoiseReduction = if (fast || rawDevelopIsBaked) 0f else editNoiseReduction,
+            editChromaNoiseReduction = if (fast || rawDevelopIsBaked) 0f else editChromaNoiseReduction,
+            editRawExposureCompensation = if (fast || rawDevelopIsBaked) 0f else editRawExposureCompensation,
+            editRawAutoExposure = if (fast || rawDevelopIsBaked) false else editRawAutoExposure,
+            editRawHighlightsAdjustment = if (fast || rawDevelopIsBaked) 0f else editRawHighlightsAdjustment,
+            editRawShadowsAdjustment = if (fast || rawDevelopIsBaked) 0f else editRawShadowsAdjustment,
+            editRawBlackPointCorrection = if (fast || rawDevelopIsBaked) 0f else editRawBlackPointCorrection,
+            editRawWhitePointCorrection = if (fast || rawDevelopIsBaked) 0f else editRawWhitePointCorrection,
+            editRawLensShadingCorrectionEnabled = if (fast || rawDevelopIsBaked) false else editRawLensShadingCorrectionEnabled,
+            editRawDROMode = if (fast || rawDevelopIsBaked) "" else editRawDROMode,
+            editRawBlackLevelMode = if (fast || rawDevelopIsBaked) "" else editRawBlackLevelMode,
+            editRawCustomBlackLevel = if (fast || rawDevelopIsBaked) 0f else editRawCustomBlackLevel,
+            editRawWhiteLevelMode = if (fast || rawDevelopIsBaked) "" else editRawWhiteLevelMode,
+            editRawCustomWhiteLevel = if (fast || rawDevelopIsBaked) 0f else editRawCustomWhiteLevel,
+            editRawCfaCorrectionMode = if (fast || rawDevelopIsBaked) "" else editRawCfaCorrectionMode,
+            editRawDcpId = if (fast || rawDevelopIsBaked) null else editRawDcpId,
+            editRawRenderingEngine = if (fast || rawDevelopIsBaked) "" else editRawColorEngine.name,
+            editRawBaselineLutId = editRawBaselineLutId.takeUnless { rawDevelopIsBaked },
+            editRawBaselineRecipeParams = editRawBaselineRecipeParams.takeUnless { rawDevelopIsBaked },
             editComputationalAperture = if (fast) 0f else editComputationalAperture,
             editFocusX = editFocusX,
             editFocusY = editFocusY,
@@ -346,9 +347,11 @@ fun GalleryEditScreen(
         }
     }
 
-    LaunchedEffect(editSourcePhoto, refreshKey) {
+    LaunchedEffect(editSourcePhoto?.id, refreshKey, isRaw) {
         val photo = editSourcePhoto ?: return@LaunchedEffect
-        if (photo.isVideo) return@LaunchedEffect
+        // RAW decoding is already the expensive source load. Running the fast JPEG-style pass
+        // before the full pass decodes the same DNG twice for every refresh.
+        if (photo.isVideo || isRaw) return@LaunchedEffect
         snapshotFlow {
             currentPreviewSignature(true)
         }
@@ -359,7 +362,7 @@ fun GalleryEditScreen(
             }
     }
 
-    LaunchedEffect(editSourcePhoto, refreshKey) {
+    LaunchedEffect(editSourcePhoto?.id, refreshKey) {
         val photo = editSourcePhoto ?: return@LaunchedEffect
         if (photo.isVideo) return@LaunchedEffect
         snapshotFlow {
@@ -1112,7 +1115,9 @@ fun GalleryEditScreen(
                                         availableDcps = availableDcps,
                                         selectedBaselineLutId = editRawBaselineLutId,
                                         onSelectBaselineLut = { lutId ->
-                                            viewModel.saveRawBaselineLutSelection(currentEditSourcePhoto, lutId)
+                                            viewModel.saveRawBaselineLutSelection(currentEditSourcePhoto, lutId) {
+                                                requestRawPreviewRefresh()
+                                            }
                                         },
                                         onEditBaselineRecipe = { lutId ->
                                             baselineLutEditId = lutId

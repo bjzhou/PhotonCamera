@@ -41,10 +41,13 @@ import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
+import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
+import com.hinnka.mycamera.raw.RawDngViewfinderExposureMatcher
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
+import com.hinnka.mycamera.raw.RawViewfinderExposureMatcher
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DngBlackLevelPatcher
@@ -194,9 +197,13 @@ object GalleryManager {
         context: Context,
         metadata: MediaMetadata?
     ): Boolean {
-        return metadata?.rawAutoExposure
-            ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                ?.rawAutoExposure ?: true)
+        val fallback = ContentRepository.getInstance(context)
+            .userPreferencesRepository
+            .userPreferences
+            .firstOrNull()
+            ?.rawAutoExposure
+            ?: true
+        return metadata?.rawAutoExposure ?: fallback
     }
 
     private fun resolveNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
@@ -205,16 +212,6 @@ object GalleryManager {
 
     private fun resolveChromaNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else fallback)
-    }
-
-    private fun MediaMetadata.withRawAutoAdjustments(
-        adjustments: RawDemosaicProcessor.RawAutoAdjustments
-    ): MediaMetadata {
-        return copy(
-            rawExposureCompensation = adjustments.exposureCompensation,
-            rawHighlightsAdjustment = adjustments.highlights,
-            rawShadowsAdjustment = adjustments.shadows
-        )
     }
 
     data class PhotoMetadataUpdate(
@@ -1833,6 +1830,12 @@ object GalleryManager {
 
             var dngSaveAttempted = false
             val captureInfo = metadata.toCaptureInfo()
+            val rawDngDefaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
+                width = image.width,
+                height = image.height,
+                characteristics = characteristics,
+                captureResult = resolvedCaptureResult,
+            )
             FileOutputStream(tempDngFile).use { outputStream ->
                 image.use {
                     try {
@@ -1850,6 +1853,16 @@ object GalleryManager {
                             cfaCorrectionMode = metadata.rawCfaCorrectionMode,
                             effectiveFocalLengthMm = captureInfo.focalLength,
                             effectiveFocalLength35mm = captureInfo.focalLength35mm,
+                            dngProfilePreparationOptions = rawDngProfilePreparationOptions(
+                                context = context,
+                                metadata = metadata,
+                                width = image.width,
+                                height = image.height,
+                                defaultCrop = rawDngDefaultCrop,
+                                aspectRatio = aspectRatio,
+                                rotation = rotation,
+                                capturePreviewThumbnail = thumbnail,
+                            ),
                         )
                     } catch (e: Throwable) {
                         PLog.e(TAG, "DNG save failed", e)
@@ -1885,7 +1898,6 @@ object GalleryManager {
                 rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
                 rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
-                rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
                 rawHighlightsAdjustment = updatedMetadata.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
@@ -1903,7 +1915,6 @@ object GalleryManager {
                 rawRenderingEngine = updatedMetadata.rawRenderingEngine,
                 rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                 rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
-                capturePreviewThumbnail = thumbnail,
                 rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                 spectralFilmStock = updatedMetadata.spectralFilmStock,
                 spectralFilmPrint = updatedMetadata.spectralFilmPrint,
@@ -1912,9 +1923,6 @@ object GalleryManager {
                     mDensityGain = updatedMetadata.spectralFilmMDensityGain,
                     yDensityGain = updatedMetadata.spectralFilmYDensityGain
                 ),
-                onRawAutoAdjustments = { adjustments ->
-                    updatedMetadata = updatedMetadata.withRawAutoAdjustments(adjustments)
-                },
                 onMetadata = { raw ->
                     updatedMetadata = updatedMetadata.merge(raw)
                 }
@@ -2756,6 +2764,8 @@ object GalleryManager {
                     characteristics = characteristics,
                     captureResult = captureResult,
                     rotation = rotation,
+                    aspectRatio = aspectRatio,
+                    capturePreviewThumbnail = capturePreviewThumbnail,
                     thumbnail = null,
                     metadata = stackedMetadata,
                     shouldAutoSave = shouldAutoSave,
@@ -2791,7 +2801,6 @@ object GalleryManager {
                 rotation = rotation,
                 exposureBias = exposureBias ?: 0f,
                 rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
-                rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
                 rawHighlightsAdjustment = updatedMetadata.rawHighlightsAdjustment ?: 0f,
                 rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
@@ -2809,7 +2818,6 @@ object GalleryManager {
                 rawRenderingEngine = updatedMetadata.rawRenderingEngine,
                 rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
                 rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
-                capturePreviewThumbnail = capturePreviewThumbnail,
                 rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
                 spectralFilmStock = updatedMetadata.spectralFilmStock,
                 spectralFilmPrint = updatedMetadata.spectralFilmPrint,
@@ -2818,9 +2826,6 @@ object GalleryManager {
                     mDensityGain = updatedMetadata.spectralFilmMDensityGain,
                     yDensityGain = updatedMetadata.spectralFilmYDensityGain
                 ),
-                onRawAutoAdjustments = { adjustments ->
-                    updatedMetadata = updatedMetadata.withRawAutoAdjustments(adjustments)
-                },
                 onMetadata = { raw ->
                     updatedMetadata = updatedMetadata.merge(raw)
                 }
@@ -3067,7 +3072,9 @@ object GalleryManager {
                     applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, metadata),
                     colorCorrectionMatrix = rawMetadata.colorCorrectionMatrix,
                     pgtmStatsBounds = rawHdrPgtmStatsBounds,
-                    profileToneMapMode = rawHdrPgtmModeForMetadata(metadata),
+                    // The shared DNG writer prepares baseline/PGTM from the fused buffer. Disable
+                    // the stacker's legacy generator so the write path owns the calculation once.
+                    profileToneMapMode = RawProfileToneMapMode.Default,
                 )
                 closeImagesNow(images)
 
@@ -3076,17 +3083,16 @@ object GalleryManager {
                     return@withContext false
                 }
                 val fusedBayerBuffer = stackResult.fusedBayerBuffer ?: return@withContext false
-                val rawHdrBaselineExposureEv = calculateRawHdrDngBaselineExposureEv(
+                val rawHdrSourceBaselineExposureEv = calculateRawHdrDngBaselineExposureEv(
                     referenceProduct = normalReferenceCandidate.exposureProduct,
                     baseProduct = shortCandidate.exposureProduct,
                 )
                 PLog.d(
                     TAG,
-                    "RAW HDR stack DNG baseline exposure: ${rawHdrBaselineExposureEv}EV, " +
+                    "RAW HDR stack DNG source baseline exposure: ${rawHdrSourceBaselineExposureEv}EV, " +
                             "outputDomain=short, normalReference=${normalReferenceCandidate.exposureProduct}, " +
                             "short=${shortCandidate.exposureProduct}"
                 )
-                val rawHdrProfileGainTableMap = stackResult.profileGainTableMap
                 val stackedMetadata = metadata.withNormalizedRawLevelCorrectionsCleared("RAW HDR stack")
                 val stackRawMetadata = rawMetadata.copy(
                     cfaPattern = stackCfaPattern,
@@ -3109,13 +3115,15 @@ object GalleryManager {
                         captureResult = shortCandidate.captureResult,
                         captureMetadataResult = normalReferenceCandidate.captureResult,
                         rotation = rotation,
+                        aspectRatio = aspectRatio,
+                        capturePreviewThumbnail = capturePreviewThumbnail,
                         thumbnail = null,
                         metadata = stackedMetadata,
                         shouldAutoSave = shouldAutoSave,
                         exportDngWithRawExport = exportDngWithRawExport,
-                        baselineExposureEv = rawHdrBaselineExposureEv,
-                        profileGainTableMap = rawHdrProfileGainTableMap,
-                        profileToneMapMode = rawHdrPgtmModeForMetadata(stackedMetadata),
+                        baselineExposureEv = rawHdrSourceBaselineExposureEv,
+                        profileGainTableMap = null,
+                        profileToneMapMode = RawProfileToneMapMode.Default,
                         imageLayout = stackResult.bufferLayout.toDngImageLayout(),
                         compression = stackResult.bufferLayout.toDngCompression(),
                         inputRowStepSamples = stackResult.inputRowStepSamples,
@@ -3249,7 +3257,6 @@ object GalleryManager {
             rotation = rotation,
             exposureBias = exposureBias ?: 0f,
             rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
-            rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
             rawHighlightsAdjustment = updatedMetadata.rawHighlightsAdjustment ?: 0f,
             rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
@@ -3267,7 +3274,6 @@ object GalleryManager {
             rawRenderingEngine = updatedMetadata.rawRenderingEngine,
             rawToneMappingParameters = updatedMetadata.rawToneMappingParameters,
             rawCfaCorrectionMode = updatedMetadata.rawCfaCorrectionMode,
-            capturePreviewThumbnail = capturePreviewThumbnail,
             rawBlackBorderCrop = updatedMetadata.rawBlackBorderCrop,
             spectralFilmStock = updatedMetadata.spectralFilmStock,
             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
@@ -3276,9 +3282,6 @@ object GalleryManager {
                 mDensityGain = updatedMetadata.spectralFilmMDensityGain,
                 yDensityGain = updatedMetadata.spectralFilmYDensityGain
             ),
-            onRawAutoAdjustments = { adjustments ->
-                updatedMetadata = updatedMetadata.withRawAutoAdjustments(adjustments)
-            },
             onMetadata = { raw ->
                 updatedMetadata = updatedMetadata.merge(raw)
             }
@@ -3395,6 +3398,8 @@ object GalleryManager {
         captureResult: CaptureResult,
         captureMetadataResult: CaptureResult? = null,
         rotation: Int,
+        aspectRatio: AspectRatio?,
+        capturePreviewThumbnail: Bitmap?,
         thumbnail: Bitmap?,
         metadata: MediaMetadata,
         shouldAutoSave: Boolean,
@@ -3409,6 +3414,12 @@ object GalleryManager {
     ): Boolean {
         val tempDngFile = File(dngFile.parentFile, "temp_stacked.dng")
         val captureInfo = metadata.toCaptureInfo()
+        val rawDngDefaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
+            width = width,
+            height = height,
+            characteristics = characteristics,
+            captureResult = captureResult,
+        )
         val dngWritten = try {
             FileOutputStream(tempDngFile).use { outputStream ->
                 RawProcessor.saveRawBufferToDng(
@@ -3443,14 +3454,19 @@ object GalleryManager {
                     compression = compression,
                     inputRowStepSamples = inputRowStepSamples,
                     inputColStepSamples = inputColStepSamples,
-                    // Carry the Camera2 field of view into the DNG itself. The renderer consumes
-                    // DefaultCrop after OpcodeList3, matching the DNG SDK processing order.
-                    defaultCrop = RawProcessor.resolveCameraRawDefaultCrop(
+                    dngProfilePreparationOptions = rawDngProfilePreparationOptions(
+                        context = context,
+                        metadata = metadata,
                         width = width,
                         height = height,
-                        characteristics = characteristics,
-                        captureResult = captureResult,
+                        defaultCrop = rawDngDefaultCrop,
+                        aspectRatio = aspectRatio,
+                        rotation = rotation,
+                        capturePreviewThumbnail = capturePreviewThumbnail,
                     ),
+                    // Carry the Camera2 field of view into the DNG itself. The renderer consumes
+                    // DefaultCrop after OpcodeList3, matching the DNG SDK processing order.
+                    defaultCrop = rawDngDefaultCrop,
                 )
             }
         } catch (e: Throwable) {
@@ -3603,8 +3619,66 @@ object GalleryManager {
         }
     }
 
-    private fun rawHdrPgtmModeForMetadata(metadata: MediaMetadata): RawProfileToneMapMode {
-        return RawProfileToneMapMode.Photon
+    private fun rawDngPgtmModeForMetadata(metadata: MediaMetadata): RawProfileToneMapMode {
+        return metadata.rawToneMappingParameters.profileToneMapMode
+    }
+
+    private suspend fun rawDngProfilePreparationOptions(
+        context: Context,
+        metadata: MediaMetadata,
+        width: Int,
+        height: Int,
+        defaultCrop: Rect?,
+        aspectRatio: AspectRatio?,
+        rotation: Int,
+        capturePreviewThumbnail: Bitmap?,
+    ): RawDngProfilePreparationOptions {
+        val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
+            resolveRawAutoExposure(context, metadata) &&
+            kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f
+        val viewfinderExposureMatcher = if (viewfinderMatchEnabled) {
+            val preview = requireNotNull(capturePreviewThumbnail)
+            RawDngViewfinderExposureMatcher { input ->
+                RawViewfinderExposureMatcher.match(
+                    renderer = RawDemosaicProcessor.getInstance(),
+                    context = context,
+                    input = input,
+                    aspectRatio = aspectRatio,
+                    cropRegion = metadata.cropRegion,
+                    rotation = rotation,
+                    capturePreviewThumbnail = preview,
+                    rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+                    rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
+                    rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(
+                        context,
+                        metadata,
+                    ),
+                    applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(
+                        context,
+                        metadata,
+                    ),
+                    rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+                )
+            }
+        } else {
+            null
+        }
+        PLog.i(
+            TAG,
+            "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
+                "curve=DEFAULT pgtmDuringMatch=false sourceAutoExposure=${metadata.rawAutoExposure} " +
+                "manualExposureEv=${metadata.rawExposureCompensation ?: 0f}"
+        )
+        return RawDngProfilePreparationOptions(
+            profileToneMapMode = rawDngPgtmModeForMetadata(metadata),
+            statsBounds = resolveRawStatsBounds(
+                width = width,
+                height = height,
+                defaultCrop = defaultCrop,
+                cropRegion = metadata.cropRegion,
+            ),
+            viewfinderExposureMatcher = viewfinderExposureMatcher,
+        )
     }
 
     private fun profileNameForPgtmMode(mode: RawProfileToneMapMode): String {
@@ -4513,7 +4587,6 @@ object GalleryManager {
                             context,
                             dngFile.absolutePath, null, null, 0,
                             rawExposureCompensation = updatedMetadata.rawExposureCompensation ?: 0f,
-                            rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
                             rawHighlightsAdjustment = updatedMetadata.rawHighlightsAdjustment ?: 0f,
                             rawShadowsAdjustment = updatedMetadata.rawShadowsAdjustment ?: 0f,
                             rawBlackPointCorrection = updatedMetadata.rawBlackPointCorrection ?: 0f,
@@ -4541,9 +4614,6 @@ object GalleryManager {
                             ),
                             onMetadata = { raw ->
                                 updatedMetadata = updatedMetadata.merge(raw)
-                            },
-                            onRawAutoAdjustments = { adjustments ->
-                                updatedMetadata = updatedMetadata.withRawAutoAdjustments(adjustments)
                             }
                         )
 
@@ -4681,7 +4751,6 @@ object GalleryManager {
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
                     rawExposureCompensation = updatedMetadata?.rawExposureCompensation ?: 0f,
-                    rawAutoExposure = resolveRawAutoExposure(context, updatedMetadata),
                     rawHighlightsAdjustment = updatedMetadata?.rawHighlightsAdjustment ?: 0f,
                     rawShadowsAdjustment = updatedMetadata?.rawShadowsAdjustment ?: 0f,
                     rawBlackPointCorrection = updatedMetadata?.rawBlackPointCorrection ?: 0f,
@@ -4699,7 +4768,6 @@ object GalleryManager {
                     rawRenderingEngine = updatedMetadata?.rawRenderingEngine ?: MediaMetadata().rawRenderingEngine,
                     rawToneMappingParameters = updatedMetadata?.rawToneMappingParameters ?: MediaMetadata().rawToneMappingParameters,
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,
-                    useEmbeddedPreviewForAutoExposure = false,
                     rawBlackBorderCrop = rawMetadata.rawBlackBorderCrop,
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata?.spectralFilmPrint,
@@ -4710,9 +4778,6 @@ object GalleryManager {
                     ),
                     onMetadata = { raw ->
                         updatedMetadata = updatedMetadata?.merge(raw) ?: MediaMetadata().merge(raw)
-                    },
-                    onRawAutoAdjustments = { adjustments ->
-                        updatedMetadata = (updatedMetadata ?: MediaMetadata()).withRawAutoAdjustments(adjustments)
                     }
                 )
 

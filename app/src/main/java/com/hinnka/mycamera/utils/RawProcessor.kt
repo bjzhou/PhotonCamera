@@ -11,9 +11,14 @@ import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
+import com.hinnka.mycamera.raw.DngBaselineExposure
+import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawProfileGainTableMapBuilder
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import java.io.File
 import java.io.FileInputStream
@@ -141,7 +146,7 @@ object RawProcessor {
      * @param outputStream 输出流
      * @param rotation 旋转角度 (0, 90, 180, 270)
      */
-    fun saveToDng(
+    suspend fun saveToDng(
         image: SafeImage,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
@@ -155,6 +160,7 @@ object RawProcessor {
         cfaCorrectionMode: String? = null,
         effectiveFocalLengthMm: Float? = null,
         effectiveFocalLength35mm: Int? = null,
+        dngProfilePreparationOptions: RawDngProfilePreparationOptions? = null,
     ): Boolean {
         if (!isRawImage(image)) {
             throw IllegalArgumentException("Image is not RAW format: ${image.format}")
@@ -174,6 +180,7 @@ object RawProcessor {
             cfaCorrectionMode = cfaCorrectionMode,
             effectiveFocalLengthMm = effectiveFocalLengthMm,
             effectiveFocalLength35mm = effectiveFocalLength35mm,
+            dngProfilePreparationOptions = dngProfilePreparationOptions,
             defaultCrop = resolveCameraRawDefaultCrop(
                 width = image.width,
                 height = image.height,
@@ -229,7 +236,7 @@ object RawProcessor {
 
     private fun Rect.toRawCropRect(): RawCropRect = RawCropRect(left, top, right, bottom)
 
-    private fun saveRawImageToDngWithCustomWriter(
+    private suspend fun saveRawImageToDngWithCustomWriter(
         image: SafeImage,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
@@ -243,6 +250,7 @@ object RawProcessor {
         cfaCorrectionMode: String?,
         effectiveFocalLengthMm: Float?,
         effectiveFocalLength35mm: Int?,
+        dngProfilePreparationOptions: RawDngProfilePreparationOptions?,
         defaultCrop: Rect,
     ): Boolean {
         if (image.format != ImageFormat.RAW_SENSOR) {
@@ -280,6 +288,7 @@ object RawProcessor {
             cfaCorrectionMode = cfaCorrectionMode,
             effectiveFocalLengthMm = effectiveFocalLengthMm,
             effectiveFocalLength35mm = effectiveFocalLength35mm,
+            dngProfilePreparationOptions = dngProfilePreparationOptions,
             defaultCrop = defaultCrop,
         )
     }
@@ -314,7 +323,7 @@ object RawProcessor {
         return output
     }
 
-    fun saveRawBufferToDng(
+    suspend fun saveRawBufferToDng(
         rawBuffer: ByteBuffer,
         width: Int,
         height: Int,
@@ -344,14 +353,17 @@ object RawProcessor {
         compression: SuperResolutionDngWriter.Compression = SuperResolutionDngWriter.Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
         inputColStepSamples: Int? = null,
+        dngProfilePreparationOptions: RawDngProfilePreparationOptions? = null,
         defaultCrop: Rect,
     ): Boolean {
         val resolvedCfaPattern = resolveCfaPatternForMode(cfaPattern, cfaCorrectionMode)
+        val resolvedBlackLevel = resolveBlackLevelForMode(blackLevel, blackLevelMode, customBlackLevel)
         val resolvedWhiteLevel = resolveWhiteLevelForMode(whiteLevel.toFloat(), whiteLevelMode, customWhiteLevel).toInt()
         val hasCfaOverride = RawCfaCorrection.isOverrideMode(cfaCorrectionMode)
         val hasWhiteLevelOverride = RawWhiteLevelCorrection.isOverrideMode(whiteLevelMode)
         val requiresCustomWriter = imageLayout != SuperResolutionDngWriter.ImageLayout.CFA ||
-                compression != SuperResolutionDngWriter.Compression.UNCOMPRESSED
+                compression != SuperResolutionDngWriter.Compression.UNCOMPRESSED ||
+                dngProfilePreparationOptions != null
         if (hasCfaOverride && resolvedCfaPattern != cfaPattern) {
             PLog.d(TAG, "RAW DNG CFA override mode=$cfaCorrectionMode cfa=$cfaPattern->$resolvedCfaPattern")
         }
@@ -359,6 +371,101 @@ object RawProcessor {
             PLog.d(TAG, "RAW DNG white level override mode=$whiteLevelMode white=$whiteLevel->$resolvedWhiteLevel")
         }
 
+        val sourceBaselineExposureEv = DngBaselineExposure.sanitize(
+            baselineExposureEv ?: captureResult
+                .get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)
+                ?.takeIf { it > 0 }
+                ?.let { kotlin.math.log2(it / 100.0).toFloat() }
+                ?: 0f
+        )
+        val preparedProfile = dngProfilePreparationOptions?.let { options ->
+            val inputSamplesPerPixel = inputColStepSamples ?: imageLayout.samplesPerPixel
+            val inputRowStrideBytes = (inputRowStepSamples
+                ?: width * inputSamplesPerPixel) * Short.SIZE_BYTES
+            val statsBlackLevel = if (valueDomain == RawBufferValueDomain.NORMALIZED_SENSOR_RANGE) {
+                FloatArray(if (inputSamplesPerPixel >= 3) 3 else 4)
+            } else {
+                resolvedBlackLevel
+            }
+            val statsWhiteLevel = if (valueDomain == RawBufferValueDomain.NORMALIZED_SENSOR_RANGE) {
+                65535f
+            } else {
+                resolvedWhiteLevel.toFloat()
+            }
+            val statsMetadata = RawMetadata.create(
+                width = width,
+                height = height,
+                characteristics = characteristics,
+                captureResult = captureMetadataResult ?: captureResult,
+            ).copy(
+                width = width,
+                height = height,
+                cfaPattern = resolvedCfaPattern,
+                blackLevel = statsBlackLevel,
+                whiteLevel = statsWhiteLevel,
+                baselineExposure = sourceBaselineExposureEv,
+                defaultCrop = defaultCrop,
+            )
+            val exposureOffsetEv = options.viewfinderExposureMatcher?.match(
+                com.hinnka.mycamera.raw.RawDngViewfinderMatchInput(
+                    rawData = rawBuffer.duplicate().order(ByteOrder.nativeOrder()),
+                    width = width,
+                    height = height,
+                    rowStride = inputRowStrideBytes,
+                    samplesPerPixel = inputSamplesPerPixel,
+                    metadata = statsMetadata.copy(profileGainTableMap = null),
+                )
+            )?.takeIf { it.isFinite() }
+                ?.coerceIn(
+                    com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
+                    com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MAX_EV,
+                )
+            val finalBaselineExposureEv = DngBaselineExposure.sanitize(
+                sourceBaselineExposureEv + (exposureOffsetEv ?: 0f)
+            )
+            val finalProfile = RawProfileGainTableMapBuilder.prepareForDngWrite(
+                rawData = rawBuffer,
+                width = width,
+                height = height,
+                rowStride = inputRowStrideBytes,
+                metadata = statsMetadata.copy(baselineExposure = finalBaselineExposureEv),
+                samplesPerPixel = inputSamplesPerPixel,
+                options = options,
+            ) ?: return false
+            PLog.i(
+                TAG,
+                "RAW_VIEWFINDER_BASELINE stage=DNG_WRITE_READY " +
+                    "enabled=${options.viewfinderExposureMatcher != null} " +
+                    "matched=${exposureOffsetEv != null} " +
+                    "sourceBaselineEv=$sourceBaselineExposureEv " +
+                    "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
+                    "meteredExposureOffsetEv=${exposureOffsetEv ?: 0f} " +
+                    "meteredExposureGain=${DngBaselineExposure.exactGain(exposureOffsetEv ?: 0f)} " +
+                    "writtenBaselineEv=${finalProfile.baselineExposureEv} " +
+                    "writtenBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
+                    "pgtm=${finalProfile.profileGainTableMap != null} " +
+                    "mode=${options.profileToneMapMode} statsBounds=${options.statsBounds}"
+            )
+            finalProfile
+        }
+        val writtenBaselineExposureEv = preparedProfile?.baselineExposureEv ?: baselineExposureEv
+        val writtenProfileGainTableMap = if (dngProfilePreparationOptions != null) {
+            preparedProfile?.profileGainTableMap
+        } else {
+            profileGainTableMap
+        }
+        val preparedToneMapMode = dngProfilePreparationOptions?.profileToneMapMode
+            ?.takeIf { writtenProfileGainTableMap != null }
+        val writtenProfileName = if (dngProfilePreparationOptions != null) {
+            preparedToneMapMode?.let(::profileNameForToneMapMode)
+        } else {
+            profileName
+        }
+        val writtenProfileToneCurve = if (dngProfilePreparationOptions != null) {
+            preparedToneMapMode?.let(::profileToneCurveForToneMapMode)
+        } else {
+            profileToneCurve
+        }
         val orientation = when (rotation) {
             90 -> ExifInterface.ORIENTATION_ROTATE_90
             180 -> ExifInterface.ORIENTATION_ROTATE_180
@@ -386,10 +493,10 @@ object RawProcessor {
                 customBlackLevel = customBlackLevel,
                 whiteLevelMode = whiteLevelMode,
                 customWhiteLevel = customWhiteLevel,
-                baselineExposureEv = baselineExposureEv,
-                profileGainTableMap = profileGainTableMap,
-                profileName = profileName,
-                profileToneCurve = profileToneCurve,
+                baselineExposureEv = writtenBaselineExposureEv,
+                profileGainTableMap = writtenProfileGainTableMap,
+                profileName = writtenProfileName,
+                profileToneCurve = writtenProfileToneCurve,
                 imageLayout = imageLayout,
                 compression = compression,
                 inputRowStepSamples = inputRowStepSamples,
@@ -426,6 +533,16 @@ object RawProcessor {
         } finally {
             dngCreator.close()
         }
+    }
+
+    private fun profileNameForToneMapMode(mode: RawProfileToneMapMode): String = when (mode) {
+        RawProfileToneMapMode.Photon -> DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
+        else -> DngProfileToneCurve.GOOGLE_HDR_PROFILE_NAME
+    }
+
+    private fun profileToneCurveForToneMapMode(mode: RawProfileToneMapMode): FloatArray = when (mode) {
+        RawProfileToneMapMode.Photon -> DngProfileToneCurve.photonPgtmToneCurvePoints()
+        else -> DngProfileToneCurve.googleHdrToneCurvePoints()
     }
 
     internal fun denormalizeNormalizedRawBufferInPlace(
