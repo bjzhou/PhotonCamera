@@ -2507,6 +2507,7 @@ class RawDemosaicProcessor {
     private val FRAGMENT_SHADER_LINEAR_RCD = """
         #version 300 es
         precision highp float;
+        precision highp sampler3D;
         
         in vec2 vTexCoord;
         out vec4 fragColor;
