@@ -46,7 +46,7 @@ internal object DngHdrLtmSpatialModel {
                     1.20f,
                     log2((global.inputTailP99 + TAIL_EPS) / (global.inputTailP95 + TAIL_EPS))
                 )
-        val residualScale = 1f + 1.50f * saturatedScene + 1.00f * sparseSeparatedTail
+        val residualScale = 1f + 2.20f * saturatedScene + 1.00f * sparseSeparatedTail
         return Array(cells.size) { index ->
             val cell = cells[index]
             if (cell == null || cell.sampleWeight <= 0f) {

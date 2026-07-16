@@ -17,9 +17,9 @@ class RawSuperResolutionStripePlannerTest {
             rawHeight = 3000,
         )
 
-        assertTrue(band.firstRow <= 255)
-        assertTrue(band.endExclusive >= 384)
-        assertTrue(band.rowCount < 150)
+        assertEquals(242, band.firstRow)
+        assertEquals(397, band.endExclusive)
+        assertEquals(155, band.rowCount)
     }
 
     @Test

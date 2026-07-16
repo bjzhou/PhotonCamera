@@ -35,7 +35,7 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
-    fun fromJson_resolvesRawAndMfsrConflict() {
+    fun fromJson_keepsRawAndMfsrCombination() {
         val preset = CameraPreset.fromJson(
             """
             {
@@ -53,7 +53,7 @@ class CameraPresetJsonCodecTest {
 
         requireNotNull(preset)
         assertTrue(preset.useRaw)
-        assertFalse(preset.useMFSR)
+        assertTrue(preset.useMFSR)
     }
 
     @Test

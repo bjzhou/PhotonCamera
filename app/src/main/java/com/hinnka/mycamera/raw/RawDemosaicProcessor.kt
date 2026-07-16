@@ -6962,7 +6962,7 @@ class RawDemosaicProcessor {
             profileName = basePlan?.profileName?.let { "$it + $modeName" } ?: modeName,
             workingColorSpace = basePlan?.workingColorSpace ?: workingColorSpace,
             baselineExposureOffset = basePlan?.baselineExposureOffset ?: 0f,
-            defaultBlackRender = DcpDefaultBlackRender.Auto,
+            defaultBlackRender = basePlan?.defaultBlackRender ?: DcpDefaultBlackRender.None,
             supportsOverrange = basePlan?.supportsOverrange ?: false,
             colorCorrectionMatrix = basePlan?.colorCorrectionMatrix ?: metadata.colorCorrectionMatrix,
             cameraWhite = basePlan?.cameraWhite ?: metadata.cameraWhite,

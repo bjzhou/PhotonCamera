@@ -16,7 +16,10 @@ class DngHdrProfileGainTableGeneratorTest {
     @Test
     fun bimodalPhotonCaptureKeepsAUsableBrightSyntheticExposure() {
         val fixture = loadFixture(BIMODAL_CAPTURE_RESOURCE)
-        val map = generateMap(fixture)
+        val map = generateMap(
+            fixture = fixture,
+            fusionParameters = DngHdrProfileGainTableGenerator.PHOTON_FUSION_PARAMETERS,
+        )
         val blackGains = actualAnchorGains(fixture, map, ToneAnchor.BLACK)
         val medianGains = actualAnchorGains(fixture, map, ToneAnchor.MEDIAN)
         val medianOutputs = FloatArray(fixture.cellCount) { cell ->
@@ -112,6 +115,7 @@ class DngHdrProfileGainTableGeneratorTest {
                 height = fixture.height,
                 baselineExposureEv = fixture.baselineExposureEv,
                 packedCellStats = fixture.packedStats,
+                fusionParameters = DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS,
             ) ?: error("Expected Google PGTM for ${case.name}")
             listOf(0.25f, 0.50f, 0.75f).mapIndexed { index, tableInput ->
                 val actual = percentile(
@@ -167,8 +171,9 @@ class DngHdrProfileGainTableGeneratorTest {
                         else -> MAX_SPATIAL_QUANTILE_GAIN_ERROR_EV
                     }
                     if (errorEv > tolerance) {
-                        failures += "${fixture.sourceName} ${anchor.label} p${(percentile * 100).toInt()} " +
-                            "expected=$expectedGain actual=$actualGain errorEv=$errorEv toleranceEv=$tolerance"
+                        failures += "${fixture.sourceName} ${anchor.label} " +
+                            "p${(percentile * 100).toInt()} expected=$expectedGain " +
+                            "actual=$actualGain errorEv=$errorEv toleranceEv=$tolerance"
                     }
                 }
             }
@@ -192,20 +197,25 @@ class DngHdrProfileGainTableGeneratorTest {
                     val actual = actualAnchorGains(fixture, map, anchor)
                     val rmseEv = logGainRmseEv(actual, expected)
                     if (rmseEv > MAX_PER_CELL_GAIN_RMSE_EV) {
-                        failures += "${fixture.sourceName} ${anchor.label} perCellRmseEv=$rmseEv " +
-                            "toleranceEv=$MAX_PER_CELL_GAIN_RMSE_EV"
+                        failures += "${fixture.sourceName} ${anchor.label} " +
+                            "perCellRmseEv=$rmseEv toleranceEv=$MAX_PER_CELL_GAIN_RMSE_EV"
                     }
                 }
         }
         assertTrue(failures.joinToString(separator = "\n"), failures.isEmpty())
     }
 
-    private fun generateMap(fixture: PgtmFixture): DngProfileGainTableMap {
+    private fun generateMap(
+        fixture: PgtmFixture,
+        fusionParameters: HdrExposureFusionParameters =
+            DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS,
+    ): DngProfileGainTableMap {
         return DngHdrProfileGainTableGenerator.forCellStats(
             width = fixture.width,
             height = fixture.height,
             baselineExposureEv = fixture.baselineExposureEv,
-            packedCellStats = fixture.packedStats
+            packedCellStats = fixture.packedStats,
+            fusionParameters = fusionParameters,
         ) ?: error("Expected PGTM for ${fixture.sourceName}")
     }
 
@@ -344,7 +354,10 @@ class DngHdrProfileGainTableGeneratorTest {
     private fun logGainRmseEv(actual: FloatArray, expected: FloatArray): Float {
         require(actual.size == expected.size)
         val meanSquare = actual.indices.sumOf { index ->
-            val error = log2(actual[index].coerceAtLeast(1e-6f) / expected[index].coerceAtLeast(1e-6f))
+            val error = log2(
+                actual[index].coerceAtLeast(1e-6f) /
+                    expected[index].coerceAtLeast(1e-6f)
+            )
             (error * error).toDouble()
         } / actual.size.coerceAtLeast(1).toDouble()
         return sqrt(meanSquare).toFloat()
@@ -468,11 +481,11 @@ class DngHdrProfileGainTableGeneratorTest {
         private const val MAX_MEDIAN_GAIN_ERROR_EV = 0.22f
         private const val MAX_SPATIAL_QUANTILE_GAIN_ERROR_EV = 0.38f
         private const val MAX_PER_CELL_GAIN_RMSE_EV = 0.48f
-
         private val FIXTURE_MAGIC = "PGTFIX2\u0000".toByteArray(Charsets.US_ASCII)
         private const val BIMODAL_CAPTURE_RESOURCE =
             "/pgtm/captures/PhotonCamera_20260715_173013.pgtfixture"
-        private val DISTRIBUTION_PERCENTILES = floatArrayOf(0.10f, 0.50f, 0.90f)
+        private val DISTRIBUTION_PERCENTILES =
+            floatArrayOf(0.10f, 0.25f, 0.50f, 0.75f, 0.90f, 0.98f)
         private val OFFICIAL_INPUT_WEIGHTS = floatArrayOf(0.1495f, 0.2935f, 0.0570f, 0.1250f, 0.3750f)
         private val FIXTURE_RESOURCES = listOf(
             "/pgtm/skyyking/Skyyking_20260711_184627.RAW-02.ORIGINAL.pgtfixture",

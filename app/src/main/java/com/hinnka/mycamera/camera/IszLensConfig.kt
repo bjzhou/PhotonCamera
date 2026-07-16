@@ -2,8 +2,9 @@ package com.hinnka.mycamera.camera
 
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
-import org.json.JSONArray
-import org.json.JSONObject
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -18,19 +19,19 @@ data class IszLensConfig(
     val virtualCameraId: String
         get() = createVirtualCameraId(baseCameraId, iszZoomRatio, vendorCaptureProfileId)
 
-    fun toJsonObject(): JSONObject {
-        return JSONObject().apply {
-            put(KEY_BASE_CAMERA_ID, baseCameraId)
-            put(KEY_ISZ_ZOOM_RATIO, iszZoomRatio)
-            put(KEY_IS_MACRO, isMacro)
+    fun toJsonObject(): JsonObject {
+        return JsonObject().apply {
+            addProperty(KEY_BASE_CAMERA_ID, baseCameraId)
+            addProperty(KEY_ISZ_ZOOM_RATIO, iszZoomRatio)
+            addProperty(KEY_IS_MACRO, isMacro)
             sanitizeVendorCaptureProfileId(vendorCaptureProfileId)?.let {
-                put(KEY_VENDOR_CAPTURE_PROFILE_ID, it)
+                addProperty(KEY_VENDOR_CAPTURE_PROFILE_ID, it)
             }
             val sanitizedCrop = sanitizeRawBlackBorderCrop(rawBlackBorderCrop)
-            put(KEY_RAW_BLACK_BORDER_CROP_LEFT_PX, sanitizedCrop.leftPx)
-            put(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, sanitizedCrop.topPx)
-            put(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, sanitizedCrop.rightPx)
-            put(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, sanitizedCrop.bottomPx)
+            addProperty(KEY_RAW_BLACK_BORDER_CROP_LEFT_PX, sanitizedCrop.leftPx)
+            addProperty(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, sanitizedCrop.topPx)
+            addProperty(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, sanitizedCrop.rightPx)
+            addProperty(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, sanitizedCrop.bottomPx)
         }
     }
 
@@ -59,23 +60,30 @@ data class IszLensConfig(
 
         fun deserializeList(value: String?): List<IszLensConfig> {
             if (value.isNullOrBlank()) return emptyList()
-            val array = runCatching { JSONArray(value) }.getOrNull() ?: return emptyList()
+            val array = runCatching {
+                JsonParser.parseString(value)
+                    .takeIf { it.isJsonArray }
+                    ?.asJsonArray
+            }.getOrNull() ?: return emptyList()
             return buildList {
-                for (index in 0 until array.length()) {
-                    val obj = array.optJSONObject(index) ?: continue
-                    val baseCameraId = obj.optString(KEY_BASE_CAMERA_ID).trim()
-                    val iszZoomRatio = obj.optDouble(KEY_ISZ_ZOOM_RATIO, 0.0).toFloat()
-                    val isMacro = obj.optBoolean(KEY_IS_MACRO, false)
+                for (index in 0 until array.size()) {
+                    val obj = array[index].takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                    val baseCameraId = obj.stringOrDefault(KEY_BASE_CAMERA_ID).trim()
+                    val iszZoomRatio = obj.doubleOrDefault(KEY_ISZ_ZOOM_RATIO, 0.0).toFloat()
+                    val isMacro = obj.booleanOrDefault(KEY_IS_MACRO, false)
                     val vendorCaptureProfileId = sanitizeVendorCaptureProfileId(
-                        obj.optString(KEY_VENDOR_CAPTURE_PROFILE_ID, "")
+                        obj.stringOrDefault(KEY_VENDOR_CAPTURE_PROFILE_ID)
                     )
-                    val legacyLeftCropPx = obj.optInt(KEY_RAW_BLACK_BORDER_CROP_PX, 0)
+                    val legacyLeftCropPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_PX, 0)
                     val rawBlackBorderCrop = sanitizeRawBlackBorderCrop(
                         RawBlackBorderCrop(
-                            leftPx = obj.optInt(KEY_RAW_BLACK_BORDER_CROP_LEFT_PX, legacyLeftCropPx),
-                            topPx = obj.optInt(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, 0),
-                            rightPx = obj.optInt(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, 0),
-                            bottomPx = obj.optInt(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, 0)
+                            leftPx = obj.intOrDefault(
+                                KEY_RAW_BLACK_BORDER_CROP_LEFT_PX,
+                                legacyLeftCropPx
+                            ),
+                            topPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_TOP_PX, 0),
+                            rightPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_RIGHT_PX, 0),
+                            bottomPx = obj.intOrDefault(KEY_RAW_BLACK_BORDER_CROP_BOTTOM_PX, 0)
                         )
                     )
                     if (baseCameraId.isNotEmpty() && iszZoomRatio >= 1f) {
@@ -94,11 +102,11 @@ data class IszLensConfig(
         }
 
         fun serializeList(configs: List<IszLensConfig>): String {
-            return JSONArray().apply {
+            return JsonArray().apply {
                 configs
                     .filter { it.baseCameraId.isNotBlank() && it.iszZoomRatio >= 1f }
                     .distinctBy { it.virtualCameraId }
-                    .forEach { put(it.toJsonObject()) }
+                    .forEach { add(it.toJsonObject()) }
             }.toString()
         }
 
@@ -141,6 +149,30 @@ data class IszLensConfig(
                 rightPx = sanitizeRawBlackBorderCropPx(crop.rightPx),
                 bottomPx = sanitizeRawBlackBorderCropPx(crop.bottomPx)
             )
+        }
+
+        private fun JsonObject.stringOrDefault(key: String, defaultValue: String = ""): String {
+            return runCatching { get(key)?.takeUnless { it.isJsonNull }?.asString }
+                .getOrNull()
+                ?: defaultValue
+        }
+
+        private fun JsonObject.doubleOrDefault(key: String, defaultValue: Double): Double {
+            return runCatching { get(key)?.takeUnless { it.isJsonNull }?.asDouble }
+                .getOrNull()
+                ?: defaultValue
+        }
+
+        private fun JsonObject.booleanOrDefault(key: String, defaultValue: Boolean): Boolean {
+            return runCatching { get(key)?.takeUnless { it.isJsonNull }?.asBoolean }
+                .getOrNull()
+                ?: defaultValue
+        }
+
+        private fun JsonObject.intOrDefault(key: String, defaultValue: Int): Int {
+            return runCatching { get(key)?.takeUnless { it.isJsonNull }?.asInt }
+                .getOrNull()
+                ?: defaultValue
         }
     }
 }
