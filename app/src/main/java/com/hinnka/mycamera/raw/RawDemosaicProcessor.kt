@@ -842,7 +842,9 @@ class RawDemosaicProcessor {
                 ),
                 applyDngBaselineExposure = false,
                 applyProfileGainTableMap = false,
+                profileBaselineExposureOffsetEv = 0f,
                 clampProfileRgb = false,
+                supportProfileOverrange = false,
                 label = "LinearRcdExport"
             )
 
@@ -1345,11 +1347,15 @@ class RawDemosaicProcessor {
             )
         }
         val hasProfileGainTableMap = actualMetadata.profileGainTableMap?.isValid == true
-        val applyLinearDngBaselineExposure = shouldApplyLinearDngBaselineExposure(actualMetadata)
-        val applyProfileDngBaselineExposure = !applyLinearDngBaselineExposure
+        val hasDngBaselineExposure = shouldApplyLinearDngBaselineExposure(actualMetadata)
+        val applyLinearDngBaselineExposure = !useAdobeProfilePipeline && hasDngBaselineExposure
+        val applyProfileDngBaselineExposure = useAdobeProfilePipeline
         val applyDcpBaselineExposureOffset =
             shouldApplyDcpBaselineExposureOffset(activeDcpRenderPlan)
         val useProfileExposureRamp = useAdobeProfilePipeline
+        val supportProfileOverrange =
+            useAdobeProfilePipeline && activeDcpRenderPlan?.supportsOverrange == true
+        val clampProfileRgb = useAdobeProfilePipeline
         val engineWorkingColorSpace = colorEngine.workingColorSpace
         val profileToEngineTransform = computeWorkingToOutputTransform(
             profileWorkingColorSpace,
@@ -1764,8 +1770,9 @@ class RawDemosaicProcessor {
                     cameraWhite = linearCameraWhite,
                     dcpRenderPlan = activeDcpRenderPlan,
                     applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
+                    applyProfileDngBaselineExposure = applyProfileDngBaselineExposure,
                     applyProfileGainTableMap = false,
-                    clampProfileRgb = useAdobeProfilePipeline,
+                    clampProfileRgb = clampProfileRgb,
                     outputBounds = bounds,
                     outputRotation = actualRotation,
                     spectralFilmLut = spektrafilmLut,
@@ -1774,7 +1781,8 @@ class RawDemosaicProcessor {
                     profileToEngineTransform = profileToEngineTransform,
                     rawToneMappingParameters = rawToneMappingParameters,
                     useProfileExposureRamp = useProfileExposureRamp,
-                    applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset
+                    applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
+                    supportProfileOverrange = supportProfileOverrange
                 )
                 onExposurePreviewSolved?.invoke(solvedExposureEv)
                 return@withContext null
@@ -1813,16 +1821,18 @@ class RawDemosaicProcessor {
                     "profileExposureEv=${profileExposureUniforms.exposureEv} " +
                     "defaultBlackRender=${if (useProfileExposureRamp) dcpDefaultBlackRenderOrAuto(activeDcpRenderPlan) else DcpDefaultBlackRender.None} " +
                     "profileRampBlack=${profileExposureUniforms.rampBlack} " +
+                    "profileSupportOverrange=${profileExposureUniforms.supportOverrange} " +
                     "dngShadowScale=${actualMetadata.shadowScale} " +
                     "dngBaselineExposure=${actualMetadata.baselineExposure} " +
                     "linearCameraWhite=${linearCameraWhite.contentToString()} " +
                     "dngBaselineExposureInLinear=$applyLinearDngBaselineExposure " +
+                    "dngBaselineExposureInProfileRamp=$applyProfileDngBaselineExposure " +
                     "profileGainTableMapActive=$hasProfileGainTableMap " +
                     "dcpBaselineExposureOffsetApplied=$applyDcpBaselineExposureOffset"
             )
 
-            // 运行 linearRcdProgram 将相机矩阵应用在已解马赛克的浮点 RCD 图像上。
-            // DNG BaselineExposure 按规范在线性 ProPhoto/RIMM 阶段应用，PGTM 只作为可选局部 tone map。
+            // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. Linear-domain
+            // engines apply the same EV as an exact 2^EV gain in this ProPhoto/RIMM pass.
             checkGlError("Before LinearRcdPass")
 
             renderLinearRcdPass(
@@ -1837,7 +1847,13 @@ class RawDemosaicProcessor {
                 hueSatMap = activeDcpRenderPlan?.hueSatMap,
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
                 applyProfileGainTableMap = hasProfileGainTableMap,
-                clampProfileRgb = useAdobeProfilePipeline,
+                profileBaselineExposureOffsetEv = if (applyDcpBaselineExposureOffset) {
+                    dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan)
+                } else {
+                    0f
+                },
+                clampProfileRgb = clampProfileRgb,
+                supportProfileOverrange = supportProfileOverrange,
                 label = "LinearRcdPass"
             )
 
@@ -2525,6 +2541,8 @@ class RawDemosaicProcessor {
         uniform vec3 uCameraWhite;
         uniform float uExposureGain;
         uniform int uClampProfileRgb;
+        uniform int uClampProfileGainOutput;
+        uniform int uProfileSupportOverrange;
         uniform int uProfileGainEnabled;
         uniform ivec3 uProfileGainTableSize;
         uniform vec4 uProfileGainGrid;
@@ -2615,13 +2633,14 @@ class RawDemosaicProcessor {
                     rgb,
                     uLinearDcpHueSatMap,
                     uLinearDcpHueSatDivisions,
-                    uLinearDcpHueSatEncoding
+                    uLinearDcpHueSatEncoding,
+                    uProfileSupportOverrange != 0
                 );
             }
             vec3 profileInputRgb = rgb * uProfileGainBaselineGain;
             float tableInput = profileGainTableInput(profileInputRgb);
             rgb *= profileGain(profileInputRgb, tableInput);
-            if (uClampProfileRgb != 0) {
+            if (uClampProfileGainOutput != 0) {
                 rgb = clamp(rgb, vec3(0.0), vec3(1.0));
             }
             rgb *= uExposureGain;
@@ -4034,7 +4053,9 @@ class RawDemosaicProcessor {
             ),
             applyDngBaselineExposure = false,
             applyProfileGainTableMap = false,
+            profileBaselineExposureOffsetEv = 0f,
             clampProfileRgb = false,
+            supportProfileOverrange = false,
             label = label
         )
         if (rawTextureId != 0) {
@@ -6942,6 +6963,7 @@ class RawDemosaicProcessor {
             workingColorSpace = basePlan?.workingColorSpace ?: workingColorSpace,
             baselineExposureOffset = basePlan?.baselineExposureOffset ?: 0f,
             defaultBlackRender = DcpDefaultBlackRender.Auto,
+            supportsOverrange = basePlan?.supportsOverrange ?: false,
             colorCorrectionMatrix = basePlan?.colorCorrectionMatrix ?: metadata.colorCorrectionMatrix,
             cameraWhite = basePlan?.cameraWhite ?: metadata.cameraWhite,
             hueSatMap = basePlan?.hueSatMap,
@@ -6961,6 +6983,7 @@ class RawDemosaicProcessor {
             workingColorSpace = basePlan?.workingColorSpace ?: workingColorSpace,
             baselineExposureOffset = basePlan?.baselineExposureOffset ?: 0f,
             defaultBlackRender = basePlan?.defaultBlackRender ?: DcpDefaultBlackRender.Auto,
+            supportsOverrange = basePlan?.supportsOverrange ?: false,
             colorCorrectionMatrix = basePlan?.colorCorrectionMatrix ?: metadata.colorCorrectionMatrix,
             cameraWhite = basePlan?.cameraWhite ?: metadata.cameraWhite,
             hueSatMap = basePlan?.hueSatMap,
@@ -7054,6 +7077,7 @@ class RawDemosaicProcessor {
                 "look=$lookEnabled " +
                 "profileToneCurve=$profileToneCurveEnabled " +
                 "profileExposureRamp=$useProfileExposureRamp " +
+                "profileSupportsOverrange=${dcpRenderPlan?.supportsOverrange == true} " +
                 "defaultBlackRender=$defaultBlackRender " +
                 "baselineExposureOffset=$dcpBaselineExposureOffset " +
                 "cameraWhite=${cameraWhite.contentToString()} " +
@@ -7075,7 +7099,7 @@ class RawDemosaicProcessor {
     }
 
     private fun sanitizeDngShadowScale(shadowScale: Float): Float {
-        return if (shadowScale.isFinite() && shadowScale > 0f && shadowScale <= 1f) {
+        return if (shadowScale.isFinite() && shadowScale > 0f) {
             shadowScale
         } else {
             1f
@@ -7121,6 +7145,7 @@ class RawDemosaicProcessor {
                 DcpDefaultBlackRender.None
             },
             shadowScale = metadata.shadowScale,
+            supportOverrange = useRamp && dcpRenderPlan?.supportsOverrange == true,
             useRamp = useRamp
         )
     }
@@ -7154,7 +7179,9 @@ class RawDemosaicProcessor {
         hueSatMap: DcpHueSatMap? = null,
         applyDngBaselineExposure: Boolean,
         applyProfileGainTableMap: Boolean,
+        profileBaselineExposureOffsetEv: Float,
         clampProfileRgb: Boolean,
+        supportProfileOverrange: Boolean,
         label: String
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
@@ -7191,17 +7218,26 @@ class RawDemosaicProcessor {
         )
         bindLinearDcpHueSatMap(
             program = linearRcdProgram,
-            hueSatMap = hueSatMap?.takeIf { clampProfileRgb },
+            hueSatMap = hueSatMap,
         )
         bindProfileGainTableMapForLinearRcd(
             linearRcdProgram,
             metadata,
-            hasActiveProfileGainTableMap
+            hasActiveProfileGainTableMap,
+            profileBaselineExposureOffsetEv
         )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(linearRcdProgram, "uExposureGain"), exposureGain)
         GLES30.glUniform1i(
             GLES30.glGetUniformLocation(linearRcdProgram, "uClampProfileRgb"),
             if (clampProfileRgb) 1 else 0
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uClampProfileGainOutput"),
+            if (clampProfileRgb && !supportProfileOverrange) 1 else 0
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uProfileSupportOverrange"),
+            if (supportProfileOverrange) 1 else 0
         )
 
         val identityMatrix = FloatArray(16)
@@ -7255,7 +7291,8 @@ class RawDemosaicProcessor {
     private fun bindProfileGainTableMapForLinearRcd(
         program: Int,
         metadata: RawMetadata,
-        applyProfileGainTableMap: Boolean
+        applyProfileGainTableMap: Boolean,
+        profileBaselineExposureOffsetEv: Float
     ) {
         val profileGainTableMap = metadata.profileGainTableMap?.takeIf { it.isValid }
         if (profileGainTableMap == null || !applyProfileGainTableMap) {
@@ -7307,10 +7344,14 @@ class RawDemosaicProcessor {
             GLES30.glGetUniformLocation(program, "uProfileGainGamma"),
             profileGainTableMap.gamma.coerceIn(0.125f, 8.0f)
         )
-        // Match the DNG SDK PGTM path: scale table input by DNG baseline exposure only.
+        // dng_render_task uses TotalBaselineExposure, including the selected profile's
+        // BaselineExposureOffset, for PGTM input weighting.
+        val totalProfileBaselineExposureEv =
+            DngBaselineExposure.sanitize(metadata.baselineExposure) +
+                (profileBaselineExposureOffsetEv.takeIf { it.isFinite() } ?: 0f)
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(program, "uProfileGainBaselineGain"),
-            exactDngBaselineExposureGain(metadata)
+            2.0f.pow(totalProfileBaselineExposureEv)
         )
         GLES30.glUniform1i(
             GLES30.glGetUniformLocation(program, "uProfileGainDebugOverlay"),
@@ -7399,6 +7440,7 @@ class RawDemosaicProcessor {
         cameraWhite: FloatArray,
         dcpRenderPlan: DcpRenderPlan?,
         applyLinearDngBaselineExposure: Boolean,
+        applyProfileDngBaselineExposure: Boolean,
         applyProfileGainTableMap: Boolean,
         clampProfileRgb: Boolean,
         outputBounds: Rect,
@@ -7409,7 +7451,8 @@ class RawDemosaicProcessor {
         profileToEngineTransform: FloatArray,
         rawToneMappingParameters: RawToneMappingParameters,
         useProfileExposureRamp: Boolean,
-        applyProfileDcpBaselineExposureOffset: Boolean
+        applyProfileDcpBaselineExposureOffset: Boolean,
+        supportProfileOverrange: Boolean
     ): Float? {
         val previewSize = resolveLongEdgePreviewSize(
             sourceWidth = metadata.width,
@@ -7420,6 +7463,36 @@ class RawDemosaicProcessor {
         val previewHeight = previewSize.height
         return try {
             setupLinearExposurePreviewFramebuffer(previewWidth, previewHeight)
+            val useAdobeSdkExposure =
+                colorEngine == RawRenderingEngine.AdobeCurve && useProfileExposureRamp
+            val profileBaselineExposureOffsetEv = if (applyProfileDcpBaselineExposureOffset) {
+                dcpBaselineExposureOffsetOrZero(dcpRenderPlan)
+            } else {
+                0f
+            }
+            if (useAdobeSdkExposure) {
+                renderLinearRcdPass(
+                    metadata = metadata,
+                    sourceTextureId = sourceTextureId,
+                    targetFramebufferId = linearExposurePreviewFramebufferId,
+                    viewportWidth = previewWidth,
+                    viewportHeight = previewHeight,
+                    rawExposureCompensation = 0f,
+                    colorCorrectionMatrix = colorCorrectionMatrix,
+                    cameraWhite = cameraWhite,
+                    hueSatMap = dcpRenderPlan?.hueSatMap,
+                    applyDngBaselineExposure = false,
+                    applyProfileGainTableMap = applyProfileGainTableMap,
+                    profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
+                    clampProfileRgb = clampProfileRgb,
+                    supportProfileOverrange = supportProfileOverrange,
+                    label = "AdobeExposurePreviewLinearPass"
+                )
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                GLES31.glMemoryBarrier(
+                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+                )
+            }
             setupCombinedFramebuffer(previewWidth, previewHeight)
             val previewBounds = scaleExposurePreviewBounds(
                 bounds = outputBounds,
@@ -7445,7 +7518,9 @@ class RawDemosaicProcessor {
                     "source=WRITER_INPUT_BUFFER " +
                     "layout=${if (samplesPerPixel >= 3) "LINEAR_RAW_RGB" else "CFA_RAW"} " +
                     "samplesPerPixel=$samplesPerPixel size=${metadata.width}x${metadata.height} " +
-                    "sourceBaselineEv=$sourceBaselineEv candidateDomain=LINEAR_BASELINE"
+                    "sourceBaselineEv=$sourceBaselineEv " +
+                    "profileBaselineExposureOffsetEv=$profileBaselineExposureOffsetEv " +
+                    "candidateDomain=${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"}"
             )
             try {
                 request.solve { exposureEv ->
@@ -7455,38 +7530,43 @@ class RawDemosaicProcessor {
                     )
                     PLog.d(
                         TAG,
-                        "RAW viewfinder linear candidate: sourceBaselineEv=$sourceBaselineEv " +
+                        "RAW viewfinder candidate: domain=" +
+                            "${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"} " +
+                            "sourceBaselineEv=$sourceBaselineEv " +
                             "offsetEv=$clampedExposureEv " +
-                            "effectiveBaselineEv=${sourceBaselineEv + clampedExposureEv}"
+                            "effectiveBaselineEv=${sourceBaselineEv + clampedExposureEv} " +
+                            "totalProfileExposureEv=" +
+                            "${sourceBaselineEv + profileBaselineExposureOffsetEv + clampedExposureEv}"
                     )
-                    // Render the exact baseline that would be written to the DNG. BaselineExposure
-                    // belongs to the linear RCD stage; applying the candidate in the profile ramp
-                    // would produce a different image than rendering the written DNG.
-                    renderLinearRcdPass(
-                        metadata = metadata,
-                        sourceTextureId = sourceTextureId,
-                        targetFramebufferId = linearExposurePreviewFramebufferId,
-                        viewportWidth = previewWidth,
-                        viewportHeight = previewHeight,
-                        rawExposureCompensation = clampedExposureEv,
-                        colorCorrectionMatrix = colorCorrectionMatrix,
-                        cameraWhite = cameraWhite,
-                        hueSatMap = dcpRenderPlan?.hueSatMap,
-                        applyDngBaselineExposure = applyLinearDngBaselineExposure,
-                        applyProfileGainTableMap = applyProfileGainTableMap,
-                        clampProfileRgb = clampProfileRgb,
-                        label = "LinearExposurePreviewPass"
-                    )
-                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                    GLES31.glMemoryBarrier(
-                        GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-                    )
+                    if (!useAdobeSdkExposure) {
+                        renderLinearRcdPass(
+                            metadata = metadata,
+                            sourceTextureId = sourceTextureId,
+                            targetFramebufferId = linearExposurePreviewFramebufferId,
+                            viewportWidth = previewWidth,
+                            viewportHeight = previewHeight,
+                            rawExposureCompensation = clampedExposureEv,
+                            colorCorrectionMatrix = colorCorrectionMatrix,
+                            cameraWhite = cameraWhite,
+                            hueSatMap = dcpRenderPlan?.hueSatMap,
+                            applyDngBaselineExposure = applyLinearDngBaselineExposure,
+                            applyProfileGainTableMap = applyProfileGainTableMap,
+                            profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
+                            clampProfileRgb = clampProfileRgb,
+                            supportProfileOverrange = supportProfileOverrange,
+                            label = "LinearExposurePreviewPass"
+                        )
+                        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                        GLES31.glMemoryBarrier(
+                            GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+                        )
+                    }
                     renderToneMappedExposurePreviewFrame(
                         metadata = metadata,
                         linearTextureId = linearExposurePreviewTextureId,
                         width = previewWidth,
                         height = previewHeight,
-                        exposureEv = 0f,
+                        exposureEv = if (useAdobeSdkExposure) clampedExposureEv else 0f,
                         dcpRenderPlan = dcpRenderPlan,
                         spectralFilmLut = spectralFilmLut,
                         colorEngine = colorEngine,
@@ -7497,7 +7577,8 @@ class RawDemosaicProcessor {
                         rawWhitesAdjustment = rawWhitePointCorrection,
                         useProfileExposureRamp = useProfileExposureRamp,
                         applyProfileDcpBaselineExposureOffset = applyProfileDcpBaselineExposureOffset,
-                        applyProfileDngBaselineExposure = false,
+                        applyProfileDngBaselineExposure =
+                            useAdobeSdkExposure && applyProfileDngBaselineExposure,
                         readbackBounds = previewBounds,
                         readbackWidth = request.width.coerceAtLeast(1),
                         readbackHeight = request.height.coerceAtLeast(1),

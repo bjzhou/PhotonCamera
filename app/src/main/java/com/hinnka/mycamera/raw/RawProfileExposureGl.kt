@@ -18,6 +18,7 @@ object RawProfileExposureGl {
         val rampBlack: Float,
         val rampRadius: Float,
         val rampQScale: Float,
+        val supportOverrange: Boolean,
         val toneEnabled: Boolean,
         val toneSlope: Float,
         val toneA: Float,
@@ -33,6 +34,7 @@ object RawProfileExposureGl {
                 rampBlack = 0f,
                 rampRadius = 0f,
                 rampQScale = 0f,
+                supportOverrange = false,
                 toneEnabled = false,
                 toneSlope = 1f,
                 toneA = 0f,
@@ -49,6 +51,7 @@ object RawProfileExposureGl {
         defaultBlackRender: DcpDefaultBlackRender = DcpDefaultBlackRender.None,
         blackRenderShadows: Float = DEFAULT_BLACK_RENDER_SHADOWS,
         shadowScale: Float = 1f,
+        supportOverrange: Boolean = false,
         useRamp: Boolean
     ): Uniforms {
         val exposureEv = profileExposureCompensation + dngBaselineExposure + dcpBaselineExposureOffset
@@ -62,6 +65,7 @@ object RawProfileExposureGl {
                 rampBlack = 0f,
                 rampRadius = 0f,
                 rampQScale = 0f,
+                supportOverrange = false,
                 toneEnabled = false,
                 toneSlope = 1f,
                 toneA = 0f,
@@ -72,7 +76,7 @@ object RawProfileExposureGl {
 
         val positiveExposureEv = max(0f, exposureEv)
         val white = 1f / 2.0f.pow(positiveExposureEv)
-        val safeShadowScale = if (shadowScale.isFinite() && shadowScale > 0f && shadowScale <= 1f) {
+        val safeShadowScale = if (shadowScale.isFinite() && shadowScale > 0f) {
             shadowScale
         } else {
             DEFAULT_BLACK_RENDER_SHADOW_SCALE
@@ -98,6 +102,7 @@ object RawProfileExposureGl {
                 rampBlack = black,
                 rampRadius = radius,
                 rampQScale = qScale,
+                supportOverrange = supportOverrange,
                 toneEnabled = false,
                 toneSlope = 1f,
                 toneA = 0f,
@@ -118,6 +123,7 @@ object RawProfileExposureGl {
             rampBlack = black,
             rampRadius = radius,
             rampQScale = qScale,
+            supportOverrange = supportOverrange,
             toneEnabled = true,
             toneSlope = toneSlope,
             toneA = toneA,
@@ -150,6 +156,10 @@ object RawProfileExposureGl {
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(program, "uProfileExposureRampQScale"),
             exposure.rampQScale
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uProfileExposureSupportOverrange"),
+            if (exposure.supportOverrange) 1 else 0
         )
         GLES30.glUniform1i(
             GLES30.glGetUniformLocation(program, "uProfileExposureToneEnabled"),

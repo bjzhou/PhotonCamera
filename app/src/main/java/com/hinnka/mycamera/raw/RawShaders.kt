@@ -330,6 +330,7 @@ object RawShaders {
         uniform float uProfileExposureRampBlack;
         uniform float uProfileExposureRampRadius;
         uniform float uProfileExposureRampQScale;
+        uniform bool uProfileExposureSupportOverrange;
         uniform bool uProfileExposureToneEnabled;
         uniform float uProfileExposureToneSlope;
         uniform float uProfileExposureToneA;
@@ -349,7 +350,7 @@ object RawShaders {
     """.trimIndent()
 
     private val CURVE_COMBINED_FUNCTIONS = """
-        float sampleCurve(float value) {
+        float sampleBaseCurve(float value) {
             if (!uCurveEnabled || uCurveSize <= 1.0) {
                 return value;
             }
@@ -358,12 +359,31 @@ object RawShaders {
             return texture(uCurveTexture, vec2(coordX, 0.5)).r;
         }
 
+        float sampleProfileToneCurve(float value) {
+            value = clamp(value, 0.0, 1.0);
+            return sampleBaseCurve(applyProfileExposureToneValue(value));
+        }
+
+        float sampleProfileToneCurveOverrange(float value) {
+            if (!(value > 1.0)) {
+                return sampleProfileToneCurve(max(value, 0.0));
+            }
+            const float dx = 0.001;
+            float y1 = sampleProfileToneCurve(1.0);
+            float slope = (y1 - sampleProfileToneCurve(1.0 - dx)) / dx;
+            return y1 + slope * (value - 1.0);
+        }
+
         void adobeRgbTone(inout float maxValue, inout float midValue, inout float minValue) {
             float oldMax = maxValue;
             float oldMid = midValue;
             float oldMin = minValue;
-            maxValue = sampleCurve(oldMax);
-            minValue = sampleCurve(oldMin);
+            maxValue = uProfileExposureSupportOverrange
+                ? sampleProfileToneCurveOverrange(oldMax)
+                : sampleProfileToneCurve(oldMax);
+            minValue = uProfileExposureSupportOverrange
+                ? sampleProfileToneCurveOverrange(oldMin)
+                : sampleProfileToneCurve(oldMin);
             if (abs(oldMax - oldMin) < 1e-6) {
                 midValue = minValue;
             } else {
@@ -372,7 +392,13 @@ object RawShaders {
         }
 
         vec3 applyAdobeCurve(vec3 color) {
-            color = clamp(color, vec3(0.0), vec3(1.0));
+            color = uProfileExposureSupportOverrange
+                ? vec3(
+                    encodeProfileOverrangeValue(color.r),
+                    encodeProfileOverrangeValue(color.g),
+                    encodeProfileOverrangeValue(color.b)
+                )
+                : clamp(color, vec3(0.0), vec3(1.0));
             float r = color.r;
             float g = color.g;
             float b = color.b;
@@ -385,8 +411,12 @@ object RawShaders {
                 } else if (b > g) {
                     adobeRgbTone(r, b, g);
                 } else {
-                    r = sampleCurve(r);
-                    g = sampleCurve(g);
+                    r = uProfileExposureSupportOverrange
+                        ? sampleProfileToneCurveOverrange(r)
+                        : sampleProfileToneCurve(r);
+                    g = uProfileExposureSupportOverrange
+                        ? sampleProfileToneCurveOverrange(g)
+                        : sampleProfileToneCurve(g);
                     b = g;
                 }
             } else {
@@ -399,18 +429,32 @@ object RawShaders {
                 }
             }
 
-            return clamp(vec3(r, g, b), vec3(0.0), vec3(1.0));
+            vec3 toned = vec3(r, g, b);
+            if (uProfileExposureSupportOverrange) {
+                return vec3(
+                    decodeProfileOverrangeValue(toned.r),
+                    decodeProfileOverrangeValue(toned.g),
+                    decodeProfileOverrangeValue(toned.b)
+                );
+            }
+            return clamp(toned, vec3(0.0), vec3(1.0));
         }
     """.trimIndent()
 
     private val ADOBE_PROFILE_COMBINED_FUNCTIONS = """
-        const float PROFILE_HIGHLIGHT_SHOULDER_START = 0.58;
-        const float PROFILE_HIGHLIGHT_SHOULDER_SOFTNESS = 0.30;
-        const float PROFILE_HIGHLIGHT_NEUTRAL_BLEND_MAX = 0.71;
-        const float PROFILE_HIGHLIGHT_NEUTRAL_BLEND_POWER = 1.91;
-
         float clampDcpTableCoordinate(float value) {
             return clamp(value, 0.0, 1.0);
+        }
+
+        float encodeProfileOverrangeValue(float value) {
+            value = max(value, 0.0);
+            return value * (256.0 + value) / (256.0 * (1.0 + value));
+        }
+
+        float decodeProfileOverrangeValue(float value) {
+            value = max(value, 0.0);
+            float discriminant = max(64.0 * value * value - 127.0 * value + 64.0, 0.0);
+            return 16.0 * (8.0 * value - 8.0 + sqrt(discriminant));
         }
 
         float encodeLookupValue(float value, int encoding) {
@@ -540,7 +584,16 @@ object RawShaders {
         }
 
         vec3 applyDcpHsvMap(vec3 color, sampler3D tableTexture, ivec3 divisions, int encoding) {
-            vec3 hsv = rgbToDcpHsv(color);
+            bool encodeOverrange = uProfileExposureSupportOverrange && divisions.z > 1;
+            vec3 mapColor = max(color, vec3(0.0));
+            if (encodeOverrange) {
+                mapColor = vec3(
+                    encodeProfileOverrangeValue(mapColor.r),
+                    encodeProfileOverrangeValue(mapColor.g),
+                    encodeProfileOverrangeValue(mapColor.b)
+                );
+            }
+            vec3 hsv = rgbToDcpHsv(mapColor);
             float lookupValue = hsv.z;
             float vEncoded = hsv.z;
             if (encoding == 1 && divisions.z > 1) {
@@ -559,7 +612,15 @@ object RawShaders {
                 hsv.z = vEncoded;
             }
 
-            return dcpHsvToRgb(hsv);
+            vec3 mapped = dcpHsvToRgb(hsv);
+            if (encodeOverrange) {
+                mapped = vec3(
+                    decodeProfileOverrangeValue(mapped.r),
+                    decodeProfileOverrangeValue(mapped.g),
+                    decodeProfileOverrangeValue(mapped.b)
+                );
+            }
+            return mapped;
         }
 
         float applyProfileExposureRampValue(float value) {
@@ -569,7 +630,8 @@ object RawShaders {
                 return 0.0;
             }
             if (value >= black + radius) {
-                return max((value - black) * uProfileExposureRampSlope, 0.0);
+                float ramped = max((value - black) * uProfileExposureRampSlope, 0.0);
+                return uProfileExposureSupportOverrange ? ramped : min(ramped, 1.0);
             }
             float y = value - (black - radius);
             return uProfileExposureRampQScale * y * y;
@@ -584,19 +646,7 @@ object RawShaders {
                 applyProfileExposureRampValue(color.g),
                 applyProfileExposureRampValue(color.b)
             );
-            float peak = max(ramped.r, max(ramped.g, ramped.b));
-            if (peak <= PROFILE_HIGHLIGHT_SHOULDER_START) {
-                return ramped;
-            }
-            float shoulderInput = peak - PROFILE_HIGHLIGHT_SHOULDER_START;
-            float shoulderAmount = shoulderInput / (shoulderInput + PROFILE_HIGHLIGHT_SHOULDER_SOFTNESS);
-            float compressedPeak = PROFILE_HIGHLIGHT_SHOULDER_START +
-                (1.0 - PROFILE_HIGHLIGHT_SHOULDER_START) *
-                shoulderAmount;
-            vec3 compressed = ramped * (compressedPeak / max(peak, 1e-6));
-            float neutralBlend = PROFILE_HIGHLIGHT_NEUTRAL_BLEND_MAX *
-                pow(shoulderAmount, PROFILE_HIGHLIGHT_NEUTRAL_BLEND_POWER);
-            return mix(compressed, vec3(compressedPeak), neutralBlend);
+            return ramped;
         }
 
         float applyProfileExposureToneValue(float value) {
@@ -608,17 +658,6 @@ object RawShaders {
             }
             return (uProfileExposureToneA * value + uProfileExposureToneB) * value +
                 uProfileExposureToneC;
-        }
-
-        vec3 applyProfileExposureTone(vec3 color) {
-            if (!uProfileExposureRampEnabled) {
-                return color;
-            }
-            return vec3(
-                applyProfileExposureToneValue(color.r),
-                applyProfileExposureToneValue(color.g),
-                applyProfileExposureToneValue(color.b)
-            );
         }
 
         vec3 applyDcpHueSatMap(vec3 color) {
@@ -640,7 +679,6 @@ object RawShaders {
             if (uProfileExposureRampEnabled) {
                 color = applyProfileExposureRamp(color);
                 color = applyDcpLookTable(color);
-                color = applyProfileExposureTone(color);
             } else {
                 color = applyDcpLookTable(color);
                 color = applyProfileExposureRamp(color);

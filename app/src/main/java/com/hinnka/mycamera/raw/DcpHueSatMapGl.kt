@@ -21,6 +21,17 @@ internal object DcpHueSatMapGl {
                 : pow((value + 0.055) / 1.055, 2.4);
         }
 
+        float dngEncodeOverrangeValue(float value) {
+            value = max(value, 0.0);
+            return value * (256.0 + value) / (256.0 * (1.0 + value));
+        }
+
+        float dngDecodeOverrangeValue(float value) {
+            value = max(value, 0.0);
+            float discriminant = max(64.0 * value * value - 127.0 * value + 64.0, 0.0);
+            return 16.0 * (8.0 * value - 8.0 + sqrt(discriminant));
+        }
+
         float dngEncodeLookupValue(float value, int encoding) {
             value = dngClampTableCoordinate(value);
             return encoding == 1 ? dngLinearToSrgbValue(value) : value;
@@ -114,9 +125,19 @@ internal object DcpHueSatMapGl {
             vec3 color,
             sampler3D tableTexture,
             ivec3 divisions,
-            int encoding
+            int encoding,
+            bool supportOverrange
         ) {
-            vec3 hsv = dngRgbToHsv(color);
+            vec3 mapColor = supportOverrange ? max(color, vec3(0.0)) : color;
+            bool encodeOverrange = supportOverrange && divisions.z > 1;
+            if (encodeOverrange) {
+                mapColor = vec3(
+                    dngEncodeOverrangeValue(mapColor.r),
+                    dngEncodeOverrangeValue(mapColor.g),
+                    dngEncodeOverrangeValue(mapColor.b)
+                );
+            }
+            vec3 hsv = dngRgbToHsv(mapColor);
             float encodedValue = hsv.z;
             float lookupValue = hsv.z;
             // RefBaselineHueSatMap uses the encoded value axis only for a true 3D map.
@@ -136,7 +157,15 @@ internal object DcpHueSatMapGl {
             hsv.y = dngClampTableCoordinate(hsv.y * modify.y);
             encodedValue = clamp(encodedValue * modify.z, 0.0, 1.0);
             hsv.z = dngDecodeScaledValue(encodedValue, encoding);
-            return dngHsvToRgb(hsv);
+            vec3 mapped = dngHsvToRgb(hsv);
+            if (encodeOverrange) {
+                mapped = vec3(
+                    dngDecodeOverrangeValue(mapped.r),
+                    dngDecodeOverrangeValue(mapped.g),
+                    dngDecodeOverrangeValue(mapped.b)
+                );
+            }
+            return mapped;
         }
     """.trimIndent()
 }

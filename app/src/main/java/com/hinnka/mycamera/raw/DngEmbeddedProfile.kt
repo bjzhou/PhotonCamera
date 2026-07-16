@@ -44,6 +44,7 @@ internal object DngEmbeddedProfile {
     private const val TAG_PROFILE_LOOK_TABLE_ENCODING = 51108
     private const val TAG_BASELINE_EXPOSURE_OFFSET = 51109
     private const val TAG_DEFAULT_BLACK_RENDER = 51110
+    private const val TAG_PROFILE_DYNAMIC_RANGE = 52551
 
     private val IDENTITY_3X3 = floatArrayOf(
         1f, 0f, 0f,
@@ -66,7 +67,8 @@ internal object DngEmbeddedProfile {
                         "hueSat=${plan.hueSatMap?.isValid == true} " +
                         "look=${plan.lookTable?.isValid == true} " +
                         "baselineExposureOffset=${plan.baselineExposureOffset} " +
-                        "defaultBlackRender=${plan.defaultBlackRender}"
+                        "defaultBlackRender=${plan.defaultBlackRender} " +
+                        "supportsOverrange=${plan.supportsOverrange}"
                 )
             }
     }
@@ -204,6 +206,11 @@ internal object DngEmbeddedProfile {
                 ?.firstOrNull()
                 ?.toInt()
         )
+        val supportsOverrange = readProfileSupportsOverrange(
+            raf,
+            ifd[TAG_PROFILE_DYNAMIC_RANGE],
+            byteOrder
+        )
 
         val hasProfileData = colorMatrix1 != null ||
             colorMatrix2 != null ||
@@ -214,7 +221,8 @@ internal object DngEmbeddedProfile {
             lookTable != null ||
             toneCurve != null ||
             abs(baselineExposureOffset) > 1e-6f ||
-            defaultBlackRender != DcpDefaultBlackRender.Auto
+            defaultBlackRender != DcpDefaultBlackRender.Auto ||
+            supportsOverrange
         if (!hasProfileData) {
             return null
         }
@@ -225,6 +233,7 @@ internal object DngEmbeddedProfile {
             calibrationIlluminant2 = illuminant2,
             baselineExposureOffset = baselineExposureOffset,
             defaultBlackRender = defaultBlackRender,
+            supportsOverrange = supportsOverrange,
             colorMatrix1 = colorMatrix1,
             colorMatrix2 = colorMatrix2,
             forwardMatrix1 = forwardMatrix1,
@@ -246,6 +255,25 @@ internal object DngEmbeddedProfile {
     ): DcpToneCurve? {
         val values = readRealValues(raf, entry, byteOrder) ?: return null
         return DcpToneCurve(values).takeIf { it.isValid }
+    }
+
+    private fun readProfileSupportsOverrange(
+        raf: RandomAccessFile,
+        entry: TiffEntry?,
+        byteOrder: ByteOrder
+    ): Boolean {
+        if (entry == null || entry.type != TIFF_TYPE_UNDEFINED || entry.count != 8L) return false
+        val bytes = readEntryBytes(raf, entry, byteOrder)
+        if (bytes.size != 8) return false
+        val buffer = ByteBuffer.wrap(bytes).order(byteOrder)
+        val version = buffer.short.toInt() and 0xFFFF
+        val dynamicRange = buffer.short.toInt() and 0xFFFF
+        val hintMaxOutputValue = buffer.float
+        val valid = version == 1 &&
+            dynamicRange in 0..1 &&
+            hintMaxOutputValue.isFinite() &&
+            (dynamicRange != 0 || hintMaxOutputValue <= 1f)
+        return valid && dynamicRange != 0
     }
 
     private fun readHueSatMap(
