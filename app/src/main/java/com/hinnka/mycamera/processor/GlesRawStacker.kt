@@ -128,11 +128,6 @@ class GlesRawStacker(
         }
     }
 
-    data class HdrInputFrame(
-        val image: SafeImage,
-        val exposureProduct: Double,
-    )
-
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
@@ -251,11 +246,6 @@ class GlesRawStacker(
     private var rcdStripeStep42Program = 0
     private var rcdStripeStep43Program = 0
     private var hdrShortGlobalAlignProgram = 0
-    private var hdrSaturationSeedProgram = 0
-    private var hdrSplatSupportProgram = 0
-    private var hdrSplatPrepareProgram = 0
-    private var hdrSplatCoherenceProgram = 0
-    private var hdrSplatProgram = 0
     private var hdrRcdNormalPopulateProgram = 0
     private var hdrRcdStoreRgbProgram = 0
     private var hdrRgbFusionProgram = 0
@@ -281,9 +271,6 @@ class GlesRawStacker(
     private var kernelTexture = 0
     private var robustnessTexture = 0
     private var tileMaskTexture = 0
-    private var hdrSplatMaskTextureA = 0
-    private var hdrSplatMaskTextureB = 0
-    private var hdrReplacementMaskTexture = 0
     private var hdrNormalRgbStripeTexture = 0
     private var hdrReferenceRgbStripeTexture = 0
     private var hdrShortRgbStripeTexture = 0
@@ -321,6 +308,7 @@ class GlesRawStacker(
     private var superResolutionDetailWeightMax = 0f
     private var hdrShortRawOffsetX = 0f
     private var hdrShortRawOffsetY = 0f
+    private var hdrWeightMap: GlesRawHdrWeightMap? = null
 
     fun process(images: List<SafeImage>): RawStackResult? {
         return processFrames(images.map { RawStackFrame(it) })
@@ -559,7 +547,10 @@ class GlesRawStacker(
         }
     }
 
-    fun processHdr(shortFrame: HdrInputFrame, normalFrames: List<HdrInputFrame>): RawStackResult? {
+    fun processHdr(
+        shortFrame: GlesRawHdrInputFrame,
+        normalFrames: List<GlesRawHdrInputFrame>,
+    ): RawStackResult? {
         val allImages = buildList {
             add(shortFrame.image)
             normalFrames.forEach { add(it.image) }
@@ -593,6 +584,7 @@ class GlesRawStacker(
             initPrograms()
             initHdrPrograms()
             initResources()
+            initHdrResources()
             hdrLinearOutputTexture = createTexture2D(
                 width,
                 height,
@@ -672,8 +664,6 @@ class GlesRawStacker(
                 alignedFrameCount += 1
                 GlesGpuScheduler.yieldToUiRenderer()
             }
-            computeHdrReplacementMask(referenceOutputScale)
-            GlesGpuScheduler.yieldToUiRenderer()
             reconstructHdrRgbStripes(
                 shortImage = shortFrame.image,
                 referenceImage = normalFrames.first().image,
@@ -837,41 +827,21 @@ class GlesRawStacker(
     private fun initHdrPrograms() {
         if (hdrShortGlobalAlignProgram != 0) return
         hdrShortGlobalAlignProgram = linkComputeProgram(
-            HDR_SHORT_GLOBAL_ALIGN_COMPUTE_SHADER,
+            GlesRawHdrShaders.shortGlobalAlign,
             "raw_hdr_short_global_align",
         )
-        hdrSaturationSeedProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            HDR_SATURATION_SEED_FRAGMENT_SHADER,
-            "raw_hdr_saturation_seed",
-        )
-        hdrSplatSupportProgram = linkComputeProgram(
-            HDR_SPLAT_SUPPORT_COMPUTE_SHADER,
-            "raw_hdr_splat_support",
-        )
-        hdrSplatPrepareProgram = linkComputeProgram(
-            HDR_SPLAT_PREPARE_COMPUTE_SHADER,
-            "raw_hdr_splat_prepare",
-        )
-        hdrSplatCoherenceProgram = linkComputeProgram(
-            HDR_SPLAT_COHERENCE_COMPUTE_SHADER,
-            "raw_hdr_splat_coherence",
-        )
-        hdrSplatProgram = linkComputeProgram(
-            HDR_SPLAT_DILATE_COMPUTE_SHADER,
-            "raw_hdr_splat_dilate",
-        )
+        hdrWeightMap = createHdrWeightMap().also { it.initPrograms() }
         hdrRcdNormalPopulateProgram = linkComputeProgram(
-            HDR_RCD_NORMAL_POPULATE_COMPUTE_SHADER,
+            GlesRawHdrShaders.rcdNormalPopulate(RAW_COMMON),
             "raw_hdr_rcd_normal_populate",
         )
         hdrRcdStoreRgbProgram = linkComputeProgram(
-            HDR_RCD_STORE_RGB_COMPUTE_SHADER,
+            GlesRawHdrShaders.rcdStoreRgb,
             "raw_hdr_rcd_store_rgb",
         )
         hdrRgbFusionProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
-            HDR_RGB_FUSION_FRAGMENT_SHADER,
+            GlesRawHdrShaders.rgbFusion(),
             "raw_hdr_rgb_fusion",
         )
         if (rcdStripePopulateProgram == 0) {
@@ -884,6 +854,54 @@ class GlesRawStacker(
             rcdStripeStep42Program = linkComputeProgram(RcdShaders.STEP_4_2, "raw_hdr_rcd_step42")
             rcdStripeStep43Program = linkComputeProgram(RcdShaders.STEP_4_3, "raw_hdr_rcd_step43")
         }
+    }
+
+    private fun createHdrWeightMap(): GlesRawHdrWeightMap {
+        return GlesRawHdrWeightMap(
+            width = width,
+            height = height,
+            rawCommonShader = RAW_COMMON,
+            backend = object : GlesRawHdrWeightMap.Backend {
+                override fun linkComputeProgram(source: String, name: String): Int =
+                    this@GlesRawStacker.linkComputeProgram(source, name)
+
+                override fun createTexture2D(
+                    width: Int,
+                    height: Int,
+                    internalFormat: Int,
+                    filter: Int,
+                ): Int = this@GlesRawStacker.createTexture2D(
+                    width,
+                    height,
+                    internalFormat,
+                    filter,
+                )
+
+                override fun bindTexture(
+                    program: Int,
+                    name: String,
+                    unit: Int,
+                    texture: Int,
+                ) {
+                    this@GlesRawStacker.bindTexture(program, name, unit, texture)
+                }
+
+                override fun bindImage(unit: Int, texture: Int, access: Int, format: Int) {
+                    this@GlesRawStacker.bindImage(unit, texture, access, format)
+                }
+
+                override fun setCommonUniforms(program: Int) {
+                    this@GlesRawStacker.setCommonUniforms(program)
+                }
+
+                override fun uniformLocation(program: Int, name: String): Int =
+                    this@GlesRawStacker.uniformLocation(program, name)
+
+                override fun checkGlError(label: String) {
+                    this@GlesRawStacker.checkGlError(label)
+                }
+            },
+        )
     }
 
     private fun validateOutputTextureLimits() {
@@ -934,7 +952,6 @@ class GlesRawStacker(
 
         refRaw = createTexture2D(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
         curRaw = createTexture2D(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
-        hdrShortRaw = createTexture2D(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
         refProxy = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
         curProxy = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
         flowTexture = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
@@ -942,9 +959,6 @@ class GlesRawStacker(
         kernelTexture = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
         robustnessTexture = createTexture2D(planeWidth, planeHeight, GLES30.GL_R32F, GLES30.GL_NEAREST)
         tileMaskTexture = createTexture2D(gridWidth, gridHeight, GLES30.GL_R16F, GLES30.GL_LINEAR)
-        hdrSplatMaskTextureA = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
-        hdrSplatMaskTextureB = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
-        hdrReplacementMaskTexture = hdrSplatMaskTextureA
         accumulatorValueWeightTexture = createTexture2D(width, height, GLES30.GL_R32UI, GLES30.GL_NEAREST)
         accumulatorStatisticsTexture = createTexture2D(width, height, GLES30.GL_R32UI, GLES30.GL_NEAREST)
         if (superResolutionEnabled) {
@@ -972,6 +986,11 @@ class GlesRawStacker(
         renderFbo = createFramebuffer()
         readbackFbo = createFramebuffer()
         initDiagnosticResources()
+    }
+
+    private fun initHdrResources() {
+        hdrShortRaw = createTexture2D(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
+        checkNotNull(hdrWeightMap) { "HDR weight map is not initialized" }.initResources()
     }
 
     private fun initDiagnosticResources() {
@@ -3163,21 +3182,29 @@ class GlesRawStacker(
     }
 
     private fun alignHdrShortToReference(reference: List<TextureLevel>, shortFrame: List<TextureLevel>) {
-        val levelIndex = HDR_123_ALIGN_LEVEL.coerceAtMost(reference.lastIndex).coerceAtMost(shortFrame.lastIndex)
+        val levelIndex = GlesRawHdrConfig.ALIGN_LEVEL
+            .coerceAtMost(reference.lastIndex)
+            .coerceAtMost(shortFrame.lastIndex)
         val ref = reference[levelIndex]
         val cur = shortFrame[levelIndex]
         val minLevelSide = minOf(ref.width, ref.height)
-        val searchRadius = minOf(HDR_123_SHORT_GLOBAL_SEARCH_RADIUS_LEVEL, max(1, minLevelSide / 6))
-        val sampleBorder = minOf(HDR_123_SHORT_GLOBAL_SAMPLE_BORDER, max(1, minLevelSide / 5))
+        val searchRadius = minOf(
+            GlesRawHdrConfig.SHORT_GLOBAL_SEARCH_RADIUS_LEVEL,
+            max(1, minLevelSide / 6),
+        )
+        val sampleBorder = minOf(
+            GlesRawHdrConfig.SHORT_GLOBAL_SAMPLE_BORDER,
+            max(1, minLevelSide / 5),
+        )
         val scoreSide = searchRadius * 2 + 1
         val scoreCount = scoreSide * scoreSide
-        val floatCount = scoreCount * HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE
+        val floatCount = scoreCount * GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_STRIDE
         val byteCount = floatCount * 4
         try {
             val scoreBufferId = prepareReadbackScratchBuffer(byteCount)
             GLES31.glBindBufferBase(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
-                HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING,
+                GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_BUFFER_BINDING,
                 scoreBufferId,
             )
             GLES31.glUseProgram(hdrShortGlobalAlignProgram)
@@ -3188,7 +3215,7 @@ class GlesRawStacker(
             GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uSearchRadius"), searchRadius)
             GLES31.glUniform1i(
                 uniformLocation(hdrShortGlobalAlignProgram, "uSampleStep"),
-                HDR_123_SHORT_GLOBAL_SAMPLE_STEP,
+                GlesRawHdrConfig.SHORT_GLOBAL_SAMPLE_STEP,
             )
             GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uSampleBorder"), sampleBorder)
             GLES31.glDispatchCompute(scoreSide, scoreSide, 1)
@@ -3215,7 +3242,7 @@ class GlesRawStacker(
             var bestDx = 0f
             var bestDy = 0f
             for (index in 0 until scoreCount) {
-                val offset = index * HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE
+                val offset = index * GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_STRIDE
                 val score = scores[offset + 2]
                 if (score.isFinite() && score < bestScore) {
                     bestScore = score
@@ -3233,7 +3260,11 @@ class GlesRawStacker(
             PLog.w(TAG, "Failed to compute HDR short global alignment", e)
             setHdrShortAlignment(0f, 0f)
         } finally {
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING, 0)
+            GLES31.glBindBufferBase(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_BUFFER_BINDING,
+                0,
+            )
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
         }
     }
@@ -3422,240 +3453,6 @@ class GlesRawStacker(
         )
     }
 
-    private fun computeHdrReplacementMask(referenceExposureScale: Float) {
-        computeHdrSaturationSeed()
-        expandHdrSplatMask(referenceExposureScale)
-    }
-
-    private fun computeHdrSaturationSeed() {
-        bindFramebufferOutput(hdrSplatMaskTextureA, "computeHdrSaturationSeed")
-        GLES30.glViewport(0, 0, planeWidth, planeHeight)
-        GLES30.glUseProgram(hdrSaturationSeedProgram)
-        bindTexture(hdrSaturationSeedProgram, "uReferenceRaw", 0, refRaw)
-        bindTexture(
-            hdrSaturationSeedProgram,
-            "uAccumulatorValueWeight",
-            1,
-            accumulatorValueWeightTexture,
-        )
-        bindTexture(
-            hdrSaturationSeedProgram,
-            "uAccumulatorStatistics",
-            2,
-            accumulatorStatisticsTexture,
-        )
-        setCommonUniforms(hdrSaturationSeedProgram)
-        GLES31.glUniform2i(uniformLocation(hdrSaturationSeedProgram, "uImageSize"), width, height)
-        GLES31.glUniform2i(uniformLocation(hdrSaturationSeedProgram, "uPlaneSize"), planeWidth, planeHeight)
-        GLES31.glUniform1f(
-            uniformLocation(hdrSaturationSeedProgram, "uReferenceSupportSeed"),
-            HDR_REFERENCE_RCD_SUPPORT_SEED.toFloat(),
-        )
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        finishFramebufferPass("computeHdrSaturationSeed")
-    }
-
-    private fun expandHdrSplatMask(referenceExposureScale: Float) {
-        val startTime = System.currentTimeMillis()
-        var sourceMask = hdrSplatMaskTextureA
-        var targetMask = hdrSplatMaskTextureB
-
-        // Resolve the original four-block recovery coverage first. This makes the subsequent
-        // geodesic-dilation predicate immutable instead of recomputing it one layer at a time.
-        repeat(HDR_REFERENCE_RCD_SUPPORT_RADIUS_BLOCKS) { pass ->
-            GLES31.glUseProgram(hdrSplatSupportProgram)
-            bindTexture(hdrSplatSupportProgram, "uSourceMask", 0, sourceMask)
-            bindImage(0, targetMask, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-            GLES31.glUniform2i(
-                uniformLocation(hdrSplatSupportProgram, "uPlaneSize"),
-                planeWidth,
-                planeHeight,
-            )
-            GLES31.glDispatchCompute(groupCount(planeWidth), groupCount(planeHeight), 1)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-            )
-            checkGlError("expandHdrSplatSupport pass $pass")
-            val previousSource = sourceMask
-            sourceMask = targetMask
-            targetMask = previousSource
-        }
-
-        // The expensive exposure-normalized luma/chroma comparison is static for this capture.
-        // Evaluate it once and store statistically significant mismatch evidence in blue.
-        GLES31.glUseProgram(hdrSplatPrepareProgram)
-        bindTexture(hdrSplatPrepareProgram, "uSourceMask", 0, sourceMask)
-        bindTexture(hdrSplatPrepareProgram, "uReferenceRaw", 1, refRaw)
-        bindTexture(hdrSplatPrepareProgram, "uShortRaw", 2, hdrShortRaw)
-        bindTexture(hdrSplatPrepareProgram, "uLensShadingMap", 3, lensShadingTexture)
-        bindImage(0, targetMask, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-        setCommonUniforms(hdrSplatPrepareProgram)
-        GLES31.glUniform2i(uniformLocation(hdrSplatPrepareProgram, "uImageSize"), width, height)
-        GLES31.glUniform2i(
-            uniformLocation(hdrSplatPrepareProgram, "uPlaneSize"),
-            planeWidth,
-            planeHeight,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uReferenceExposureScale"),
-            referenceExposureScale,
-        )
-        GLES31.glUniform2f(
-            uniformLocation(hdrSplatPrepareProgram, "uShortRawOffset"),
-            hdrShortRawOffsetX,
-            hdrShortRawOffsetY,
-        )
-        GLES31.glUniform3f(
-            uniformLocation(hdrSplatPrepareProgram, "uCalculationGains"),
-            demosaicCalculationWbGains[0],
-            1f,
-            demosaicCalculationWbGains[3],
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uLumaRelativeThreshold"),
-            HDR_SPLAT_LUMA_RELATIVE_THRESHOLD,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uChromaThreshold"),
-            HDR_SPLAT_CHROMA_THRESHOLD,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uNoiseFloorVariance"),
-            hwmfPostfilter.noiseFloorVariance.coerceAtLeast(0f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uLscNoiseGainMax"),
-            hwmfPostfilter.lscNoiseGainMax.coerceAtLeast(1f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uNoiseSigma"),
-            HDR_SPLAT_NOISE_SIGMA,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uChromaChiSquareThreshold"),
-            HDR_SPLAT_CHROMA_CHI_SQUARE_THRESHOLD,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrSplatPrepareProgram, "uChromaMinSnr"),
-            HDR_SPLAT_CHROMA_MIN_SNR,
-        )
-        GLES31.glDispatchCompute(groupCount(planeWidth), groupCount(planeHeight), 1)
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
-        checkGlError("prepareHdrSplatExpansion")
-        val previousSource = sourceMask
-        sourceMask = targetMask
-        targetMask = previousSource
-
-        // A single noisy short-frame block can differ strongly from the reference even though
-        // there is no coherent highlight boundary there. Resolve spatially coherent mismatch
-        // evidence before dilation. Traversal through mandatory RCD support is kept separate from
-        // final replacement eligibility, so support-only pixels do not import short-frame noise.
-        GLES31.glUseProgram(hdrSplatCoherenceProgram)
-        bindTexture(hdrSplatCoherenceProgram, "uSourceMask", 0, sourceMask)
-        bindImage(0, targetMask, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-        GLES31.glUniform2i(
-            uniformLocation(hdrSplatCoherenceProgram, "uPlaneSize"),
-            planeWidth,
-            planeHeight,
-        )
-        GLES31.glDispatchCompute(groupCount(planeWidth), groupCount(planeHeight), 1)
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
-        checkGlError("resolveHdrSplatCoherence")
-        val preparedSource = sourceMask
-        sourceMask = targetMask
-        targetMask = preparedSource
-
-        val counterBuffer = prepareReadbackScratchBuffer(4)
-        val zero = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder()).apply {
-            putInt(0)
-            rewind()
-        }
-        val maxDispatches = groupCount(
-            max(planeWidth, planeHeight),
-            HDR_SPLAT_LAYERS_PER_DISPATCH,
-        )
-        val dispatchGroupsX = groupCount(planeWidth, HDR_SPLAT_LOCAL_SIZE)
-        val dispatchGroupsY = groupCount(planeHeight, HDR_SPLAT_LOCAL_SIZE)
-        var dispatchCount = 0
-        var readbackCount = 0
-        GLES31.glUseProgram(hdrSplatProgram)
-        GLES31.glUniform2i(
-            uniformLocation(hdrSplatProgram, "uPlaneSize"),
-            planeWidth,
-            planeHeight,
-        )
-        try {
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                HDR_SPLAT_CHANGE_BUFFER_BINDING,
-                counterBuffer,
-            )
-            while (dispatchCount < maxDispatches) {
-                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, counterBuffer)
-                zero.rewind()
-                GLES31.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 4, zero)
-
-                val dispatchesBeforeReadback = if (dispatchCount == 0) {
-                    1
-                } else {
-                    minOf(
-                        HDR_SPLAT_DISPATCHES_PER_READBACK,
-                        maxDispatches - dispatchCount,
-                    )
-                }
-                repeat(dispatchesBeforeReadback) {
-                    bindTexture(hdrSplatProgram, "uSourceMask", 0, sourceMask)
-                    bindImage(0, targetMask, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-                    GLES31.glDispatchCompute(dispatchGroupsX, dispatchGroupsY, 1)
-                    GLES31.glMemoryBarrier(
-                        GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                            GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                            GLES31.GL_SHADER_STORAGE_BARRIER_BIT,
-                    )
-                    checkGlError("expandHdrSplatMask dispatch $dispatchCount")
-                    val previousSource = sourceMask
-                    sourceMask = targetMask
-                    targetMask = previousSource
-                    dispatchCount += 1
-                }
-                GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
-
-                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, counterBuffer)
-                val mapped = GLES31.glMapBufferRange(
-                    GLES31.GL_SHADER_STORAGE_BUFFER,
-                    0,
-                    4,
-                    GLES31.GL_MAP_READ_BIT,
-                ) as? ByteBuffer ?: throw IllegalStateException("HDR splat change counter map failed")
-                val changed = try {
-                    mapped.order(ByteOrder.nativeOrder()).getInt(0)
-                } finally {
-                    GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
-                }
-                readbackCount += 1
-                if (changed == 0) break
-            }
-            hdrReplacementMaskTexture = sourceMask
-            RawStackRuntimeDebug.d(TAG) {
-                "HDR saturation splat converged dispatches=$dispatchCount " +
-                    "layersPerDispatch=$HDR_SPLAT_LAYERS_PER_DISPATCH " +
-                    "coveredLayers=${dispatchCount * HDR_SPLAT_LAYERS_PER_DISPATCH} " +
-                    "readbacks=$readbackCount elapsed=${System.currentTimeMillis() - startTime}ms"
-            }
-        } finally {
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                HDR_SPLAT_CHANGE_BUFFER_BINDING,
-                0,
-            )
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        }
-    }
-
     private fun populateHdrNormalRcdStripe(
         sourceRowOffset: Int,
         sourceRowCount: Int,
@@ -3730,13 +3527,22 @@ class GlesRawStacker(
         var requiredRows = 1
         var outputRow = 0
         while (outputRow < height) {
-            val outputCount = minOf(HDR_RGB_STRIPE_ROWS, height - outputRow)
+            val outputCount = minOf(GlesRawHdrConfig.RGB_STRIPE_ROWS, height - outputRow)
+            val weightRowOffset = maxOf(
+                0,
+                outputRow - GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
+            )
+            val weightRowEnd = minOf(
+                height,
+                outputRow + outputCount + GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
+            )
+            val weightRowCount = weightRowEnd - weightRowOffset
             val normalBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                outputRow, outputCount, 1f, 0f, 0f, rawCfaPeriod, height,
+                weightRowOffset, weightRowCount, 1f, 0f, 0f, rawCfaPeriod, height,
             )
             val shortBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                outputRow,
-                outputCount,
+                weightRowOffset,
+                weightRowCount,
                 1f,
                 hdrShortRawOffsetY * 0.5f,
                 hdrShortRawOffsetY * 0.5f,
@@ -3750,13 +3556,22 @@ class GlesRawStacker(
 
         outputRow = 0
         while (outputRow < height) {
-            val outputCount = minOf(HDR_RGB_STRIPE_ROWS, height - outputRow)
+            val outputCount = minOf(GlesRawHdrConfig.RGB_STRIPE_ROWS, height - outputRow)
+            val weightRowOffset = maxOf(
+                0,
+                outputRow - GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
+            )
+            val weightRowEnd = minOf(
+                height,
+                outputRow + outputCount + GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
+            )
+            val weightRowCount = weightRowEnd - weightRowOffset
             val normalBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                outputRow, outputCount, 1f, 0f, 0f, rawCfaPeriod, height,
+                weightRowOffset, weightRowCount, 1f, 0f, 0f, rawCfaPeriod, height,
             )
             val shortBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                outputRow,
-                outputCount,
+                weightRowOffset,
+                weightRowCount,
                 1f,
                 hdrShortRawOffsetY * 0.5f,
                 hdrShortRawOffsetY * 0.5f,
@@ -3783,8 +3598,6 @@ class GlesRawStacker(
                 hdrReferenceRgbStripeTexture,
                 normalBand.rowCount,
                 "HDR reference RGB store",
-                exposureScale = referenceExposureScale,
-                desaturateBeforeExposureScale = true,
             )
 
             uploadRcdRawStripe(shortImage, shortBand.firstRow, shortBand.rowCount, "HDR short")
@@ -3796,14 +3609,40 @@ class GlesRawStacker(
             )
             storeHdrRcdRgbStripe(hdrShortRgbStripeTexture, shortBand.rowCount, "HDR short RGB store")
 
+            checkNotNull(hdrWeightMap) { "HDR weight map is not initialized" }.computeStripe(
+                GlesRawHdrWeightMap.Inputs(
+                    referenceRgbTexture = hdrReferenceRgbStripeTexture,
+                    shortRgbTexture = hdrShortRgbStripeTexture,
+                    referenceRawTexture = refRaw,
+                    lensShadingTexture = lensShadingTexture,
+                    referenceSourceWidth = width,
+                    referenceSourceHeight = normalBand.rowCount,
+                    shortSourceWidth = width,
+                    shortSourceHeight = shortBand.rowCount,
+                    referenceSourceRowOffset = normalBand.firstRow,
+                    shortSourceRowOffset = shortBand.firstRow,
+                    weightRowOffset = weightRowOffset,
+                    weightRowCount = weightRowCount,
+                    referenceExposureScale = referenceExposureScale,
+                    shortRawOffsetX = hdrShortRawOffsetX,
+                    shortRawOffsetY = hdrShortRawOffsetY,
+                    noiseFloorVariance = hwmfPostfilter.noiseFloorVariance,
+                    lscNoiseGainMax = hwmfPostfilter.lscNoiseGainMax,
+                ),
+            )
+
             bindFramebufferOutput(hdrLinearOutputTexture, "HDR linear RGB fusion")
             GLES30.glViewport(0, outputRow, width, outputCount)
             GLES30.glUseProgram(hdrRgbFusionProgram)
             bindTexture(hdrRgbFusionProgram, "uNormalRgb", 0, hdrNormalRgbStripeTexture)
             bindTexture(hdrRgbFusionProgram, "uReferenceRgb", 1, hdrReferenceRgbStripeTexture)
             bindTexture(hdrRgbFusionProgram, "uShortRgb", 2, hdrShortRgbStripeTexture)
-            bindTexture(hdrRgbFusionProgram, "uReplacementMask", 3, hdrReplacementMaskTexture)
-            GLES31.glUniform2i(uniformLocation(hdrRgbFusionProgram, "uPlaneSize"), planeWidth, planeHeight)
+            bindTexture(
+                hdrRgbFusionProgram,
+                "uWeightMap",
+                3,
+                checkNotNull(hdrWeightMap) { "HDR weight map is not initialized" }.outputTexture,
+            )
             GLES31.glUniform2i(
                 uniformLocation(hdrRgbFusionProgram, "uNormalSourceSize"),
                 width,
@@ -3827,9 +3666,13 @@ class GlesRawStacker(
                 hdrShortRawOffsetX,
                 hdrShortRawOffsetY,
             )
+            GLES31.glUniform1f(
+                uniformLocation(hdrRgbFusionProgram, "uReferenceExposureScale"),
+                referenceExposureScale,
+            )
             GLES31.glUniform1i(
                 uniformLocation(hdrRgbFusionProgram, "uDebugOutputSource"),
-                HDR_DEBUG_OUTPUT_SOURCE,
+                GlesRawHdrConfig.DEBUG_OUTPUT_SOURCE,
             )
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
             finishFramebufferPass("HDR linear RGB fusion")
@@ -5302,7 +5145,6 @@ class GlesRawStacker(
         private const val SUPER_RESOLUTION_STRIPE_ROWS = 256
         private const val SUPER_RESOLUTION_SPATIAL_RADIUS = 2
         private const val READBACK_STRIPE_ROWS = 128
-        private const val HDR_RGB_STRIPE_ROWS = 256
         private const val PGTM_STATS_BUFFER_BINDING = 7
         private const val PGTM_STATS_SAMPLE_COUNT = 16 * 16
         private const val PGTM_CELL_SUM_FLOAT_STRIDE = 2
@@ -5314,27 +5156,6 @@ class GlesRawStacker(
         private const val PGTM_COUNTER_ZERO_COUNT = 1
         private const val PGTM_COUNTER_HIGHLIGHT_COUNT = 2
         private const val PGTM_COUNTER_MAX_INPUT_BITS = 3
-        private const val HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING = 8
-        private const val HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE = 4
-        private const val HDR_123_ALIGN_LEVEL = 2
-        private const val HDR_123_SHORT_GLOBAL_SEARCH_RADIUS_LEVEL = 8
-        private const val HDR_123_SHORT_GLOBAL_SAMPLE_STEP = 6
-        private const val HDR_123_SHORT_GLOBAL_SAMPLE_BORDER = 8
-        private const val HDR_SPLAT_CHANGE_BUFFER_BINDING = 13
-        private const val HDR_SPLAT_LUMA_RELATIVE_THRESHOLD = 0.06f
-        private const val HDR_SPLAT_CHROMA_THRESHOLD = 0.025f
-        private const val HDR_SPLAT_NOISE_SIGMA = 3.0f
-        private const val HDR_SPLAT_CHROMA_CHI_SQUARE_THRESHOLD = 9.21f
-        private const val HDR_SPLAT_CHROMA_MIN_SNR = 3.0f
-        private const val HDR_SPLAT_LOCAL_SIZE = 16
-        private const val HDR_SPLAT_LAYERS_PER_DISPATCH = 8
-        private const val HDR_SPLAT_DISPATCHES_PER_READBACK = 4
-        private const val HDR_DEBUG_OUTPUT_SOURCE = 0
-        // Preserve the original HDR recovery coverage: mask texels cover 2x2 RAW samples and
-        // the recovery source mask is expanded by four mask texels before selecting RCD output.
-        private const val HDR_REFERENCE_RCD_SUPPORT_RADIUS_BLOCKS = 4
-        private const val HDR_REFERENCE_RCD_SUPPORT_SEED =
-            HDR_REFERENCE_RCD_SUPPORT_RADIUS_BLOCKS + 1
         private const val DIAGNOSTIC_BUFFER_BINDING = 9
         private const val REGISTRATION_SAMPLE_BUFFER_BINDING = 10
         private const val REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING = 11
@@ -7673,353 +7494,6 @@ class GlesRawStacker(
             }
         """.trimIndent()
 
-        private val HDR_RCD_NORMAL_POPULATE_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform highp usampler2D uAccumulatorValueWeight;
-            uniform highp usampler2D uReferenceRaw;
-            uniform sampler2D uLensShadingMap;
-            uniform ivec2 uImageSize;
-            uniform ivec2 uStripeSize;
-            uniform int uSourceRowOffset;
-            uniform int uCfaPattern;
-            uniform float uBlackLevel[4];
-            uniform float uWhiteLevel;
-            uniform float uReferenceExposureScale;
-            uniform vec4 uCalculationWbGains;
-            layout(std430, binding = 0) buffer CFA_Buf { float cfa[]; };
-            layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
-            layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
-            layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
-
-            float lscGain(ivec2 p) {
-                vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
-                return gains[lensShadingChannelAt(uCfaPattern, p)];
-            }
-
-            float referenceValue(ivec2 p, int channel) {
-                float raw = float(texelFetch(uReferenceRaw, p, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
-                return max(raw - uBlackLevel[channel], 0.0) * lscGain(p) /
-                    range * uReferenceExposureScale;
-            }
-
-            void main() {
-                ivec2 local = ivec2(gl_GlobalInvocationID.xy);
-                if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
-                ivec2 global = ivec2(local.x, local.y + uSourceRowOffset);
-                int channel = bayerIndexAt(uCfaPattern, global);
-                vec2 valueWeight = unpackHalf2x16(texelFetch(uAccumulatorValueWeight, global, 0).r);
-                float value = valueWeight.y > 0.02 ?
-                    valueWeight.x / max(valueWeight.y, 1e-6) :
-                    referenceValue(global, channel);
-                value = clamp(value * max(uCalculationWbGains[channel], 1e-6), 0.0, 8.0);
-                int index = local.y * uStripeSize.x + local.x;
-                cfa[index] = value;
-                rgb0[index] = channel == 0 ? value : 0.0;
-                rgb1[index] = (channel == 1 || channel == 2) ? value : 0.0;
-                rgb2[index] = channel == 3 ? value : 0.0;
-            }
-        """.trimIndent()
-
-        private val HDR_RCD_STORE_RGB_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
-            layout(std430, binding = 1) readonly buffer RcdRgb0_Buf { float rcdRgb0[]; };
-            layout(std430, binding = 2) readonly buffer RcdRgb1_Buf { float rcdRgb1[]; };
-            layout(std430, binding = 3) readonly buffer RcdRgb2_Buf { float rcdRgb2[]; };
-            layout(rgba16f, binding = 0) writeonly uniform highp image2D uOutput;
-            uniform ivec2 uSourceSize;
-            uniform vec3 uCalculationGains;
-            uniform float uExposureScale;
-            uniform int uDesaturateBeforeExposureScale;
-
-            vec3 desaturateHighlightPreservingLuma(vec3 rgb) {
-                rgb = max(rgb, vec3(0.0));
-                const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-                float luma = dot(rgb, LUMA);
-                float ceiling = max(1.0, luma);
-                vec3 chroma = rgb - vec3(luma);
-                float chromaScale = 1.0;
-                if (chroma.r > 0.0) {
-                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.r);
-                }
-                if (chroma.g > 0.0) {
-                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.g);
-                }
-                if (chroma.b > 0.0) {
-                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.b);
-                }
-                return vec3(luma) + chroma * clamp(chromaScale, 0.0, 1.0);
-            }
-
-            void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (p.x >= uSourceSize.x || p.y >= uSourceSize.y) return;
-                int index = p.y * uSourceSize.x + p.x;
-                vec3 workingRgb = vec3(rcdRgb0[index], rcdRgb1[index], rcdRgb2[index]);
-                if (uDesaturateBeforeExposureScale != 0) {
-                    workingRgb = desaturateHighlightPreservingLuma(workingRgb);
-                }
-                workingRgb *= uExposureScale;
-                vec3 rgb = workingRgb /
-                    max(uCalculationGains, vec3(1e-6));
-                imageStore(uOutput, p, vec4(max(rgb, vec3(0.0)), 1.0));
-            }
-        """.trimIndent()
-
-        private val HDR_RGB_FUSION_FRAGMENT_SHADER = """
-            #version 300 es
-            $RAW_COMMON
-            in vec2 vTexCoord;
-            layout(location = 0) out highp uvec4 fragColor;
-            uniform sampler2D uNormalRgb;
-            uniform sampler2D uReferenceRgb;
-            uniform sampler2D uShortRgb;
-            uniform sampler2D uReplacementMask;
-            uniform ivec2 uPlaneSize;
-            uniform ivec2 uNormalSourceSize;
-            uniform ivec2 uShortSourceSize;
-            uniform int uNormalSourceRowOffset;
-            uniform int uShortSourceRowOffset;
-            uniform vec2 uShortRawOffset;
-            uniform int uDebugOutputSource;
-
-            vec3 stripeFetch(sampler2D source, ivec2 p, ivec2 sourceSize) {
-                p = clamp(p, ivec2(0), sourceSize - ivec2(1));
-                return texelFetch(source, p, 0).rgb;
-            }
-
-            vec3 sampleStripe(sampler2D source, vec2 p, ivec2 sourceSize) {
-                p = clamp(p, vec2(0.0), vec2(sourceSize - ivec2(1)));
-                ivec2 p0 = ivec2(floor(p));
-                ivec2 p1 = min(p0 + ivec2(1), sourceSize - ivec2(1));
-                vec2 f = p - vec2(p0);
-                vec3 v00 = stripeFetch(source, p0, sourceSize);
-                vec3 v10 = stripeFetch(source, ivec2(p1.x, p0.y), sourceSize);
-                vec3 v01 = stripeFetch(source, ivec2(p0.x, p1.y), sourceSize);
-                vec3 v11 = stripeFetch(source, p1, sourceSize);
-                return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
-            }
-
-            vec3 shortRgbAtGlobal(vec2 globalPos) {
-                vec2 shortGlobal = globalPos + uShortRawOffset;
-                vec2 local = vec2(shortGlobal.x, shortGlobal.y - float(uShortSourceRowOffset));
-                return clamp(
-                    sampleStripe(uShortRgb, local, uShortSourceSize),
-                    vec3(0.0),
-                    vec3(1.0)
-                );
-            }
-
-            vec3 referenceRgbAtGlobal(vec2 globalPos) {
-                vec2 local = vec2(globalPos.x, globalPos.y - float(uNormalSourceRowOffset));
-                return clamp(
-                    sampleStripe(uReferenceRgb, local, uNormalSourceSize),
-                    vec3(0.0),
-                    vec3(1.0)
-                );
-            }
-
-            vec4 replacementStateAt(ivec2 block) {
-                block = clamp(block, ivec2(0), uPlaneSize - ivec2(1));
-                return texelFetch(uReplacementMask, block, 0);
-            }
-
-            void writeLinearRgb(vec3 rgb) {
-                uvec3 linear16 = uvec3(floor(clamp(rgb, 0.0, 1.0) * 65535.0 + 0.5));
-                fragColor = uvec4(linear16, 65535u);
-            }
-
-            void main() {
-                ivec2 outputPos = ivec2(gl_FragCoord.xy);
-                vec2 normalLocal = vec2(outputPos.x, outputPos.y - uNormalSourceRowOffset);
-                vec3 accumulatedNormalRgb = clamp(
-                    sampleStripe(uNormalRgb, normalLocal, uNormalSourceSize),
-                    vec3(0.0),
-                    vec3(1.0)
-                );
-                vec3 referenceRgb = referenceRgbAtGlobal(vec2(outputPos));
-                vec3 shortRgb = shortRgbAtGlobal(vec2(outputPos));
-                ivec2 maskPos = clamp(outputPos / 2, ivec2(0), uPlaneSize - ivec2(1));
-                vec4 replacementState = replacementStateAt(maskPos);
-                bool useNativeExposureReference = replacementState.g > 0.5;
-                vec3 normalRgb = useNativeExposureReference ?
-                    referenceRgb : accumulatedNormalRgb;
-                vec3 rgb = replacementState.r > 0.5 ? shortRgb : normalRgb;
-                if (uDebugOutputSource == 1) {
-                    rgb = accumulatedNormalRgb;
-                } else if (uDebugOutputSource == 2) {
-                    rgb = referenceRgb;
-                } else if (uDebugOutputSource == 3) {
-                    rgb = shortRgb;
-                }
-                writeLinearRgb(rgb);
-            }
-        """.trimIndent()
-
-        private val HDR_SHORT_GLOBAL_ALIGN_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 8, local_size_y = 8) in;
-            uniform sampler2D uReference;
-            uniform sampler2D uCurrent;
-            uniform ivec2 uLevelSize;
-            uniform int uLevelScale;
-            uniform int uSearchRadius;
-            uniform int uSampleStep;
-            uniform int uSampleBorder;
-            layout(std430, binding = $HDR_123_SHORT_ALIGNMENT_SCORE_BUFFER_BINDING) buffer HdrShortAlignmentScores {
-                float scores[];
-            };
-
-            const int LOCAL_COUNT = 64;
-            const int SCORE_STRIDE = $HDR_123_SHORT_ALIGNMENT_SCORE_STRIDE;
-            shared float sadParts[LOCAL_COUNT];
-            shared float weightParts[LOCAL_COUNT];
-            shared float sampleParts[LOCAL_COUNT];
-
-            vec2 readProxy(sampler2D tex, ivec2 p) {
-                p = clamp(p, ivec2(0), uLevelSize - ivec2(1));
-                return texelFetch(tex, p, 0).rg;
-            }
-
-            bool insideLevel(ivec2 p) {
-                return p.x >= 0 && p.y >= 0 && p.x < uLevelSize.x && p.y < uLevelSize.y;
-            }
-
-            float detailAt(ivec2 p) {
-                float c = readProxy(uReference, p).r;
-                float gx = abs(readProxy(uReference, p + ivec2(1, 0)).r - readProxy(uReference, p - ivec2(1, 0)).r);
-                float gy = abs(readProxy(uReference, p + ivec2(0, 1)).r - readProxy(uReference, p - ivec2(0, 1)).r);
-                float lap = abs(4.0 * c -
-                    readProxy(uReference, p + ivec2(1, 0)).r -
-                    readProxy(uReference, p - ivec2(1, 0)).r -
-                    readProxy(uReference, p + ivec2(0, 1)).r -
-                    readProxy(uReference, p - ivec2(0, 1)).r);
-                return gx + gy + 0.5 * lap;
-            }
-
-            void main() {
-                ivec2 candidate = ivec2(gl_WorkGroupID.xy);
-                int scoreSide = uSearchRadius * 2 + 1;
-                if (candidate.x >= scoreSide || candidate.y >= scoreSide) return;
-                ivec2 localId = ivec2(gl_LocalInvocationID.xy);
-                int localIndex = localId.y * 8 + localId.x;
-                ivec2 shift = candidate - ivec2(uSearchRadius);
-                int sampleWidth = max(0, (uLevelSize.x - 2 * uSampleBorder + uSampleStep - 1) / uSampleStep);
-                int sampleHeight = max(0, (uLevelSize.y - 2 * uSampleBorder + uSampleStep - 1) / uSampleStep);
-                int totalSamples = sampleWidth * sampleHeight;
-                float sad = 0.0;
-                float weight = 0.0;
-                float sampleCount = 0.0;
-                for (int sampleIndex = localIndex; sampleIndex < totalSamples; sampleIndex += LOCAL_COUNT) {
-                    int sx = sampleIndex - (sampleIndex / sampleWidth) * sampleWidth;
-                    int sy = sampleIndex / sampleWidth;
-                    ivec2 rp = ivec2(uSampleBorder + sx * uSampleStep, uSampleBorder + sy * uSampleStep);
-                    ivec2 cp = rp + shift;
-                    sampleCount += 1.0;
-                    if (!insideLevel(cp)) continue;
-                    vec2 rv = readProxy(uReference, rp);
-                    vec2 cv = readProxy(uCurrent, cp);
-                    float detail = clamp(detailAt(rp) * 18.0, 0.08, 1.0);
-                    float w = min(rv.g, cv.g) * detail;
-                    sad += abs(rv.r - cv.r) * w;
-                    weight += w;
-                }
-                sadParts[localIndex] = sad;
-                weightParts[localIndex] = weight;
-                sampleParts[localIndex] = sampleCount;
-                memoryBarrierShared();
-                barrier();
-                if (localIndex != 0) return;
-                float totalSad = 0.0;
-                float totalWeight = 0.0;
-                float totalSampleCount = 0.0;
-                for (int i = 0; i < LOCAL_COUNT; ++i) {
-                    totalSad += sadParts[i];
-                    totalWeight += weightParts[i];
-                    totalSampleCount += sampleParts[i];
-                }
-                float coverage = totalWeight / max(totalSampleCount, 1.0);
-                float shiftPenalty = 0.0008 * float(shift.x * shift.x + shift.y * shift.y);
-                float score = totalSad / max(totalWeight, 1e-4) +
-                    0.12 * (1.0 - clamp(coverage, 0.0, 1.0)) + shiftPenalty;
-                int offset = (candidate.y * scoreSide + candidate.x) * SCORE_STRIDE;
-                scores[offset + 0] = float(shift.x * uLevelScale);
-                scores[offset + 1] = float(shift.y * uLevelScale);
-                scores[offset + 2] = score;
-                scores[offset + 3] = coverage;
-            }
-        """.trimIndent()
-
-        private val HDR_SATURATION_SEED_FRAGMENT_SHADER = """
-            #version 300 es
-            $RAW_COMMON
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            uniform highp usampler2D uReferenceRaw;
-            uniform highp usampler2D uAccumulatorValueWeight;
-            uniform highp usampler2D uAccumulatorStatistics;
-            uniform ivec2 uImageSize;
-            uniform ivec2 uPlaneSize;
-            uniform int uCfaPattern;
-            uniform float uBlackLevel[4];
-            uniform float uWhiteLevel;
-            uniform float uReferenceSupportSeed;
-
-            float sensorNormAt(ivec2 p) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                int channel = bayerIndexAt(uCfaPattern, p);
-                float raw = float(texelFetch(uReferenceRaw, p, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
-                return max(raw - uBlackLevel[channel], 0.0) / range;
-            }
-
-            vec4 accumulatorAt(ivec2 p) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                vec2 valueWeight = unpackHalf2x16(
-                    texelFetch(uAccumulatorValueWeight, p, 0).r
-                );
-                vec2 statistics = unpackHalf2x16(
-                    texelFetch(uAccumulatorStatistics, p, 0).r
-                );
-                return vec4(valueWeight, statistics);
-            }
-
-            bool phaseAffected(ivec2 p) {
-                float sensor = sensorNormAt(p);
-                // Match the original HDR recovery mask. accumulator.a is clip/highlight mass
-                // accumulated from aligned kernel support, so it also catches pixels whose own
-                // reference RAW sample is below the direct highlight threshold.
-                return sensor >= 0.90 || accumulatorAt(p).a > 0.0001;
-            }
-
-            void main() {
-                ivec2 block = clamp(ivec2(gl_FragCoord.xy), ivec2(0), uPlaneSize - ivec2(1));
-                ivec2 base = block * 2;
-                bool fullySaturated = true;
-                bool recoverySource = false;
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        ivec2 rawPos = clamp(base + ivec2(x, y), ivec2(0), uImageSize - ivec2(1));
-                        float sensor = sensorNormAt(rawPos);
-                        fullySaturated = fullySaturated && sensor >= 0.985;
-                        recoverySource = recoverySource || phaseAffected(rawPos);
-                    }
-                }
-                float seed = fullySaturated ? 1.0 : 0.0;
-                float referenceSupport = recoverySource ?
-                    uReferenceSupportSeed : 0.0;
-                fragColor = vec4(seed, referenceSupport, 0.0, 1.0);
-            }
-        """.trimIndent()
-
         private val RCD_STRIPE_POPULATE_COMPUTE_SHADER = """
             #version 310 es
             $RAW_COMMON
@@ -8119,436 +7593,6 @@ class GlesRawStacker(
                 rgb0[index] = channel == 0 ? value : 0.0;
                 rgb1[index] = (channel == 1 || channel == 2) ? value : 0.0;
                 rgb2[index] = channel == 3 ? value : 0.0;
-            }
-        """.trimIndent()
-
-        private val HDR_SPLAT_SUPPORT_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform sampler2D uSourceMask;
-            layout(rgba16f, binding = 0) writeonly uniform highp image2D uTargetMask;
-            uniform ivec2 uPlaneSize;
-
-            bool insidePlane(ivec2 p) {
-                return p.x >= 0 && p.y >= 0 && p.x < uPlaneSize.x && p.y < uPlaneSize.y;
-            }
-
-            void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (!insidePlane(p)) return;
-                vec4 sourceState = texelFetch(uSourceMask, p, 0);
-                float referenceSupport = sourceState.g;
-                for (int y = -1; y <= 1; ++y) {
-                    for (int x = -1; x <= 1; ++x) {
-                        ivec2 neighbor = p + ivec2(x, y);
-                        if ((x != 0 || y != 0) && insidePlane(neighbor)) {
-                            referenceSupport = max(
-                                referenceSupport,
-                                max(texelFetch(uSourceMask, neighbor, 0).g - 1.0, 0.0)
-                            );
-                        }
-                    }
-                }
-                imageStore(
-                    uTargetMask,
-                    p,
-                    vec4(sourceState.r, referenceSupport, 0.0, 1.0)
-                );
-            }
-        """.trimIndent()
-
-        private val HDR_SPLAT_PREPARE_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform sampler2D uSourceMask;
-            uniform highp usampler2D uReferenceRaw;
-            uniform highp usampler2D uShortRaw;
-            uniform sampler2D uLensShadingMap;
-            layout(rgba16f, binding = 0) writeonly uniform highp image2D uTargetMask;
-            uniform ivec2 uImageSize;
-            uniform ivec2 uPlaneSize;
-            uniform int uCfaPattern;
-            uniform float uBlackLevel[4];
-            uniform float uWhiteLevel;
-            uniform float uReferenceExposureScale;
-            uniform vec2 uShortRawOffset;
-            uniform vec3 uCalculationGains;
-            uniform float uLumaRelativeThreshold;
-            uniform float uChromaThreshold;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uNoiseFloorVariance;
-            uniform float uLscNoiseGainMax;
-            uniform float uNoiseSigma;
-            uniform float uChromaChiSquareThreshold;
-            uniform float uChromaMinSnr;
-
-            struct BlockStats {
-                vec3 rgb;
-                vec3 variance;
-            };
-
-            vec3 desaturateHighlightPreservingLuma(vec3 rgb) {
-                rgb = max(rgb, vec3(0.0));
-                const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-                float luma = dot(rgb, LUMA);
-                float ceiling = max(1.0, luma);
-                vec3 chroma = rgb - vec3(luma);
-                float chromaScale = 1.0;
-                if (chroma.r > 0.0) {
-                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.r);
-                }
-                if (chroma.g > 0.0) {
-                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.g);
-                }
-                if (chroma.b > 0.0) {
-                    chromaScale = min(chromaScale, (ceiling - luma) / chroma.b);
-                }
-                return vec3(luma) + chroma * clamp(chromaScale, 0.0, 1.0);
-            }
-
-            bool insidePlane(ivec2 p) {
-                return p.x >= 0 && p.y >= 0 && p.x < uPlaneSize.x && p.y < uPlaneSize.y;
-            }
-
-            vec2 correctedSampleStats(highp usampler2D source, ivec2 p, int channel) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                float raw = float(texelFetch(source, p, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
-                float sensor = max(raw - uBlackLevel[channel], 0.0) / range;
-                vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uImageSize);
-                vec4 lsc = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
-                float lscValue = lsc[lensShadingChannelAt(uCfaPattern, p)];
-                float noiseGain = clamp(lscValue, 1e-3, max(uLscNoiseGainMax, 1.0));
-                float corrected = sensor * lscValue;
-                float noiseSignal = clamp(sensor * noiseGain, 0.0, 1.0);
-                float variance = max(
-                    uNoiseAlphaByChannel[channel] * noiseSignal * noiseGain +
-                        uNoiseBetaByChannel[channel] * noiseGain * noiseGain,
-                    max(uNoiseFloorVariance, 0.0) * noiseGain * noiseGain
-                );
-                return vec2(corrected, max(variance, 1e-10));
-            }
-
-            BlockStats blockWorkingStats(
-                highp usampler2D source,
-                ivec2 base,
-                float exposureScale,
-                bool desaturateBeforeExposureScale
-            ) {
-                vec3 sum = vec3(0.0);
-                vec3 varianceSum = vec3(0.0);
-                vec3 count = vec3(0.0);
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        ivec2 p = clamp(base + ivec2(x, y), ivec2(0), uImageSize - ivec2(1));
-                        int channel = bayerIndexAt(uCfaPattern, p);
-                        int color = channel == 0 ? 0 : (channel == 3 ? 2 : 1);
-                        vec2 sampleStats = correctedSampleStats(source, p, channel);
-                        sum[color] += sampleStats.x;
-                        varianceSum[color] += sampleStats.y;
-                        count[color] += 1.0;
-                    }
-                }
-                vec3 safeCount = max(count, vec3(1.0));
-                vec3 workingRgb = max(sum / safeCount, vec3(0.0)) *
-                    uCalculationGains;
-                vec3 workingVariance = max(
-                    varianceSum / (safeCount * safeCount),
-                    vec3(1e-10)
-                ) * uCalculationGains * uCalculationGains;
-                if (desaturateBeforeExposureScale) {
-                    workingRgb = desaturateHighlightPreservingLuma(workingRgb);
-                }
-                BlockStats result;
-                result.rgb = workingRgb * exposureScale;
-                result.variance = workingVariance * exposureScale * exposureScale;
-                return result;
-            }
-
-            vec3 chroma(vec3 rgb) {
-                return rgb / max(rgb.r + rgb.g + rgb.b, 1e-5);
-            }
-
-            vec2 independentChroma(vec3 rgb) {
-                float sum = max(rgb.r + rgb.g + rgb.b, 1e-5);
-                return vec2(rgb.r, rgb.b) / sum;
-            }
-
-            mat2 chromaCovariance(BlockStats stats) {
-                float sum = max(stats.rgb.r + stats.rgb.g + stats.rgb.b, 1e-5);
-                float inverseSumSquared = 1.0 / (sum * sum);
-                vec3 redGradient = vec3(
-                    stats.rgb.g + stats.rgb.b,
-                    -stats.rgb.r,
-                    -stats.rgb.r
-                ) * inverseSumSquared;
-                vec3 blueGradient = vec3(
-                    -stats.rgb.b,
-                    -stats.rgb.b,
-                    stats.rgb.r + stats.rgb.g
-                ) * inverseSumSquared;
-                float redVariance = dot(redGradient * redGradient, stats.variance);
-                float blueVariance = dot(blueGradient * blueGradient, stats.variance);
-                float covariance = dot(redGradient * blueGradient, stats.variance);
-                return mat2(redVariance, covariance, covariance, blueVariance);
-            }
-
-            bool lumaCompatible(BlockStats referenceStats, BlockStats shortStats) {
-                const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-                float referenceLuma = dot(referenceStats.rgb, LUMA);
-                float shortLuma = dot(shortStats.rgb, LUMA);
-                vec3 differenceVariance = referenceStats.variance + shortStats.variance;
-                float lumaVariance = dot(differenceVariance, LUMA * LUMA);
-                float noiseTolerance = max(uNoiseSigma, 0.0) *
-                    sqrt(max(lumaVariance, 1e-10));
-                float relativeTolerance = uLumaRelativeThreshold *
-                    max(referenceLuma, shortLuma);
-                return abs(referenceLuma - shortLuma) <=
-                    max(relativeTolerance, noiseTolerance);
-            }
-
-            bool chromaCompatible(BlockStats referenceStats, BlockStats shortStats) {
-                float referenceSignal =
-                    referenceStats.rgb.r + referenceStats.rgb.g + referenceStats.rgb.b;
-                float shortSignal = shortStats.rgb.r + shortStats.rgb.g + shortStats.rgb.b;
-                float referenceSnr = referenceSignal / sqrt(max(
-                    referenceStats.variance.r +
-                        referenceStats.variance.g +
-                        referenceStats.variance.b,
-                    1e-10
-                ));
-                float shortSnr = shortSignal / sqrt(max(
-                    shortStats.variance.r + shortStats.variance.g + shortStats.variance.b,
-                    1e-10
-                ));
-                if (min(referenceSnr, shortSnr) < uChromaMinSnr) {
-                    return true;
-                }
-
-                float fixedDifference = length(chroma(referenceStats.rgb) - chroma(shortStats.rgb));
-                if (fixedDifference <= uChromaThreshold) return true;
-
-                vec2 difference = independentChroma(referenceStats.rgb) -
-                    independentChroma(shortStats.rgb);
-                mat2 covariance = chromaCovariance(referenceStats) +
-                    chromaCovariance(shortStats);
-                covariance[0][0] += 1e-8;
-                covariance[1][1] += 1e-8;
-                float determinant = covariance[0][0] * covariance[1][1] -
-                    covariance[1][0] * covariance[0][1];
-                if (determinant <= 1e-12) return false;
-                float distanceSquared = dot(difference, inverse(covariance) * difference);
-                return distanceSquared <= uChromaChiSquareThreshold;
-            }
-
-            bool referenceAndShortMatch(
-                BlockStats referenceStats,
-                BlockStats shortStats
-            ) {
-                return lumaCompatible(referenceStats, shortStats) &&
-                    chromaCompatible(referenceStats, shortStats);
-            }
-
-            bool referenceAndShortMatch(ivec2 block) {
-                ivec2 referenceBase = block * 2;
-                ivec2 shortBase = referenceBase + ivec2(round(uShortRawOffset));
-                BlockStats referenceStats = blockWorkingStats(
-                    uReferenceRaw,
-                    referenceBase,
-                    uReferenceExposureScale,
-                    true
-                );
-                BlockStats shortStats = blockWorkingStats(
-                    uShortRaw,
-                    shortBase,
-                    1.0,
-                    false
-                );
-                return referenceAndShortMatch(referenceStats, shortStats);
-            }
-
-            void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (!insidePlane(p)) return;
-                vec4 sourceState = texelFetch(uSourceMask, p, 0);
-                bool matches = referenceAndShortMatch(p);
-                imageStore(
-                    uTargetMask,
-                    p,
-                    vec4(
-                        sourceState.r,
-                        sourceState.g,
-                        matches ? 0.0 : 1.0,
-                        1.0
-                    )
-                );
-            }
-        """.trimIndent()
-
-        private val HDR_SPLAT_COHERENCE_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform sampler2D uSourceMask;
-            layout(rgba16f, binding = 0) writeonly uniform highp image2D uTargetMask;
-            uniform ivec2 uPlaneSize;
-
-            bool insidePlane(ivec2 p) {
-                return p.x >= 0 && p.y >= 0 && p.x < uPlaneSize.x && p.y < uPlaneSize.y;
-            }
-
-            void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (!insidePlane(p)) return;
-                vec4 center = texelFetch(uSourceMask, p, 0);
-                int coherentMismatchCount = 0;
-                for (int y = -1; y <= 1; ++y) {
-                    for (int x = -1; x <= 1; ++x) {
-                        ivec2 neighbor = p + ivec2(x, y);
-                        if (insidePlane(neighbor)) {
-                            vec4 state = texelFetch(uSourceMask, neighbor, 0);
-                            if (state.b > 0.5) {
-                                coherentMismatchCount += 1;
-                            }
-                        }
-                    }
-                }
-
-                // The per-block comparison already includes the sensor noise covariance. Require
-                // two neighboring mismatches as additional spatial evidence, so an isolated
-                // noise excursion cannot become replacement evidence.
-                bool coherentMismatch = center.b > 0.5 && coherentMismatchCount >= 3;
-                bool supportTraversal = center.g > 0.5;
-                // Blue encodes two static states for the dilation pass:
-                //   1 = traversal only, required by RCD kernel support
-                //   2 = traversal plus final short-frame replacement
-                float traversalClass = coherentMismatch ? 2.0 :
-                    (supportTraversal ? 1.0 : 0.0);
-                float seed = center.r > 0.5 ? 1.0 : 0.0;
-                imageStore(
-                    uTargetMask,
-                    p,
-                    vec4(
-                        seed,
-                        center.g,
-                        traversalClass,
-                        seed
-                    )
-                );
-            }
-        """.trimIndent()
-
-        private val HDR_SPLAT_DILATE_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(
-                local_size_x = $HDR_SPLAT_LOCAL_SIZE,
-                local_size_y = $HDR_SPLAT_LOCAL_SIZE
-            ) in;
-            uniform sampler2D uSourceMask;
-            layout(rgba16f, binding = 0) writeonly uniform highp image2D uTargetMask;
-            layout(std430, binding = $HDR_SPLAT_CHANGE_BUFFER_BINDING) buffer HdrSplatChanges {
-                uint changedCount;
-            };
-            uniform ivec2 uPlaneSize;
-
-            const int CORE_SIZE = $HDR_SPLAT_LOCAL_SIZE;
-            const int LAYERS = $HDR_SPLAT_LAYERS_PER_DISPATCH;
-            const int TILE_SIZE = CORE_SIZE + 2 * LAYERS;
-            const int TILE_CELL_COUNT = TILE_SIZE * TILE_SIZE;
-            const int LOCAL_INVOCATION_COUNT = CORE_SIZE * CORE_SIZE;
-            const uint REACHED_BIT = 1u;
-            const uint ALLOWED_BIT = 2u;
-            shared uint stateA[TILE_CELL_COUNT];
-            shared uint stateB[TILE_CELL_COUNT];
-
-            bool insidePlane(ivec2 p) {
-                return p.x >= 0 && p.y >= 0 && p.x < uPlaneSize.x && p.y < uPlaneSize.y;
-            }
-
-            uint encodedStateAt(ivec2 p) {
-                if (!insidePlane(p)) return 0u;
-                vec4 state = texelFetch(uSourceMask, p, 0);
-                uint encoded = state.a > 0.5 ? REACHED_BIT : 0u;
-                if (state.b > 0.5) encoded |= ALLOWED_BIT;
-                return encoded;
-            }
-
-            void main() {
-                ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * CORE_SIZE;
-                int localIndex = int(gl_LocalInvocationIndex);
-                for (int index = localIndex; index < TILE_CELL_COUNT;
-                    index += LOCAL_INVOCATION_COUNT) {
-                    int tileY = index / TILE_SIZE;
-                    int tileX = index - tileY * TILE_SIZE;
-                    ivec2 global = groupBase + ivec2(tileX - LAYERS, tileY - LAYERS);
-                    stateA[index] = encodedStateAt(global);
-                }
-                barrier();
-
-                for (int layer = 0; layer < LAYERS; ++layer) {
-                    bool readA = (layer & 1) == 0;
-                    for (int index = localIndex; index < TILE_CELL_COUNT;
-                        index += LOCAL_INVOCATION_COUNT) {
-                        int tileY = index / TILE_SIZE;
-                        int tileX = index - tileY * TILE_SIZE;
-                        uint state = readA ? stateA[index] : stateB[index];
-                        uint nextState = state;
-                        if ((state & REACHED_BIT) == 0u && (state & ALLOWED_BIT) != 0u) {
-                            bool touchesReached = false;
-                            for (int y = -1; y <= 1; ++y) {
-                                for (int x = -1; x <= 1; ++x) {
-                                    int neighborX = tileX + x;
-                                    int neighborY = tileY + y;
-                                    if ((x != 0 || y != 0) &&
-                                        neighborX >= 0 && neighborY >= 0 &&
-                                        neighborX < TILE_SIZE && neighborY < TILE_SIZE) {
-                                        int neighborIndex = neighborY * TILE_SIZE + neighborX;
-                                        uint neighborState = readA ?
-                                            stateA[neighborIndex] : stateB[neighborIndex];
-                                        touchesReached = touchesReached ||
-                                            (neighborState & REACHED_BIT) != 0u;
-                                    }
-                                }
-                            }
-                            if (touchesReached) nextState |= REACHED_BIT;
-                        }
-                        if (readA) {
-                            stateB[index] = nextState;
-                        } else {
-                            stateA[index] = nextState;
-                        }
-                    }
-                    barrier();
-                }
-
-                ivec2 p = groupBase + ivec2(gl_LocalInvocationID.xy);
-                if (!insidePlane(p)) return;
-                int outputTileX = int(gl_LocalInvocationID.x) + LAYERS;
-                int outputTileY = int(gl_LocalInvocationID.y) + LAYERS;
-                int outputIndex = outputTileY * TILE_SIZE + outputTileX;
-                uint finalState = (LAYERS & 1) == 0 ?
-                    stateA[outputIndex] : stateB[outputIndex];
-                vec4 sourceState = texelFetch(uSourceMask, p, 0);
-                float reached = (finalState & REACHED_BIT) != 0u ? 1.0 : 0.0;
-                if (reached > sourceState.a + 0.5) atomicAdd(changedCount, 1u);
-                float replacement = sourceState.r;
-                if (reached > 0.5 && sourceState.b > 1.5) {
-                    replacement = 1.0;
-                }
-                imageStore(
-                    uTargetMask,
-                    p,
-                    vec4(replacement, sourceState.g, sourceState.b, reached)
-                );
             }
         """.trimIndent()
 

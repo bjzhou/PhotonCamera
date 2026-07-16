@@ -289,8 +289,8 @@ object MultiFrameStacker {
             tuning = tuning,
             debugConfig = RawStackRuntimeDebug.debugConfig,
         ).processHdr(
-            shortFrame = GlesRawStacker.HdrInputFrame(shortFrame.image, shortFrame.exposureProduct),
-            normalFrames = normalFrames.map { GlesRawStacker.HdrInputFrame(it.image, it.exposureProduct) },
+            shortFrame = GlesRawHdrInputFrame(shortFrame.image, shortFrame.exposureProduct),
+            normalFrames = normalFrames.map { GlesRawHdrInputFrame(it.image, it.exposureProduct) },
         )
     }
 

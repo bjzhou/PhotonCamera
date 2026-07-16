@@ -1405,12 +1405,13 @@ class RawDemosaicProcessor {
 
             // 4. 第一步：全分辨率处理 (Linear CCM / RCD Compute Shader Demosaic)
             setupFullResFramebuffer(actualWidth, actualHeight)
-            if (actualSamplesPerPixel == 3) {
+            if (actualSamplesPerPixel in 3..4) {
                 uploadLinearRawRgbTextureFromBuffer(
                     actualRawData,
                     actualWidth,
                     actualHeight,
-                    actualRowStride
+                    actualRowStride,
+                    actualSamplesPerPixel,
                 )
                 actualRawData = null
                 renderLinearRawRgbToFramebuffer(
@@ -1423,7 +1424,11 @@ class RawDemosaicProcessor {
                     GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
                     rawTextureId = 0
                 }
-                PLog.d(TAG, "LinearRaw RGB input prepared on GPU: ${actualWidth}x${actualHeight}")
+                PLog.d(
+                    TAG,
+                    "LinearRaw input prepared on GPU: ${actualWidth}x${actualHeight} " +
+                        "samplesPerPixel=$actualSamplesPerPixel rowStride=$actualRowStride"
+                )
             } else {
                 uploadRawTextureFromBuffer(
                     actualRawData,
@@ -1751,6 +1756,7 @@ class RawDemosaicProcessor {
                 val solvedExposureEv = renderExposurePreviewRequest(
                     request = exposurePreviewRequest,
                     metadata = actualMetadata,
+                    samplesPerPixel = actualSamplesPerPixel,
                     sourceTextureId = demosaicTextureId,
                     rawBlackPointCorrection = rawBlackPointCorrection,
                     rawWhitePointCorrection = rawWhitePointCorrection,
@@ -3919,8 +3925,12 @@ class RawDemosaicProcessor {
         buffer: ByteBuffer,
         width: Int,
         height: Int,
-        rowStride: Int
+        rowStride: Int,
+        samplesPerPixel: Int,
     ) {
+        require(samplesPerPixel == 3 || samplesPerPixel == 4) {
+            "LinearRaw upload requires RGB or RGBX input, got samplesPerPixel=$samplesPerPixel"
+        }
         if (rawTextureId == 0) {
             val textures = IntArray(1)
             GLES30.glGenTextures(1, textures, 0)
@@ -3934,23 +3944,25 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
 
         buffer.position(0)
-        val bytesPerPixel = 6
+        val bytesPerPixel = samplesPerPixel * Short.SIZE_BYTES
         val rowLength = rowStride / bytesPerPixel
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowLength)
+        val internalFormat = if (samplesPerPixel == 4) GLES30.GL_RGBA16UI else GLES30.GL_RGB16UI
+        val format = if (samplesPerPixel == 4) GLES30.GL_RGBA_INTEGER else GLES30.GL_RGB_INTEGER
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D,
             0,
-            GLES30.GL_RGB16UI,
+            internalFormat,
             width,
             height,
             0,
-            GLES30.GL_RGB_INTEGER,
+            format,
             GLES30.GL_UNSIGNED_SHORT,
             buffer
         )
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
-        checkGlError("uploadLinearRawRgbTextureFromBuffer")
+        checkGlError("uploadLinearRawRgbTextureFromBuffer samplesPerPixel=$samplesPerPixel")
     }
 
     private fun renderLinearRawRgbToFramebuffer(
@@ -7379,6 +7391,7 @@ class RawDemosaicProcessor {
     private fun renderExposurePreviewRequest(
         request: RawExposurePreviewRequest,
         metadata: RawMetadata,
+        samplesPerPixel: Int,
         sourceTextureId: Int,
         rawBlackPointCorrection: Float,
         rawWhitePointCorrection: Float,
@@ -7407,25 +7420,6 @@ class RawDemosaicProcessor {
         val previewHeight = previewSize.height
         return try {
             setupLinearExposurePreviewFramebuffer(previewWidth, previewHeight)
-            renderLinearRcdPass(
-                metadata = metadata,
-                sourceTextureId = sourceTextureId,
-                targetFramebufferId = linearExposurePreviewFramebufferId,
-                viewportWidth = previewWidth,
-                viewportHeight = previewHeight,
-                rawExposureCompensation = 0f,
-                colorCorrectionMatrix = colorCorrectionMatrix,
-                cameraWhite = cameraWhite,
-                hueSatMap = dcpRenderPlan?.hueSatMap,
-                applyDngBaselineExposure = applyLinearDngBaselineExposure,
-                applyProfileGainTableMap = applyProfileGainTableMap,
-                clampProfileRgb = clampProfileRgb,
-                label = "LinearExposurePreviewPass"
-            )
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-            )
             setupCombinedFramebuffer(previewWidth, previewHeight)
             val previewBounds = scaleExposurePreviewBounds(
                 bounds = outputBounds,
@@ -7444,14 +7438,55 @@ class RawDemosaicProcessor {
                 pixelCount.toLong() * 4L,
                 "RAW exposure preview readback"
             ) ?: return null
+            val sourceBaselineEv = DngBaselineExposure.sanitize(metadata.baselineExposure)
+            PLog.i(
+                TAG,
+                "RAW_VIEWFINDER_BASELINE stage=METERING_SOURCE " +
+                    "source=WRITER_INPUT_BUFFER " +
+                    "layout=${if (samplesPerPixel >= 3) "LINEAR_RAW_RGB" else "CFA_RAW"} " +
+                    "samplesPerPixel=$samplesPerPixel size=${metadata.width}x${metadata.height} " +
+                    "sourceBaselineEv=$sourceBaselineEv candidateDomain=LINEAR_BASELINE"
+            )
             try {
                 request.solve { exposureEv ->
+                    val clampedExposureEv = exposureEv.coerceIn(
+                        MeteringSystem.RAW_EXPOSURE_MIN_EV,
+                        MeteringSystem.RAW_EXPOSURE_MAX_EV,
+                    )
+                    PLog.d(
+                        TAG,
+                        "RAW viewfinder linear candidate: sourceBaselineEv=$sourceBaselineEv " +
+                            "offsetEv=$clampedExposureEv " +
+                            "effectiveBaselineEv=${sourceBaselineEv + clampedExposureEv}"
+                    )
+                    // Render the exact baseline that would be written to the DNG. BaselineExposure
+                    // belongs to the linear RCD stage; applying the candidate in the profile ramp
+                    // would produce a different image than rendering the written DNG.
+                    renderLinearRcdPass(
+                        metadata = metadata,
+                        sourceTextureId = sourceTextureId,
+                        targetFramebufferId = linearExposurePreviewFramebufferId,
+                        viewportWidth = previewWidth,
+                        viewportHeight = previewHeight,
+                        rawExposureCompensation = clampedExposureEv,
+                        colorCorrectionMatrix = colorCorrectionMatrix,
+                        cameraWhite = cameraWhite,
+                        hueSatMap = dcpRenderPlan?.hueSatMap,
+                        applyDngBaselineExposure = applyLinearDngBaselineExposure,
+                        applyProfileGainTableMap = applyProfileGainTableMap,
+                        clampProfileRgb = clampProfileRgb,
+                        label = "LinearExposurePreviewPass"
+                    )
+                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                    GLES31.glMemoryBarrier(
+                        GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+                    )
                     renderToneMappedExposurePreviewFrame(
                         metadata = metadata,
                         linearTextureId = linearExposurePreviewTextureId,
                         width = previewWidth,
                         height = previewHeight,
-                        exposureEv = exposureEv,
+                        exposureEv = 0f,
                         dcpRenderPlan = dcpRenderPlan,
                         spectralFilmLut = spectralFilmLut,
                         colorEngine = colorEngine,
@@ -7462,7 +7497,7 @@ class RawDemosaicProcessor {
                         rawWhitesAdjustment = rawWhitePointCorrection,
                         useProfileExposureRamp = useProfileExposureRamp,
                         applyProfileDcpBaselineExposureOffset = applyProfileDcpBaselineExposureOffset,
-                        applyProfileDngBaselineExposure = !applyLinearDngBaselineExposure,
+                        applyProfileDngBaselineExposure = false,
                         readbackBounds = previewBounds,
                         readbackWidth = request.width.coerceAtLeast(1),
                         readbackHeight = request.height.coerceAtLeast(1),
