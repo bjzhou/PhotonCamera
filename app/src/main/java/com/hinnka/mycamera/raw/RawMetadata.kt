@@ -410,6 +410,46 @@ data class RawMetadata(
             }
         }
 
+        /**
+         * Returns red and blue noise models as [redSlope, redOffset, blueSlope, blueOffset].
+         *
+         * Camera2 profiles follow CFA position order; DNG profiles use [R, G, B]
+         * and may contain a zero-padded fourth pair after native parsing.
+         */
+        internal fun redBlueNoiseProfile(
+            channelNoiseProfile: FloatArray,
+            cfaPattern: Int
+        ): FloatArray {
+            fun pairAt(pairIndex: Int): FloatArray? {
+                val offset = pairIndex * 2
+                if (offset + 1 >= channelNoiseProfile.size) return null
+                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[offset])
+                val intercept = sanitizeNoiseCoefficient(channelNoiseProfile[offset + 1])
+                if (slope <= 0f && intercept <= 0f) return null
+                return floatArrayOf(slope, intercept)
+            }
+
+            val hasFourChannels = pairAt(3) != null
+            val (red, blue) = if (!hasFourChannels) {
+                pairAt(0) to pairAt(2)
+            } else {
+                val indices = when (cfaPattern.mod(4)) {
+                    CFA_GRBG -> 1 to 2
+                    CFA_GBRG -> 2 to 1
+                    CFA_BGGR -> 3 to 0
+                    else -> 0 to 3
+                }
+                pairAt(indices.first) to pairAt(indices.second)
+            }
+
+            return floatArrayOf(
+                red?.get(0) ?: 0f,
+                red?.get(1) ?: 0f,
+                blue?.get(0) ?: 0f,
+                blue?.get(1) ?: 0f
+            )
+        }
+
         private fun sanitizeNoiseCoefficient(value: Float): Float {
             return value.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
         }

@@ -89,6 +89,7 @@ class LutImageProcessor {
     private var bitmapDenoiseNlmFinishProgram = 0
     private var bitmapDenoisePassthroughProgram = 0
     private var naturalLightSrgbToLinearProgram = 0
+    private var bitmapChromaDenoiseGuideProgram = 0
     private var bitmapChromaDenoiseProgram = 0
     private var lutSharpenProgram = 0
 
@@ -1514,7 +1515,8 @@ class LutImageProcessor {
         bitmapDenoiseNlmFinishProgram = compileComputeProgram(DenoiseProfileShaders.FINISH_V2, "BitmapDenoise_NLM_FinishV2")
         bitmapDenoisePassthroughProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, TEXTURE_PASSTHROUGH_SHADER, "BitmapDenoise_Passthrough")
         naturalLightSrgbToLinearProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, SRGB_TO_LINEAR_SHADER, "NaturalLight_SrgbToLinear")
-        bitmapChromaDenoiseProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_CHROMA_DENOISE, "BitmapChromaDenoise_BM3DPass0")
+        bitmapChromaDenoiseGuideProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_EDGE_GUIDE, "BitmapChromaDenoise_EdgeGuide")
+        bitmapChromaDenoiseProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, ChromaDenoiseShaders.PASS_CHROMA_DENOISE, "BitmapChromaDenoise_MultiScale")
         lutSharpenProgram = createFragmentProgram(IMAGE_VERTEX_SHADER, RawShaders.SHARPEN_FRAGMENT_SHADER, "LutSharpen")
         PLog.d(
             TAG,
@@ -1522,6 +1524,7 @@ class LutImageProcessor {
                 "init=$bitmapDenoiseNlmInitProgram fusedAccu=$bitmapDenoiseNlmFusedAccuProgram " +
                 "finish=$bitmapDenoiseNlmFinishProgram " +
                 "pass=$bitmapDenoisePassthroughProgram linearize=$naturalLightSrgbToLinearProgram " +
+                "chromaGuide=$bitmapChromaDenoiseGuideProgram " +
                 "chroma=$bitmapChromaDenoiseProgram " +
                 "sharpen=$lutSharpenProgram"
         )
@@ -1642,14 +1645,26 @@ class LutImageProcessor {
 
         val strength = chromaNoiseReduction.coerceIn(0f, 1f)
         val target = targetIndex.coerceIn(0, bitmapDenoiseTexId.lastIndex)
-        if (strength <= 0f || bitmapChromaDenoiseProgram == 0) {
+        val edgeGuidanceRelaxation =
+            ChromaDenoiseDefaults.edgeGuidanceRelaxation(strength)
+        if (strength <= 0f || bitmapChromaDenoiseProgram == 0 ||
+            bitmapChromaDenoiseGuideProgram == 0
+        ) {
             renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[target], width, height)
             return
         }
 
         val identityMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-        val h = strength * strength * ChromaDenoiseShaders.SIGMA_STRENGTH_AT_SLIDER_ONE
+        val h = ChromaDenoiseDefaults.noiseBandwidth(strength)
+        val guideIndex = if (target == 0) 1 else 0
+        renderBitmapChromaDenoiseEdgeGuide(
+            sourceTextureId,
+            bitmapDenoiseFboId[guideIndex],
+            width,
+            height
+        )
+        val guideTextureId = bitmapDenoiseTexId[guideIndex]
 
         GLES30.glUseProgram(bitmapChromaDenoiseProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bitmapDenoiseFboId[target])
@@ -1657,6 +1672,12 @@ class LutImageProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uInputTexture"), 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, guideTextureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uGuideTexture"),
+            1
+        )
         GLES30.glUniform2f(
             GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uTexelSize"),
             1.0f / width,
@@ -1669,14 +1690,68 @@ class LutImageProcessor {
             identityMatrix,
             0
         )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uOutputStrength"),
+            ChromaDenoiseDefaults.outputStrength(strength)
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(
+                bitmapChromaDenoiseProgram,
+                "uEdgeGuidanceRelaxation"
+            ),
+            edgeGuidanceRelaxation
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uCameraRgbInput"),
+            0
+        )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uH"), h)
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uNoiseModel"),
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uNoiseModelRB"),
+            BITMAP_DENOISE_A * 2f,
+            BITMAP_DENOISE_B * 2f,
             BITMAP_DENOISE_A * 2f,
             BITMAP_DENOISE_B * 2f
         )
         drawQuad(bitmapChromaDenoiseProgram)
         checkGlError("renderBitmapChromaDenoise")
+    }
+
+    private fun renderBitmapChromaDenoiseEdgeGuide(
+        sourceTextureId: Int,
+        targetFramebufferId: Int,
+        width: Int,
+        height: Int,
+    ) {
+        GLES30.glUseProgram(bitmapChromaDenoiseGuideProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uInputTexture"),
+            0
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uTexelSize"),
+            1.0f / width,
+            1.0f / height
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uCameraRgbInput"),
+            0
+        )
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uMVPMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0
+        )
+        drawQuad(bitmapChromaDenoiseGuideProgram)
+        checkGlError("renderBitmapChromaDenoiseEdgeGuide")
     }
 
     private fun resolvePreToneMapChromaDenoise(
@@ -2729,6 +2804,7 @@ class LutImageProcessor {
         if (bitmapDenoiseNlmFinishProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFinishProgram)
         if (bitmapDenoisePassthroughProgram != 0) GLES30.glDeleteProgram(bitmapDenoisePassthroughProgram)
         if (naturalLightSrgbToLinearProgram != 0) GLES30.glDeleteProgram(naturalLightSrgbToLinearProgram)
+        if (bitmapChromaDenoiseGuideProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseGuideProgram)
         if (bitmapChromaDenoiseProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseProgram)
         if (lutSharpenProgram != 0) {
             GLES30.glDeleteProgram(lutSharpenProgram)

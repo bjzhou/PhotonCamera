@@ -49,6 +49,53 @@ class RawNoiseProfileSelectionTest {
     }
 
     @Test
+    fun camera2ProfileSelectsRedAndBlueFromCfaPositionOrder() {
+        val profile = floatArrayOf(
+            1f, 10f,
+            2f, 20f,
+            4f, 40f,
+            8f, 80f,
+        )
+
+        assertArrayEquals(
+            floatArrayOf(1f, 10f, 8f, 80f),
+            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_RGGB),
+            0f
+        )
+        assertArrayEquals(
+            floatArrayOf(2f, 20f, 4f, 40f),
+            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_GRBG),
+            0f
+        )
+        assertArrayEquals(
+            floatArrayOf(4f, 40f, 2f, 20f),
+            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_GBRG),
+            0f
+        )
+        assertArrayEquals(
+            floatArrayOf(8f, 80f, 1f, 10f),
+            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_BGGR),
+            0f
+        )
+    }
+
+    @Test
+    fun threePlaneDngProfileSelectsRedAndBlueAndIgnoresPadding() {
+        val profile = floatArrayOf(
+            1f, 10f,
+            2f, 20f,
+            8f, 80f,
+            0f, 0f,
+        )
+
+        assertArrayEquals(
+            floatArrayOf(1f, 10f, 8f, 80f),
+            RawMetadata.redBlueNoiseProfile(profile, RawMetadata.CFA_BGGR),
+            0f
+        )
+    }
+
+    @Test
     fun denoiseProfileShaderUsesCameraDomainSignalScaleInsteadOfWhiteBalanceScale() {
         val shader = DenoiseProfileShaders.PRECONDITION_V2 + DenoiseProfileShaders.FINISH_V2
 
