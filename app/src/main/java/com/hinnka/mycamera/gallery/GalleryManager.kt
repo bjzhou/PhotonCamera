@@ -26,6 +26,7 @@ import com.hinnka.mycamera.hdr.SourceKind
 import com.hinnka.mycamera.hdr.UltraHdrWriter
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
+import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.lut.applyEffectsToVideoFile
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
@@ -1889,7 +1890,8 @@ object GalleryManager {
             var updatedMetadata: MediaMetadata = metadata
             val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
-            val rawChromaNoiseReduction = resolveChromaNoiseReduction(updatedMetadata, chromaNoiseReductionValue)
+            val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
+                ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
             val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
                 context,
                 dngFile.absolutePath,
@@ -1935,7 +1937,8 @@ object GalleryManager {
             updatedMetadata = updatedMetadata.copy(
                 width = bitmap.width,
                 height = bitmap.height,
-                sharpening = rawSharpening
+                sharpening = rawSharpening,
+                chromaNoiseReduction = rawChromaNoiseReduction
             )
 
             FileOutputStream(tempFile).use { outputStream ->
@@ -2792,7 +2795,8 @@ object GalleryManager {
             var updatedMetadata: MediaMetadata = stackedMetadata
             val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
-            val rawChromaNoiseReduction = resolveChromaNoiseReduction(updatedMetadata, chromaNoiseReductionValue)
+            val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
+                ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
             val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
                 context,
                 dngFile.absolutePath,
@@ -2838,7 +2842,8 @@ object GalleryManager {
             updatedMetadata = updatedMetadata.copy(
                 width = bitmap.width,
                 height = bitmap.height,
-                sharpening = rawSharpening
+                sharpening = rawSharpening,
+                chromaNoiseReduction = rawChromaNoiseReduction
             )
 
             // Save Original (Stacked Result)
@@ -3231,7 +3236,8 @@ object GalleryManager {
         var updatedMetadata: MediaMetadata = metadata.withEmbeddedDngToneMapDefaults(dngFile)
         val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
         val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
-        val rawChromaNoiseReduction = resolveChromaNoiseReduction(updatedMetadata, chromaNoiseReductionValue)
+        val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
+            ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
         val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
             context,
             dngFile.absolutePath,
@@ -3277,7 +3283,8 @@ object GalleryManager {
         updatedMetadata = updatedMetadata.copy(
             width = bitmap.width,
             height = bitmap.height,
-            sharpening = rawSharpening
+            sharpening = rawSharpening,
+            chromaNoiseReduction = rawChromaNoiseReduction
         )
 
         FileOutputStream(tempFile).use { outputStream ->
@@ -4564,6 +4571,12 @@ object GalleryManager {
                     var updatedMetadata: MediaMetadata = metadata
                         .withImportedRawToneMapPreference(context)
                         .withEmbeddedDngToneMapDefaults(dngFile)
+                        .let { rawMetadata ->
+                            rawMetadata.copy(
+                                chromaNoiseReduction = rawMetadata.chromaNoiseReduction
+                                    ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
+                            )
+                        }
                     if (deferRawPreview) {
                         val metadataSaved = saveMetadata(context, photoId, updatedMetadata)
                         if (!metadataSaved) {
@@ -4573,7 +4586,8 @@ object GalleryManager {
                     } else {
                         // 3. 处理 RAW 以生成 JPEG 预览
                         val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, 0f)
-                        val rawChromaNoiseReduction = resolveChromaNoiseReduction(updatedMetadata, 0f)
+                        val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
+                            ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
                         val processedBitmap = RawDemosaicProcessor.getInstance().process(
                             context,
                             dngFile.absolutePath, null, null, 0,
@@ -4621,7 +4635,8 @@ object GalleryManager {
                             updatedMetadata = updatedMetadata.copy(
                                 width = processedBitmap.width,
                                 height = processedBitmap.height,
-                                rotation = 0
+                                rotation = 0,
+                                chromaNoiseReduction = rawChromaNoiseReduction
                             )
                             saveMetadata(context, photoId, updatedMetadata)
 //                        if (updatedMetadata.computationalAperture != null) {
@@ -4737,7 +4752,8 @@ object GalleryManager {
                 var updatedMetadata = metadata
                 val rawMetadata = updatedMetadata ?: MediaMetadata()
                 val rawNoiseReduction = resolveNoiseReduction(rawMetadata, 0f)
-                val rawChromaNoiseReduction = resolveChromaNoiseReduction(rawMetadata, 0f)
+                val rawChromaNoiseReduction = rawMetadata.chromaNoiseReduction
+                    ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
                 val processedBitmap = RawDemosaicProcessor.getInstance().process(
                     context,
                     dngFile.absolutePath, metadata?.ratio, metadata?.cropRegion, 0,
@@ -4792,7 +4808,8 @@ object GalleryManager {
                         val finalMetadata = it.copy(
                             width = processedBitmap.width,
                             height = processedBitmap.height,
-                            hasAiDenoisedBase = false
+                            hasAiDenoisedBase = false,
+                            chromaNoiseReduction = rawChromaNoiseReduction
                         )
                         generateBokehPhoto(context, photoId, finalMetadata, processedBitmap.copy(Bitmap.Config.ARGB_8888, true))
                         saveMetadata(context, photoId, finalMetadata)

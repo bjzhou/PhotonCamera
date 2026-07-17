@@ -1,16 +1,14 @@
 package com.hinnka.mycamera.lut
 
 object ChromaDenoiseDefaults {
-    const val RAW_HIDDEN_BASE_STRENGTH = 0.25f
+    const val RAW_CAPTURE_DEFAULT_STRENGTH = 0.25f
     private const val MIN_ACTIVE_NOISE_BANDWIDTH = 1.0f
     private const val MAX_NOISE_BANDWIDTH = 8.0f
     private const val FULL_OUTPUT_STRENGTH_POINT = 0.25f
     private const val EDGE_GUIDANCE_START_POINT = 0.75f
 
-    fun rawDefaultStrength(userStrength: Float): Float {
-        val clamped = userStrength.coerceIn(0f, 1f)
-        return RAW_HIDDEN_BASE_STRENGTH + clamped * (1f - RAW_HIDDEN_BASE_STRENGTH)
-    }
+    fun forRawCapture(requested: Float): Float =
+        maxOf(requested, RAW_CAPTURE_DEFAULT_STRENGTH)
 
     /**
      * Keeps the bilateral kernel wide enough to recognize noise at every active

@@ -1759,7 +1759,7 @@ class LutImageProcessor {
         applyNaturalLightDefault: Boolean
     ): Float {
         return if (applyNaturalLightDefault) {
-            ChromaDenoiseDefaults.rawDefaultStrength(userStrength)
+            ChromaDenoiseDefaults.forRawCapture(userStrength)
         } else {
             userStrength.coerceIn(0f, 1f)
         }

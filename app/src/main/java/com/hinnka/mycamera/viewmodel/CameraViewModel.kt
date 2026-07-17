@@ -52,6 +52,7 @@ import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
@@ -4588,7 +4589,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 requestedSharpeningValue
             }
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val requestedChromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = if (isRawCaptureFormat(image.format)) {
+                ChromaDenoiseDefaults.forRawCapture(requestedChromaNoiseReductionValue)
+            } else {
+                requestedChromaNoiseReductionValue
+            }
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
             val droModeForProcessing =
@@ -5172,7 +5178,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 requestedSharpeningValue
             }
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val requestedChromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = if (isRawStack) {
+                ChromaDenoiseDefaults.forRawCapture(requestedChromaNoiseReductionValue)
+            } else {
+                requestedChromaNoiseReductionValue
+            }
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val droModeString = droMode.value
             val currentCameraId = cameraController.getCurrentCameraId()
@@ -5646,7 +5657,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
             val sharpeningValue = RawSharpeningDefaults.forCapture(sharpening.firstOrNull() ?: 0f)
             val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+            val chromaNoiseReductionValue = ChromaDenoiseDefaults.forRawCapture(
+                chromaNoiseReduction.firstOrNull() ?: 0f
+            )
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val captureMode = if (state.value.useMFNR) "raw_hdr_mfnr" else "raw_hdr_bracket"
             val baseImage = images.first()
@@ -5724,7 +5737,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             requestedSharpeningValue
         }
         val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-        val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+        val requestedChromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
+        val chromaNoiseReductionValue = if (isRawCaptureFormat(image.format)) {
+            ChromaDenoiseDefaults.forRawCapture(requestedChromaNoiseReductionValue)
+        } else {
+            requestedChromaNoiseReductionValue
+        }
         val currentCameraId = cameraController.getCurrentCameraId()
 
         // 计算旋转角度

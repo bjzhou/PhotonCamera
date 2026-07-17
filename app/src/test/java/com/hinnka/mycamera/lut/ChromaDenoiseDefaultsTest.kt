@@ -5,6 +5,13 @@ import org.junit.Test
 
 class ChromaDenoiseDefaultsTest {
     @Test
+    fun rawCaptureUsesAnExplicitDefaultWithoutScalingUserValues() {
+        assertEquals(0.25f, ChromaDenoiseDefaults.forRawCapture(0f), 0f)
+        assertEquals(0.25f, ChromaDenoiseDefaults.forRawCapture(0.1f), 0f)
+        assertEquals(0.5f, ChromaDenoiseDefaults.forRawCapture(0.5f), 0f)
+    }
+
+    @Test
     fun activeNoiseBandwidthRespondsAcrossTheWholeSliderRange() {
         assertEquals(0f, ChromaDenoiseDefaults.noiseBandwidth(0f), 0f)
         assertEquals(5.25f, ChromaDenoiseDefaults.noiseBandwidth(0.25f), 1e-6f)

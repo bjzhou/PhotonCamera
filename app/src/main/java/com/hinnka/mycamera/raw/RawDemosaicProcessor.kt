@@ -3894,7 +3894,7 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         chromaDenoiseValue: Float?,
     ): Int {
-        val strength = ChromaDenoiseDefaults.rawDefaultStrength(chromaDenoiseValue ?: 0f)
+        val strength = chromaDenoiseValue?.coerceIn(0f, 1f) ?: 0f
         if (strength <= 0f || width * height < 2) {
             return sourceTextureId
         }
