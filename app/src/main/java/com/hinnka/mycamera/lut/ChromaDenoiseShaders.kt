@@ -3,10 +3,10 @@ package com.hinnka.mycamera.lut
 /**
  * Shared multi-scale edge-guided chroma denoise shader.
  *
- * RAW input is filtered in normalized camera RGB opponent space before white
+ * RAW input is filtered in linear camera RGB opponent space before white
  * balance and color conversion. Bitmap input retains its luma/chroma transform.
- * Above half strength, a prefiltered green/luma guide is relaxed independently
- * of the chroma bandwidth so dense color noise can regain spatial support.
+ * Both paths use a prefiltered luminance guide. RAW luminance is the symmetric
+ * camera-RGB mean; bitmap luminance retains its display-space coefficients.
  */
 object ChromaDenoiseShaders {
     val PASS_EDGE_GUIDE = """
@@ -20,7 +20,7 @@ object ChromaDenoiseShaders {
 
         float guideSignal(vec3 rgb) {
             if (uCameraRgbInput != 0) {
-                return rgb.g;
+                return (rgb.r + rgb.g + rgb.b) / 3.0;
             }
             return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
         }
@@ -51,8 +51,11 @@ object ChromaDenoiseShaders {
         uniform float uOutputStrength;
         uniform float uEdgeGuidanceRelaxation;
         uniform int uCameraRgbInput;
+        // Camera-domain variance models. RB order is
         // [red slope, red offset, blue slope, blue offset].
         uniform vec4 uNoiseModelRB;
+        // [green slope, green offset].
+        uniform vec2 uNoiseModelG;
 
         vec3 rgb2ycbcr(vec3 rgb) {
             float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
@@ -66,44 +69,42 @@ object ChromaDenoiseShaders {
                         yuv.x + 1.8556   * yuv.y);
         }
 
-        vec2 redBlueNoiseSigma(vec3 rgb) {
-            float redVariance =
-                uNoiseModelRB.x * max(rgb.r, 0.0) + uNoiseModelRB.y;
-            float blueVariance =
-                uNoiseModelRB.z * max(rgb.b, 0.0) + uNoiseModelRB.w;
-            return sqrt(max(vec2(redVariance, blueVariance), vec2(1e-10)));
-        }
-
-        float cameraChromaScale(vec3 rgb) {
-            // Above the noise floor this is ordinary green-normalized opponent
-            // color. In deep shadows the R/B model supplies a stable denominator
-            // so chroma ratios cannot explode as green approaches zero.
-            vec2 rbSigma = redBlueNoiseSigma(rgb);
-            float noiseFloor = 4.0 * max(rbSigma.x, rbSigma.y);
-            return max(max(rgb.g, 0.0), max(noiseFloor, 1e-4));
+        vec3 channelNoiseVariance(vec3 rgb) {
+            return max(
+                vec3(
+                    uNoiseModelRB.x * max(rgb.r, 0.0) + uNoiseModelRB.y,
+                    uNoiseModelG.x * max(rgb.g, 0.0) + uNoiseModelG.y,
+                    uNoiseModelRB.z * max(rgb.b, 0.0) + uNoiseModelRB.w
+                ),
+                vec3(1e-10)
+            );
         }
 
         vec3 rgbToFilterSpace(vec3 rgb) {
             if (uCameraRgbInput != 0) {
-                float scale = cameraChromaScale(rgb);
+                // Keep every sample in one linear camera-RGB coordinate system.
+                // Exposure invariance is restored after each weighted mean, not
+                // by averaging unstable per-pixel ratios in the shadows.
                 return vec3(
-                    rgb.g,
-                    (rgb.r - rgb.g) / scale,
-                    (rgb.b - rgb.g) / scale
+                    (rgb.r + rgb.g + rgb.b) / 3.0,
+                    rgb.r - rgb.g,
+                    rgb.b - rgb.g
                 );
             }
             return rgb2ycbcr(rgb);
         }
 
-        vec3 filterSpaceToRgb(vec3 value, vec3 referenceRgb) {
+        vec3 filterSpaceToRgb(vec3 value) {
             if (uCameraRgbInput != 0) {
-                float green = value.x;
-                float scale = cameraChromaScale(referenceRgb);
+                // value.x is the symmetric camera-RGB mean, not green. Recover
+                // the three channels from mean, R-G and B-G without giving any
+                // channel a privileged luminance role.
+                float green = value.x - (value.y + value.z) / 3.0;
                 return max(
                     vec3(
-                        green + value.y * scale,
+                        green + value.y,
                         green,
-                        green + value.z * scale
+                        green + value.z
                     ),
                     vec3(0.0)
                 );
@@ -112,27 +113,35 @@ object ChromaDenoiseShaders {
         }
 
         vec2 chromaNoiseSigma(vec3 rgb) {
-            vec2 rbSigma = redBlueNoiseSigma(rgb);
+            vec3 variance = channelNoiseVariance(rgb);
             if (uCameraRgbInput != 0) {
-                // Normalized opponent order is (R-G)/scale, (B-G)/scale.
-                return rbSigma / cameraChromaScale(rgb);
+                // Var(R-G) = Var(R) + Var(G), likewise for B-G.
+                return sqrt(max(variance.rb + variance.gg, vec2(1e-10)));
             }
-            // Bitmap filter-space order is Cb, Cr.
-            return rbSigma.yx;
+            const vec3 cb = vec3(-0.114572, -0.385428, 0.5);
+            const vec3 cr = vec3(0.5, -0.454153, -0.045847);
+            return sqrt(max(
+                vec2(dot(cb * cb, variance), dot(cr * cr, variance)),
+                vec2(1e-10)
+            ));
         }
 
         float guideNoiseSigma(vec3 rgb) {
-            // The guide remains in linear green/luma units, so its range bandwidth
-            // must use the unnormalized R/B sigma rather than opponent-space sigma.
-            vec2 rbSigma = redBlueNoiseSigma(rgb);
-            return max(rbSigma.x, rbSigma.y);
+            vec3 variance = channelNoiseVariance(rgb);
+            if (uCameraRgbInput != 0) {
+                return sqrt(max((variance.r + variance.g + variance.b) / 9.0, 1e-10));
+            }
+            const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+            return sqrt(max(dot(luma * luma, variance), 1e-10));
         }
 
         void filterScale(
             float radius,
             float centerGuide,
+            float centerSignal,
             vec2 baseChroma,
             vec2 chromaGuide,
+            float chromaGuidance,
             float invGuideH2,
             vec2 invChromaH2,
             out vec2 filteredChroma,
@@ -141,6 +150,7 @@ object ChromaDenoiseShaders {
             // The center estimate anchors each wider scale and prevents a sparse
             // coarse neighborhood from replacing a small valid color feature.
             vec2 sumChroma = baseChroma;
+            float sumSignal = centerSignal;
             float sumWeight = 1.0;
             float acceptedLumaSupport = 0.0;
             float totalSupport = 0.0;
@@ -163,20 +173,39 @@ object ChromaDenoiseShaders {
                     float guideWeight =
                         exp(-(guideDelta * guideDelta) * invGuideH2);
                     vec2 chromaDelta = sampleValue.yz - chromaGuide;
-                    float chromaWeight = exp(-dot(chromaDelta * chromaDelta, invChromaH2));
+                    float chromaDistance =
+                        dot(chromaDelta * chromaDelta, invChromaH2);
+                    // A noisy center chroma must not select only samples with the
+                    // same noise color. In low-SNR shadows chroma is the value
+                    // being estimated, never an edge guide; the prefiltered
+                    // luminance remains responsible for structure. RAW uses the
+                    // symmetric RGB mean rather than a single-channel edge veto.
+                    float chromaWeight =
+                        exp(-chromaDistance * chromaGuidance);
                     float weight = spatialWeight * guideWeight * chromaWeight;
 
                     sumChroma += sampleValue.yz * weight;
+                    sumSignal += sampleValue.x * weight;
                     sumWeight += weight;
                     acceptedLumaSupport += spatialWeight * guideWeight;
                     totalSupport += spatialWeight;
                 }
             }
 
-            filteredChroma = sumChroma / max(sumWeight, 1e-6);
-            // The guide is always active. Above half strength its bandwidth grows,
-            // admitting weak/noisy pseudo-edges while real strong edges still
-            // receive exponential rejection.
+            vec2 averageChroma = sumChroma / max(sumWeight, 1e-6);
+            if (uCameraRgbInput != 0) {
+                // averageChroma is the opponent component of the weighted RGB
+                // mean. Scale that mean back to the center RGB mean so exposure
+                // differences in sparse/coarse samples cannot turn into color.
+                // This ratio-of-means is stable in shadows and exactly preserves
+                // a constant camera chromaticity across an exposure gradient.
+                float averageSignal = sumSignal / max(sumWeight, 1e-6);
+                float signalScale = centerSignal / max(averageSignal, 1e-6);
+                filteredChroma = averageChroma * signalScale;
+            } else {
+                filteredChroma = averageChroma;
+            }
+            // Support reflects the shared luminance guide in both input domains.
             edgeSupport = acceptedLumaSupport / max(totalSupport, 1e-6);
         }
 
@@ -194,14 +223,24 @@ object ChromaDenoiseShaders {
             vec3 centerValue = rgbToFilterSpace(source.rgb);
             vec2 noiseSigma = chromaNoiseSigma(source.rgb);
             vec2 localH = max(uH * noiseSigma, vec2(1e-5));
-            float shadowFactor =
-                1.0 - smoothstep(0.03, 0.35, max(centerValue.x, 0.0));
 
             float centerGuide = texture(uGuideTexture, vTexCoord).r;
+            float guideSigma = guideNoiseSigma(source.rgb);
+            float signalSnr = max(centerGuide, 0.0) / max(guideSigma, 1e-6);
+            // Below the useful chroma SNR, disable chroma self-guidance so an
+            // isolated purple/green/blue noise sample cannot preserve itself by
+            // rejecting the rest of the neighborhood. Restore it smoothly only
+            // where real color edges are measurable.
+            float chromaGuidance = smoothstep(4.0, 12.0, signalSnr);
+            float shadowFactor = 1.0 - chromaGuidance;
             float guideBandwidthScale =
                 mix(1.0, 4.0, uEdgeGuidanceRelaxation);
+            // Deep-shadow luminance is itself noisy. Keep its guide permissive
+            // until signal confidence rises, otherwise a purple RGB impulse can
+            // preserve itself merely by also changing the local luminance.
             float guideH =
-                guideNoiseSigma(source.rgb) * 4.0 * guideBandwidthScale;
+                guideSigma * mix(10.0, 4.0, chromaGuidance) *
+                    guideBandwidthScale;
             float invGuideH2 = 1.0 / max(guideH * guideH, 1e-8);
 
             vec2 fineCandidate;
@@ -212,8 +251,10 @@ object ChromaDenoiseShaders {
             filterScale(
                 1.0,
                 centerGuide,
+                centerValue.x,
                 centerValue.yz,
                 centerValue.yz,
+                chromaGuidance,
                 invGuideH2,
                 1.0 / max(fineH * fineH, vec2(1e-8)),
                 fineCandidate,
@@ -228,8 +269,10 @@ object ChromaDenoiseShaders {
             filterScale(
                 4.0,
                 centerGuide,
+                centerValue.x,
                 fineChroma,
                 fineChroma,
+                chromaGuidance,
                 invGuideH2,
                 1.0 / max(mediumH * mediumH, vec2(1e-8)),
                 mediumCandidate,
@@ -245,8 +288,10 @@ object ChromaDenoiseShaders {
             filterScale(
                 14.0,
                 centerGuide,
+                centerValue.x,
                 mediumChroma,
                 mediumChroma,
+                chromaGuidance,
                 invGuideH2,
                 1.0 / max(coarseH * coarseH, vec2(1e-8)),
                 coarseCandidate,
@@ -267,8 +312,10 @@ object ChromaDenoiseShaders {
             filterScale(
                 cloudRadius,
                 centerGuide,
+                centerValue.x,
                 coarseChroma,
                 coarseChroma,
+                chromaGuidance,
                 invGuideH2,
                 1.0 / max(cloudH * cloudH, vec2(1e-8)),
                 cloudCandidate,
@@ -278,7 +325,7 @@ object ChromaDenoiseShaders {
                 uOutputStrength * featheredEdgeSupport(cloudSupport, 1.5);
 
             centerValue.yz = mix(coarseChroma, cloudCandidate, cloudMix);
-            fragColor = vec4(filterSpaceToRgb(centerValue, source.rgb), source.a);
+            fragColor = vec4(filterSpaceToRgb(centerValue), source.a);
         }
     """.trimIndent()
 }

@@ -1713,6 +1713,11 @@ class LutImageProcessor {
             BITMAP_DENOISE_A * 2f,
             BITMAP_DENOISE_B * 2f
         )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uNoiseModelG"),
+            BITMAP_DENOISE_A * 2f,
+            BITMAP_DENOISE_B * 2f
+        )
         drawQuad(bitmapChromaDenoiseProgram)
         checkGlError("renderBitmapChromaDenoise")
     }

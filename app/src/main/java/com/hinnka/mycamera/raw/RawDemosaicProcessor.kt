@@ -2808,7 +2808,6 @@ class RawDemosaicProcessor {
             ) {
                 chromaDenoiseGuideProgram = 0
             }
-
             GLES30.glDeleteShader(fShaderChromaDenoiseGuide)
         }
 
@@ -3929,7 +3928,7 @@ class RawDemosaicProcessor {
         val edgeGuidanceRelaxation =
             ChromaDenoiseDefaults.edgeGuidanceRelaxation(strength)
         setupNLMFramebuffers(width, height)
-        renderChromaDenoiseEdgeGuide(sourceTextureId, width, height)
+        renderChromaDenoiseLuminanceGuide(sourceTextureId, width, height)
         val guideTextureId = gfTexId[0]
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)
@@ -3978,6 +3977,11 @@ class RawDemosaicProcessor {
             noiseModel.blueSlope,
             noiseModel.blueOffset
         )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(chromaDenoiseProgram, "uNoiseModelG"),
+            noiseModel.greenSlope,
+            noiseModel.greenOffset
+        )
         drawQuad(chromaDenoiseProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGlError("RAW chroma denoise")
@@ -3987,12 +3991,13 @@ class RawDemosaicProcessor {
             "RAW chroma denoise before luma: strength=$strength h=$h " +
                 "edgeGuidanceRelaxation=$edgeGuidanceRelaxation " +
                 "red=(${noiseModel.redSlope}, ${noiseModel.redOffset}) " +
+                "green=(${noiseModel.greenSlope}, ${noiseModel.greenOffset}) " +
                 "blue=(${noiseModel.blueSlope}, ${noiseModel.blueOffset})"
         )
         return linearOutputTextureId
     }
 
-    private fun renderChromaDenoiseEdgeGuide(
+    private fun renderChromaDenoiseLuminanceGuide(
         sourceTextureId: Int,
         width: Int,
         height: Int,
@@ -4026,9 +4031,8 @@ class RawDemosaicProcessor {
         )
         drawQuad(chromaDenoiseGuideProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("RAW chroma denoise edge guide")
+        checkGlError("RAW chroma denoise luminance guide")
     }
-
 
     /**
      * 渲染 darktable denoiseprofile NLM 降噪。
@@ -4505,6 +4509,8 @@ class RawDemosaicProcessor {
     private data class ChromaDenoiseNoiseModel(
         val redSlope: Float,
         val redOffset: Float,
+        val greenSlope: Float,
+        val greenOffset: Float,
         val blueSlope: Float,
         val blueOffset: Float
     )
@@ -4530,6 +4536,8 @@ class RawDemosaicProcessor {
                 ?: fallback
         }
 
+        val (greenSlope, greenOffset) =
+            resolveDenoiseProfileNoiseModel(metadata, fallbackGain)
         val frameNoiseScale = 1f / metadata.frameCount.coerceAtLeast(1).toFloat()
         return ChromaDenoiseNoiseModel(
             redSlope =
@@ -4538,6 +4546,8 @@ class RawDemosaicProcessor {
             redOffset =
                 (coefficient(1, fallbackOffset) * frameNoiseScale)
                     .coerceAtLeast(1e-10f),
+            greenSlope = greenSlope,
+            greenOffset = greenOffset,
             blueSlope =
                 (coefficient(2, fallbackSlope) * frameNoiseScale)
                     .coerceAtLeast(1e-10f),
