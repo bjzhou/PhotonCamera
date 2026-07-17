@@ -65,10 +65,88 @@ MFSR accumulator 只保存 `weightedValue + weight`，使用一张 `R32UI`，为
 `app/src/androidTest/java/com/hinnka/mycamera/processor/GlesRawStackerShaderTest.kt`，让测试实际
 dispatch 对应 pass，而不只编译 program。
 
+## vivo V2242A / Mali-G715-Immortalis MC11
+
+已确认环境：
+
+- 设备：vivo V2242A
+- SoC 平台：MT6985
+- 系统：Android 15
+- GPU：ARM Mali-G715-Immortalis MC11
+- GLES：OpenGL ES 3.2，驱动 `v1.r38p1`
+
+### `uint16` 直接转浮点再归一化会在饱和值产生非有限值
+
+HDR 输出使用三通道 16-bit LinearRaw。应用重新打开 DNG 时，先把 `GL_RGB16UI` 输入转换到
+`RGBA16F` 线性工作纹理。以下看似符合 GLSL 语义的写法在该驱动上不能使用：
+
+```glsl
+uvec3 sample16 = texture(uLinearRawTexture, vTexCoord).rgb;
+vec3 rgb = vec3(sample16) * (1.0 / 65535.0);
+```
+
+在饱和输入 `65535` 附近，该驱动会让整数转浮点的中间结果表现得像 FP16。`65535` 超过
+FP16 最大有限值 `65504`，因而先产生 `Inf`，再进入色度降噪的 `R-G`、`B-G` 运算并形成
+`Inf-Inf=NaN`。
+
+外部表现包括：
+
+- 完全饱和高光变成纯绿色；
+- 高光边缘出现不规则绿色过渡带；
+- 切换渲染引擎后，同一位置可能变成黑色，因为不同 shader 对非有限值的最终表现不同；
+- 问题只出现在 HDR LinearRaw 路径，仍走 CFA 输入的 MFNR/MFSR 不受影响。
+
+`highp` 声明、把输入从 `GL_RGB16UI` 改成 `GL_RGBA16UI`，均不能消除该问题。后者只改变
+纹理像素布局，错误的数值转换仍然存在。
+
+### 当前兼容策略
+
+在整数域先拆分高、低 8 bit，使每次整数转浮点的输入都不超过 255，再分别归一化：
+
+```glsl
+uvec3 sample16 = texture(uLinearRawTexture, vTexCoord).rgb;
+uvec3 high8 = sample16 >> 8u;
+uvec3 low8 = sample16 & uvec3(255u);
+vec3 rgb =
+    vec3(high8) * (256.0 / 65535.0) +
+    vec3(low8) * (1.0 / 65535.0);
+```
+
+这样在驱动错误地降低中间精度时仍不会溢出，并保留完整的 16-bit 输入关系；最终写入
+`RGBA16F` 时只发生目标格式本来就需要的 half-float 量化。
+
+不能在色度降噪、色彩转换或输出 pass 末尾用 `isnan`/`isinf` 替换颜色来掩盖该错误。
+非有限值必须在首次整数归一化时从源头消除，否则后续的邻域计算已经受到污染。
+
+### 排查证据与验收
+
+本问题依次排除了 CFA、RCD、HDR 融合、DNG 编码、LibRaw 解码和三通道纹理布局：
+
+- HDR 短帧 CPU 采样中 `greenOnly=0`，R/G、B/G 均正常；
+- 独立解压 DNG 主 IFD 后，约 48.6 万个高光像素中没有绿色单通道像素；
+- 同一 DNG 使用同一版本 App 在另一台手机显示正常；
+- 故障机 CPU 解码结果 `greenOnly=0`；
+- 改成 RGBX/`GL_RGBA16UI` 后仍然复现；
+- 修复前首次 `integer-to-rgba16f` pass 在目标高光区域检测到
+  `nonFinite=425175`；修复后同一区域为 `nonFinite=0`、`greenOnly=0`，并且后续色度降噪、
+  denoise-profile 与线性色彩转换阶段也全部保持为 0。
+
+相关 shader 修改至少应在目标 Mali 设备上覆盖：
+
+- `0`、普通中间值、`65504`、`65505`、`65535`；
+- 整数纹理采样到 `RGBA16F` 的实际 draw 和 readback，而不只是 shader compile/link；
+- 首次浮点转换后的有限值检查；
+- 后续包含通道相减的色度降噪；
+- 不同 RAW 渲染引擎的高光输出。
+
 ## 通用规则
 
 - 不根据 `GL_MAX_TEXTURE_SIZE` 推断 image load/store 格式支持。
 - 不根据 write-only image 可用推断同格式 read/write image 也可用。
 - 不以增加补偿 pass 掩盖驱动格式错误；应选择驱动明确支持的存储格式和访问模型。
+- 16-bit 整数归一化到 half-float 工作纹理时，应保证整数转浮点的每个中间值都在 FP16
+  有限范围内；不要假设先转换 `65535`、再乘归一化系数在所有移动驱动上都安全。
+- 同一异常区域随渲染引擎变化呈现绿、黑或其他颜色时，应优先在引擎之前逐 pass 检查
+  `NaN`/`Inf`，不能据最终颜色反推某个 CFA 通道损坏。
 - 每个新增 image format 都需要在代表设备上验证 compile、bind、dispatch 和后续采样。
 - 运行时错误日志必须保留 shader 名称、访问模式、internal format 和驱动错误文本。

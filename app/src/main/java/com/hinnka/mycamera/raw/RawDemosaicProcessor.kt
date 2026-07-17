@@ -3060,7 +3060,14 @@ class RawDemosaicProcessor {
 
         void main() {
             uvec3 sample16 = texture(uLinearRawTexture, vTexCoord).rgb;
-            vec3 rgb = vec3(sample16) * (1.0 / 65535.0);
+            // Keep the integer-to-float conversion below the FP16 finite limit. Some Mali
+            // compilers lower the direct uint16 conversion before the normalization multiply;
+            // 65535 then becomes Inf and opponent-color processing turns Inf - Inf into NaN.
+            uvec3 high8 = sample16 >> 8u;
+            uvec3 low8 = sample16 & uvec3(255u);
+            vec3 rgb =
+                vec3(high8) * (256.0 / 65535.0) +
+                vec3(low8) * (1.0 / 65535.0);
             fragColor = vec4(rgb, 1.0);
         }
     """.trimIndent()
