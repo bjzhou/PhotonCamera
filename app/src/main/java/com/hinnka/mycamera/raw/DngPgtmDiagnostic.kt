@@ -37,15 +37,6 @@ internal object DngPgtmDiagnostic {
         return PGTM_VISUAL_OVERLAY_MODE
     }
 
-    fun applyToEmbeddedMap(
-        map: DngProfileGainTableMap?,
-        source: String,
-    ): DngProfileGainTableMap? {
-        val embeddedMap = map ?: return null
-        val band = activeBandForSource(source) ?: return embeddedMap
-        return DngHdrProfileGainTableGenerator.withDiagnosticBand(embeddedMap, band)
-    }
-
     private fun activeBand(): DngHdrProfileGainTableGenerator.DiagnosticBand? {
         return when (PGTM_DIAGNOSTIC_BAND_INDEX) {
             1 -> band(0.000f, 0.005f, feather = 0.0010f)

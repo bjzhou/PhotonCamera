@@ -17,7 +17,6 @@ import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
-import com.hinnka.mycamera.raw.RawProfileGainTableMapBuilder
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import java.io.File
@@ -406,8 +405,8 @@ object RawProcessor {
                 baselineExposure = sourceBaselineExposureEv,
                 defaultCrop = defaultCrop,
             )
-            val exposureOffsetEv = options.viewfinderExposureMatcher?.match(
-                com.hinnka.mycamera.raw.RawDngViewfinderMatchInput(
+            val captureProfile = options.captureProfilePreparer?.prepare(
+                com.hinnka.mycamera.raw.RawDngCaptureProfileInput(
                     rawData = rawBuffer.duplicate().order(ByteOrder.nativeOrder()),
                     width = width,
                     height = height,
@@ -415,7 +414,9 @@ object RawProcessor {
                     samplesPerPixel = inputSamplesPerPixel,
                     metadata = statsMetadata.copy(profileGainTableMap = null),
                 )
-            )?.takeIf { it.isFinite() }
+            )
+            val exposureOffsetEv = captureProfile?.exposureOffsetEv
+                ?.takeIf { it.isFinite() }
                 ?.coerceIn(
                     com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
                     com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MAX_EV,
@@ -423,19 +424,24 @@ object RawProcessor {
             val finalBaselineExposureEv = DngBaselineExposure.sanitize(
                 sourceBaselineExposureEv + (exposureOffsetEv ?: 0f)
             )
-            val finalProfile = RawProfileGainTableMapBuilder.prepareForDngWrite(
-                rawData = rawBuffer,
-                width = width,
-                height = height,
-                rowStride = inputRowStrideBytes,
-                metadata = statsMetadata.copy(baselineExposure = finalBaselineExposureEv),
-                samplesPerPixel = inputSamplesPerPixel,
-                options = options,
-            ) ?: return false
+            val profileRequired = options.profileToneMapMode == RawProfileToneMapMode.Photon ||
+                options.profileToneMapMode == RawProfileToneMapMode.GooglePixel
+            if (profileRequired && captureProfile?.profileGainTableMap == null) {
+                PLog.e(
+                    TAG,
+                    "GPU RAW profile preparation failed: mode=${options.profileToneMapMode} " +
+                        "size=${width}x$height samplesPerPixel=$inputSamplesPerPixel"
+                )
+                return false
+            }
+            val finalProfile = com.hinnka.mycamera.raw.RawDngProfilePreparation(
+                baselineExposureEv = finalBaselineExposureEv,
+                profileGainTableMap = captureProfile?.profileGainTableMap,
+            )
             PLog.i(
                 TAG,
                 "RAW_VIEWFINDER_BASELINE stage=DNG_WRITE_READY " +
-                    "enabled=${options.viewfinderExposureMatcher != null} " +
+                    "enabled=${options.captureProfilePreparer != null} " +
                     "matched=${exposureOffsetEv != null} " +
                     "sourceBaselineEv=$sourceBaselineExposureEv " +
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
@@ -444,7 +450,7 @@ object RawProcessor {
                     "writtenBaselineEv=${finalProfile.baselineExposureEv} " +
                     "writtenBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +
-                    "mode=${options.profileToneMapMode} statsBounds=${options.statsBounds}"
+                    "pgtmSource=GPU mode=${options.profileToneMapMode} statsBounds=${options.statsBounds}"
             )
             finalProfile
         }

@@ -271,6 +271,9 @@ class RawDemosaicProcessor {
     private var quadChromaProgram = 0
     private var quadRefineProgram = 0
     private var quadWriteOutputProgram = 0
+    private var pgtmCellStatsProgram = 0
+    private var pgtmGainCurvesProgram = 0
+    private var pgtmWeightLutBufferId = 0
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
@@ -338,6 +341,7 @@ class RawDemosaicProcessor {
     private var curveTextureId = 0
     private var dcpToneCurveTextureId = 0
     private var dcpHueSatTextureId = 0
+    private var dcpHueSatTextureSource: DcpHueSatMap? = null
     private var dcpLookTableTextureId = 0
     private var spectralFilmTextureId = 0
     private var spectralFilmTextureKey: String? = null
@@ -737,21 +741,23 @@ class RawDemosaicProcessor {
         }
     }
 
-    /** Renders default-curve preview samples requested by a capture-side exposure solver. */
-    internal suspend fun renderExposurePreviewSamples(
+    /** Solves optional viewfinder exposure and prepares the capture PGTM in the same GL pass. */
+    internal suspend fun prepareCaptureProfile(
         context: Context,
-        input: RawDngViewfinderMatchInput,
+        input: RawDngCaptureProfileInput,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        request: RawExposurePreviewRequest,
+        request: RawExposurePreviewRequest?,
+        profileToneMapMode: RawProfileToneMapMode,
+        statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
-    ): Float? = withContext(glDispatcher) {
-        var solvedExposureEv: Float? = null
+    ): RawDngCaptureProfileResult? = withContext(glDispatcher) {
+        var preparedResult: RawDngCaptureProfileResult? = null
         try {
             processInternal(
                 context = context,
@@ -780,12 +786,14 @@ class RawDemosaicProcessor {
                 ),
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 exposurePreviewRequest = request,
-                onExposurePreviewSolved = { solvedExposureEv = it },
+                captureProfileToneMapMode = profileToneMapMode,
+                captureProfileStatsBounds = statsBounds,
+                onCaptureProfilePrepared = { preparedResult = it },
             )
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to render RAW exposure preview samples", e)
+            PLog.e(TAG, "Failed to prepare RAW capture profile", e)
         }
-        solvedExposureEv
+        preparedResult
     }
 
     suspend fun renderLinearRcdFrame(
@@ -1003,7 +1011,9 @@ class RawDemosaicProcessor {
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false,
         exposurePreviewRequest: RawExposurePreviewRequest? = null,
-        onExposurePreviewSolved: ((Float?) -> Unit)? = null,
+        captureProfileToneMapMode: RawProfileToneMapMode? = null,
+        captureProfileStatsBounds: Rect? = null,
+        onCaptureProfilePrepared: ((RawDngCaptureProfileResult?) -> Unit)? = null,
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         var actualRawData = rawData
         var actualWidth = width
@@ -1023,10 +1033,7 @@ class RawDemosaicProcessor {
         if (dngFile != null) {
             val hasClassicTiffHeader = DngProfileGainTableMap.hasClassicTiffHeader(dngFile)
             val profileGainTableMap = if (hasClassicTiffHeader) {
-                DngPgtmDiagnostic.applyToEmbeddedMap(
-                    DngProfileGainTableMap.readFrom(dngFile),
-                    "DNG render"
-                )
+                DngProfileGainTableMap.readFrom(dngFile)
             } else {
                 PLog.d(TAG, "Skipping DNG-only metadata for non-classic-TIFF RAW: ${dngFile.name}")
                 null
@@ -1184,6 +1191,38 @@ class RawDemosaicProcessor {
                 "aspectRatio=$aspectRatio rotation=$actualRotation outputSourceBounds=$outputSourceBounds"
         )
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
+        try {
+            if (!isInitialized && !initializeOnGlThread()) {
+                PLog.e(TAG, "Failed to initialize processor")
+                return@withContext null
+            }
+            if (actualWidth > maxTextureSize || actualHeight > maxTextureSize) {
+                PLog.e(
+                    TAG,
+                    "Input ${actualWidth}x$actualHeight exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize",
+                )
+                return@withContext null
+            }
+            setupFullResFramebuffer(actualWidth, actualHeight)
+            if (actualSamplesPerPixel in 3..4) {
+                uploadLinearRawRgbTextureFromBuffer(
+                    actualRawData,
+                    actualWidth,
+                    actualHeight,
+                    actualRowStride,
+                    actualSamplesPerPixel,
+                )
+            } else {
+                uploadRawTextureFromBuffer(
+                    actualRawData,
+                    actualWidth,
+                    actualHeight,
+                    actualRowStride,
+                )
+            }
+            // The RAW source is GPU-resident from this point onward.
+            actualRawData = null
+
         val embeddedDngProfileName = embeddedDngRenderPlan?.profileName
         val embeddedProfileToneCurveLut = embeddedDngRenderPlan?.toneCurveLut
         val embeddedProfileToneMapMode = when {
@@ -1223,25 +1262,23 @@ class RawDemosaicProcessor {
         if (profileGainToneMapRequested &&
             (profileGainTableMap == null || profileToneMapMode != requestedProfileToneMapMode)
         ) {
-            val generated = RawProfileGainTableMapBuilder.prepareForDngWrite(
-                rawData = actualRawData,
+            val generated = generateProfileGainTableMapOnGpu(
+                rawTextureId = rawTextureId,
                 width = actualWidth,
                 height = actualHeight,
-                rowStride = actualRowStride,
                 samplesPerPixel = actualSamplesPerPixel,
                 metadata = actualMetadata.copy(profileGainTableMap = null),
-                options = RawDngProfilePreparationOptions(
-                    profileToneMapMode = requestedProfileToneMapMode,
-                    statsBounds = outputSourceBounds,
-                ),
+                statsBounds = outputSourceBounds,
+                baselineExposureEv = DngBaselineExposure.sanitize(actualMetadata.baselineExposure),
+                profileToneMapMode = requestedProfileToneMapMode,
                 colorCorrectionMatrix = resolvedDcpRenderPlan?.colorCorrectionMatrix
                     ?: actualMetadata.colorCorrectionMatrix,
                 cameraWhite = resolvedDcpRenderPlan?.cameraWhite ?: actualMetadata.cameraWhite,
                 hueSatMap = resolvedDcpRenderPlan?.hueSatMap,
-            )?.profileGainTableMap?.takeIf { it.isValid }
+            )?.takeIf { it.isValid }
             if (generated != null) {
                 profileGainTableMap = generated
-                profileGainTableMapSource = "generated"
+                profileGainTableMapSource = "generated-gpu"
             } else if (profileGainTableMap != null) {
                 // PGTM maps are curve-independent. A valid embedded map remains usable when the
                 // user switches between the Photon and Google profile curves.
@@ -1385,63 +1422,24 @@ class RawDemosaicProcessor {
                 "engineWorkingSpace=$engineWorkingColorSpace"
         )
 
-        try {
-            if (!isInitialized) {
-                if (!initializeOnGlThread()) {
-                    PLog.e(TAG, "Failed to initialize processor")
-                    return@withContext null
-                }
-            }
-
-            // Check GL_MAX_TEXTURE_SIZE. Oversized Bayer RCD inputs are rejected.
-            if (actualWidth > maxTextureSize || actualHeight > maxTextureSize) {
-                PLog.e(
-                    TAG,
-                    "Input ${actualWidth}x${actualHeight} exceeds GL_MAX_TEXTURE_SIZE=$maxTextureSize"
-                )
-                return@withContext null
-            }
-
             val bounds = rawOutputBounds
             val finalWidth = bounds.width()
             val finalHeight = bounds.height()
 
             // 4. 第一步：全分辨率处理 (Linear CCM / RCD Compute Shader Demosaic)
-            setupFullResFramebuffer(actualWidth, actualHeight)
             if (actualSamplesPerPixel in 3..4) {
-                uploadLinearRawRgbTextureFromBuffer(
-                    actualRawData,
-                    actualWidth,
-                    actualHeight,
-                    actualRowStride,
-                    actualSamplesPerPixel,
-                )
-                actualRawData = null
                 renderLinearRawRgbToFramebuffer(
                     sourceTextureId = rawTextureId,
                     targetFramebufferId = demosaicFramebufferId,
                     width = actualWidth,
                     height = actualHeight
                 )
-                if (rawTextureId != 0) {
-                    GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
-                    rawTextureId = 0
-                }
                 PLog.d(
                     TAG,
                     "LinearRaw input prepared on GPU: ${actualWidth}x${actualHeight} " +
                         "samplesPerPixel=$actualSamplesPerPixel rowStride=$actualRowStride"
                 )
             } else {
-                uploadRawTextureFromBuffer(
-                    actualRawData,
-                    actualWidth,
-                    actualHeight,
-                    actualRowStride
-                )
-                // GPU 已消费 rawData，立即释放 CPU 侧引用，帮助 GC 回收（超分时约 288 MB）
-                actualRawData = null
-
                 // darktable feeds Filmic after the raw highlight reconstruction module;
                 // keep the raw-domain repair enabled before Filmic HR.
                 val rawDomainHighlightReconstructionEnabled = true
@@ -1751,33 +1749,73 @@ class RawDemosaicProcessor {
                 PLog.d(TAG, "Applied $appliedWarpCount/${warps.size / 8} DNG WarpRectilinear opcode(s) before color conversion")
             }
 
-            if (exposurePreviewRequest != null) {
-                val solvedExposureEv = renderExposurePreviewRequest(
-                    request = exposurePreviewRequest,
-                    metadata = actualMetadata,
-                    samplesPerPixel = actualSamplesPerPixel,
-                    sourceTextureId = demosaicTextureId,
-                    rawBlackPointCorrection = rawBlackPointCorrection,
-                    rawWhitePointCorrection = rawWhitePointCorrection,
-                    colorCorrectionMatrix = linearColorCorrectionMatrix,
-                    cameraWhite = linearCameraWhite,
-                    dcpRenderPlan = activeDcpRenderPlan,
-                    applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
-                    applyProfileDngBaselineExposure = applyProfileDngBaselineExposure,
-                    applyProfileGainTableMap = false,
-                    clampProfileRgb = clampProfileRgb,
-                    outputBounds = bounds,
-                    outputRotation = actualRotation,
-                    spectralFilmLut = spektrafilmLut,
-                    colorEngine = colorEngine,
-                    outputWorkingColorSpace = engineWorkingColorSpace,
-                    profileToEngineTransform = profileToEngineTransform,
-                    rawToneMappingParameters = rawToneMappingParameters,
-                    useProfileExposureRamp = useProfileExposureRamp,
-                    applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
-                    supportProfileOverrange = supportProfileOverrange
+            if (exposurePreviewRequest != null || captureProfileToneMapMode != null) {
+                val solvedExposureEv = exposurePreviewRequest?.let { request ->
+                    renderExposurePreviewRequest(
+                        request = request,
+                        metadata = actualMetadata,
+                        samplesPerPixel = actualSamplesPerPixel,
+                        sourceTextureId = demosaicTextureId,
+                        rawBlackPointCorrection = rawBlackPointCorrection,
+                        rawWhitePointCorrection = rawWhitePointCorrection,
+                        colorCorrectionMatrix = linearColorCorrectionMatrix,
+                        cameraWhite = linearCameraWhite,
+                        dcpRenderPlan = activeDcpRenderPlan,
+                        applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
+                        applyProfileDngBaselineExposure = applyProfileDngBaselineExposure,
+                        applyProfileGainTableMap = false,
+                        clampProfileRgb = clampProfileRgb,
+                        outputBounds = bounds,
+                        outputRotation = actualRotation,
+                        spectralFilmLut = spektrafilmLut,
+                        colorEngine = colorEngine,
+                        outputWorkingColorSpace = engineWorkingColorSpace,
+                        profileToEngineTransform = profileToEngineTransform,
+                        rawToneMappingParameters = rawToneMappingParameters,
+                        useProfileExposureRamp = useProfileExposureRamp,
+                        applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
+                        supportProfileOverrange = supportProfileOverrange,
+                    )
+                }
+                solvedExposureEv?.let { exposureEv ->
+                    PLog.i(
+                        TAG,
+                        "RAW_VIEWFINDER_BASELINE stage=METERING_COMPLETE curve=DEFAULT " +
+                            "pgtm=false sourceBaselineEv=${actualMetadata.baselineExposure} " +
+                            "meteredExposureOffsetEv=$exposureEv",
+                    )
+                }
+                val finalBaselineExposureEv = DngBaselineExposure.sanitize(
+                    actualMetadata.baselineExposure + (solvedExposureEv ?: 0f)
                 )
-                onExposurePreviewSolved?.invoke(solvedExposureEv)
+                val captureProfileGainTableMap = when (captureProfileToneMapMode) {
+                    RawProfileToneMapMode.Photon,
+                    RawProfileToneMapMode.GooglePixel -> generateProfileGainTableMapOnGpu(
+                        rawTextureId = rawTextureId,
+                        width = actualWidth,
+                        height = actualHeight,
+                        samplesPerPixel = actualSamplesPerPixel,
+                        metadata = actualMetadata,
+                        statsBounds = captureProfileStatsBounds,
+                        baselineExposureEv = finalBaselineExposureEv,
+                        profileToneMapMode = captureProfileToneMapMode,
+                        colorCorrectionMatrix = linearColorCorrectionMatrix,
+                        cameraWhite = linearCameraWhite,
+                        hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                    )
+                    else -> null
+                }
+                val profileRequired = captureProfileToneMapMode == RawProfileToneMapMode.Photon ||
+                    captureProfileToneMapMode == RawProfileToneMapMode.GooglePixel
+                val captureResult = if (profileRequired && captureProfileGainTableMap == null) {
+                    null
+                } else {
+                    RawDngCaptureProfileResult(
+                        exposureOffsetEv = solvedExposureEv,
+                        profileGainTableMap = captureProfileGainTableMap,
+                    )
+                }
+                onCaptureProfilePrepared?.invoke(captureResult)
                 return@withContext null
             }
 
@@ -2063,6 +2101,355 @@ class RawDemosaicProcessor {
         } finally {
             embeddedDngJpegPreview?.takeIf { !it.isRecycled }?.recycle()
             dngRawDataCleanup?.close()
+        }
+    }
+
+    private fun generateProfileGainTableMapOnGpu(
+        rawTextureId: Int,
+        width: Int,
+        height: Int,
+        samplesPerPixel: Int,
+        metadata: RawMetadata,
+        statsBounds: Rect?,
+        baselineExposureEv: Float,
+        profileToneMapMode: RawProfileToneMapMode,
+        colorCorrectionMatrix: FloatArray,
+        cameraWhite: FloatArray,
+        hueSatMap: DcpHueSatMap?,
+    ): DngProfileGainTableMap? {
+        if (rawTextureId == 0 || width <= 0 || height <= 0 || metadata.whiteLevel <= 0f) {
+            PLog.e(
+                TAG,
+                "GPU RAW PGTM input invalid: texture=$rawTextureId size=${width}x$height " +
+                    "white=${metadata.whiteLevel}",
+            )
+            return null
+        }
+        if (pgtmCellStatsProgram == 0 ||
+            pgtmGainCurvesProgram == 0 ||
+            pgtmWeightLutBufferId == 0
+        ) {
+            PLog.e(
+                TAG,
+                "GPU RAW PGTM programs unavailable: stats=$pgtmCellStatsProgram " +
+                    "curves=$pgtmGainCurvesProgram weights=$pgtmWeightLutBufferId",
+            )
+            return null
+        }
+        val fusionParameters = when (profileToneMapMode) {
+            RawProfileToneMapMode.Photon -> DngHdrProfileGainTableGenerator.PHOTON_FUSION_PARAMETERS
+            RawProfileToneMapMode.GooglePixel -> DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS
+            else -> return null
+        }
+        val safeStatsBounds = sanitizePgtmStatsBounds(statsBounds, width, height) ?: run {
+            PLog.e(TAG, "GPU RAW PGTM stats bounds invalid: source=${width}x$height bounds=$statsBounds")
+            return null
+        }
+        val gridSize = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
+        val gridWidth = gridSize.getOrElse(0) { 0 }
+        val gridHeight = gridSize.getOrElse(1) { 0 }
+        if (gridWidth <= 0 || gridHeight <= 0) return null
+
+        val cellCount = gridWidth * gridHeight
+        val statsFloatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
+        val bufferIds = IntArray(3)
+        val totalStartNs = System.nanoTime()
+        GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
+        try {
+            val statsBufferId = bufferIds[0]
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, statsBufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                statsFloatCount * Float.SIZE_BYTES,
+                null,
+                GLES31.GL_DYNAMIC_READ,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, statsBufferId)
+
+            GLES31.glUseProgram(pgtmCellStatsProgram)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uRawTexture"),
+                RCD_RAW_TEXTURE_UNIT,
+            )
+            val activeHueSatMap = hueSatMap?.takeIf { it.isValid }
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
+            val hueSatTextureId = activeHueSatMap?.let { map ->
+                ensureDcpHueSatTexture(map)
+            } ?: ensureDummyDcp3DTexture()
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, hueSatTextureId)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatMap"),
+                LINEAR_DCP_HUE_SAT_TEXTURE_UNIT,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatEnabled"),
+                if (activeHueSatMap != null) 1 else 0,
+            )
+            GLES31.glUniform3i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatDivisions"),
+                activeHueSatMap?.hueDivisions ?: 1,
+                activeHueSatMap?.satDivisions ?: 1,
+                activeHueSatMap?.valueDivisions ?: 1,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatEncoding"),
+                activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uImageSize"),
+                width,
+                height,
+            )
+            GLES31.glUniform4i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uStatsBounds"),
+                safeStatsBounds.left,
+                safeStatsBounds.top,
+                safeStatsBounds.right,
+                safeStatsBounds.bottom,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uGridSize"),
+                gridWidth,
+                gridHeight,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uSamplesPerPixel"),
+                samplesPerPixel.coerceAtLeast(1),
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uCfaPattern"),
+                metadata.cfaPattern,
+            )
+            val blackLevel4 = FloatArray(4) { index ->
+                metadata.blackLevel.getOrElse(index) {
+                    metadata.blackLevel.firstOrNull() ?: 0f
+                }
+            }
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uBlackLevel"),
+                1,
+                blackLevel4,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uWhiteLevel"),
+                metadata.whiteLevel,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uBaselineGain"),
+                DngBaselineExposure.exactGain(baselineExposureEv),
+            )
+            GLES31.glUniform3fv(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uCameraWhite"),
+                1,
+                sanitizeCameraWhite(cameraWhite),
+                0,
+            )
+            val safeColorCorrectionMatrix = colorCorrectionMatrix.takeIf { matrix ->
+                matrix.size >= 9 && matrix.take(9).all { it.isFinite() }
+            } ?: floatArrayOf(
+                1f, 0f, 0f,
+                0f, 1f, 0f,
+                0f, 0f, 1f,
+            )
+            GLES31.glUniformMatrix3fv(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uColorCorrectionMatrix"),
+                1,
+                false,
+                transposeMatrix3x3(safeColorCorrectionMatrix),
+                0,
+            )
+            val statsGpuStartNs = System.nanoTime()
+            GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+            )
+            checkGlError("generateProfileGainTableMapOnGpu stats dispatch")
+            val packedCellStats = readFloatStorageBuffer(
+                bufferId = statsBufferId,
+                floatCount = statsFloatCount,
+                label = "PGTM cell stats",
+            ) ?: return null
+            val statsGpuReadyNs = System.nanoTime()
+
+            val plan = DngHdrProfileGainTableGenerator.planForCellStats(
+                width = width,
+                height = height,
+                baselineExposureEv = baselineExposureEv,
+                packedCellStats = packedCellStats,
+                diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
+                fusionParameters = fusionParameters,
+            ) ?: return null
+            val planReadyNs = System.nanoTime()
+            if (plan.cellPlans.size != cellCount) {
+                PLog.e(
+                    TAG,
+                    "GPU RAW PGTM plan count=${plan.cellPlans.size}, expected=$cellCount",
+                )
+                return null
+            }
+
+            val exposurePlanBuffer = ByteBuffer.allocateDirect(cellCount * 2 * Float.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+            plan.cellPlans.forEach { cellPlan ->
+                exposurePlanBuffer.put(cellPlan.brightestExposureGain)
+                exposurePlanBuffer.put(cellPlan.darkestExposureGain)
+            }
+            exposurePlanBuffer.position(0)
+            val planBufferId = bufferIds[1]
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, planBufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                cellCount * 2 * Float.SIZE_BYTES,
+                exposurePlanBuffer,
+                GLES31.GL_STATIC_DRAW,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, planBufferId)
+
+            val gainFloatCount = cellCount * plan.pointCount
+            val gainBufferId = bufferIds[2]
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, gainBufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                gainFloatCount * Float.SIZE_BYTES,
+                null,
+                GLES31.GL_DYNAMIC_READ,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, gainBufferId)
+            GLES31.glBindBufferBase(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                2,
+                pgtmWeightLutBufferId,
+            )
+
+            GLES31.glUseProgram(pgtmGainCurvesProgram)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uCellCount"),
+                cellCount,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uPointCount"),
+                plan.pointCount,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uInputScale"),
+                plan.inputScale,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uWellExposedKey"),
+                plan.fusionParameters.wellExposedKey,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMaxExposureGain"),
+                plan.fusionParameters.maxExposureGain,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uHighlightFusionStart"),
+                plan.fusionParameters.highlightFusionStart,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uHighlightFusionEnd"),
+                plan.fusionParameters.highlightFusionEnd,
+            )
+            val diagnosticMode = when (plan.diagnosticBand?.mode) {
+                DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
+                DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
+                null -> -1
+            }
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticMode"),
+                diagnosticMode,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticStart"),
+                plan.diagnosticBand?.start ?: 0f,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticEnd"),
+                plan.diagnosticBand?.end ?: 1f,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticFeather"),
+                plan.diagnosticBand?.feather ?: 0f,
+            )
+            val curveGpuStartNs = System.nanoTime()
+            GLES31.glDispatchCompute((cellCount + 63) / 64, 1, 1)
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+            )
+            checkGlError("generateProfileGainTableMapOnGpu curve dispatch")
+            val gains = readFloatStorageBuffer(
+                bufferId = gainBufferId,
+                floatCount = gainFloatCount,
+                label = "PGTM gain curves",
+            ) ?: return null
+            val curvesGpuReadyNs = System.nanoTime()
+            val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
+            PLog.d(
+                TAG,
+                "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
+                    "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
+                    "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
+                    "planCpuMs=${(planReadyNs - statsGpuReadyNs) / 1_000_000.0} " +
+                    "curvesGpuMs=${(curvesGpuReadyNs - curveGpuStartNs) / 1_000_000.0} " +
+                    "totalMs=${(curvesGpuReadyNs - totalStartNs) / 1_000_000.0}",
+            )
+            return map
+        } catch (error: Exception) {
+            PLog.e(TAG, "GPU RAW PGTM preparation failed", error)
+            return null
+        } finally {
+            GLES31.glUseProgram(0)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, 0)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, 0)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+            GLES31.glDeleteBuffers(bufferIds.size, bufferIds, 0)
+        }
+    }
+
+    private fun readFloatStorageBuffer(
+        bufferId: Int,
+        floatCount: Int,
+        label: String,
+    ): FloatArray? {
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
+        val byteCount = floatCount * Float.SIZE_BYTES
+        val mapped = GLES31.glMapBufferRange(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            0,
+            byteCount,
+            GLES31.GL_MAP_READ_BIT,
+        ) ?: run {
+            PLog.e(TAG, "$label buffer map failed")
+            return null
+        }
+        return try {
+            val byteBuffer = mapped as? ByteBuffer ?: run {
+                PLog.e(TAG, "$label mapped buffer is not a ByteBuffer")
+                return null
+            }
+            FloatArray(floatCount).also { values ->
+                byteBuffer.order(ByteOrder.nativeOrder()).asFloatBuffer().get(values)
+            }
+        } finally {
+            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
+        }
+    }
+
+    private fun sanitizePgtmStatsBounds(bounds: Rect?, width: Int, height: Int): Rect? {
+        val imageBounds = Rect(0, 0, width, height)
+        if (bounds == null) return imageBounds
+        if (bounds.isEmpty) return null
+        return Rect(bounds).takeIf {
+            it.intersect(imageBounds) && it.width() >= 2 && it.height() >= 2
         }
     }
 
@@ -2452,7 +2839,8 @@ class RawDemosaicProcessor {
         GLES30.glDeleteShader(vShader)
         PLog.d(
             TAG,
-            "Shader programs created: passthrough=$passthroughProgram"
+            "Shader programs created: passthrough=$passthroughProgram " +
+                "pgtmStats=$pgtmCellStatsProgram pgtmCurves=$pgtmGainCurvesProgram"
         )
     }
 
@@ -2985,6 +3373,17 @@ class RawDemosaicProcessor {
         quadChromaProgram = compileComputeProgram(QuadBayerShaders.CHROMA, "QUAD_CHROMA")
         quadRefineProgram = compileComputeProgram(QuadBayerShaders.REFINE, "QUAD_REFINE")
         quadWriteOutputProgram = compileComputeProgram(QuadBayerShaders.WRITE_OUTPUT, "QUAD_WRITE_OUTPUT")
+        pgtmCellStatsProgram = compileComputeProgram(
+            DngHdrProfileGainTableGpuShaders.CELL_STATS,
+            "DNG_PGTM_CELL_STATS",
+        )
+        pgtmGainCurvesProgram = compileComputeProgram(
+            DngHdrProfileGainTableGpuShaders.GAIN_CURVES,
+            "DNG_PGTM_GAIN_CURVES",
+        )
+        if (pgtmCellStatsProgram != 0 && pgtmGainCurvesProgram != 0) {
+            initPgtmWeightLutBuffer()
+        }
 
         val fShaderLinearRcd = compileShader(
             GLES30.GL_FRAGMENT_SHADER,
@@ -3027,6 +3426,28 @@ class RawDemosaicProcessor {
             WARP_RECTILINEAR_FRAGMENT_SHADER,
             "warpRectilinear"
         )
+    }
+
+    private fun initPgtmWeightLutBuffer() {
+        if (pgtmWeightLutBufferId != 0) return
+        val weights = DngHdrProfileGainTableGenerator.interleavedWellExposedWeightLut()
+        val buffer = ByteBuffer.allocateDirect(weights.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        buffer.put(weights)
+        buffer.position(0)
+        val ids = IntArray(1)
+        GLES31.glGenBuffers(1, ids, 0)
+        pgtmWeightLutBufferId = ids[0]
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, pgtmWeightLutBufferId)
+        GLES31.glBufferData(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            weights.size * Float.SIZE_BYTES,
+            buffer,
+            GLES31.GL_STATIC_DRAW,
+        )
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+        checkGlError("initPgtmWeightLutBuffer")
     }
 
     private fun linkFragmentProgram(
@@ -5732,6 +6153,19 @@ class RawDemosaicProcessor {
         return textureId
     }
 
+    private fun ensureDcpHueSatTexture(table: DcpHueSatMap): Int {
+        if (dcpHueSatTextureId != 0 && dcpHueSatTextureSource === table) {
+            return dcpHueSatTextureId
+        }
+        val textureId = uploadDcp3DTexture(
+            textureIdProvider = { dcpHueSatTextureId },
+            assignTextureId = { dcpHueSatTextureId = it },
+            table = table,
+        )
+        dcpHueSatTextureSource = table
+        return textureId
+    }
+
     private fun bindDcpCombinedResources(
         program: Int,
         dcpRenderPlan: DcpRenderPlan?,
@@ -5753,8 +6187,7 @@ class RawDemosaicProcessor {
 
         if (hueSatMap != null) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            val textureId =
-                uploadDcp3DTexture({ dcpHueSatTextureId }, { dcpHueSatTextureId = it }, hueSatMap)
+            val textureId = ensureDcpHueSatTexture(hueSatMap)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
             GLES30.glUniform3i(
                 GLES30.glGetUniformLocation(program, "uDcpHueSatDivisions"),
@@ -7267,11 +7700,7 @@ class RawDemosaicProcessor {
         )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
         val textureId = activeMap?.let { map ->
-            uploadDcp3DTexture(
-                textureIdProvider = { dcpHueSatTextureId },
-                assignTextureId = { dcpHueSatTextureId = it },
-                table = map,
-            )
+            ensureDcpHueSatTexture(map)
         } ?: ensureDummyDcp3DTexture()
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
         GLES30.glUniform1i(
@@ -8115,6 +8544,12 @@ class RawDemosaicProcessor {
         if (quadChromaProgram != 0) GLES31.glDeleteProgram(quadChromaProgram)
         if (quadRefineProgram != 0) GLES31.glDeleteProgram(quadRefineProgram)
         if (quadWriteOutputProgram != 0) GLES31.glDeleteProgram(quadWriteOutputProgram)
+        if (pgtmCellStatsProgram != 0) GLES31.glDeleteProgram(pgtmCellStatsProgram)
+        if (pgtmGainCurvesProgram != 0) GLES31.glDeleteProgram(pgtmGainCurvesProgram)
+        if (pgtmWeightLutBufferId != 0) {
+            GLES31.glDeleteBuffers(1, intArrayOf(pgtmWeightLutBufferId), 0)
+            pgtmWeightLutBufferId = 0
+        }
         if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
         if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)
         if (linearRawRgbProgram != 0) GLES31.glDeleteProgram(linearRawRgbProgram)
@@ -8222,6 +8657,7 @@ class RawDemosaicProcessor {
             0
         )
         if (dcpHueSatTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(dcpHueSatTextureId), 0)
+        dcpHueSatTextureSource = null
         if (dcpLookTableTextureId != 0) GLES30.glDeleteTextures(
             1,
             intArrayOf(dcpLookTableTextureId),

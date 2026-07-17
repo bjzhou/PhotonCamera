@@ -7,20 +7,25 @@ import java.nio.ByteBuffer
 data class RawDngProfilePreparationOptions(
     val profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
     val statsBounds: Rect? = null,
-    val viewfinderExposureMatcher: RawDngViewfinderExposureMatcher? = null,
+    val captureProfilePreparer: RawDngCaptureProfilePreparer? = null,
 )
 
-fun interface RawDngViewfinderExposureMatcher {
-    suspend fun match(input: RawDngViewfinderMatchInput): Float?
+fun interface RawDngCaptureProfilePreparer {
+    suspend fun prepare(input: RawDngCaptureProfileInput): RawDngCaptureProfileResult?
 }
 
-data class RawDngViewfinderMatchInput(
+data class RawDngCaptureProfileInput(
     val rawData: ByteBuffer,
     val width: Int,
     val height: Int,
     val rowStride: Int,
     val samplesPerPixel: Int,
     val metadata: RawMetadata,
+)
+
+data class RawDngCaptureProfileResult(
+    val exposureOffsetEv: Float?,
+    val profileGainTableMap: DngProfileGainTableMap?,
 )
 
 /** BaselineExposure and optional PGTM prepared before the DNG writer starts. */

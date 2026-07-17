@@ -19,9 +19,9 @@ internal data class RawExposurePreviewFrame(
 /**
  * Capture-side viewfinder matcher.
  *
- * The RAW renderer only supplies default-curve preview samples for requested EV values. All
- * thumbnail analysis, error calculation and iterative exposure solving live here, outside the
- * normal RAW rendering path.
+ * Thumbnail analysis, error calculation and iterative exposure solving live here. The RAW
+ * renderer supplies default-curve preview samples and prepares the GPU profile map in the same
+ * capture-side GL pass.
  */
 internal object RawViewfinderExposureMatcher {
     private const val TAG = "RawViewfinderExposureMatcher"
@@ -31,49 +31,48 @@ internal object RawViewfinderExposureMatcher {
     private const val EV_TOLERANCE = 0.05f
     private const val MIN_STEP_EV = 0.025f
 
-    suspend fun match(
+    suspend fun prepareCaptureProfile(
         renderer: RawDemosaicProcessor,
         context: Context,
-        input: RawDngViewfinderMatchInput,
+        input: RawDngCaptureProfileInput,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        capturePreviewThumbnail: Bitmap,
+        capturePreviewThumbnail: Bitmap?,
+        profileToneMapMode: RawProfileToneMapMode,
+        statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         rawAutoWhiteBalanceEstimate: Boolean = false,
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
-    ): Float? {
-        val reference = buildReference(capturePreviewThumbnail) ?: run {
+    ): RawDngCaptureProfileResult? {
+        val reference = capturePreviewThumbnail?.let(::buildReference)
+        if (capturePreviewThumbnail != null && reference == null) {
             PLog.w(TAG, "Viewfinder match skipped: capture preview is unavailable")
-            return null
         }
-        val request = RawExposurePreviewRequest(
-            width = reference.width,
-            height = reference.height,
-            solve = { renderSample -> solve(reference, renderSample) },
-        )
-        return renderer.renderExposurePreviewSamples(
+        val request = reference?.let {
+            RawExposurePreviewRequest(
+                width = it.width,
+                height = it.height,
+                solve = { renderSample -> solve(it, renderSample) },
+            )
+        }
+        return renderer.prepareCaptureProfile(
             context = context,
             input = input,
             aspectRatio = aspectRatio,
             cropRegion = cropRegion,
             rotation = rotation,
             request = request,
+            profileToneMapMode = profileToneMapMode,
+            statsBounds = statsBounds,
             rawBlackPointCorrection = rawBlackPointCorrection,
             rawWhitePointCorrection = rawWhitePointCorrection,
             rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
             applyLensShadingCorrection = applyLensShadingCorrection,
             rawBlackBorderCrop = rawBlackBorderCrop,
-        ).also { exposureEv ->
-            PLog.i(
-                TAG,
-                "RAW_VIEWFINDER_BASELINE stage=METERING_COMPLETE curve=DEFAULT " +
-                    "pgtm=false sourceBaselineEv=${input.metadata.baselineExposure} " +
-                    "meteredExposureOffsetEv=$exposureEv"
-            )
-        }
+        )
     }
 
     private data class Reference(

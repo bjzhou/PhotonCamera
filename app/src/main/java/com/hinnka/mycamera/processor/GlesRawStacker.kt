@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.ImageFormat
-import android.graphics.Rect
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -10,9 +9,6 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.model.SafeImage
-import com.hinnka.mycamera.raw.DngHdrProfileGainTableGenerator
-import com.hinnka.mycamera.raw.DngPgtmDiagnostic
-import com.hinnka.mycamera.raw.DngPgtmGlobalStats
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RcdShaders
 import com.hinnka.mycamera.utils.LargeDirectBuffer
@@ -22,7 +18,6 @@ import java.nio.ByteOrder
 import kotlin.math.ceil
 import kotlin.math.ln
 import kotlin.math.max
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 class GlesRawStacker(
@@ -37,9 +32,6 @@ class GlesRawStacker(
     private val lensShading: FloatArray?,
     private val lensShadingWidth: Int,
     private val lensShadingHeight: Int,
-    colorCorrectionMatrix: FloatArray? = null,
-    pgtmStatsBounds: Rect? = null,
-    private val profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
     private val tuning: RawStackTuningProfile = RawStackTuningResolver.resolve(RawStackMode.MFNR),
     debugConfig: RawStackDebugConfig = RawStackDebugConfig.Disabled,
 ) {
@@ -167,13 +159,6 @@ class GlesRawStacker(
     private val normalizedNoiseBetaByChannel = rawNoiseModel.normalizedReadNoiseForShader()
     private val noiseAlpha = rawNoiseModel.greenShotNoise.coerceAtLeast(0f) / 65535.0f
     private val noiseBeta = rawNoiseModel.greenReadNoise.coerceAtLeast(0f) / (65535.0f * 65535.0f)
-    private val pgtmColorCorrectionMatrix = FloatArray(9) { index ->
-        colorCorrectionMatrix
-            ?.getOrNull(index)
-            ?.takeIf { it.isFinite() }
-            ?: if (index % 4 == 0) 1f else 0f
-    }
-    private val pgtmStatsBounds = sanitizePgtmStatsBounds(pgtmStatsBounds)
     private val hwmfPrefilter = tuning.prefilter
     private val hwmfBlend = tuning.blend
     private val hwmfPostfilter = tuning.postfilter
@@ -250,7 +235,6 @@ class GlesRawStacker(
     private var hdrNormalCfaInputProgram = 0
     private var hdrWorkingRgbStoreProgram = 0
     private var hdrRgbFusionProgram = 0
-    private var pgtmStatsProgram = 0
     private var diagnosticAlignmentProgram = 0
     private var diagnosticFinalProgram = 0
     private var diagnosticBuffer = 0
@@ -1297,204 +1281,6 @@ class GlesRawStacker(
         } else {
             0f
         }.coerceIn(0f, 8f)
-    }
-
-    private fun computeHdrProfileGainTableMap(
-        baselineExposureEv: Float,
-    ): com.hinnka.mycamera.raw.DngProfileGainTableMap? {
-        if (!baselineExposureEv.isFinite() || baselineExposureEv <= 0.05f || pgtmStatsProgram == 0) {
-            return null
-        }
-        if (profileToneMapMode != RawProfileToneMapMode.GooglePixel &&
-            profileToneMapMode != RawProfileToneMapMode.Photon
-        ) {
-            return null
-        }
-        val grid = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
-        val pgtmGridWidth = grid.getOrElse(0) { 0 }
-        val pgtmGridHeight = grid.getOrElse(1) { 0 }
-        if (pgtmGridWidth <= 0 || pgtmGridHeight <= 0) return null
-        if (!pgtmStatsBounds.isFullImage()) {
-            RawStackRuntimeDebug.d(TAG) {
-                "GPU HDR PGTM stats bounds: source=${width}x$height bounds=$pgtmStatsBounds"
-            }
-        }
-
-        val cellCount = pgtmGridWidth * pgtmGridHeight
-        val collectGlobalStats = false
-        val cellStatsWordCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
-        val cellSumsOffset = if (collectGlobalStats) cellStatsWordCount else -1
-        val globalHistogramOffset = if (collectGlobalStats) {
-            cellSumsOffset + cellCount * PGTM_CELL_SUM_FLOAT_STRIDE
-        } else {
-            -1
-        }
-        val globalCountersOffset = if (collectGlobalStats) {
-            globalHistogramOffset + PGTM_GLOBAL_HISTOGRAM_BIN_COUNT
-        } else {
-            -1
-        }
-        val wordCount = if (collectGlobalStats) {
-            globalCountersOffset + PGTM_GLOBAL_COUNTER_COUNT
-        } else {
-            cellStatsWordCount
-        }
-        val byteCount = wordCount * Int.SIZE_BYTES
-        val totalStartNs = System.nanoTime()
-        return try {
-            val statsBufferId = prepareReadbackScratchBuffer(byteCount)
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, statsBufferId)
-            val zeroData = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.nativeOrder())
-            GLES31.glBufferSubData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                0,
-                byteCount,
-                zeroData,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, PGTM_STATS_BUFFER_BINDING, statsBufferId)
-            GLES31.glUseProgram(pgtmStatsProgram)
-            bindTexture(pgtmStatsProgram, "uLinearRgb", 0, hdrLinearOutputTexture)
-            GLES31.glUniform2i(uniformLocation(pgtmStatsProgram, "uImageSize"), width, height)
-            GLES31.glUniform4i(
-                uniformLocation(pgtmStatsProgram, "uStatsBounds"),
-                pgtmStatsBounds.left,
-                pgtmStatsBounds.top,
-                pgtmStatsBounds.right,
-                pgtmStatsBounds.bottom,
-            )
-            GLES31.glUniform2i(
-                uniformLocation(pgtmStatsProgram, "uGridSize"),
-                pgtmGridWidth,
-                pgtmGridHeight,
-            )
-            GLES31.glUniform1i(
-                uniformLocation(pgtmStatsProgram, "uCellSumsOffset"),
-                cellSumsOffset
-            )
-            GLES31.glUniform1i(
-                uniformLocation(pgtmStatsProgram, "uGlobalHistogramOffset"),
-                globalHistogramOffset
-            )
-            GLES31.glUniform1i(
-                uniformLocation(pgtmStatsProgram, "uGlobalCountersOffset"),
-                globalCountersOffset
-            )
-            GLES31.glUniform1f(
-                uniformLocation(pgtmStatsProgram, "uBaselineExposureGain"),
-                2.0f.pow(baselineExposureEv.coerceIn(0f, 8f))
-            )
-            GLES31.glUniformMatrix3fv(
-                uniformLocation(pgtmStatsProgram, "uColorCorrectionMatrix"),
-                1,
-                false,
-                transposeMatrix3x3(pgtmColorCorrectionMatrix),
-                0
-            )
-            val dispatchStartNs = System.nanoTime()
-            GLES31.glDispatchCompute(pgtmGridWidth, pgtmGridHeight, 1)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
-            )
-            checkGlError("computeHdrProfileGainTableMap dispatch")
-
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, statsBufferId)
-            val mapped = GLES31.glMapBufferRange(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                0,
-                byteCount,
-                GLES31.GL_MAP_READ_BIT
-            ) ?: throw IllegalStateException("PGTM stats buffer map failed")
-            val words = try {
-                IntArray(wordCount).also { values ->
-                    val byteBuffer = mapped as? ByteBuffer
-                        ?: throw IllegalStateException("PGTM stats buffer is not ByteBuffer")
-                    byteBuffer.order(ByteOrder.nativeOrder()).asIntBuffer().get(values)
-                }
-            } finally {
-                GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
-            }
-            val statsReadyNs = System.nanoTime()
-            val packedCellStats = FloatArray(cellStatsWordCount) { index ->
-                Float.fromBits(words[index])
-            }
-            val globalStats = if (collectGlobalStats) {
-                val sampleCount = words[globalCountersOffset + PGTM_COUNTER_SAMPLE_COUNT]
-                    .coerceIn(0, cellCount * PGTM_STATS_SAMPLE_COUNT)
-                val zeroCount = words[globalCountersOffset + PGTM_COUNTER_ZERO_COUNT]
-                    .coerceIn(0, sampleCount)
-                val highlightCount = words[globalCountersOffset + PGTM_COUNTER_HIGHLIGHT_COUNT]
-                    .coerceIn(0, sampleCount)
-                val maxInput = Float.fromBits(
-                    words[globalCountersOffset + PGTM_COUNTER_MAX_INPUT_BITS]
-                )
-                var linearSum = 0.0
-                var logSum = 0.0
-                for (cellIndex in 0 until cellCount) {
-                    val offset = cellSumsOffset + cellIndex * PGTM_CELL_SUM_FLOAT_STRIDE
-                    linearSum += Float.fromBits(words[offset]).toDouble()
-                    logSum += Float.fromBits(words[offset + 1]).toDouble()
-                }
-                val globalHistogram = IntArray(PGTM_GLOBAL_HISTOGRAM_BIN_COUNT) { index ->
-                    words[globalHistogramOffset + index].coerceAtLeast(0)
-                }
-                DngPgtmGlobalStats.fromLogHistogram(
-                    logHistogram = globalHistogram,
-                    histogramMinEv = PGTM_GLOBAL_HISTOGRAM_MIN_EV,
-                    histogramMaxEv = PGTM_GLOBAL_HISTOGRAM_MAX_EV,
-                    sampleCount = sampleCount,
-                    zeroCount = zeroCount,
-                    highlightCount = highlightCount,
-                    maxInput = maxInput,
-                    linearSum = linearSum,
-                    logSum = logSum,
-                )
-                    ?: throw IllegalStateException("GPU Photon PGTM global stats are empty")
-            } else {
-                null
-            }
-            val diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU stacker")
-            val generation = DngHdrProfileGainTableGenerator.forCellStats(
-                width = width,
-                height = height,
-                baselineExposureEv = baselineExposureEv,
-                packedCellStats = packedCellStats,
-                diagnosticBand = diagnosticBand,
-                fusionParameters = if (profileToneMapMode == RawProfileToneMapMode.Photon) {
-                    DngHdrProfileGainTableGenerator.PHOTON_FUSION_PARAMETERS
-                } else {
-                    DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS
-                },
-            )
-            val completeNs = System.nanoTime()
-            PLog.d(
-                TAG,
-                "GPU HDR PGTM built: mode=$profileToneMapMode grid=${pgtmGridWidth}x${pgtmGridHeight} " +
-                    "samples=${globalStats?.sampleCount ?: cellCount * PGTM_STATS_SAMPLE_COUNT} " +
-                    "readbackBytes=$byteCount " +
-                    "gpuAndReadbackMs=${(statsReadyNs - dispatchStartNs) / 1_000_000.0} " +
-                    "curveMs=${(completeNs - statsReadyNs) / 1_000_000.0} " +
-                    "totalMs=${(completeNs - totalStartNs) / 1_000_000.0}"
-            )
-            generation
-        } catch (e: Exception) {
-            PLog.w(TAG, "Failed to compute GPU HDR PGTM stats", e)
-            null
-        } finally {
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, PGTM_STATS_BUFFER_BINDING, 0)
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        }
-    }
-
-    private fun sanitizePgtmStatsBounds(bounds: Rect?): Rect {
-        val imageBounds = Rect(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
-        if (bounds == null || bounds.isEmpty) return imageBounds
-        return Rect(bounds).takeIf {
-            it.intersect(imageBounds) && it.width() >= 2 && it.height() >= 2
-        } ?: imageBounds
-    }
-
-    private fun Rect.isFullImage(): Boolean {
-        return left == 0 && top == 0 && right == width && bottom == height
     }
 
     private fun buildProxy(
@@ -5188,17 +4974,6 @@ class GlesRawStacker(
         private const val SUPER_RESOLUTION_STRIPE_ROWS = 256
         private const val SUPER_RESOLUTION_SPATIAL_RADIUS = 2
         private const val READBACK_STRIPE_ROWS = 128
-        private const val PGTM_STATS_BUFFER_BINDING = 7
-        private const val PGTM_STATS_SAMPLE_COUNT = 16 * 16
-        private const val PGTM_CELL_SUM_FLOAT_STRIDE = 2
-        private const val PGTM_GLOBAL_HISTOGRAM_BIN_COUNT = 1024
-        private const val PGTM_GLOBAL_HISTOGRAM_MIN_EV = -16f
-        private const val PGTM_GLOBAL_HISTOGRAM_MAX_EV = 8f
-        private const val PGTM_GLOBAL_COUNTER_COUNT = 4
-        private const val PGTM_COUNTER_SAMPLE_COUNT = 0
-        private const val PGTM_COUNTER_ZERO_COUNT = 1
-        private const val PGTM_COUNTER_HIGHLIGHT_COUNT = 2
-        private const val PGTM_COUNTER_MAX_INPUT_BITS = 3
         private const val DIAGNOSTIC_BUFFER_BINDING = 9
         private const val REGISTRATION_SAMPLE_BUFFER_BINDING = 10
         private const val REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING = 11
@@ -7534,259 +7309,6 @@ class GlesRawStacker(
                     0.0,
                     1.0
                 );
-            }
-        """.trimIndent()
-
-        private val PGTM_STATS_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform highp usampler2D uLinearRgb;
-            uniform ivec2 uImageSize;
-            uniform ivec4 uStatsBounds;
-            uniform ivec2 uGridSize;
-            uniform int uCellSumsOffset;
-            uniform int uGlobalHistogramOffset;
-            uniform int uGlobalCountersOffset;
-            uniform float uBaselineExposureGain;
-            uniform mat3 uColorCorrectionMatrix;
-            layout(std430, binding = $PGTM_STATS_BUFFER_BINDING) buffer PgtmStats {
-                uint data[];
-            };
-
-            const int HIST_BINS = 256;
-            const int STATS_STRIDE = 8;
-            const int SAMPLE_GRID = 16;
-            const int CELL_SUM_STRIDE = $PGTM_CELL_SUM_FLOAT_STRIDE;
-            const int GLOBAL_HISTOGRAM_BINS = $PGTM_GLOBAL_HISTOGRAM_BIN_COUNT;
-            const float GLOBAL_HISTOGRAM_MIN_EV = $PGTM_GLOBAL_HISTOGRAM_MIN_EV;
-            const float GLOBAL_HISTOGRAM_MAX_EV = $PGTM_GLOBAL_HISTOGRAM_MAX_EV;
-            const float INV_LOG_2 = 1.4426950408889634;
-            const int COUNTER_SAMPLE_COUNT = $PGTM_COUNTER_SAMPLE_COUNT;
-            const int COUNTER_ZERO_COUNT = $PGTM_COUNTER_ZERO_COUNT;
-            const int COUNTER_HIGHLIGHT_COUNT = $PGTM_COUNTER_HIGHLIGHT_COUNT;
-            const int COUNTER_MAX_INPUT_BITS = $PGTM_COUNTER_MAX_INPUT_BITS;
-            shared uint hist[HIST_BINS];
-            shared uint globalLogHist[GLOBAL_HISTOGRAM_BINS];
-            shared float inputSamples[HIST_BINS];
-            shared uint sampleCount;
-            shared uint highlightCount;
-            shared uint zeroCount;
-
-            vec3 linearRgbAt(ivec2 p) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                return vec3(texelFetch(uLinearRgb, p, 0).rgb) * (1.0 / 65535.0);
-            }
-
-            vec3 blockRgbAt(ivec2 base) {
-                vec3 sum = vec3(0.0);
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        ivec2 p = clamp(base + ivec2(x, y), ivec2(0), uImageSize - ivec2(1));
-                        sum += linearRgbAt(p);
-                    }
-                }
-                return sum * 0.25;
-            }
-
-            float pgtmInputAt(ivec2 base) {
-                vec3 rgb = blockRgbAt(base);
-                vec3 profileRgb = uColorCorrectionMatrix * rgb * uBaselineExposureGain;
-                float minChannel = min(profileRgb.r, min(profileRgb.g, profileRgb.b));
-                float maxChannel = max(profileRgb.r, max(profileRgb.g, profileRgb.b));
-                return max(
-                    0.1495 * profileRgb.r +
-                    0.2935 * profileRgb.g +
-                    0.0570 * profileRgb.b +
-                    0.1250 * minChannel +
-                    0.3750 * maxChannel,
-                    0.0
-                );
-            }
-
-            void main() {
-                ivec2 cell = ivec2(gl_WorkGroupID.xy);
-                if (cell.x >= uGridSize.x || cell.y >= uGridSize.y) return;
-                ivec2 localId = ivec2(gl_LocalInvocationID.xy);
-                int localIndex = localId.y * SAMPLE_GRID + localId.x;
-                int cellIndex = cell.y * uGridSize.x + cell.x;
-
-                if (localIndex < HIST_BINS) {
-                    hist[localIndex] = 0u;
-                }
-                for (int bin = localIndex; bin < GLOBAL_HISTOGRAM_BINS; bin += HIST_BINS) {
-                    globalLogHist[bin] = 0u;
-                }
-                if (localIndex == 0) {
-                    sampleCount = 0u;
-                    highlightCount = 0u;
-                    zeroCount = 0u;
-                }
-                barrier();
-
-                ivec2 statsMin = clamp(uStatsBounds.xy, ivec2(0), uImageSize - ivec2(1));
-                ivec2 statsMax = clamp(uStatsBounds.zw, statsMin + ivec2(1), uImageSize);
-                ivec2 statsSize = max(statsMax - statsMin, ivec2(2));
-                int startX = statsMin.x + (cell.x * statsSize.x) / uGridSize.x;
-                int endX = statsMin.x + ((cell.x + 1) * statsSize.x + uGridSize.x - 1) / uGridSize.x;
-                int startY = statsMin.y + (cell.y * statsSize.y) / uGridSize.y;
-                int endY = statsMin.y + ((cell.y + 1) * statsSize.y + uGridSize.y - 1) / uGridSize.y;
-                startX += startX & 1;
-                startY += startY & 1;
-                endX = min(statsMax.x, endX - (endX & 1));
-                endY = min(statsMax.y, endY - (endY & 1));
-
-                if (endX - startX < 2 || endY - startY < 2) {
-                    if (localIndex == 0) {
-                        int cellIndex = cell.y * uGridSize.x + cell.x;
-                        int offset = cellIndex * STATS_STRIDE;
-                        for (int i = 0; i < STATS_STRIDE; ++i) {
-                            data[offset + i] = floatBitsToUint(0.0);
-                        }
-                        if (uCellSumsOffset >= 0) {
-                            int sumOffset = uCellSumsOffset + cellIndex * CELL_SUM_STRIDE;
-                            data[sumOffset] = floatBitsToUint(0.0);
-                            data[sumOffset + 1] = floatBitsToUint(0.0);
-                        }
-                    }
-                    return;
-                }
-
-                int cellWidth = max(endX - startX, 2);
-                int cellHeight = max(endY - startY, 2);
-                int x = startX + ((localId.x * 2 + 1) * cellWidth) / (SAMPLE_GRID * 2);
-                int y = startY + ((localId.y * 2 + 1) * cellHeight) / (SAMPLE_GRID * 2);
-                x = clamp(x - (x & 1), startX, max(startX, endX - 2));
-                y = clamp(y - (y & 1), startY, max(startY, endY - 2));
-                float inputValue = pgtmInputAt(ivec2(x, y));
-                inputSamples[localIndex] = inputValue;
-                if (uGlobalHistogramOffset >= 0) {
-                    if (inputValue <= 0.0) {
-                        atomicAdd(zeroCount, 1u);
-                    } else {
-                        float ev = clamp(
-                            log(inputValue) * INV_LOG_2,
-                            GLOBAL_HISTOGRAM_MIN_EV,
-                            GLOBAL_HISTOGRAM_MAX_EV - 1e-5
-                        );
-                        int globalBin = clamp(
-                            int(floor(
-                                (ev - GLOBAL_HISTOGRAM_MIN_EV) /
-                                (GLOBAL_HISTOGRAM_MAX_EV - GLOBAL_HISTOGRAM_MIN_EV) *
-                                float(GLOBAL_HISTOGRAM_BINS)
-                            )),
-                            0,
-                            GLOBAL_HISTOGRAM_BINS - 1
-                        );
-                        atomicAdd(globalLogHist[globalBin], 1u);
-                    }
-                }
-                float clampedInput = clamp(inputValue, 0.0, 1.0);
-                uint bin = uint(clamp(int(floor(clampedInput * float(HIST_BINS - 1) + 0.5)), 0, HIST_BINS - 1));
-                atomicAdd(hist[bin], 1u);
-                atomicAdd(sampleCount, 1u);
-                if (inputValue >= 0.92) {
-                    atomicAdd(highlightCount, 1u);
-                }
-                memoryBarrierShared();
-                barrier();
-
-                if (uGlobalHistogramOffset >= 0) {
-                    for (int globalBin = localIndex;
-                        globalBin < GLOBAL_HISTOGRAM_BINS;
-                        globalBin += HIST_BINS
-                    ) {
-                        uint count = globalLogHist[globalBin];
-                        if (count > 0u) {
-                            atomicAdd(data[uGlobalHistogramOffset + globalBin], count);
-                        }
-                    }
-                }
-
-                if (localIndex != 0) {
-                    return;
-                }
-
-                int samples = int(sampleCount);
-                int target10 = max(1, int(ceil(float(samples) * 0.10)));
-                int target50 = max(1, int(ceil(float(samples) * 0.50)));
-                int target90 = max(1, int(ceil(float(samples) * 0.90)));
-                int target98 = max(1, int(ceil(float(samples) * 0.98)));
-                uint cumulative = 0u;
-                float p10 = 1.0;
-                float p50 = 1.0;
-                float p90 = 1.0;
-                float p98 = 1.0;
-                float p995Input = 0.0;
-                float p999Input = 0.0;
-                bool got10 = false;
-                bool got50 = false;
-                bool got90 = false;
-                bool got98 = false;
-                for (int i = 0; i < HIST_BINS; ++i) {
-                    cumulative += hist[i];
-                    float value = float(i) / float(HIST_BINS - 1);
-                    if (!got10 && cumulative >= uint(target10)) {
-                        p10 = value;
-                        got10 = true;
-                    }
-                    if (!got50 && cumulative >= uint(target50)) {
-                        p50 = value;
-                        got50 = true;
-                    }
-                    if (!got90 && cumulative >= uint(target90)) {
-                        p90 = value;
-                        got90 = true;
-                    }
-                    if (!got98 && cumulative >= uint(target98)) {
-                        p98 = value;
-                        got98 = true;
-                    }
-                }
-                for (int i = 0; i < HIST_BINS; ++i) {
-                    float value = inputSamples[i];
-                    if (value >= p999Input) {
-                        p995Input = p999Input;
-                        p999Input = value;
-                    } else if (value > p995Input) {
-                        p995Input = value;
-                    }
-                }
-
-                if (uGlobalCountersOffset >= 0) {
-                    atomicAdd(data[uGlobalCountersOffset + COUNTER_SAMPLE_COUNT], sampleCount);
-                    atomicAdd(data[uGlobalCountersOffset + COUNTER_ZERO_COUNT], zeroCount);
-                    atomicAdd(data[uGlobalCountersOffset + COUNTER_HIGHLIGHT_COUNT], highlightCount);
-                    atomicMax(
-                        data[uGlobalCountersOffset + COUNTER_MAX_INPUT_BITS],
-                        floatBitsToUint(p999Input)
-                    );
-                }
-
-                if (uCellSumsOffset >= 0) {
-                    float linearSum = 0.0;
-                    float logSum = 0.0;
-                    for (int i = 0; i < HIST_BINS; ++i) {
-                        float value = inputSamples[i];
-                        linearSum += value;
-                        logSum += log(max(value, 1e-6));
-                    }
-                    int sumOffset = uCellSumsOffset + cellIndex * CELL_SUM_STRIDE;
-                    data[sumOffset] = floatBitsToUint(linearSum);
-                    data[sumOffset + 1] = floatBitsToUint(logSum);
-                }
-
-                int offset = cellIndex * STATS_STRIDE;
-                data[offset + 0] = floatBitsToUint(samples > 0 ? p10 : 0.0);
-                data[offset + 1] = floatBitsToUint(samples > 0 ? p50 : 0.0);
-                data[offset + 2] = floatBitsToUint(samples > 0 ? p90 : 0.0);
-                data[offset + 3] = floatBitsToUint(samples > 0 ? p98 : 0.0);
-                data[offset + 4] = floatBitsToUint(
-                    samples > 0 ? float(highlightCount) / float(samples) : 0.0
-                );
-                data[offset + 5] = floatBitsToUint(float(samples));
-                data[offset + 6] = floatBitsToUint(samples > 0 ? p995Input : 0.0);
-                data[offset + 7] = floatBitsToUint(samples > 0 ? p999Input : 0.0);
             }
         """.trimIndent()
 

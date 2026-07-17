@@ -2,7 +2,6 @@ package com.hinnka.mycamera.processor
 
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
-import android.graphics.Rect
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
@@ -242,9 +241,6 @@ object MultiFrameStacker {
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,
         applyLensShadingCorrection: Boolean = true,
-        colorCorrectionMatrix: FloatArray? = null,
-        pgtmStatsBounds: Rect? = null,
-        profileToneMapMode: RawProfileToneMapMode = RawProfileToneMapMode.Photon,
     ): RawStackResult? {
         if (normalFrames.isEmpty()) {
             shortFrame.image.close()
@@ -283,9 +279,6 @@ object MultiFrameStacker {
             lensShading = stackLensShading,
             lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
-            colorCorrectionMatrix = colorCorrectionMatrix,
-            pgtmStatsBounds = pgtmStatsBounds,
-            profileToneMapMode = profileToneMapMode,
             tuning = tuning,
             debugConfig = RawStackRuntimeDebug.debugConfig,
         ).processHdr(

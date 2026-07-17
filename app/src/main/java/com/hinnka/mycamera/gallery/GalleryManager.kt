@@ -42,7 +42,7 @@ import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
-import com.hinnka.mycamera.raw.RawDngViewfinderExposureMatcher
+import com.hinnka.mycamera.raw.RawDngCaptureProfilePreparer
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
@@ -3036,18 +3036,6 @@ object GalleryManager {
                 if (!useGpuAcceleration) {
                     PLog.w(TAG, "RAW HDR denoise requires GLES stacker; ignoring disabled GPU acceleration setting")
                 }
-                val rawHdrPgtmStatsBounds = resolveRawStatsBounds(
-                    width = rawMetadataImage.width,
-                    height = rawMetadataImage.height,
-                    defaultCrop = RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
-                        width = rawMetadataImage.width,
-                        height = rawMetadataImage.height,
-                        rotation = rotation,
-                        rawBlackBorderCrop = metadata.rawBlackBorderCrop,
-                        metadataDefaultCrop = rawMetadata.defaultCrop
-                    ),
-                    cropRegion = metadata.cropRegion
-                )
                 rawHdrStackResult = MultiFrameStacker.processHdrBurstRaw(
                     shortFrame = RawHdrStackFrame(
                         image = shortCandidate.image,
@@ -3070,11 +3058,6 @@ object GalleryManager {
                     lensShadingWidth = rawMetadata.lensShadingMapWidth,
                     lensShadingHeight = rawMetadata.lensShadingMapHeight,
                     applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, metadata),
-                    colorCorrectionMatrix = rawMetadata.colorCorrectionMatrix,
-                    pgtmStatsBounds = rawHdrPgtmStatsBounds,
-                    // The shared DNG writer prepares baseline/PGTM from the fused buffer. Disable
-                    // the stacker's legacy generator so the write path owns the calculation once.
-                    profileToneMapMode = RawProfileToneMapMode.Default,
                 )
                 closeImagesNow(images)
 
@@ -3633,20 +3616,32 @@ object GalleryManager {
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
     ): RawDngProfilePreparationOptions {
+         val profileToneMapMode = rawDngPgtmModeForMetadata(metadata)
+        val statsBounds = resolveRawStatsBounds(
+            width = width,
+            height = height,
+            defaultCrop = defaultCrop,
+            cropRegion = metadata.cropRegion,
+        )
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
             resolveRawAutoExposure(context, metadata) &&
             kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f
-        val viewfinderExposureMatcher = if (viewfinderMatchEnabled) {
-            val preview = requireNotNull(capturePreviewThumbnail)
-            RawDngViewfinderExposureMatcher { input ->
-                RawViewfinderExposureMatcher.match(
+        val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon ||
+            profileToneMapMode == RawProfileToneMapMode.GooglePixel
+        val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
+            RawDngCaptureProfilePreparer { input ->
+                RawViewfinderExposureMatcher.prepareCaptureProfile(
                     renderer = RawDemosaicProcessor.getInstance(),
                     context = context,
                     input = input,
                     aspectRatio = aspectRatio,
                     cropRegion = metadata.cropRegion,
                     rotation = rotation,
-                    capturePreviewThumbnail = preview,
+                    capturePreviewThumbnail = capturePreviewThumbnail.takeIf {
+                        viewfinderMatchEnabled
+                    },
+                    profileToneMapMode = profileToneMapMode,
+                    statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
                     rawAutoWhiteBalanceEstimate = resolveRawAutoWhiteBalanceEstimate(
@@ -3666,18 +3661,14 @@ object GalleryManager {
         PLog.i(
             TAG,
             "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
-                "curve=DEFAULT pgtmDuringMatch=false sourceAutoExposure=${metadata.rawAutoExposure} " +
+                "curve=DEFAULT pgtmOnGpu=$profileGainTableRequired " +
+                "sourceAutoExposure=${metadata.rawAutoExposure} " +
                 "manualExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
         return RawDngProfilePreparationOptions(
-            profileToneMapMode = rawDngPgtmModeForMetadata(metadata),
-            statsBounds = resolveRawStatsBounds(
-                width = width,
-                height = height,
-                defaultCrop = defaultCrop,
-                cropRegion = metadata.cropRegion,
-            ),
-            viewfinderExposureMatcher = viewfinderExposureMatcher,
+            profileToneMapMode = profileToneMapMode,
+            statsBounds = statsBounds,
+            captureProfilePreparer = captureProfilePreparer,
         )
     }
 
