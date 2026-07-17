@@ -17,6 +17,7 @@ internal object DngHdrProfileGainTableGenerator {
     private const val TAG = "DngHdrProfileGainTableGenerator"
 
     const val CELL_STATS_FLOAT_STRIDE = 8
+    internal const val ADOBE_PROFILE_CAPTURE_BASELINE_OFFSET_EV = 0.7f
 
     private const val MAP_INPUT_WEIGHT_COUNT = 5
     private const val DEFAULT_TABLE_POINTS = 257
@@ -65,8 +66,8 @@ internal object DngHdrProfileGainTableGenerator {
     )
 
     internal val PHOTON_FUSION_PARAMETERS = HdrExposureFusionParameters(
-        autoExposureTarget = 0.35f,
-        wellExposedKey = 0.5f,
+        autoExposureTarget = AUTO_EXPOSURE_TARGET,
+        wellExposedKey = WELL_EXPOSED_KEY,
         maxExposureGain = MAX_LTM_GAIN,
         highlightFusionStart = HIGHLIGHT_FUSION_START,
         highlightFusionEnd = HIGHLIGHT_FUSION_END,

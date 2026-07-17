@@ -3647,6 +3647,7 @@ object GalleryManager {
                     capturePreviewThumbnail = capturePreviewThumbnail.takeIf {
                         viewfinderMatchEnabled
                     },
+                    rawRenderingEngine = metadata.rawRenderingEngine,
                     profileToneMapMode = profileToneMapMode,
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
