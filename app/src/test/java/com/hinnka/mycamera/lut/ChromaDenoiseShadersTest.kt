@@ -37,13 +37,14 @@ class ChromaDenoiseShadersTest {
     }
 
     @Test
-    fun lowSnrChromaCannotUseItsOwnNoiseColorAsAnEdgeGuide() {
+    fun everyScaleUsesTheSameBoundedChromaEdgeThreshold() {
         val shader = ChromaDenoiseShaders.PASS_CHROMA_DENOISE
 
-        assertTrue(shader.contains("smoothstep(4.0, 12.0, signalSnr)"))
-        assertTrue(shader.contains("exp(-chromaDistance * chromaGuidance)"))
-        assertTrue(shader.contains("float shadowFactor = 1.0 - chromaGuidance;"))
-        assertTrue(shader.contains("mix(10.0, 4.0, chromaGuidance)"))
+        assertTrue(shader.contains("exp(-chromaDistance)"))
+        assertTrue(shader.contains("float chromaEdgeSigmaMultiplier"))
+        assertFalse(shader.contains("signalSnr"))
+        assertFalse(shader.contains("cloudRadius"))
+        assertFalse(shader.contains("vec2 cloudH"))
     }
 
     @Test

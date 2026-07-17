@@ -2059,6 +2059,7 @@ class LutImageProcessor {
         GLES31.glUseProgram(bitmapDenoiseNlmInitProgram)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmInitProgram, "uImageSize"), width, height)
+        setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmInitProgram, height)
         dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM init")
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
     }
@@ -2075,6 +2076,7 @@ class LutImageProcessor {
         bindComputeSampler(bitmapDenoiseNlmFusedAccuProgram, "uInput", 0, input)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uImageSize"), width, height)
+        setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmFusedAccuProgram, height)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uQ"), qx, qy)
         GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uNorm"), params.norm)
         GLES31.glUniform1f(
@@ -2091,8 +2093,14 @@ class LutImageProcessor {
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
         GLES31.glBindImageTexture(1, output, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES31.GL_RGBA16F)
         setBitmapDenoiseCommonUniforms(bitmapDenoiseNlmFinishProgram, width, height, params)
+        setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmFinishProgram, height)
         GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFinishProgram, "uBias"), params.bias - 0.5f * ln(params.scale))
         dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM finish")
+    }
+
+    private fun setBitmapDenoiseStripeUniforms(program: Int, height: Int) {
+        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uStripeRowOffset"), 0)
+        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uStripeRowCount"), height)
     }
 
     private fun setBitmapDenoiseCommonUniforms(program: Int, width: Int, height: Int, params: BitmapDenoiseParams) {

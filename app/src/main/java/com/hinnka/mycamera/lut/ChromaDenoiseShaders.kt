@@ -141,7 +141,6 @@ object ChromaDenoiseShaders {
             float centerSignal,
             vec2 baseChroma,
             vec2 chromaGuide,
-            float chromaGuidance,
             float invGuideH2,
             vec2 invChromaH2,
             out vec2 filteredChroma,
@@ -175,13 +174,7 @@ object ChromaDenoiseShaders {
                     vec2 chromaDelta = sampleValue.yz - chromaGuide;
                     float chromaDistance =
                         dot(chromaDelta * chromaDelta, invChromaH2);
-                    // A noisy center chroma must not select only samples with the
-                    // same noise color. In low-SNR shadows chroma is the value
-                    // being estimated, never an edge guide; the prefiltered
-                    // luminance remains responsible for structure. RAW uses the
-                    // symmetric RGB mean rather than a single-channel edge veto.
-                    float chromaWeight =
-                        exp(-chromaDistance * chromaGuidance);
+                    float chromaWeight = exp(-chromaDistance);
                     float weight = spatialWeight * guideWeight * chromaWeight;
 
                     sumChroma += sampleValue.yz * weight;
@@ -222,41 +215,36 @@ object ChromaDenoiseShaders {
 
             vec3 centerValue = rgbToFilterSpace(source.rgb);
             vec2 noiseSigma = chromaNoiseSigma(source.rgb);
-            vec2 localH = max(uH * noiseSigma, vec2(1e-5));
 
             float centerGuide = texture(uGuideTexture, vTexCoord).r;
             float guideSigma = guideNoiseSigma(source.rgb);
-            float signalSnr = max(centerGuide, 0.0) / max(guideSigma, 1e-6);
-            // Below the useful chroma SNR, disable chroma self-guidance so an
-            // isolated purple/green/blue noise sample cannot preserve itself by
-            // rejecting the rest of the neighborhood. Restore it smoothly only
-            // where real color edges are measurable.
-            float chromaGuidance = smoothstep(4.0, 12.0, signalSnr);
-            float shadowFactor = 1.0 - chromaGuidance;
             float guideBandwidthScale =
                 mix(1.0, 4.0, uEdgeGuidanceRelaxation);
-            // Deep-shadow luminance is itself noisy. Keep its guide permissive
-            // until signal confidence rises, otherwise a purple RGB impulse can
-            // preserve itself merely by also changing the local luminance.
             float guideH =
-                guideSigma * mix(10.0, 4.0, chromaGuidance) *
-                    guideBandwidthScale;
+                guideSigma * 4.0 * guideBandwidthScale;
             float invGuideH2 = 1.0 / max(guideH * guideH, 1e-8);
+            // Denoise strength may relax the range threshold slightly, but every
+            // spatial scale shares the same bounded color-edge bandwidth. Large
+            // radii must never gain permission to cross a red/blue boundary.
+            float strengthT = clamp((uH - 1.0) / 7.0, 0.0, 1.0);
+            float chromaEdgeSigmaMultiplier = mix(2.75, 3.5, strengthT);
+            vec2 chromaEdgeH =
+                max(noiseSigma * chromaEdgeSigmaMultiplier, vec2(1e-5));
+            vec2 invChromaEdgeH2 =
+                1.0 / max(chromaEdgeH * chromaEdgeH, vec2(1e-8));
 
             vec2 fineCandidate;
             float fineSupport;
             // Radius one directly covers the one-to-two-pixel sensor grain that
             // was skipped by the previous sparse fine scale.
-            vec2 fineH = localH * 4.0;
             filterScale(
                 1.0,
                 centerGuide,
                 centerValue.x,
                 centerValue.yz,
                 centerValue.yz,
-                chromaGuidance,
                 invGuideH2,
-                1.0 / max(fineH * fineH, vec2(1e-8)),
+                invChromaEdgeH2,
                 fineCandidate,
                 fineSupport
             );
@@ -265,16 +253,14 @@ object ChromaDenoiseShaders {
 
             vec2 mediumCandidate;
             float mediumSupport;
-            vec2 mediumH = localH * 1.8;
             filterScale(
                 4.0,
                 centerGuide,
                 centerValue.x,
                 fineChroma,
                 fineChroma,
-                chromaGuidance,
                 invGuideH2,
-                1.0 / max(mediumH * mediumH, vec2(1e-8)),
+                invChromaEdgeH2,
                 mediumCandidate,
                 mediumSupport
             );
@@ -284,16 +270,14 @@ object ChromaDenoiseShaders {
 
             vec2 coarseCandidate;
             float coarseSupport;
-            vec2 coarseH = localH * 2.1;
             filterScale(
                 14.0,
                 centerGuide,
                 centerValue.x,
                 mediumChroma,
                 mediumChroma,
-                chromaGuidance,
                 invGuideH2,
-                1.0 / max(coarseH * coarseH, vec2(1e-8)),
+                invChromaEdgeH2,
                 coarseCandidate,
                 coarseSupport
             );
@@ -301,30 +285,7 @@ object ChromaDenoiseShaders {
                 uOutputStrength * featheredEdgeSupport(coarseSupport, 2.0);
             vec2 coarseChroma = mix(mediumChroma, coarseCandidate, coarseMix);
 
-            // Low-frequency chroma clouds need samples well outside the grain
-            // neighborhood. The radius and bandwidth expand only in shadows;
-            // guide support rejects cross-structure fusion while it is active,
-            // while the chroma bandwidth remains wide enough to treat a cast as noise.
-            vec2 cloudCandidate;
-            float cloudSupport;
-            vec2 cloudH = localH * mix(2.5, 3.5, shadowFactor);
-            float cloudRadius = 56.0 * mix(1.0, 1.25, shadowFactor);
-            filterScale(
-                cloudRadius,
-                centerGuide,
-                centerValue.x,
-                coarseChroma,
-                coarseChroma,
-                chromaGuidance,
-                invGuideH2,
-                1.0 / max(cloudH * cloudH, vec2(1e-8)),
-                cloudCandidate,
-                cloudSupport
-            );
-            float cloudMix =
-                uOutputStrength * featheredEdgeSupport(cloudSupport, 1.5);
-
-            centerValue.yz = mix(coarseChroma, cloudCandidate, cloudMix);
+            centerValue.yz = coarseChroma;
             fragColor = vec4(filterSpaceToRgb(centerValue), source.a);
         }
     """.trimIndent()
