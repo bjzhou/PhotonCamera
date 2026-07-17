@@ -25,7 +25,6 @@ data class RawDngCaptureProfileInput(
 
 data class RawDngCaptureProfileResult(
     val exposureOffsetEv: Float?,
-    val captureBaselineExposureOffsetEv: Float,
     val profileGainTableMap: DngProfileGainTableMap?,
 )
 

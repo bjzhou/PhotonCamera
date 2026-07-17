@@ -33,7 +33,6 @@ internal object RawViewfinderExposureMatcher {
         cropRegion: Rect?,
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
-        rawRenderingEngine: RawRenderingEngine,
         profileToneMapMode: RawProfileToneMapMode,
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
@@ -53,18 +52,6 @@ internal object RawViewfinderExposureMatcher {
                 solve = { renderSample -> solve(it, renderSample) },
             )
         }
-        val captureBaselineExposureOffsetEv = firstCaptureDngBaselineExposureOffsetEv(
-            rawRenderingEngine = rawRenderingEngine,
-            profileToneMapMode = profileToneMapMode,
-        )
-        if (captureBaselineExposureOffsetEv != 0f) {
-            PLog.i(
-                TAG,
-                "Applying first-capture DNG BaselineExposure offset: " +
-                    "engine=$rawRenderingEngine curve=$profileToneMapMode " +
-                    "offsetEv=$captureBaselineExposureOffsetEv",
-            )
-        }
         return renderer.prepareCaptureProfile(
             context = context,
             input = input,
@@ -72,7 +59,6 @@ internal object RawViewfinderExposureMatcher {
             cropRegion = cropRegion,
             rotation = rotation,
             request = request,
-            captureBaselineExposureOffsetEv = captureBaselineExposureOffsetEv,
             profileToneMapMode = profileToneMapMode,
             statsBounds = statsBounds,
             rawBlackPointCorrection = rawBlackPointCorrection,
@@ -81,19 +67,6 @@ internal object RawViewfinderExposureMatcher {
             applyLensShadingCorrection = applyLensShadingCorrection,
             rawBlackBorderCrop = rawBlackBorderCrop,
         )
-    }
-
-    internal fun firstCaptureDngBaselineExposureOffsetEv(
-        rawRenderingEngine: RawRenderingEngine,
-        profileToneMapMode: RawProfileToneMapMode,
-    ): Float {
-        val usesHdrProfileCurve = profileToneMapMode == RawProfileToneMapMode.GooglePixel ||
-            profileToneMapMode == RawProfileToneMapMode.Photon
-        return if (rawRenderingEngine == RawRenderingEngine.AdobeCurve && usesHdrProfileCurve) {
-            DngHdrProfileGainTableGenerator.ADOBE_PROFILE_CAPTURE_BASELINE_OFFSET_EV
-        } else {
-            0f
-        }
     }
 
     private fun buildReference(bitmap: Bitmap): RawViewfinderExposureMath.Reference? {

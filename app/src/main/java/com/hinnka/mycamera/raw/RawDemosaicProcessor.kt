@@ -755,7 +755,6 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         rotation: Int,
         request: RawExposurePreviewRequest?,
-        captureBaselineExposureOffsetEv: Float,
         profileToneMapMode: RawProfileToneMapMode,
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
@@ -793,7 +792,6 @@ class RawDemosaicProcessor {
                 ),
                 rawBlackBorderCrop = rawBlackBorderCrop,
                 exposurePreviewRequest = request,
-                captureBaselineExposureOffsetEv = captureBaselineExposureOffsetEv,
                 captureProfileToneMapMode = profileToneMapMode,
                 captureProfileStatsBounds = statsBounds,
                 onCaptureProfilePrepared = { preparedResult = it },
@@ -1019,7 +1017,6 @@ class RawDemosaicProcessor {
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false,
         exposurePreviewRequest: RawExposurePreviewRequest? = null,
-        captureBaselineExposureOffsetEv: Float = 0f,
         captureProfileToneMapMode: RawProfileToneMapMode? = null,
         captureProfileStatsBounds: Rect? = null,
         onCaptureProfilePrepared: ((RawDngCaptureProfileResult?) -> Unit)? = null,
@@ -1795,9 +1792,7 @@ class RawDemosaicProcessor {
                     )
                 }
                 val finalBaselineExposureEv = DngBaselineExposure.sanitize(
-                    actualMetadata.baselineExposure +
-                        (solvedExposureEv ?: 0f) +
-                        captureBaselineExposureOffsetEv
+                    actualMetadata.baselineExposure + (solvedExposureEv ?: 0f)
                 )
                 val captureProfileGainTableMap = when (captureProfileToneMapMode) {
                     RawProfileToneMapMode.Photon,
@@ -1823,7 +1818,6 @@ class RawDemosaicProcessor {
                 } else {
                     RawDngCaptureProfileResult(
                         exposureOffsetEv = solvedExposureEv,
-                        captureBaselineExposureOffsetEv = captureBaselineExposureOffsetEv,
                         profileGainTableMap = captureProfileGainTableMap,
                     )
                 }

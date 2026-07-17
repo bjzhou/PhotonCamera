@@ -421,14 +421,8 @@ object RawProcessor {
                     com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
                     com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MAX_EV,
                 )
-            val captureBaselineExposureOffsetEv = captureProfile
-                ?.captureBaselineExposureOffsetEv
-                ?.takeIf { it.isFinite() }
-                ?: 0f
             val finalBaselineExposureEv = DngBaselineExposure.sanitize(
-                sourceBaselineExposureEv +
-                    (exposureOffsetEv ?: 0f) +
-                    captureBaselineExposureOffsetEv
+                sourceBaselineExposureEv + (exposureOffsetEv ?: 0f)
             )
             val profileRequired = options.profileToneMapMode == RawProfileToneMapMode.Photon ||
                 options.profileToneMapMode == RawProfileToneMapMode.GooglePixel
@@ -453,7 +447,6 @@ object RawProcessor {
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
                     "meteredExposureOffsetEv=${exposureOffsetEv ?: 0f} " +
                     "meteredExposureGain=${DngBaselineExposure.exactGain(exposureOffsetEv ?: 0f)} " +
-                    "captureBaselineExposureOffsetEv=$captureBaselineExposureOffsetEv " +
                     "writtenBaselineEv=${finalProfile.baselineExposureEv} " +
                     "writtenBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +
