@@ -7,6 +7,7 @@ import kotlin.math.pow
 
 object RawProfileExposureGl {
     const val DEFAULT_BLACK_RENDER_SHADOWS = 5f
+    private const val DEFAULT_BLACK_RENDER_DISABLE_BASELINE_EV = 2f
     private const val DEFAULT_BLACK_RENDER_SHADOW_SCALE = 1f
     private const val DEFAULT_BLACK_RENDER_STAGE3_GAIN = 1f
 
@@ -81,7 +82,11 @@ object RawProfileExposureGl {
         } else {
             DEFAULT_BLACK_RENDER_SHADOW_SCALE
         }
-        val black = when (defaultBlackRender) {
+        val resolvedDefaultBlackRender = resolveDefaultBlackRender(
+            dngBaselineExposure = dngBaselineExposure,
+            requested = defaultBlackRender,
+        )
+        val black = when (resolvedDefaultBlackRender) {
             DcpDefaultBlackRender.Auto -> blackRenderShadows.coerceAtLeast(0f) *
                 safeShadowScale *
                 DEFAULT_BLACK_RENDER_STAGE3_GAIN *
@@ -130,6 +135,20 @@ object RawProfileExposureGl {
             toneB = toneB,
             toneC = toneC
         )
+    }
+
+    fun resolveDefaultBlackRender(
+        dngBaselineExposure: Float,
+        requested: DcpDefaultBlackRender,
+    ): DcpDefaultBlackRender {
+        val baselineExposure = DngBaselineExposure.sanitize(dngBaselineExposure)
+        // A large BaselineExposure is a source-domain normalization. Applying the Adobe Auto
+        // stage-3 black point before that gain removes valid source signal, so keep zero as black.
+        return if (baselineExposure >= DEFAULT_BLACK_RENDER_DISABLE_BASELINE_EV) {
+            DcpDefaultBlackRender.None
+        } else {
+            requested
+        }
     }
 
     fun bindUniforms(program: Int, exposure: Uniforms) {

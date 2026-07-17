@@ -1410,6 +1410,7 @@ class RawDemosaicProcessor {
             dcpRenderPlan = activeDcpRenderPlan
         )
         logRawDcpPipeline(
+            metadata = actualMetadata,
             profilePlanSource = profilePlanSource,
             requestedColorEngine = requestedColorEngine,
             colorEngine = colorEngine,
@@ -1850,7 +1851,12 @@ class RawDemosaicProcessor {
                     "engineDefaultEv=${colorEngine.defaultExposureCompensationEv} " +
                     "engineCompensationDomain=${colorEngine.exposureCompensationDomain} " +
                     "profileExposureEv=${profileExposureUniforms.exposureEv} " +
-                    "defaultBlackRender=${if (useProfileExposureRamp) dcpDefaultBlackRenderOrAuto(activeDcpRenderPlan) else DcpDefaultBlackRender.None} " +
+                    "defaultBlackRender=${resolveProfileDefaultBlackRender(
+                        metadata = actualMetadata,
+                        dcpRenderPlan = activeDcpRenderPlan,
+                        applyDngBaselineExposure = applyProfileDngBaselineExposure,
+                        useRamp = useProfileExposureRamp,
+                    )} " +
                     "profileRampBlack=${profileExposureUniforms.rampBlack} " +
                     "profileSupportOverrange=${profileExposureUniforms.supportOverrange} " +
                     "dngShadowScale=${actualMetadata.shadowScale} " +
@@ -7732,6 +7738,7 @@ class RawDemosaicProcessor {
     }
 
     private fun logRawDcpPipeline(
+        metadata: RawMetadata,
         profilePlanSource: String?,
         requestedColorEngine: RawRenderingEngine,
         colorEngine: RawRenderingEngine,
@@ -7753,7 +7760,12 @@ class RawDemosaicProcessor {
         val hueSatMap = dcpRenderPlan?.hueSatMap?.takeIf { it.isValid }
         val lookEnabled = dcpRenderPlan?.lookTable?.isValid == true
         val profileToneCurveEnabled = useAdobeProfilePipeline && dcpRenderPlan?.toneCurveLut != null
-        val defaultBlackRender = dcpDefaultBlackRenderOrAuto(dcpRenderPlan)
+        val defaultBlackRender = resolveProfileDefaultBlackRender(
+            metadata = metadata,
+            dcpRenderPlan = dcpRenderPlan,
+            applyDngBaselineExposure = useAdobeProfilePipeline,
+            useRamp = useProfileExposureRamp,
+        )
         val dcpBaselineExposureOffset = if (applyDcpBaselineExposureOffset) {
             dcpBaselineExposureOffsetOrZero(dcpRenderPlan)
         } else {
@@ -7822,7 +7834,7 @@ class RawDemosaicProcessor {
         dcpRenderPlan: DcpRenderPlan?,
         applyDcpBaselineExposureOffset: Boolean,
         applyDngBaselineExposure: Boolean,
-        useRamp: Boolean
+        useRamp: Boolean,
     ): ProfileExposureUniforms {
         val dngBaselineExposure = if (applyDngBaselineExposure) {
             DngBaselineExposure.sanitize(metadata.baselineExposure)
@@ -7838,14 +7850,33 @@ class RawDemosaicProcessor {
             profileExposureCompensation = profileExposureCompensation,
             dngBaselineExposure = dngBaselineExposure,
             dcpBaselineExposureOffset = dcpBaselineExposureOffset,
-            defaultBlackRender = if (useRamp) {
-                dcpDefaultBlackRenderOrAuto(dcpRenderPlan)
-            } else {
-                DcpDefaultBlackRender.None
-            },
+            defaultBlackRender = resolveProfileDefaultBlackRender(
+                metadata = metadata,
+                dcpRenderPlan = dcpRenderPlan,
+                applyDngBaselineExposure = applyDngBaselineExposure,
+                useRamp = useRamp,
+            ),
             shadowScale = metadata.shadowScale,
             supportOverrange = useRamp && dcpRenderPlan?.supportsOverrange == true,
             useRamp = useRamp
+        )
+    }
+
+    private fun resolveProfileDefaultBlackRender(
+        metadata: RawMetadata,
+        dcpRenderPlan: DcpRenderPlan?,
+        applyDngBaselineExposure: Boolean,
+        useRamp: Boolean,
+    ): DcpDefaultBlackRender {
+        if (!useRamp) return DcpDefaultBlackRender.None
+        val dngBaselineExposure = if (applyDngBaselineExposure) {
+            DngBaselineExposure.sanitize(metadata.baselineExposure)
+        } else {
+            0f
+        }
+        return RawProfileExposureGl.resolveDefaultBlackRender(
+            dngBaselineExposure = dngBaselineExposure,
+            requested = dcpDefaultBlackRenderOrAuto(dcpRenderPlan),
         )
     }
 
@@ -8215,6 +8246,12 @@ class RawDemosaicProcessor {
                     "samplesPerPixel=$samplesPerPixel size=${metadata.width}x${metadata.height} " +
                     "sourceBaselineEv=$sourceBaselineEv " +
                     "profileBaselineExposureOffsetEv=$profileBaselineExposureOffsetEv " +
+                    "defaultBlackRender=${resolveProfileDefaultBlackRender(
+                        metadata = metadata,
+                        dcpRenderPlan = dcpRenderPlan,
+                        applyDngBaselineExposure = applyProfileDngBaselineExposure,
+                        useRamp = useProfileExposureRamp,
+                    )} " +
                     "candidateDomain=${if (useAdobeSdkExposure) "ADOBE_DNG_SDK" else "LINEAR_GAIN"}"
             )
             try {
@@ -8381,7 +8418,7 @@ class RawDemosaicProcessor {
             dcpRenderPlan = dcpRenderPlan,
             applyDcpBaselineExposureOffset = applyProfileDcpBaselineExposureOffset,
             applyDngBaselineExposure = applyProfileDngBaselineExposure,
-            useRamp = useProfileExposureRamp
+            useRamp = useProfileExposureRamp,
         )
         val rendered = renderCombinedPass(
             metadata = metadata,
