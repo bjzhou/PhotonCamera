@@ -19,6 +19,7 @@ import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.lut.ChromaDenoiseShaders
 import com.hinnka.mycamera.lut.ShadowsHighlightsShader
 import com.hinnka.mycamera.ml.SharedDepthEstimator
+import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
@@ -127,6 +128,13 @@ class RawDemosaicProcessor {
             width = dngRawData.width,
             height = dngRawData.height
         )
+        val channelNoiseProfile =
+            dngRawData.noiseProfile ?: baseMetadata?.channelNoiseProfile ?: floatArrayOf(0f, 0f)
+        val dngAverageNoiseProfile = dngRawData.noiseProfile
+            ?.let(RawMetadata::averageNoiseProfile)
+            ?.takeIf { profile -> profile[0] > 0f || profile[1] > 0f }
+        val noiseProfile =
+            dngAverageNoiseProfile ?: baseMetadata?.noiseProfile ?: floatArrayOf(0f, 0f)
 
         return RawMetadata(
             width = dngRawData.width,
@@ -153,14 +161,8 @@ class RawDemosaicProcessor {
             aperture = if (dngRawData.aperture == 0f) (baseMetadata?.aperture
                 ?: 0f) else dngRawData.aperture,
             activeArray = activeArray,
-            noiseProfile = dngRawData.noiseProfile ?: baseMetadata?.noiseProfile ?: floatArrayOf(
-                0f,
-                0f
-            ),
-            channelNoiseProfile = dngRawData.noiseProfile ?: baseMetadata?.channelNoiseProfile ?: floatArrayOf(
-                0f,
-                0f
-            ),
+            noiseProfile = noiseProfile,
+            channelNoiseProfile = channelNoiseProfile,
             postRawSensitivityBoost = baseMetadata?.postRawSensitivityBoost ?: 1.0f,
             exposureCompensation = baseMetadata?.exposureCompensation ?: 0f,
             aeMode = baseMetadata?.aeMode ?: 1,
@@ -215,6 +217,7 @@ class RawDemosaicProcessor {
         private const val DARKTABLE_FILMIC_HR_DELTA = 1f
         private const val DARKTABLE_FILMIC_HR_HIGH_QUALITY_ITERATIONS = 1
         private const val DNG_DEFAULT_CROP_ASPECT_TOLERANCE = 0.005f
+        private const val DENOISE_PROFILE_GLES31_MIN_SSBO_BYTES = 128L * 1024L * 1024L
         private val BRADFORD_D65_TO_D50 = floatArrayOf(
             1.0478112f, 0.0228866f, -0.0501270f,
             0.0295424f, 0.9904844f, -0.0170491f,
@@ -388,7 +391,9 @@ class RawDemosaicProcessor {
     }
 
     private var denoiseNlmU2BufferId = 0
-    private var denoiseNlmBufferPixels = 0
+    private var denoiseNlmBufferWidth = 0
+    private var denoiseNlmBufferRows = 0
+    private var denoiseNlmMaxSsboBytes = 0L
 
     // 缓冲区
     private var vertexBuffer: FloatBuffer? = null
@@ -1862,13 +1867,25 @@ class RawDemosaicProcessor {
                     "dcpBaselineExposureOffsetApplied=$applyDcpBaselineExposureOffset"
             )
 
+            // darktable runs denoiseprofile after demosaic and before input color conversion.
+            // The RCD output is un-white-balanced camera RGB, so the VST keeps WB only in its
+            // adaptive exponent and returns the same camera-RGB domain for LinearRcdPass.
+            renderDenoiseProfilePass(
+                sourceTextureId = demosaicTextureId,
+                width = actualWidth,
+                height = actualHeight,
+                metadata = actualMetadata,
+                denoiseValue = denoiseValue,
+            )
+            val denoiseProfileTextureId = gfTexId[1]
+
             // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. Linear-domain
             // engines apply the same EV as an exact 2^EV gain in this ProPhoto/RIMM pass.
             checkGlError("Before LinearRcdPass")
 
             renderLinearRcdPass(
                 metadata = actualMetadata,
-                sourceTextureId = demosaicTextureId,
+                sourceTextureId = denoiseProfileTextureId,
                 targetFramebufferId = linearOutputFramebufferId,
                 viewportWidth = actualWidth,
                 viewportHeight = actualHeight,
@@ -1899,13 +1916,16 @@ class RawDemosaicProcessor {
 
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             checkGlError("After LinearRcdPass Swap")
+            // LinearRcdPass has consumed the camera-RGB NLM result. The post-CCM pipeline uses
+            // the full-resolution ping-pong textures, so both denoiseprofile textures can go.
+            releaseDenoiseProfileFramebuffers()
             // rawTextureId 已被 RCD populate 消费，提前释放 GPU 显存
             if (rawTextureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
                 rawTextureId = 0
             }
             val workingColorSpace = resolveWorkingColorSpace()
-            val denoiseSourceTextureId = renderDefaultChromaDenoiseBeforeDenoiseProfile(
+            val outputTexture = renderDefaultChromaDenoise(
                 sourceTextureId = demosaicTextureId,
                 width = actualWidth,
                 height = actualHeight,
@@ -1914,32 +1934,12 @@ class RawDemosaicProcessor {
                 chromaDenoiseValue = chromaDenoiseValue,
             )
 
-            // darktable denoiseprofile 降噪
-            renderDenoiseProfilePass(
-                sourceTextureId = denoiseSourceTextureId,
-                width = actualWidth,
-                height = actualHeight,
-                metadata = actualMetadata,
-                linearExposureGain = linearExposureGain,
-                denoiseValue = denoiseValue,
-            )
-            val outputTexture = gfTexId[1]
-
             // 重点：不要在此处销毁常驻双缓冲的 framebuffer，由 setupFullResFramebuffer 或 release() 统一管理其生命周期
             // if (demosaicFramebufferId != 0) {
             //     GLES30.glDeleteFramebuffers(1, intArrayOf(demosaicFramebufferId), 0)
             //     demosaicFramebufferId = 0
             // }
             // demosaicWidth = 0; demosaicHeight = 0
-            if (gfTexId[0] != 0) {
-                GLES30.glDeleteTextures(1, intArrayOf(gfTexId[0]), 0)
-                gfTexId[0] = 0
-            }
-            if (gfFboId[0] != 0) {
-                GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[0]), 0)
-                gfFboId[0] = 0
-            }
-
             val hdrReferenceBitmap = if (includeHdrReference) {
                 setupHdrReferenceFramebuffer(actualWidth, actualHeight)
                 renderHdrReferencePass(
@@ -2030,17 +2030,6 @@ class RawDemosaicProcessor {
                 return@withContext null
             }
             PLog.d(TAG, "Combined Pass took: ${System.currentTimeMillis() - combinedStart}ms")
-            // outputTexture 已被 combinedPass 消费，提前释放
-            if (gfTexId[1] != 0) {
-                GLES30.glDeleteTextures(1, intArrayOf(gfTexId[1]), 0)
-                gfTexId[1] = 0
-            }
-            if (gfFboId[1] != 0) {
-                GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[1]), 0)
-                gfFboId[1] = 0
-            }
-            gfWidth = 0; gfHeight = 0
-
             // 6. 第三步：锐化 (Sharpen Pass)
             setupSharpenFramebuffer(actualWidth, actualHeight)
             val sharpenStart = System.currentTimeMillis()
@@ -3708,7 +3697,10 @@ class RawDemosaicProcessor {
     }
 
     private fun setupNLMFramebuffers(width: Int, height: Int) {
-        if (gfWidth == width && gfHeight == height && gfTexId[0] != 0) return
+        if (gfWidth == width && gfHeight == height && gfTexId[0] != 0) {
+            setupDenoiseProfileResources(width, height)
+            return
+        }
         gfWidth = width
         gfHeight = height
 
@@ -3760,40 +3752,119 @@ class RawDemosaicProcessor {
             }
             gfTexId[i] = t[0]; gfFboId[i] = f[0]
         }
+        checkGlError("setup DenoiseProfile textures")
         setupDenoiseProfileResources(width, height)
-        checkGlError("setupGuidedFilterFramebuffers")
+        checkGlError("setup DenoiseProfile resources")
     }
 
     private fun setupDenoiseProfileResources(width: Int, height: Int) {
-        val pixelCount = width * height
-        if (
-            denoiseNlmBufferPixels == pixelCount &&
-            denoiseNlmU2BufferId != 0
-        ) {
+        val maxSsboBytes = queryDenoiseProfileMaxSsboBytes()
+        val plannedRows = DenoiseProfileStripePlanner.capacityRows(width, height, maxSsboBytes)
+        if (plannedRows <= 0) {
+            PLog.e(
+                TAG,
+                "DenoiseProfile cannot fit one accumulator row: width=$width " +
+                    "GL_MAX_SHADER_STORAGE_BLOCK_SIZE=$maxSsboBytes"
+            )
+            releaseDenoiseProfileAccumulator()
             return
         }
+        if (denoiseNlmBufferWidth == width && denoiseNlmBufferRows > 0 &&
+            denoiseNlmU2BufferId != 0
+        ) return
 
-        if (denoiseNlmU2BufferId != 0) {
-            GLES31.glDeleteBuffers(1, intArrayOf(denoiseNlmU2BufferId), 0)
-            denoiseNlmU2BufferId = 0
-        }
+        releaseDenoiseProfileAccumulator()
 
         val buffers = IntArray(1)
         GLES31.glGenBuffers(buffers.size, buffers, 0)
         denoiseNlmU2BufferId = buffers[0]
-
         GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, denoiseNlmU2BufferId)
-        GLES31.glBufferData(
-            GLES31.GL_SHADER_STORAGE_BUFFER,
-            pixelCount * 4 * 4,
-            null,
-            GLES31.GL_DYNAMIC_DRAW
-        )
+        checkGlError("before DenoiseProfile accumulator allocation")
+
+        var capacityRows = plannedRows
+        while (capacityRows > 0) {
+            val byteCount = DenoiseProfileStripePlanner.requiredBytes(width, capacityRows)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                byteCount.toInt(),
+                null,
+                GLES31.GL_DYNAMIC_DRAW
+            )
+            val allocationError = GLES30.glGetError()
+            if (allocationError == GLES30.GL_NO_ERROR) {
+                denoiseNlmBufferWidth = width
+                denoiseNlmBufferRows = capacityRows
+                PLog.i(
+                    TAG,
+                    "DenoiseProfile accumulator stripe=${width}x$capacityRows " +
+                        "bytes=$byteCount maxSsbo=$maxSsboBytes"
+                )
+                break
+            }
+
+            PLog.w(
+                TAG,
+                "DenoiseProfile accumulator ${width}x$capacityRows allocation failed: " +
+                    "bytes=$byteCount glError=$allocationError"
+            )
+            capacityRows = nextSmallerDenoiseProfileStripeRows(capacityRows)
+        }
         GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        denoiseNlmBufferPixels = pixelCount
+        if (denoiseNlmBufferRows == 0) {
+            releaseDenoiseProfileAccumulator()
+        }
     }
 
-    private fun renderDefaultChromaDenoiseBeforeDenoiseProfile(
+    private fun queryDenoiseProfileMaxSsboBytes(): Long {
+        if (denoiseNlmMaxSsboBytes > 0L) return denoiseNlmMaxSsboBytes
+        val value = LongArray(1)
+        GLES30.glGetInteger64v(GLES31.GL_MAX_SHADER_STORAGE_BLOCK_SIZE, value, 0)
+        val queryError = GLES30.glGetError()
+        denoiseNlmMaxSsboBytes = if (queryError == GLES30.GL_NO_ERROR && value[0] > 0L) {
+            value[0]
+        } else {
+            PLog.w(
+                TAG,
+                "Failed to query GL_MAX_SHADER_STORAGE_BLOCK_SIZE: " +
+                    "value=${value[0]} glError=$queryError; using GLES 3.1 minimum"
+            )
+            DENOISE_PROFILE_GLES31_MIN_SSBO_BYTES
+        }
+        return denoiseNlmMaxSsboBytes
+    }
+
+    private fun nextSmallerDenoiseProfileStripeRows(currentRows: Int): Int {
+        if (currentRows <= 1) return 0
+        val half = currentRows / 2
+        val workgroupRows = DenoiseProfileShaders.IMAGE_LOCAL_Y
+        return if (half >= workgroupRows) half - half % workgroupRows else half
+    }
+
+    private fun releaseDenoiseProfileAccumulator() {
+        if (denoiseNlmU2BufferId != 0) {
+            GLES31.glDeleteBuffers(1, intArrayOf(denoiseNlmU2BufferId), 0)
+            denoiseNlmU2BufferId = 0
+        }
+        denoiseNlmBufferWidth = 0
+        denoiseNlmBufferRows = 0
+    }
+
+    private fun releaseDenoiseProfileFramebuffers() {
+        for (index in 0..1) {
+            if (gfTexId[index] != 0) {
+                GLES30.glDeleteTextures(1, intArrayOf(gfTexId[index]), 0)
+                gfTexId[index] = 0
+            }
+            if (gfFboId[index] != 0) {
+                GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[index]), 0)
+                gfFboId[index] = 0
+            }
+        }
+        gfWidth = 0
+        gfHeight = 0
+    }
+
+    private fun renderDefaultChromaDenoise(
         sourceTextureId: Int,
         width: Int,
         height: Int,
@@ -3809,7 +3880,7 @@ class RawDemosaicProcessor {
         if (chromaDenoiseProgram == 0 || linearOutputFramebufferId == 0 || linearOutputTextureId == 0) {
             PLog.w(
                 TAG,
-                "RAW chroma denoise program not initialized, falling back to denoiseprofile source"
+                "RAW chroma denoise program not initialized, falling back to source"
             )
             return sourceTextureId
         }
@@ -3847,11 +3918,11 @@ class RawDemosaicProcessor {
         )
         drawQuad(chromaDenoiseProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("RAW chroma denoise before denoiseprofile")
+        checkGlError("RAW chroma denoise")
 
         PLog.d(
             TAG,
-            "RAW chroma denoise before denoiseprofile: strength=$strength h=$h a=$noiseA b=$noiseB"
+            "RAW chroma denoise: strength=$strength h=$h a=$noiseA b=$noiseB"
         )
         return linearOutputTextureId
     }
@@ -3860,14 +3931,14 @@ class RawDemosaicProcessor {
     /**
      * 渲染 darktable denoiseprofile NLM 降噪。
      *
-     * 管线: linear RGB → variance-stabilizing transform → NLM accumulate → inverse transform → gfFboId[1]
+     * 管线: 未白平衡 camera RGB → variance-stabilizing transform → NLM accumulate
+     * → inverse transform → 未白平衡 camera RGB (gfFboId[1])。
      */
     private fun renderDenoiseProfilePass(
         sourceTextureId: Int,
         width: Int,
         height: Int,
         metadata: RawMetadata,
-        linearExposureGain: Float,
         denoiseValue: Float?,
     ) {
         setupNLMFramebuffers(width, height)
@@ -3878,7 +3949,7 @@ class RawDemosaicProcessor {
             return
         }
 
-        val params = buildDenoiseProfileParams(metadata, linearExposureGain, denoiseValue ?: 0f)
+        val params = buildDenoiseProfileParams(metadata, denoiseValue ?: 0f)
         if (params.strength <= 0f || width * height < 2) {
             renderPassthroughToTexture(sourceTextureId, width, height, gfFboId[1])
             return
@@ -3889,7 +3960,8 @@ class RawDemosaicProcessor {
             "DenoiseProfile NLM: strength=${params.strength} a=${params.a} b=${params.b} " +
                     "shadows=${params.shadows} bias=${params.bias} patch=${params.patchRadius} " +
                     "search=${params.searchRadius} norm=${params.norm} center=${params.centralPixelWeight} " +
-                    "wb=${params.wb.contentToString()}"
+                    "greenNoise=true adaptiveWb=${params.adaptiveWb.contentToString()} " +
+                    "signalScale=${params.signalScale.contentToString()}"
         )
 
         dispatchDenoisePreconditionV2(sourceTextureId, gfTexId[0], width, height, params)
@@ -3909,7 +3981,8 @@ class RawDemosaicProcessor {
         val norm: Float,
         val centralPixelWeight: Float,
         val p: FloatArray,
-        val wb: FloatArray,
+        val adaptiveWb: FloatArray,
+        val signalScale: FloatArray,
         val aa: FloatArray,
         val bb: FloatArray
     )
@@ -3918,28 +3991,29 @@ class RawDemosaicProcessor {
         return denoisePreconditionV2Program != 0 &&
                 denoiseNlmInitProgram != 0 &&
                 denoiseNlmFusedAccuProgram != 0 &&
-                denoiseNlmFinishProgram != 0
+                denoiseNlmFinishProgram != 0 &&
+                denoiseNlmU2BufferId != 0 &&
+                denoiseNlmBufferRows > 0
     }
 
     private fun buildDenoiseProfileParams(
         metadata: RawMetadata,
-        linearExposureGain: Float,
         strengthValue: Float
     ): DenoiseProfileParams {
         val profileGain =
             (metadata.iso / 100.0f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
-        val (noiseA, noiseB) = resolveDenoiseNoiseModel(metadata, linearExposureGain, profileGain)
+        val (noiseA, noiseB) = resolveDenoiseProfileNoiseModel(metadata, profileGain)
         val a = noiseA.coerceAtLeast(1e-10f)
         val b = noiseB.coerceAtLeast(1e-10f)
         val strength = strengthValue.coerceAtLeast(0f)
         val scale = 1.0f
         val shadows = inferDenoiseProfileShadows(a)
-        val bias = inferDenoiseProfileBias(a)
-        val wb = computeDenoiseProfileWb(metadata)
+        val bias = DenoiseProfileShaders.BLACK_PRESERVING_BIAS
+        val adaptiveWb = computeDenoiseProfileWb(metadata)
         val p = floatArrayOf(
-            max(shadows + 0.1f * ln(scale / wb[0]), 0.0f),
-            max(shadows + 0.1f * ln(scale / wb[1]), 0.0f),
-            max(shadows + 0.1f * ln(scale / wb[2]), 0.0f),
+            max(shadows + 0.1f * ln(scale / adaptiveWb[0]), 0.0f),
+            max(shadows + 0.1f * ln(scale / adaptiveWb[1]), 0.0f),
+            max(shadows + 0.1f * ln(scale / adaptiveWb[2]), 0.0f),
             1.0f
         )
         val compensateP = 0.05f / 0.05f.pow(shadows)
@@ -3949,11 +4023,11 @@ class RawDemosaicProcessor {
         val norm = 0.045f / (patchWidth * patchWidth).toFloat()
         val centralPixelWeight = 0.1f * scale
         val nlmStrength = strength.coerceAtLeast(1e-6f)
-        val scaledWb = floatArrayOf(
-            wb[0] * nlmStrength * scale,
-            wb[1] * nlmStrength * scale,
-            wb[2] * nlmStrength * scale,
-            0.0f
+        val signalScale = floatArrayOf(
+            nlmStrength * scale,
+            nlmStrength * scale,
+            nlmStrength * scale,
+            1.0f
         )
         val aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f)
         val bb = floatArrayOf(b, b, b, 1.0f)
@@ -3970,7 +4044,8 @@ class RawDemosaicProcessor {
             norm = norm,
             centralPixelWeight = centralPixelWeight,
             p = p,
-            wb = scaledWb,
+            adaptiveWb = adaptiveWb,
+            signalScale = signalScale,
             aa = aa,
             bb = bb
         )
@@ -3980,19 +4055,9 @@ class RawDemosaicProcessor {
         return max(0.1f - 0.1f * ln(a), 0.7f).coerceAtMost(1.8f)
     }
 
-    private fun inferDenoiseProfileBias(a: Float): Float {
-        return -max(5f + 0.5f * ln(a), 0.0f)
-    }
-
     private fun computeDenoiseProfileWb(metadata: RawMetadata): FloatArray {
-        val r = metadata.whiteBalanceGains.getOrElse(0) { 1f }.coerceAtLeast(1e-6f)
-        val g =
-            ((metadata.whiteBalanceGains.getOrElse(1) { 1f } + metadata.whiteBalanceGains.getOrElse(
-                2
-            ) { 1f }) * 0.5f)
-                .coerceAtLeast(1e-6f)
-        val b = metadata.whiteBalanceGains.getOrElse(3) { 1f }.coerceAtLeast(1e-6f)
-        return floatArrayOf(r, g, b, 0f)
+        val normalized = demosaicCalculationWbGains(metadata)
+        return floatArrayOf(normalized[0], 1f, normalized[3])
     }
 
     private fun dispatchDenoisePreconditionV2(
@@ -4026,29 +4091,53 @@ class RawDemosaicProcessor {
         height: Int,
         params: DenoiseProfileParams
     ) {
-        dispatchDenoiseNlmInit(width, height)
+        val stripes = DenoiseProfileStripePlanner.plan(height, denoiseNlmBufferRows)
+        for (stripe in stripes) {
+            dispatchDenoiseNlmInit(width, height, stripe)
 
-        for (qy in -params.searchRadius..0) {
-            for (qx in -params.searchRadius..params.searchRadius) {
-                dispatchDenoiseNlmFusedAccumulate(
-                    preconditionedTextureId,
-                    width,
-                    height,
-                    qx,
-                    qy,
-                    params
-                )
+            for (qy in -params.searchRadius..0) {
+                for (qx in -params.searchRadius..params.searchRadius) {
+                    dispatchDenoiseNlmFusedAccumulate(
+                        preconditionedTextureId,
+                        width,
+                        height,
+                        stripe,
+                        qx,
+                        qy,
+                        params
+                    )
+                }
             }
-        }
 
-        dispatchDenoiseNlmFinish(originalTextureId, outputTextureId, width, height, params)
+            dispatchDenoiseNlmFinish(
+                originalTextureId,
+                outputTextureId,
+                width,
+                height,
+                stripe,
+                params
+            )
+            GlesGpuScheduler.yieldToUiRenderer()
+        }
     }
 
-    private fun dispatchDenoiseNlmInit(width: Int, height: Int) {
+    private fun dispatchDenoiseNlmInit(
+        width: Int,
+        height: Int,
+        stripe: DenoiseProfileStripe,
+    ) {
         GLES31.glUseProgram(denoiseNlmInitProgram)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, denoiseNlmU2BufferId)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmInitProgram, "uImageSize"), width, height)
-        dispatchDenoiseImage(width, height, "DenoiseProfile NLM init")
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(denoiseNlmInitProgram, "uStripeRowCount"),
+            stripe.rowCount
+        )
+        dispatchDenoiseImage(
+            width,
+            stripe.rowCount,
+            "DenoiseProfile NLM init row=${stripe.rowOffset}"
+        )
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
     }
 
@@ -4056,6 +4145,7 @@ class RawDemosaicProcessor {
         inputTextureId: Int,
         width: Int,
         height: Int,
+        stripe: DenoiseProfileStripe,
         qx: Int,
         qy: Int,
         params: DenoiseProfileParams
@@ -4064,13 +4154,18 @@ class RawDemosaicProcessor {
         bindComputeSampler(denoiseNlmFusedAccuProgram, "uInput", 0, inputTextureId)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, denoiseNlmU2BufferId)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uImageSize"), width, height)
+        setDenoiseStripeUniforms(denoiseNlmFusedAccuProgram, stripe)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uQ"), qx, qy)
         GLES31.glUniform1f(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uNorm"), params.norm)
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uCentralPixelWeight"),
             params.centralPixelWeight
         )
-        dispatchDenoiseImage(width, height, "DenoiseProfile NLM fused accu q=($qx,$qy)")
+        dispatchDenoiseImage(
+            width,
+            stripe.rowCount,
+            "DenoiseProfile NLM fused accu row=${stripe.rowOffset} q=($qx,$qy)"
+        )
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
     }
 
@@ -4079,6 +4174,7 @@ class RawDemosaicProcessor {
         outputTextureId: Int,
         width: Int,
         height: Int,
+        stripe: DenoiseProfileStripe,
         params: DenoiseProfileParams
     ) {
         val program = denoiseNlmFinishProgram
@@ -4095,11 +4191,27 @@ class RawDemosaicProcessor {
             GLES31.GL_RGBA16F
         )
         setDenoiseCommonUniforms(program, width, height, params)
+        setDenoiseStripeUniforms(program, stripe)
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(program, "uBias"),
             params.bias - 0.5f * ln(params.scale)
         )
-        dispatchDenoiseImage(width, height, "DenoiseProfile NLM finish")
+        dispatchDenoiseImage(
+            width,
+            stripe.rowCount,
+            "DenoiseProfile NLM finish row=${stripe.rowOffset}"
+        )
+    }
+
+    private fun setDenoiseStripeUniforms(program: Int, stripe: DenoiseProfileStripe) {
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "uStripeRowOffset"),
+            stripe.rowOffset
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(program, "uStripeRowCount"),
+            stripe.rowCount
+        )
     }
 
     private fun setDenoiseCommonUniforms(
@@ -4112,7 +4224,12 @@ class RawDemosaicProcessor {
         GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uA"), 1, params.aa, 0)
         GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uP"), 1, params.p, 0)
         GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uB"), 1, params.bb, 0)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uWb"), 1, params.wb, 0)
+        GLES31.glUniform4fv(
+            GLES31.glGetUniformLocation(program, "uSignalScale"),
+            1,
+            params.signalScale,
+            0
+        )
     }
 
     private fun bindComputeSampler(program: Int, name: String, unit: Int, textureId: Int) {
@@ -4255,6 +4372,32 @@ class RawDemosaicProcessor {
 
     private fun roundUp(value: Int, multiple: Int): Int {
         return ((value + multiple - 1) / multiple) * multiple
+    }
+
+    private fun resolveDenoiseProfileNoiseModel(
+        metadata: RawMetadata,
+        fallbackGain: Float
+    ): Pair<Float, Float> {
+        val greenProfile = RawMetadata.greenNoiseProfile(
+            metadata.channelNoiseProfile,
+            metadata.cfaPattern
+        )
+        var slope = greenProfile[0].takeIf { it > 0f }
+            ?: metadata.noiseProfile.getOrElse(0) { 0f }
+        var offset = greenProfile[1].takeIf { it > 0f }
+            ?: metadata.noiseProfile.getOrElse(1) { 0f }
+
+        if (!slope.isFinite() || slope <= 0f) {
+            slope = 1E-4f * fallbackGain
+        }
+        if (!offset.isFinite() || offset <= 0f) {
+            offset = 4.5E-7f * sqrt(fallbackGain)
+        }
+
+        // An average of N registered RAW frames reduces both Poisson and read variance by N.
+        val frameNoiseScale = 1f / metadata.frameCount.coerceAtLeast(1).toFloat()
+        return (slope * frameNoiseScale).coerceAtLeast(1e-10f) to
+            (offset * frameNoiseScale).coerceAtLeast(1e-10f)
     }
 
     private fun resolveDenoiseNoiseModel(
@@ -8563,15 +8706,9 @@ class RawDemosaicProcessor {
         if (denoiseNlmFusedAccuProgram != 0) GLES31.glDeleteProgram(denoiseNlmFusedAccuProgram)
         if (denoiseNlmFinishProgram != 0) GLES31.glDeleteProgram(denoiseNlmFinishProgram)
         // denoiseprofile textures and FBOs
-        for (i in 0..1) {
-            if (gfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(gfTexId[i]), 0)
-            if (gfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(gfFboId[i]), 0)
-        }
-        if (denoiseNlmU2BufferId != 0) {
-            GLES31.glDeleteBuffers(1, intArrayOf(denoiseNlmU2BufferId), 0)
-            denoiseNlmU2BufferId = 0
-        }
-        denoiseNlmBufferPixels = 0
+        releaseDenoiseProfileFramebuffers()
+        releaseDenoiseProfileAccumulator()
+        denoiseNlmMaxSsboBytes = 0L
         releaseDarktableFilmicHighlightReconstructionFramebuffers()
 
         if (rawTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)

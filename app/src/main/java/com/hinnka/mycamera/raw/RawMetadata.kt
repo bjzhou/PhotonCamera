@@ -84,7 +84,9 @@ data class RawMetadata(
     val postRawSensitivityBoost: Float = 1.0f,
     val baselineExposure: Float = 0.0f,
     val shadowScale: Float = 1.0f,
+    /** 所有有效颜色通道噪声模型的平均值，顺序为 [slope, offset]。 */
     val noiseProfile: FloatArray = floatArrayOf(0f, 0f),
+    /** 每通道噪声模型，顺序为 [S0, O0, S1, O1, ...]。 */
     val channelNoiseProfile: FloatArray = floatArrayOf(0f, 0f),
     val afRegions: Array<MeteringRectangle>? = null,
     val activeArray: android.graphics.Rect? = null,
@@ -345,20 +347,67 @@ data class RawMetadata(
             }
         }
 
-        private fun averageNoiseProfile(channelNoiseProfile: FloatArray): FloatArray {
+        internal fun averageNoiseProfile(channelNoiseProfile: FloatArray): FloatArray {
             if (channelNoiseProfile.size < 2) return floatArrayOf(0f, 0f)
             var sumS = 0.0
             var sumO = 0.0
             var count = 0
             var index = 0
             while (index + 1 < channelNoiseProfile.size) {
-                sumS += sanitizeNoiseCoefficient(channelNoiseProfile[index])
-                sumO += sanitizeNoiseCoefficient(channelNoiseProfile[index + 1])
-                count++
+                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[index])
+                val offset = sanitizeNoiseCoefficient(channelNoiseProfile[index + 1])
+                // Native DNG parsing pads the fixed-size array with zero pairs.
+                if (slope > 0f || offset > 0f) {
+                    sumS += slope
+                    sumO += offset
+                    count++
+                }
                 index += 2
             }
             if (count == 0) return floatArrayOf(0f, 0f)
             return floatArrayOf((sumS / count).toFloat(), (sumO / count).toFloat())
+        }
+
+        /**
+         * Returns the green-channel noise model used by darktable denoiseprofile.
+         *
+         * Camera2 exposes four pairs in CFA position order, while a DNG NoiseProfile
+         * normally exposes [R, G, B]. DNG native parsing pads that three-plane array
+         * to four pairs, so a non-empty fourth pair distinguishes the four-plane form.
+         */
+        internal fun greenNoiseProfile(
+            channelNoiseProfile: FloatArray,
+            cfaPattern: Int
+        ): FloatArray {
+            fun pairAt(pairIndex: Int): FloatArray? {
+                val offset = pairIndex * 2
+                if (offset + 1 >= channelNoiseProfile.size) return null
+                val slope = sanitizeNoiseCoefficient(channelNoiseProfile[offset])
+                val intercept = sanitizeNoiseCoefficient(channelNoiseProfile[offset + 1])
+                if (slope <= 0f && intercept <= 0f) return null
+                return floatArrayOf(slope, intercept)
+            }
+
+            val hasFourChannels = pairAt(3) != null
+            if (!hasFourChannels) {
+                return pairAt(1) ?: floatArrayOf(0f, 0f)
+            }
+
+            val basePattern = cfaPattern.mod(4)
+            val greenIndices = when (basePattern) {
+                CFA_GRBG, CFA_GBRG -> 0 to 3
+                else -> 1 to 2
+            }
+            val firstGreen = pairAt(greenIndices.first)
+            val secondGreen = pairAt(greenIndices.second)
+            return if (firstGreen != null && secondGreen != null) {
+                floatArrayOf(
+                    (firstGreen[0] + secondGreen[0]) * 0.5f,
+                    (firstGreen[1] + secondGreen[1]) * 0.5f
+                )
+            } else {
+                firstGreen ?: secondGreen ?: floatArrayOf(0f, 0f)
+            }
         }
 
         private fun sanitizeNoiseCoefficient(value: Float): Float {

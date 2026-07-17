@@ -1869,7 +1869,7 @@ class LutImageProcessor {
         val norm: Float,
         val centralPixelWeight: Float,
         val p: FloatArray,
-        val wb: FloatArray,
+        val signalScale: FloatArray,
         val aa: FloatArray,
         val bb: FloatArray,
         val bias: Float,
@@ -1935,11 +1935,11 @@ class LutImageProcessor {
             norm = norm,
             centralPixelWeight = centralPixelWeight,
             p = floatArrayOf(shadows, shadows, shadows, 1.0f),
-            wb = floatArrayOf(
+            signalScale = floatArrayOf(
                 strength * scale,
                 strength * scale,
                 strength * scale,
-                0.0f
+                1.0f
             ),
             aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f),
             bb = floatArrayOf(b, b, b, 1.0f),
@@ -2020,7 +2020,12 @@ class LutImageProcessor {
         GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uA"), 1, params.aa, 0)
         GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uP"), 1, params.p, 0)
         GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uB"), 1, params.bb, 0)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uWb"), 1, params.wb, 0)
+        GLES31.glUniform4fv(
+            GLES31.glGetUniformLocation(program, "uSignalScale"),
+            1,
+            params.signalScale,
+            0
+        )
     }
 
     private fun bindComputeSampler(program: Int, name: String, unit: Int, textureId: Int) {

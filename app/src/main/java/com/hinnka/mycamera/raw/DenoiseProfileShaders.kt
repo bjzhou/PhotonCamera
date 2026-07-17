@@ -3,12 +3,17 @@ package com.hinnka.mycamera.raw
 /**
  * OpenGL ES 3.1 compute port of darktable's denoiseprofile NLM path.
  *
+ * Input and output stay in un-white-balanced camera RGB. The host keeps darktable's
+ * white-balance-adaptive exponent, but removes WB from the reversible signal scale.
  * The pipeline mirrors darktable process_nlmeans_cl with a mobile fused accumulator:
  * precondition_v2 -> init -> repeated local-tile accu -> finish_v2.
  */
 object DenoiseProfileShaders {
     const val SEARCH_RADIUS = 5
     const val PATCH_RADIUS = 1
+    // darktable's neutral bias setting makes finish_v2 the exact inverse when NLM leaves a
+    // transformed sample unchanged. This is required to keep sensor black and channel ratios.
+    const val BLACK_PRESERVING_BIAS = 0.0f
     const val IMAGE_LOCAL_X = 16
     const val IMAGE_LOCAL_Y = 16
     private const val FUSED_TILE_X = IMAGE_LOCAL_X + SEARCH_RADIUS + 2 * PATCH_RADIUS
@@ -55,7 +60,7 @@ object DenoiseProfileShaders {
         uniform vec4 uA;
         uniform vec4 uP;
         uniform vec4 uB;
-        uniform vec4 uWb;
+        uniform vec4 uSignalScale;
 
         void main() {
             ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
@@ -64,7 +69,7 @@ object DenoiseProfileShaders {
             vec4 pixel = readPixel(uInput, coord, uImageSize);
             float alpha = pixel.a;
             vec4 t = max(
-                2.0 * dtPow(max(vec4(0.0), pixel / uWb + uB), 1.0 - uP / 2.0) /
+                2.0 * dtPow(max(vec4(0.0), pixel / uSignalScale + uB), 1.0 - uP / 2.0) /
                 ((-uP + 2.0) * sqrt(uA)),
                 vec4(0.0)
             );
@@ -80,12 +85,13 @@ object DenoiseProfileShaders {
         layout(std430, binding = 0) buffer AccuBuffer { vec4 u2[]; };
 
         uniform ivec2 uImageSize;
+        uniform int uStripeRowCount;
 
         void main() {
-            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
+            ivec2 stripeCoord = ivec2(gl_GlobalInvocationID.xy);
+            if (stripeCoord.x >= uImageSize.x || stripeCoord.y >= uStripeRowCount) return;
 
-            u2[pixelIndex(coord, uImageSize)] = vec4(0.0);
+            u2[stripeCoord.y * uImageSize.x + stripeCoord.x] = vec4(0.0);
         }
     """.trimIndent()
 
@@ -99,6 +105,8 @@ object DenoiseProfileShaders {
         shared float sDistance[$FUSED_TILE_X * $FUSED_TILE_Y];
 
         uniform ivec2 uImageSize;
+        uniform int uStripeRowOffset;
+        uniform int uStripeRowCount;
         uniform ivec2 uQ;
         uniform float uNorm;
         uniform float uCentralPixelWeight;
@@ -141,8 +149,10 @@ object DenoiseProfileShaders {
         }
 
         void main() {
-            ivec2 groupOrigin = ivec2(gl_WorkGroupID.xy) *
-                ivec2($IMAGE_LOCAL_X, $IMAGE_LOCAL_Y);
+            ivec2 groupOrigin = ivec2(
+                int(gl_WorkGroupID.x) * $IMAGE_LOCAL_X,
+                uStripeRowOffset + int(gl_WorkGroupID.y) * $IMAGE_LOCAL_Y
+            );
             ivec2 tileMin = min(ivec2(-$PATCH_RADIUS), -uQ - ivec2($PATCH_RADIUS));
             ivec2 tileMax = max(ivec2($PATCH_RADIUS), -uQ + ivec2($PATCH_RADIUS));
             int tileWidth = $IMAGE_LOCAL_X + tileMax.x - tileMin.x;
@@ -163,8 +173,9 @@ object DenoiseProfileShaders {
             memoryBarrierShared();
             barrier();
 
-            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
+            ivec2 stripeCoord = ivec2(gl_GlobalInvocationID.xy);
+            if (stripeCoord.x >= uImageSize.x || stripeCoord.y >= uStripeRowCount) return;
+            ivec2 coord = stripeCoord + ivec2(0, uStripeRowOffset);
 
             ivec2 plusCoord = coord + uQ;
             ivec2 minusCoord = coord - uQ;
@@ -183,7 +194,7 @@ object DenoiseProfileShaders {
             vec4 accu = weight * u1Pq + weightMinus * u1Mq;
             accu.a = weight + weightMinus;
 
-            int idx = pixelIndex(coord, uImageSize);
+            int idx = stripeCoord.y * uImageSize.x + stripeCoord.x;
             u2[idx] = u2[idx] + accu;
         }
     """.trimIndent()
@@ -197,17 +208,20 @@ object DenoiseProfileShaders {
         layout(rgba16f, binding = 1) writeonly uniform highp image2D uOutput;
 
         uniform ivec2 uImageSize;
+        uniform int uStripeRowOffset;
+        uniform int uStripeRowCount;
         uniform vec4 uA;
         uniform vec4 uP;
         uniform vec4 uB;
         uniform float uBias;
-        uniform vec4 uWb;
+        uniform vec4 uSignalScale;
 
         void main() {
-            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
+            ivec2 stripeCoord = ivec2(gl_GlobalInvocationID.xy);
+            if (stripeCoord.x >= uImageSize.x || stripeCoord.y >= uStripeRowCount) return;
+            ivec2 coord = stripeCoord + ivec2(0, uStripeRowOffset);
 
-            int idx = pixelIndex(coord, uImageSize);
+            int idx = stripeCoord.y * uImageSize.x + stripeCoord.x;
             vec4 accu = u2[idx];
             float alpha = readPixel(uInput, coord, uImageSize).a;
             vec4 px = accu.a > 0.0 ? accu / accu.a : vec4(0.0);
@@ -216,7 +230,7 @@ object DenoiseProfileShaders {
             vec4 denominator = 4.0 / (sqrt(uA) * (2.0 - uP));
             vec4 z1 = (px + sqrt(max(vec4(0.0), delta))) / denominator;
             px = max(dtPow(z1, 1.0 / (1.0 - uP / 2.0)) - uB, vec4(0.0));
-            px *= uWb;
+            px *= uSignalScale;
             px.a = alpha;
             imageStore(uOutput, coord, px);
         }
