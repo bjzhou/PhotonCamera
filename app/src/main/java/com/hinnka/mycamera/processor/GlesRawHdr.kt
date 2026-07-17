@@ -24,7 +24,8 @@ internal object GlesRawHdrConfig {
 }
 
 internal object GlesRawHdrShaders {
-    fun rcdNormalPopulate(rawCommon: String): String = """
+    /** HDR 累加结果到统一 RCD 工作 CFA/种子 RGB 缓冲的输入适配器。 */
+    fun normalCfaInputAdapter(rawCommon: String): String = """
         #version 310 es
         $rawCommon
         layout(local_size_x = 16, local_size_y = 16) in;
@@ -75,7 +76,8 @@ internal object GlesRawHdrShaders {
         }
     """.trimIndent()
 
-    val rcdStoreRgb: String = """
+    /** RCD 完成后的 HDR 曝光域转换；解马赛克与边界处理不在这里实现。 */
+    val workingRgbStore: String = """
         #version 310 es
         precision highp float;
         precision highp int;

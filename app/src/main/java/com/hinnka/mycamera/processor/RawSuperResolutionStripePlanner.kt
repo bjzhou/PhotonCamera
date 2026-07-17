@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.raw.RcdShaders
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -36,7 +37,7 @@ internal object RawSuperResolutionStripePlanner {
         val safeMaxFlow = maxFlowYPlanePx.takeIf { it.isFinite() } ?: 0f
         val minFlow = min(safeMinFlow, safeMaxFlow) * 2f
         val maxFlow = max(safeMinFlow, safeMaxFlow) * 2f
-        val gatherMargin = cfaPeriod.coerceAtLeast(2) + RCD_HALO_ROWS
+        val gatherMargin = cfaPeriod.coerceAtLeast(2) + RcdShaders.STRIPE_HALO_ROWS
         var first = floor(firstReferenceRaw + minFlow - gatherMargin).toInt().coerceIn(0, rawHeight - 1)
         // RCD shaders evaluate CFA parity in stripe-local coordinates. Preserve the global phase.
         if ((first and 1) != 0) first = (first - 1).coerceAtLeast(0)
@@ -45,6 +46,4 @@ internal object RawSuperResolutionStripePlanner {
             .coerceIn(first + 1, rawHeight)
         return RawSourceRowBand(firstRow = first, rowCount = endExclusive - first)
     }
-
-    private const val RCD_HALO_ROWS = 10
 }

@@ -9,6 +9,139 @@ package com.hinnka.mycamera.raw
  */
 object RcdShaders {
 
+    /** RCD 主体算子不写入可靠结果的照片外圈宽度。 */
+    const val OUTPUT_MARGIN = 9
+
+    /** PPG 最深的递归邻域半径，用于验证条带是否包含完整输入。 */
+    const val PPG_RADIUS = 4
+
+    /** 条带调用方在输出采样范围之外至少保留的 RCD 输入行数。 */
+    const val STRIPE_HALO_ROWS = OUTPUT_MARGIN + 1
+
+    const val HIGHLIGHT_RECONSTRUCTION_THRESHOLD = 0.985f
+    const val HIGHLIGHT_RECONSTRUCTION_CEILING = 8.0f
+
+    /**
+     * RCD 四周统一使用的 PPG 内核。
+     *
+     * 嵌入该内核的 shader 必须先提供 `rawAt(ivec2)` 与 `colorAt(ivec2)`；两者负责
+     * 把虚拟照片坐标映射到实际 CFA 存储。这样完整图与条带图共享同一份 PPG 数学实现，
+     * 只有坐标映射不同。
+     */
+    private val PPG_KERNEL = """
+        float ppgGreenAt(ivec2 coord) {
+            // Keep the virtual coordinate so recursive PPG estimates use the neighbourhood
+            // around that reflected photosite, rather than shifting the kernel into the image.
+            ivec2 center = coord;
+
+            int ownColor = colorAt(center);
+            float pc = rawAt(center);
+            if (ownColor == GREEN) {
+                return max(0.0, pc);
+            }
+
+            float pym = rawAt(center + ivec2(0, -1));
+            float pym2 = rawAt(center + ivec2(0, -2));
+            float pym3 = rawAt(center + ivec2(0, -3));
+            float pyM = rawAt(center + ivec2(0, 1));
+            float pyM2 = rawAt(center + ivec2(0, 2));
+            float pyM3 = rawAt(center + ivec2(0, 3));
+            float pxm = rawAt(center + ivec2(-1, 0));
+            float pxm2 = rawAt(center + ivec2(-2, 0));
+            float pxm3 = rawAt(center + ivec2(-3, 0));
+            float pxM = rawAt(center + ivec2(1, 0));
+            float pxM2 = rawAt(center + ivec2(2, 0));
+            float pxM3 = rawAt(center + ivec2(3, 0));
+
+            float guessx = (pxm + pc + pxM) * 2.0 - pxM2 - pxm2;
+            float diffx = (abs(pxm2 - pc) + abs(pxM2 - pc) + abs(pxm - pxM)) * 3.0 +
+                (abs(pxM3 - pxM) + abs(pxm3 - pxm)) * 2.0;
+            float guessy = (pym + pc + pyM) * 2.0 - pyM2 - pym2;
+            float diffy = (abs(pym2 - pc) + abs(pyM2 - pc) + abs(pym - pyM)) * 3.0 +
+                (abs(pyM3 - pyM) + abs(pym3 - pym)) * 2.0;
+
+            float green;
+            if (diffx > diffy) {
+                green = clamp(guessy * 0.25, min(pym, pyM), max(pym, pyM));
+            } else {
+                green = clamp(guessx * 0.25, min(pxm, pxM), max(pxm, pxM));
+            }
+            return max(0.0, green);
+        }
+
+        vec3 ppgColorAt(ivec2 coord) {
+            ivec2 center = coord;
+
+            int ownColor = colorAt(center);
+            float pc = max(0.0, rawAt(center));
+            float green = ppgGreenAt(center);
+            vec3 color = vec3(0.0, green, 0.0);
+
+            if (ownColor == RED) {
+                color.r = pc;
+                ivec2 nw = center + ivec2(-1, -1);
+                ivec2 ne = center + ivec2(1, -1);
+                ivec2 sw = center + ivec2(-1, 1);
+                ivec2 se = center + ivec2(1, 1);
+                float diff1 = abs(rawAt(nw) - rawAt(se)) +
+                    abs(ppgGreenAt(nw) - green) + abs(ppgGreenAt(se) - green);
+                float guess1 = rawAt(nw) + rawAt(se) + 2.0 * green -
+                    ppgGreenAt(nw) - ppgGreenAt(se);
+                float diff2 = abs(rawAt(ne) - rawAt(sw)) +
+                    abs(ppgGreenAt(ne) - green) + abs(ppgGreenAt(sw) - green);
+                float guess2 = rawAt(ne) + rawAt(sw) + 2.0 * green -
+                    ppgGreenAt(ne) - ppgGreenAt(sw);
+                if (diff1 > diff2) {
+                    color.b = guess2 * 0.5;
+                } else if (diff1 < diff2) {
+                    color.b = guess1 * 0.5;
+                } else {
+                    color.b = (guess1 + guess2) * 0.25;
+                }
+            } else if (ownColor == BLUE) {
+                color.b = pc;
+                ivec2 nw = center + ivec2(-1, -1);
+                ivec2 ne = center + ivec2(1, -1);
+                ivec2 sw = center + ivec2(-1, 1);
+                ivec2 se = center + ivec2(1, 1);
+                float diff1 = abs(rawAt(nw) - rawAt(se)) +
+                    abs(ppgGreenAt(nw) - green) + abs(ppgGreenAt(se) - green);
+                float guess1 = rawAt(nw) + rawAt(se) + 2.0 * green -
+                    ppgGreenAt(nw) - ppgGreenAt(se);
+                float diff2 = abs(rawAt(ne) - rawAt(sw)) +
+                    abs(ppgGreenAt(ne) - green) + abs(ppgGreenAt(sw) - green);
+                float guess2 = rawAt(ne) + rawAt(sw) + 2.0 * green -
+                    ppgGreenAt(ne) - ppgGreenAt(sw);
+                if (diff1 > diff2) {
+                    color.r = guess2 * 0.5;
+                } else if (diff1 < diff2) {
+                    color.r = guess1 * 0.5;
+                } else {
+                    color.r = (guess1 + guess2) * 0.25;
+                }
+            } else {
+                color.g = pc;
+                if (colorAt(center + ivec2(1, 0)) == RED) {
+                    color.b = (rawAt(center + ivec2(0, -1)) + rawAt(center + ivec2(0, 1)) +
+                        2.0 * color.g - ppgGreenAt(center + ivec2(0, -1)) -
+                        ppgGreenAt(center + ivec2(0, 1))) * 0.5;
+                    color.r = (rawAt(center + ivec2(-1, 0)) + rawAt(center + ivec2(1, 0)) +
+                        2.0 * color.g - ppgGreenAt(center + ivec2(-1, 0)) -
+                        ppgGreenAt(center + ivec2(1, 0))) * 0.5;
+                } else {
+                    color.r = (rawAt(center + ivec2(0, -1)) + rawAt(center + ivec2(0, 1)) +
+                        2.0 * color.g - ppgGreenAt(center + ivec2(0, -1)) -
+                        ppgGreenAt(center + ivec2(0, 1))) * 0.5;
+                    color.b = (rawAt(center + ivec2(-1, 0)) + rawAt(center + ivec2(1, 0)) +
+                        2.0 * color.g - ppgGreenAt(center + ivec2(-1, 0)) -
+                        ppgGreenAt(center + ivec2(1, 0))) * 0.5;
+                }
+            }
+
+            return max(color, vec3(0.0));
+        }
+    """.trimIndent()
+
     /**
      * 1. 初始化与归一化片元导入 (rcd_populate.comp)
      */
@@ -709,7 +842,8 @@ object RcdShaders {
     """.trimIndent()
 
     /**
-     * 9. 合并 RGB 重建结果写出到 RGBA16F 纹理 (rcd_write_output.comp)
+     * 9. 合并 RGB 重建结果写出到 RGBA16F 纹理 (rcd_write_output.comp)。
+     * 照片真实外圈始终由这里内置的 PPG 处理，调用方不能关闭或遗漏。
      */
     val WRITE_OUTPUT = """
         #version 310 es
@@ -718,37 +852,35 @@ object RcdShaders {
         layout (local_size_x = 16, local_size_y = 16) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
-        layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; }; // R
-        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; }; // G
-        layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; }; // B
-
+        layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; };
+        layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; };
+        layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; };
         layout (rgba16f, binding = 0) writeonly uniform highp image2D uOutputImage;
 
         uniform ivec2 uImageSize;
         uniform int uCfaPattern;
-        uniform int uBorder;
         uniform vec3 uCalculationGains;
 
         #define RED 0
         #define GREEN 1
         #define BLUE 2
+        const int RCD_OUTPUT_MARGIN = $OUTPUT_MARGIN;
 
         int getBayerColor(int cfaPattern, int col, int row) {
             int r = row % 2;
             int c = col % 2;
-            if (cfaPattern == 0) { // RGGB
-                if (r == 0) return (c == 0) ? 0 : 1;
-                else return (c == 0) ? 1 : 2;
-            } else if (cfaPattern == 1) { // GRBG
-                if (r == 0) return (c == 0) ? 1 : 0;
-                else return (c == 0) ? 2 : 1;
-            } else if (cfaPattern == 2) { // GBRG
-                if (r == 0) return (c == 0) ? 1 : 2;
-                else return (c == 0) ? 0 : 1;
-            } else { // BGGR (3)
-                if (r == 0) return (c == 0) ? 2 : 1;
-                else return (c == 0) ? 1 : 0;
+            if (cfaPattern == 0) {
+                if (r == 0) return (c == 0) ? RED : GREEN;
+                return (c == 0) ? GREEN : BLUE;
+            } else if (cfaPattern == 1) {
+                if (r == 0) return (c == 0) ? GREEN : RED;
+                return (c == 0) ? BLUE : GREEN;
+            } else if (cfaPattern == 2) {
+                if (r == 0) return (c == 0) ? GREEN : BLUE;
+                return (c == 0) ? RED : GREEN;
             }
+            if (r == 0) return (c == 0) ? BLUE : GREEN;
+            return (c == 0) ? GREEN : RED;
         }
 
         int mirrorIndex(int value, int size) {
@@ -759,9 +891,6 @@ object RcdShaders {
             return (wrapped < size) ? wrapped : period - wrapped;
         }
 
-        // Mirror at the photosite center instead of clamping to the last sample.
-        // The reflection preserves x/y parity, so every synthetic neighbour keeps
-        // the same Bayer color it would have had outside the image.
         ivec2 mirrorCoord(ivec2 coord) {
             return ivec2(
                 mirrorIndex(coord.x, uImageSize.x),
@@ -783,136 +912,228 @@ object RcdShaders {
             return cfa[indexAt(coord)];
         }
 
-        float ppgGreenAt(ivec2 coord) {
-            // Keep the virtual coordinate so recursive PPG estimates use the neighbourhood
-            // around that reflected photosite, rather than shifting the kernel into the image.
-            ivec2 center = coord;
-
-            int ownColor = colorAt(center);
-            float pc = rawAt(center);
-            if (ownColor == GREEN) {
-                return max(0.0, pc);
-            }
-
-            float pym = rawAt(center + ivec2(0, -1));
-            float pym2 = rawAt(center + ivec2(0, -2));
-            float pym3 = rawAt(center + ivec2(0, -3));
-            float pyM = rawAt(center + ivec2(0, 1));
-            float pyM2 = rawAt(center + ivec2(0, 2));
-            float pyM3 = rawAt(center + ivec2(0, 3));
-            float pxm = rawAt(center + ivec2(-1, 0));
-            float pxm2 = rawAt(center + ivec2(-2, 0));
-            float pxm3 = rawAt(center + ivec2(-3, 0));
-            float pxM = rawAt(center + ivec2(1, 0));
-            float pxM2 = rawAt(center + ivec2(2, 0));
-            float pxM3 = rawAt(center + ivec2(3, 0));
-
-            float guessx = (pxm + pc + pxM) * 2.0 - pxM2 - pxm2;
-            float diffx = (abs(pxm2 - pc) + abs(pxM2 - pc) + abs(pxm - pxM)) * 3.0 +
-                (abs(pxM3 - pxM) + abs(pxm3 - pxm)) * 2.0;
-            float guessy = (pym + pc + pyM) * 2.0 - pyM2 - pym2;
-            float diffy = (abs(pym2 - pc) + abs(pyM2 - pc) + abs(pym - pyM)) * 3.0 +
-                (abs(pyM3 - pyM) + abs(pym3 - pym)) * 2.0;
-
-            float green;
-            if (diffx > diffy) {
-                green = clamp(guessy * 0.25, min(pym, pyM), max(pym, pyM));
-            } else {
-                green = clamp(guessx * 0.25, min(pxm, pxM), max(pxm, pxM));
-            }
-            return max(0.0, green);
-        }
-
-        vec3 ppgColorAt(ivec2 coord) {
-            ivec2 center = coord;
-
-            int ownColor = colorAt(center);
-            float pc = max(0.0, rawAt(center));
-            float green = ppgGreenAt(center);
-            vec3 color = vec3(0.0, green, 0.0);
-
-            if (ownColor == RED) {
-                color.r = pc;
-                ivec2 nw = center + ivec2(-1, -1);
-                ivec2 ne = center + ivec2(1, -1);
-                ivec2 sw = center + ivec2(-1, 1);
-                ivec2 se = center + ivec2(1, 1);
-                float diff1 = abs(rawAt(nw) - rawAt(se)) +
-                    abs(ppgGreenAt(nw) - green) + abs(ppgGreenAt(se) - green);
-                float guess1 = rawAt(nw) + rawAt(se) + 2.0 * green -
-                    ppgGreenAt(nw) - ppgGreenAt(se);
-                float diff2 = abs(rawAt(ne) - rawAt(sw)) +
-                    abs(ppgGreenAt(ne) - green) + abs(ppgGreenAt(sw) - green);
-                float guess2 = rawAt(ne) + rawAt(sw) + 2.0 * green -
-                    ppgGreenAt(ne) - ppgGreenAt(sw);
-                if (diff1 > diff2) {
-                    color.b = guess2 * 0.5;
-                } else if (diff1 < diff2) {
-                    color.b = guess1 * 0.5;
-                } else {
-                    color.b = (guess1 + guess2) * 0.25;
-                }
-            } else if (ownColor == BLUE) {
-                color.b = pc;
-                ivec2 nw = center + ivec2(-1, -1);
-                ivec2 ne = center + ivec2(1, -1);
-                ivec2 sw = center + ivec2(-1, 1);
-                ivec2 se = center + ivec2(1, 1);
-                float diff1 = abs(rawAt(nw) - rawAt(se)) +
-                    abs(ppgGreenAt(nw) - green) + abs(ppgGreenAt(se) - green);
-                float guess1 = rawAt(nw) + rawAt(se) + 2.0 * green -
-                    ppgGreenAt(nw) - ppgGreenAt(se);
-                float diff2 = abs(rawAt(ne) - rawAt(sw)) +
-                    abs(ppgGreenAt(ne) - green) + abs(ppgGreenAt(sw) - green);
-                float guess2 = rawAt(ne) + rawAt(sw) + 2.0 * green -
-                    ppgGreenAt(ne) - ppgGreenAt(sw);
-                if (diff1 > diff2) {
-                    color.r = guess2 * 0.5;
-                } else if (diff1 < diff2) {
-                    color.r = guess1 * 0.5;
-                } else {
-                    color.r = (guess1 + guess2) * 0.25;
-                }
-            } else {
-                color.g = pc;
-                if (colorAt(center + ivec2(1, 0)) == RED) {
-                    color.b = (rawAt(center + ivec2(0, -1)) + rawAt(center + ivec2(0, 1)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(0, -1)) -
-                        ppgGreenAt(center + ivec2(0, 1))) * 0.5;
-                    color.r = (rawAt(center + ivec2(-1, 0)) + rawAt(center + ivec2(1, 0)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(-1, 0)) -
-                        ppgGreenAt(center + ivec2(1, 0))) * 0.5;
-                } else {
-                    color.r = (rawAt(center + ivec2(0, -1)) + rawAt(center + ivec2(0, 1)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(0, -1)) -
-                        ppgGreenAt(center + ivec2(0, 1))) * 0.5;
-                    color.b = (rawAt(center + ivec2(-1, 0)) + rawAt(center + ivec2(1, 0)) +
-                        2.0 * color.g - ppgGreenAt(center + ivec2(-1, 0)) -
-                        ppgGreenAt(center + ivec2(1, 0))) * 0.5;
-                }
-            }
-
-            return max(color, vec3(0.0));
-        }
+        $PPG_KERNEL
 
         void main() {
             ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
             if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
 
             vec3 color;
-
-            if (coord.x >= uBorder && coord.x < uImageSize.x - uBorder &&
-                coord.y >= uBorder && coord.y < uImageSize.y - uBorder) {
+            if (coord.x >= RCD_OUTPUT_MARGIN && coord.x < uImageSize.x - RCD_OUTPUT_MARGIN &&
+                coord.y >= RCD_OUTPUT_MARGIN && coord.y < uImageSize.y - RCD_OUTPUT_MARGIN) {
                 int idx = coord.y * uImageSize.x + coord.x;
-                color = vec3(max(0.0, rgb0[idx]), max(0.0, rgb1[idx]), max(0.0, rgb2[idx]));
+                color = max(vec3(rgb0[idx], rgb1[idx], rgb2[idx]), vec3(0.0));
             } else {
                 color = ppgColorAt(coord);
             }
 
-            // Undo the calculation-only white balance. Downstream color conversion
-            // therefore receives the same camera RGB domain as before this RCD pass.
             color /= max(uCalculationGains, vec3(1e-6));
             imageStore(uOutputImage, coord, vec4(color, 1.0));
+        }
+    """.trimIndent()
+
+    /**
+     * HDR/MFSR 条带 RCD 的统一照片边界收尾。
+     *
+     * 仅覆盖照片的真实外圈，不把条带边界当作照片边界。位于内部条带 halo 外缘、邻域尚未
+     * 上传完整的行会跳过；它们不属于该条带的有效采样域，并会在相邻条带拥有完整邻域时处理。
+     */
+    val STRIPE_BORDER_PPG = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        layout (local_size_x = 16, local_size_y = 16) in;
+
+        layout(std430, binding = 0) readonly buffer CFA_Buf { float cfa[]; };
+        layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
+        layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
+        layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
+
+        uniform ivec2 uStripeSize;
+        uniform ivec2 uFullImageSize;
+        uniform int uGlobalRowOffset;
+        uniform int uCfaPattern;
+
+        #define RED 0
+        #define GREEN 1
+        #define BLUE 2
+        const int RCD_OUTPUT_MARGIN = $OUTPUT_MARGIN;
+        const int PPG_RADIUS = $PPG_RADIUS;
+
+        int getBayerColor(int cfaPattern, int col, int row) {
+            int r = row % 2;
+            int c = col % 2;
+            if (cfaPattern == 0) {
+                if (r == 0) return (c == 0) ? RED : GREEN;
+                return (c == 0) ? GREEN : BLUE;
+            } else if (cfaPattern == 1) {
+                if (r == 0) return (c == 0) ? GREEN : RED;
+                return (c == 0) ? BLUE : GREEN;
+            } else if (cfaPattern == 2) {
+                if (r == 0) return (c == 0) ? GREEN : BLUE;
+                return (c == 0) ? RED : GREEN;
+            }
+            if (r == 0) return (c == 0) ? BLUE : GREEN;
+            return (c == 0) ? GREEN : RED;
+        }
+
+        int mirrorIndex(int value, int size) {
+            if (size <= 1) return 0;
+            int period = 2 * (size - 1);
+            int wrapped = value % period;
+            if (wrapped < 0) wrapped += period;
+            return (wrapped < size) ? wrapped : period - wrapped;
+        }
+
+        ivec2 mirrorCoord(ivec2 coord) {
+            return ivec2(
+                mirrorIndex(coord.x, uFullImageSize.x),
+                mirrorIndex(coord.y, uFullImageSize.y)
+            );
+        }
+
+        int indexAt(ivec2 coord) {
+            ivec2 safe = mirrorCoord(coord);
+            int localY = safe.y - uGlobalRowOffset;
+            return localY * uStripeSize.x + safe.x;
+        }
+
+        int colorAt(ivec2 coord) {
+            ivec2 safe = mirrorCoord(coord);
+            return getBayerColor(uCfaPattern, safe.x, safe.y);
+        }
+
+        float rawAt(ivec2 coord) {
+            return cfa[indexAt(coord)];
+        }
+
+        $PPG_KERNEL
+
+        void main() {
+            ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+            if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
+            ivec2 global = ivec2(local.x, local.y + uGlobalRowOffset);
+
+            bool horizontalBorder = global.x < RCD_OUTPUT_MARGIN ||
+                global.x >= uFullImageSize.x - RCD_OUTPUT_MARGIN;
+            bool verticalBorder = global.y < RCD_OUTPUT_MARGIN ||
+                global.y >= uFullImageSize.y - RCD_OUTPUT_MARGIN;
+            if (!horizontalBorder && !verticalBorder) return;
+
+            int minRequiredY = uFullImageSize.y - 1;
+            int maxRequiredY = 0;
+            for (int dy = -PPG_RADIUS; dy <= PPG_RADIUS; ++dy) {
+                int sampleY = mirrorIndex(global.y + dy, uFullImageSize.y);
+                minRequiredY = min(minRequiredY, sampleY);
+                maxRequiredY = max(maxRequiredY, sampleY);
+            }
+            int stripeEnd = uGlobalRowOffset + uStripeSize.y;
+            if (minRequiredY < uGlobalRowOffset || maxRequiredY >= stripeEnd) return;
+
+            vec3 color = ppgColorAt(global);
+            int index = local.y * uStripeSize.x + local.x;
+            rgb0[index] = color.r;
+            rgb1[index] = color.g;
+            rgb2[index] = color.b;
+        }
+    """.trimIndent()
+
+    /** 原始 RAW 条带到 RCD CFA/RGB 工作缓冲的统一适配 shader。 */
+    fun stripePopulate(rawCommon: String): String = """
+        #version 310 es
+        $rawCommon
+        layout(local_size_x = 16, local_size_y = 16) in;
+        uniform highp usampler2D uRawStripe;
+        uniform sampler2D uLensShadingMap;
+        uniform ivec2 uStripeSize;
+        uniform ivec2 uFullImageSize;
+        uniform int uGlobalRowOffset;
+        uniform int uCfaPattern;
+        uniform vec4 uBlackLevel;
+        uniform float uWhiteLevel;
+        uniform vec4 uCalculationWbGains;
+        uniform int uReconstructHighlights;
+        layout(std430, binding = 0) buffer CFA_Buf { float cfa[]; };
+        layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
+        layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
+        layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
+
+        const float HIGHLIGHT_CLIP_THRESHOLD = $HIGHLIGHT_RECONSTRUCTION_THRESHOLD;
+        const float HIGHLIGHT_CEILING = $HIGHLIGHT_RECONSTRUCTION_CEILING;
+
+        ivec2 clampLocal(ivec2 p) {
+            return clamp(p, ivec2(0), uStripeSize - ivec2(1));
+        }
+
+        ivec2 globalAt(ivec2 local) {
+            local = clampLocal(local);
+            return ivec2(local.x, local.y + uGlobalRowOffset);
+        }
+
+        float sensorNormalizedAt(ivec2 local) {
+            local = clampLocal(local);
+            ivec2 global = globalAt(local);
+            int channel = bayerIndexAt(uCfaPattern, global);
+            float raw = float(texelFetch(uRawStripe, local, 0).r);
+            float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
+            return max(raw - uBlackLevel[channel], 0.0) / range;
+        }
+
+        float calculationSampleAt(ivec2 local) {
+            local = clampLocal(local);
+            ivec2 global = globalAt(local);
+            int channel = bayerIndexAt(uCfaPattern, global);
+            vec2 uv = (vec2(global) + vec2(0.5)) / vec2(uFullImageSize);
+            vec4 lsc = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
+            int lscChannel = lensShadingChannelAt(uCfaPattern, global);
+            float linear = sensorNormalizedAt(local) * lsc[lscChannel] *
+                max(uCalculationWbGains[channel], 1e-6);
+            return clamp(linear, 0.0, HIGHLIGHT_CEILING);
+        }
+
+        int colorAt(ivec2 local) {
+            int channel = bayerIndexAt(uCfaPattern, globalAt(local));
+            return channel == 0 ? 0 : (channel == 3 ? 2 : 1);
+        }
+
+        float estimateOpposedLinear(ivec2 local, int ownColor, float fallback) {
+            vec3 sum = vec3(0.0);
+            vec3 count = vec3(0.0);
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    ivec2 sampleLocal = clampLocal(local + ivec2(x, y));
+                    int sampleColor = colorAt(sampleLocal);
+                    float value = calculationSampleAt(sampleLocal);
+                    sum[sampleColor] += value;
+                    count[sampleColor] += 1.0;
+                }
+            }
+            const float power = 3.0;
+            vec3 roots = pow(max(sum / max(count, vec3(1.0)), vec3(0.0)),
+                vec3(1.0 / power));
+            float opposedRoot = ownColor == 0 ? 0.5 * (roots.g + roots.b) :
+                (ownColor == 1 ? 0.5 * (roots.r + roots.b) :
+                    0.5 * (roots.r + roots.g));
+            return max(pow(max(opposedRoot, 0.0), power), fallback);
+        }
+
+        void main() {
+            ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+            if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
+            ivec2 global = ivec2(local.x, local.y + uGlobalRowOffset);
+            int channel = bayerIndexAt(uCfaPattern, global);
+            float sensor = sensorNormalizedAt(local);
+            float value = calculationSampleAt(local);
+            float clipMask = smoothstep(HIGHLIGHT_CLIP_THRESHOLD, 1.0, sensor);
+            if (uReconstructHighlights != 0 && clipMask > 0.0) {
+                float reconstructed = estimateOpposedLinear(local, colorAt(local), value);
+                value = min(mix(value, reconstructed, clipMask), HIGHLIGHT_CEILING);
+            }
+            int index = local.y * uStripeSize.x + local.x;
+            cfa[index] = value;
+            rgb0[index] = channel == 0 ? value : 0.0;
+            rgb1[index] = (channel == 1 || channel == 2) ? value : 0.0;
+            rgb2[index] = channel == 3 ? value : 0.0;
         }
     """.trimIndent()
 }

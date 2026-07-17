@@ -196,9 +196,6 @@ class RawDemosaicProcessor {
         private const val RCD_PQ_WRITE_BINDING = 5
         private const val RCD_PQ_READ_BINDING = 4
         private const val RCD_VH_DIR_BINDING = 4
-        private const val RCD_OUTPUT_MARGIN = 9
-        private const val RCD_HIGHLIGHT_RECONSTRUCTION_THRESHOLD = 0.985f
-        private const val RCD_HIGHLIGHT_RECONSTRUCTION_CEILING = 8.0f
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MIN_WB_GAIN = 1e-3f
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MAX_WB_GAIN = 64.0f
         private const val FILMIC_GREY_SOURCE = 0.1845f
@@ -1523,11 +1520,11 @@ class RawDemosaicProcessor {
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightClipThreshold"),
-                RCD_HIGHLIGHT_RECONSTRUCTION_THRESHOLD
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightCeiling"),
-                RCD_HIGHLIGHT_RECONSTRUCTION_CEILING
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING
             )
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightReconstructionEnabled"),
@@ -1543,8 +1540,8 @@ class RawDemosaicProcessor {
                         "calculationWb=${calculationWbGains.contentToString()} " +
                         "lsc=$lscSize " +
                         "highlightReconstruction=$rawDomainHighlightReconstructionEnabled " +
-                        "highlightThreshold=$RCD_HIGHLIGHT_RECONSTRUCTION_THRESHOLD " +
-                        "highlightCeiling=$RCD_HIGHLIGHT_RECONSTRUCTION_CEILING " +
+                        "highlightThreshold=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD} " +
+                        "highlightCeiling=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING} " +
                         "blacks=${rawBlackPointCorrection.coerceIn(-1f, 1f)} " +
                         "whites=${rawWhitePointCorrection.coerceIn(-1f, 1f)}"
             )
@@ -1676,10 +1673,6 @@ class RawDemosaicProcessor {
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCfaPattern"),
                 actualMetadata.cfaPattern
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uBorder"),
-                RCD_OUTPUT_MARGIN
             )
             GLES31.glUniform3f(
                 GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCalculationGains"),
@@ -4563,11 +4556,11 @@ class RawDemosaicProcessor {
             GLES31.glUniform1f(GLES31.glGetUniformLocation(rcdPopulateProgram, "uWhiteLevel"), metadata.whiteLevel)
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightClipThreshold"),
-                RCD_HIGHLIGHT_RECONSTRUCTION_THRESHOLD
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightCeiling"),
-                RCD_HIGHLIGHT_RECONSTRUCTION_CEILING
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING
             )
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightReconstructionEnabled"),
@@ -4642,7 +4635,6 @@ class RawDemosaicProcessor {
             GLES31.glUseProgram(rcdWriteOutputProgram)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uImageSize"), width, height)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uBorder"), RCD_OUTPUT_MARGIN)
             GLES31.glUniform3f(
                 GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCalculationGains"),
                 calculationWbGains[0],
@@ -4740,11 +4732,11 @@ class RawDemosaicProcessor {
         )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(quadPopulateProgram, "uHighlightClipThreshold"),
-            RCD_HIGHLIGHT_RECONSTRUCTION_THRESHOLD
+            RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD
         )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(quadPopulateProgram, "uHighlightCeiling"),
-            RCD_HIGHLIGHT_RECONSTRUCTION_CEILING
+            RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING
         )
         GLES31.glUniform1i(
             GLES31.glGetUniformLocation(quadPopulateProgram, "uHighlightReconstructionEnabled"),
@@ -4763,8 +4755,8 @@ class RawDemosaicProcessor {
                     "white=${metadata.whiteLevel} metadataWb=${metadataWbGains.contentToString()} " +
                     "calculationWb=${calculationWbGains.contentToString()} lsc=$lscSize " +
                     "highlightReconstruction=$highlightReconstructionEnabled " +
-                    "highlightThreshold=$RCD_HIGHLIGHT_RECONSTRUCTION_THRESHOLD " +
-                    "highlightCeiling=$RCD_HIGHLIGHT_RECONSTRUCTION_CEILING"
+                    "highlightThreshold=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD} " +
+                    "highlightCeiling=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING}"
         )
         GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)

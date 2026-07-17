@@ -245,9 +245,10 @@ class GlesRawStacker(
     private var rcdStripeStep41Program = 0
     private var rcdStripeStep42Program = 0
     private var rcdStripeStep43Program = 0
+    private var rcdStripeBorderPpgProgram = 0
     private var hdrShortGlobalAlignProgram = 0
-    private var hdrRcdNormalPopulateProgram = 0
-    private var hdrRcdStoreRgbProgram = 0
+    private var hdrNormalCfaInputProgram = 0
+    private var hdrWorkingRgbStoreProgram = 0
     private var hdrRgbFusionProgram = 0
     private var pgtmStatsProgram = 0
     private var diagnosticAlignmentProgram = 0
@@ -812,7 +813,10 @@ class GlesRawStacker(
                 SUPER_RESOLUTION_NORMALIZE_RCD_FRAGMENT_SHADER,
                 "raw_sr_normalize",
             )
-            rcdStripePopulateProgram = linkComputeProgram(RCD_STRIPE_POPULATE_COMPUTE_SHADER, "raw_sr_rcd_populate")
+            rcdStripePopulateProgram = linkComputeProgram(
+                RcdShaders.stripePopulate(RAW_COMMON),
+                "raw_sr_rcd_populate",
+            )
             rcdStripeStep1Program = linkComputeProgram(RcdShaders.STEP_1, "raw_sr_rcd_step1")
             rcdStripeStep2Program = linkComputeProgram(RcdShaders.STEP_2, "raw_sr_rcd_step2")
             rcdStripeStep3Program = linkComputeProgram(RcdShaders.STEP_3, "raw_sr_rcd_step3")
@@ -820,6 +824,10 @@ class GlesRawStacker(
             rcdStripeStep41Program = linkComputeProgram(RcdShaders.STEP_4_1, "raw_sr_rcd_step41")
             rcdStripeStep42Program = linkComputeProgram(RcdShaders.STEP_4_2, "raw_sr_rcd_step42")
             rcdStripeStep43Program = linkComputeProgram(RcdShaders.STEP_4_3, "raw_sr_rcd_step43")
+            rcdStripeBorderPpgProgram = linkComputeProgram(
+                RcdShaders.STRIPE_BORDER_PPG,
+                "raw_sr_rcd_border_ppg",
+            )
         }
         initDiagnosticPrograms()
     }
@@ -831,13 +839,13 @@ class GlesRawStacker(
             "raw_hdr_short_global_align",
         )
         hdrWeightMap = createHdrWeightMap().also { it.initPrograms() }
-        hdrRcdNormalPopulateProgram = linkComputeProgram(
-            GlesRawHdrShaders.rcdNormalPopulate(RAW_COMMON),
-            "raw_hdr_rcd_normal_populate",
+        hdrNormalCfaInputProgram = linkComputeProgram(
+            GlesRawHdrShaders.normalCfaInputAdapter(RAW_COMMON),
+            "raw_hdr_normal_cfa_input",
         )
-        hdrRcdStoreRgbProgram = linkComputeProgram(
-            GlesRawHdrShaders.rcdStoreRgb,
-            "raw_hdr_rcd_store_rgb",
+        hdrWorkingRgbStoreProgram = linkComputeProgram(
+            GlesRawHdrShaders.workingRgbStore,
+            "raw_hdr_working_rgb_store",
         )
         hdrRgbFusionProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
@@ -845,7 +853,10 @@ class GlesRawStacker(
             "raw_hdr_rgb_fusion",
         )
         if (rcdStripePopulateProgram == 0) {
-            rcdStripePopulateProgram = linkComputeProgram(RCD_STRIPE_POPULATE_COMPUTE_SHADER, "raw_hdr_rcd_populate")
+            rcdStripePopulateProgram = linkComputeProgram(
+                RcdShaders.stripePopulate(RAW_COMMON),
+                "raw_hdr_rcd_populate",
+            )
             rcdStripeStep1Program = linkComputeProgram(RcdShaders.STEP_1, "raw_hdr_rcd_step1")
             rcdStripeStep2Program = linkComputeProgram(RcdShaders.STEP_2, "raw_hdr_rcd_step2")
             rcdStripeStep3Program = linkComputeProgram(RcdShaders.STEP_3, "raw_hdr_rcd_step3")
@@ -853,6 +864,10 @@ class GlesRawStacker(
             rcdStripeStep41Program = linkComputeProgram(RcdShaders.STEP_4_1, "raw_hdr_rcd_step41")
             rcdStripeStep42Program = linkComputeProgram(RcdShaders.STEP_4_2, "raw_hdr_rcd_step42")
             rcdStripeStep43Program = linkComputeProgram(RcdShaders.STEP_4_3, "raw_hdr_rcd_step43")
+            rcdStripeBorderPpgProgram = linkComputeProgram(
+                RcdShaders.STRIPE_BORDER_PPG,
+                "raw_hdr_rcd_border_ppg",
+            )
         }
     }
 
@@ -1209,10 +1224,11 @@ class GlesRawStacker(
         GLES31.glDispatchCompute(groupCount(width), groupCount(rowCount), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
 
-        runRcdSteps(rowCount, label)
+        runRcdSteps(firstRow, rowCount, label)
     }
 
-    private fun runRcdSteps(rowCount: Int, label: String) {
+    private fun runRcdSteps(firstRow: Int, rowCount: Int, label: String) {
+        require(firstRow % 2 == 0) { "RCD stripe must preserve CFA row parity: $firstRow" }
         bindRcdStripeBuffers()
 
         fun dispatch(program: Int, halfWidth: Boolean, step: String) {
@@ -1235,7 +1251,29 @@ class GlesRawStacker(
         dispatch(rcdStripeStep42Program, true, "step42")
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 4, rcdStripeBuffers[4])
         dispatch(rcdStripeStep43Program, true, "step43")
+
+        GLES31.glUseProgram(rcdStripeBorderPpgProgram)
+        GLES31.glUniform2i(
+            uniformLocation(rcdStripeBorderPpgProgram, "uStripeSize"),
+            width,
+            rowCount,
+        )
+        GLES31.glUniform2i(
+            uniformLocation(rcdStripeBorderPpgProgram, "uFullImageSize"),
+            width,
+            height,
+        )
+        GLES31.glUniform1i(
+            uniformLocation(rcdStripeBorderPpgProgram, "uGlobalRowOffset"),
+            firstRow,
+        )
+        GLES31.glUniform1i(
+            uniformLocation(rcdStripeBorderPpgProgram, "uCfaPattern"),
+            cfaPattern,
+        )
+        GLES31.glDispatchCompute(groupCount(width), groupCount(rowCount), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+        checkGlError("RCD stripe border PPG $label")
     }
 
     private fun validExposureProduct(exposureProduct: Double): Double {
@@ -3464,23 +3502,23 @@ class GlesRawStacker(
         referenceExposureScale: Float,
     ) {
         bindRcdStripeBuffers()
-        GLES31.glUseProgram(hdrRcdNormalPopulateProgram)
-        bindTexture(hdrRcdNormalPopulateProgram, "uAccumulatorValueWeight", 0, accumulatorValueWeightTexture)
-        bindTexture(hdrRcdNormalPopulateProgram, "uReferenceRaw", 1, refRaw)
-        bindTexture(hdrRcdNormalPopulateProgram, "uLensShadingMap", 2, lensShadingTexture)
-        setCommonUniforms(hdrRcdNormalPopulateProgram)
-        GLES31.glUniform2i(uniformLocation(hdrRcdNormalPopulateProgram, "uImageSize"), width, height)
-        GLES31.glUniform2i(uniformLocation(hdrRcdNormalPopulateProgram, "uStripeSize"), width, sourceRowCount)
+        GLES31.glUseProgram(hdrNormalCfaInputProgram)
+        bindTexture(hdrNormalCfaInputProgram, "uAccumulatorValueWeight", 0, accumulatorValueWeightTexture)
+        bindTexture(hdrNormalCfaInputProgram, "uReferenceRaw", 1, refRaw)
+        bindTexture(hdrNormalCfaInputProgram, "uLensShadingMap", 2, lensShadingTexture)
+        setCommonUniforms(hdrNormalCfaInputProgram)
+        GLES31.glUniform2i(uniformLocation(hdrNormalCfaInputProgram, "uImageSize"), width, height)
+        GLES31.glUniform2i(uniformLocation(hdrNormalCfaInputProgram, "uStripeSize"), width, sourceRowCount)
         GLES31.glUniform1i(
-            uniformLocation(hdrRcdNormalPopulateProgram, "uSourceRowOffset"),
+            uniformLocation(hdrNormalCfaInputProgram, "uSourceRowOffset"),
             sourceRowOffset,
         )
         GLES31.glUniform1f(
-            uniformLocation(hdrRcdNormalPopulateProgram, "uReferenceExposureScale"),
+            uniformLocation(hdrNormalCfaInputProgram, "uReferenceExposureScale"),
             referenceExposureScale,
         )
         GLES31.glUniform4fv(
-            uniformLocation(hdrRcdNormalPopulateProgram, "uCalculationWbGains"),
+            uniformLocation(hdrNormalCfaInputProgram, "uCalculationWbGains"),
             1,
             demosaicCalculationWbGains,
             0,
@@ -3497,22 +3535,22 @@ class GlesRawStacker(
         exposureScale: Float = 1f,
         desaturateBeforeExposureScale: Boolean = false,
     ) {
-        GLES31.glUseProgram(hdrRcdStoreRgbProgram)
+        GLES31.glUseProgram(hdrWorkingRgbStoreProgram)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, rcdStripeBuffers[1])
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, rcdStripeBuffers[2])
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 3, rcdStripeBuffers[3])
         bindImage(0, targetTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-        GLES31.glUniform2i(uniformLocation(hdrRcdStoreRgbProgram, "uSourceSize"), width, rowCount)
+        GLES31.glUniform2i(uniformLocation(hdrWorkingRgbStoreProgram, "uSourceSize"), width, rowCount)
         GLES31.glUniform1f(
-            uniformLocation(hdrRcdStoreRgbProgram, "uExposureScale"),
+            uniformLocation(hdrWorkingRgbStoreProgram, "uExposureScale"),
             exposureScale,
         )
         GLES31.glUniform1i(
-            uniformLocation(hdrRcdStoreRgbProgram, "uDesaturateBeforeExposureScale"),
+            uniformLocation(hdrWorkingRgbStoreProgram, "uDesaturateBeforeExposureScale"),
             if (desaturateBeforeExposureScale) 1 else 0,
         )
         GLES31.glUniform3f(
-            uniformLocation(hdrRcdStoreRgbProgram, "uCalculationGains"),
+            uniformLocation(hdrWorkingRgbStoreProgram, "uCalculationGains"),
             demosaicCalculationWbGains[0],
             1f,
             demosaicCalculationWbGains[3],
@@ -3589,7 +3627,7 @@ class GlesRawStacker(
                 sourceRowCount = normalBand.rowCount,
                 referenceExposureScale = referenceExposureScale,
             )
-            runRcdSteps(normalBand.rowCount, "HDR normal")
+            runRcdSteps(normalBand.firstRow, normalBand.rowCount, "HDR normal")
             storeHdrRcdRgbStripe(hdrNormalRgbStripeTexture, normalBand.rowCount, "HDR normal RGB store")
 
             uploadRcdRawStripe(referenceImage, normalBand.firstRow, normalBand.rowCount, "HDR reference")
@@ -7496,108 +7534,6 @@ class GlesRawStacker(
                     0.0,
                     1.0
                 );
-            }
-        """.trimIndent()
-
-        private val RCD_STRIPE_POPULATE_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform highp usampler2D uRawStripe;
-            uniform sampler2D uLensShadingMap;
-            uniform ivec2 uStripeSize;
-            uniform ivec2 uFullImageSize;
-            uniform int uGlobalRowOffset;
-            uniform int uCfaPattern;
-            uniform vec4 uBlackLevel;
-            uniform float uWhiteLevel;
-            uniform vec4 uCalculationWbGains;
-            uniform int uReconstructHighlights;
-            layout(std430, binding = 0) buffer CFA_Buf { float cfa[]; };
-            layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
-            layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
-            layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
-
-            const float HIGHLIGHT_CLIP_THRESHOLD = 0.985;
-            const float HIGHLIGHT_CEILING = 8.0;
-
-            ivec2 clampLocal(ivec2 p) {
-                return clamp(p, ivec2(0), uStripeSize - ivec2(1));
-            }
-
-            ivec2 globalAt(ivec2 local) {
-                local = clampLocal(local);
-                return ivec2(local.x, local.y + uGlobalRowOffset);
-            }
-
-            float sensorNormalizedAt(ivec2 local) {
-                local = clampLocal(local);
-                ivec2 global = globalAt(local);
-                int channel = bayerIndexAt(uCfaPattern, global);
-                float raw = float(texelFetch(uRawStripe, local, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
-                return max(raw - uBlackLevel[channel], 0.0) / range;
-            }
-
-            float calculationSampleAt(ivec2 local) {
-                local = clampLocal(local);
-                ivec2 global = globalAt(local);
-                int channel = bayerIndexAt(uCfaPattern, global);
-                vec2 uv = (vec2(global) + vec2(0.5)) / vec2(uFullImageSize);
-                vec4 lsc = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
-                int lscChannel = lensShadingChannelAt(uCfaPattern, global);
-                float linear = sensorNormalizedAt(local) * lsc[lscChannel] *
-                    max(uCalculationWbGains[channel], 1e-6);
-                return clamp(linear, 0.0, HIGHLIGHT_CEILING);
-            }
-
-            int colorAt(ivec2 local) {
-                int channel = bayerIndexAt(uCfaPattern, globalAt(local));
-                return channel == 0 ? 0 : (channel == 3 ? 2 : 1);
-            }
-
-            float estimateOpposedLinear(ivec2 local, int ownColor, float fallback) {
-                vec3 sum = vec3(0.0);
-                vec3 count = vec3(0.0);
-                for (int y = -1; y <= 1; ++y) {
-                    for (int x = -1; x <= 1; ++x) {
-                        ivec2 sampleLocal = clampLocal(local + ivec2(x, y));
-                        int sampleColor = colorAt(sampleLocal);
-                        float value = calculationSampleAt(sampleLocal);
-                        sum[sampleColor] += value;
-                        count[sampleColor] += 1.0;
-                    }
-                }
-                const float power = 3.0;
-                vec3 roots = pow(max(sum / max(count, vec3(1.0)), vec3(0.0)),
-                    vec3(1.0 / power));
-                float opposedRoot = ownColor == 0 ? 0.5 * (roots.g + roots.b) :
-                    (ownColor == 1 ? 0.5 * (roots.r + roots.b) :
-                        0.5 * (roots.r + roots.g));
-                return max(pow(max(opposedRoot, 0.0), power), fallback);
-            }
-
-            void main() {
-                ivec2 local = ivec2(gl_GlobalInvocationID.xy);
-                if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
-                ivec2 global = ivec2(local.x, local.y + uGlobalRowOffset);
-                int channel = bayerIndexAt(uCfaPattern, global);
-                float sensor = sensorNormalizedAt(local);
-                float value = calculationSampleAt(local);
-                float clipMask = smoothstep(HIGHLIGHT_CLIP_THRESHOLD, 1.0, sensor);
-                if (uReconstructHighlights != 0 && clipMask > 0.0) {
-                    float reconstructed = estimateOpposedLinear(
-                        local,
-                        colorAt(local),
-                        value
-                    );
-                    value = min(mix(value, reconstructed, clipMask), HIGHLIGHT_CEILING);
-                }
-                int index = local.y * uStripeSize.x + local.x;
-                cfa[index] = value;
-                rgb0[index] = channel == 0 ? value : 0.0;
-                rgb1[index] = (channel == 1 || channel == 2) ? value : 0.0;
-                rgb2[index] = channel == 3 ? value : 0.0;
             }
         """.trimIndent()
 
