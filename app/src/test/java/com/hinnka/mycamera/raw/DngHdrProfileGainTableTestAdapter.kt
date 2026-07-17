@@ -1,24 +1,22 @@
 package com.hinnka.mycamera.raw
 
-/** JVM-only bridge that exercises the production planner with a deterministic curve stage. */
-internal fun DngHdrProfileGainTableGenerator.forCellStats(
+internal fun DngHdrProfileGainTableGenerator.generateForCellStats(
     width: Int,
     height: Int,
     baselineExposureEv: Float,
     packedCellStats: FloatArray,
-    tablePointCount: Int = 257,
+    noiseSlope: Float,
+    noiseOffset: Float,
     diagnosticBand: DngHdrProfileGainTableGenerator.DiagnosticBand? = null,
-    fusionParameters: HdrExposureFusionParameters =
-        DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS,
 ): DngProfileGainTableMap? {
     val plan = planForCellStats(
         width = width,
         height = height,
         baselineExposureEv = baselineExposureEv,
         packedCellStats = packedCellStats,
-        tablePointCount = tablePointCount,
+        noiseSlope = noiseSlope,
+        noiseOffset = noiseOffset,
         diagnosticBand = diagnosticBand,
-        fusionParameters = fusionParameters,
     ) ?: return null
     return mapFromGpuGains(plan, DngHdrProfileGainTableCpuReference.generate(plan))
 }

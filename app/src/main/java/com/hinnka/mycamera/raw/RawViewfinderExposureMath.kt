@@ -10,7 +10,9 @@ import kotlin.math.pow
  * Both inputs are tone-mapped 8-bit sRGB previews. Converting their surviving code values back
  * to display-linear light does not recover scene-linear RAW data; it only makes the logarithmic
  * ratio describe a ratio of displayed light. Reference pixels clipped near black or white are
- * excluded once and the same fixed sample set is used for every rendered candidate.
+ * excluded once and the same fixed sample set is used for every rendered candidate. Errors are
+ * weighted by the reference pixel's perceptual brightness so large dark regions cannot dominate
+ * a high-contrast scene merely because the logarithmic domain expands their residuals.
  */
 internal object RawViewfinderExposureMath {
     private const val DISPLAY_LINEAR_LUMA_FLOOR = 0.001f
@@ -37,9 +39,12 @@ internal object RawViewfinderExposureMath {
         val height: Int,
         val pixelIndices: IntArray,
         val targetLog2DisplayLinearLumas: FloatArray,
+        val perceptualWeights: FloatArray,
     ) {
         init {
             require(pixelIndices.size == targetLog2DisplayLinearLumas.size)
+            require(pixelIndices.size == perceptualWeights.size)
+            require(perceptualWeights.all { it.isFinite() && it > 0f })
         }
 
         val sampleCount: Int
@@ -51,6 +56,7 @@ internal object RawViewfinderExposureMath {
         val medianLog2Error: Float,
         val trimmedMeanLog2Error: Float,
         val sampleCount: Int,
+        val perceptualWeightSum: Float,
     )
 
     private data class SolverSample(
@@ -77,6 +83,7 @@ internal object RawViewfinderExposureMath {
         val capacity = (safeRight - safeLeft) * (safeBottom - safeTop)
         val pixelIndices = IntArray(capacity)
         val targetLogLumas = FloatArray(capacity)
+        val perceptualWeights = FloatArray(capacity)
         var sampleCount = 0
         for (y in safeTop until safeBottom) {
             for (x in safeLeft until safeRight) {
@@ -89,6 +96,7 @@ internal object RawViewfinderExposureMath {
                 }
                 pixelIndices[sampleCount] = pixelIndex
                 targetLogLumas[sampleCount] = log2(targetLuma)
+                perceptualWeights[sampleCount] = linearToSrgb(targetLuma)
                 sampleCount++
             }
         }
@@ -98,6 +106,7 @@ internal object RawViewfinderExposureMath {
             height = height,
             pixelIndices = pixelIndices.copyOf(sampleCount),
             targetLog2DisplayLinearLumas = targetLogLumas.copyOf(sampleCount),
+            perceptualWeights = perceptualWeights.copyOf(sampleCount),
         )
     }
 
@@ -116,6 +125,7 @@ internal object RawViewfinderExposureMath {
         }
 
         val log2Errors = FloatArray(reference.sampleCount)
+        val perceptualWeights = reference.perceptualWeights.copyOf()
         for (sampleIndex in reference.pixelIndices.indices) {
             val pixelIndex = reference.pixelIndices[sampleIndex]
             val renderedLuma = displayLinearLuma(pixels[pixelIndex])
@@ -124,11 +134,16 @@ internal object RawViewfinderExposureMath {
             log2Errors[sampleIndex] =
                 log2(renderedLuma) - reference.targetLog2DisplayLinearLumas[sampleIndex]
         }
-        log2Errors.sort()
+        sortPairsByFirst(log2Errors, perceptualWeights)
 
-        val median = median(log2Errors)
-        val trimmedMean = trimmedMean(
+        var weightSum = 0.0
+        for (weight in perceptualWeights) weightSum += weight.toDouble()
+        if (!weightSum.isFinite() || weightSum <= 0.0) return null
+        val median = weightedMedian(log2Errors, perceptualWeights, weightSum)
+        val trimmedMean = weightedTrimmedMean(
             sortedValues = log2Errors,
+            sortedWeights = perceptualWeights,
+            weightSum = weightSum,
             lowFraction = TRIM_LOW_FRACTION,
             highFraction = TRIM_HIGH_FRACTION,
         )
@@ -139,6 +154,7 @@ internal object RawViewfinderExposureMath {
             medianLog2Error = median,
             trimmedMeanLog2Error = trimmedMean,
             sampleCount = reference.sampleCount,
+            perceptualWeightSum = weightSum.toFloat(),
         )
     }
 
@@ -257,28 +273,100 @@ internal object RawViewfinderExposureMath {
         }
     }
 
-    private fun median(sortedValues: FloatArray): Float {
-        val middle = sortedValues.size / 2
-        return if (sortedValues.size % 2 == 0) {
-            (sortedValues[middle - 1] + sortedValues[middle]) * 0.5f
-        } else {
-            sortedValues[middle]
+    private fun weightedMedian(
+        sortedValues: FloatArray,
+        sortedWeights: FloatArray,
+        weightSum: Double,
+    ): Float {
+        val targetWeight = weightSum * 0.5
+        val boundaryTolerance = maxOf(1e-12, weightSum * 1e-9)
+        var cumulativeWeight = 0.0
+        for (index in sortedValues.indices) {
+            cumulativeWeight += sortedWeights[index].toDouble()
+            if (cumulativeWeight < targetWeight - boundaryTolerance) continue
+            return if (kotlin.math.abs(cumulativeWeight - targetWeight) <= boundaryTolerance &&
+                index < sortedValues.lastIndex
+            ) {
+                (sortedValues[index] + sortedValues[index + 1]) * 0.5f
+            } else {
+                sortedValues[index]
+            }
         }
+        return sortedValues.last()
     }
 
-    private fun trimmedMean(
+    private fun weightedTrimmedMean(
         sortedValues: FloatArray,
+        sortedWeights: FloatArray,
+        weightSum: Double,
         lowFraction: Float,
         highFraction: Float,
     ): Float {
-        val start = (sortedValues.size * lowFraction.coerceIn(0f, 1f)).toInt()
-        val endExclusive = (sortedValues.size * highFraction.coerceIn(0f, 1f)).toInt()
-            .coerceIn(start + 1, sortedValues.size)
-        var sum = 0.0
-        for (index in start until endExclusive) {
-            sum += sortedValues[index].toDouble()
+        val startWeight = weightSum * lowFraction.coerceIn(0f, 1f).toDouble()
+        val endWeight = weightSum * highFraction.coerceIn(0f, 1f).toDouble()
+            .coerceAtLeast(startWeight)
+        var cumulativeWeight = 0.0
+        var includedWeight = 0.0
+        var weightedSum = 0.0
+        for (index in sortedValues.indices) {
+            val nextCumulativeWeight = cumulativeWeight + sortedWeights[index].toDouble()
+            val overlapStart = maxOf(cumulativeWeight, startWeight)
+            val overlapEnd = minOf(nextCumulativeWeight, endWeight)
+            val overlapWeight = (overlapEnd - overlapStart).coerceAtLeast(0.0)
+            if (overlapWeight > 0.0) {
+                includedWeight += overlapWeight
+                weightedSum += sortedValues[index].toDouble() * overlapWeight
+            }
+            cumulativeWeight = nextCumulativeWeight
+            if (cumulativeWeight >= endWeight) break
         }
-        return (sum / (endExclusive - start)).toFloat()
+        return if (includedWeight > 0.0) {
+            (weightedSum / includedWeight).toFloat()
+        } else {
+            weightedMedian(sortedValues, sortedWeights, weightSum)
+        }
+    }
+
+    private fun sortPairsByFirst(values: FloatArray, weights: FloatArray) {
+        require(values.size == weights.size)
+        if (values.size < 2) return
+        quickSortPairs(values, weights, 0, values.lastIndex)
+    }
+
+    private fun quickSortPairs(
+        values: FloatArray,
+        weights: FloatArray,
+        left: Int,
+        right: Int,
+    ) {
+        var low = left
+        var high = right
+        val pivot = values[(left + right) ushr 1]
+        while (low <= high) {
+            while (values[low] < pivot) low++
+            while (values[high] > pivot) high--
+            if (low <= high) {
+                val value = values[low]
+                values[low] = values[high]
+                values[high] = value
+                val weight = weights[low]
+                weights[low] = weights[high]
+                weights[high] = weight
+                low++
+                high--
+            }
+        }
+        if (left < high) quickSortPairs(values, weights, left, high)
+        if (low < right) quickSortPairs(values, weights, low, right)
+    }
+
+    private fun linearToSrgb(value: Float): Float {
+        val clamped = value.coerceIn(0f, 1f)
+        return if (clamped <= 0.0031308f) {
+            clamped * SRGB_LINEAR_SCALE
+        } else {
+            (1f + SRGB_TRANSFER_A) * clamped.pow(1f / SRGB_TRANSFER_GAMMA) - SRGB_TRANSFER_A
+        }
     }
 
     private fun log2(value: Float): Float {

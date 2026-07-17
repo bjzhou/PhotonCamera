@@ -73,6 +73,51 @@ class RawViewfinderExposureMathTest {
     }
 
     @Test
+    fun crushedShadowsDoNotDriveHighContrastSceneTowardOverexposure() {
+        val width = 8
+        val height = 8
+        val referencePixels = grayscalePixels(width, height, linearLuma = 0.01f)
+        val candidatePixels = grayscalePixels(width, height, linearLuma = 0.001f)
+        for (index in 48 until referencePixels.size) {
+            referencePixels[index] = grayscaleArgb(0.64f)
+            candidatePixels[index] = grayscaleArgb(0.64f)
+        }
+        val reference = buildReference(referencePixels, width, height)
+
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(match)
+        assertEquals(0f, match!!.medianLog2Error, 0.001f)
+        assertEquals(0f, match.matchLog2Error, 0.1f)
+
+        val solvedEv = RawViewfinderExposureMath.solve { exposureEv ->
+            val exposureGain = 2f.pow(exposureEv)
+            val renderedPixels = grayscalePixels(
+                width,
+                height,
+                linearLuma = 0.001f * exposureGain,
+            )
+            for (index in 48 until renderedPixels.size) {
+                renderedPixels[index] = grayscaleArgb(0.64f * exposureGain)
+            }
+            RawViewfinderExposureMath.evaluate(
+                reference = reference,
+                pixels = renderedPixels,
+                width = width,
+                height = height,
+            )?.matchLog2Error
+        }
+
+        assertNotNull(solvedEv)
+        assertEquals(0f, solvedEv!!, 0.15f)
+    }
+
+    @Test
     fun referenceWithOnlyClippedPixelsIsRejected() {
         val pixels = IntArray(64) { index ->
             if (index % 2 == 0) grayscaleArgb(0f) else grayscaleArgb(1f)

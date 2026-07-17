@@ -1,4 +1,5 @@
 import argparse
+import math
 import struct
 from pathlib import Path
 
@@ -20,23 +21,49 @@ from analyze_google_pgtm import (
 )
 
 
-MAGIC = b"PGTFIX2\0"
+MAGIC = b"PGTFIX3\0"
 TAG_SUB_IFDS = 330
 TAG_PROFILE_GAIN_TABLE_MAP = 52525
 TAG_PROFILE_GAIN_TABLE_MAP2 = 52544
+TAG_NOISE_PROFILE = 51041
 
-# These are scene-semantic anchors rather than arbitrary table indices. Every non-terminal anchor
-# is converted to the embedded PGTM table domain with that DNG's own input-weight sum.
-SEMANTIC_ANCHORS = (
-    "black",
-    "shadow",
-    "dark",
-    "median",
-    "bright",
-    "highlight",
-    "white",
-    "specular",
-    "endpoint",
+# Dense, fixed-domain samples describe the complete toe and shoulder. The old semantic-only
+# fixture could fit the sampled percentiles while hiding a plateau or contrast reversal between
+# them. Inputs are intentionally denser around the black plateau and the endpoint.
+DENSE_TABLE_INPUTS = (
+    0.000,
+    0.004,
+    0.008,
+    0.012,
+    0.016,
+    0.020,
+    0.030,
+    0.040,
+    0.050,
+    0.060,
+    0.080,
+    0.100,
+    0.120,
+    0.160,
+    0.200,
+    0.250,
+    0.300,
+    0.350,
+    0.400,
+    0.450,
+    0.500,
+    0.550,
+    0.600,
+    0.650,
+    0.700,
+    0.750,
+    0.800,
+    0.850,
+    0.900,
+    0.940,
+    0.970,
+    0.990,
+    1.000,
 )
 
 
@@ -99,9 +126,9 @@ def find_raw_ifd(tiff, ifds):
         height = (tiff.values(ifd, 257) or [0])[0]
         compression = (tiff.values(ifd, 259) or [0])[0]
         bits = (tiff.values(ifd, 258) or [0])[0]
-        if width >= 1000 and height >= 1000 and compression == 1 and bits == 16:
+        if width >= 1000 and height >= 1000 and compression in (1, 7) and bits >= 10:
             return offset, ifd
-    raise ValueError("no uncompressed 16-bit raw IFD")
+    raise ValueError("no supported uncompressed or lossless-JPEG raw IFD")
 
 
 def find_pgtm(tiff, ifds, tag):
@@ -166,19 +193,41 @@ def extract_packed_stats(tiff, ifd0, raw_ifd, raw_offset):
     app_cfa = app_cfa_pattern_from_dng(cfa, cfa_repeat)
     black_rggb = black_level_by_channel(black, black_repeat, app_cfa)
 
-    raw_bytes = bytearray()
-    for strip_offset, strip_count in zip(strip_offsets, strip_counts):
-        raw_bytes += tiff.data[strip_offset:strip_offset + strip_count]
+    compression = (tiff.values(raw_ifd, 259) or [1])[0]
+    raw_bytes = None
+    decoded_raw = None
     row_stride = width * 2
-    if len(raw_bytes) < row_stride * height:
-        raise ValueError(f"raw bytes too small {len(raw_bytes)} expected {row_stride * height}")
+    if compression == 1:
+        raw_bytes = bytearray()
+        for strip_offset, strip_count in zip(strip_offsets, strip_counts):
+            raw_bytes += tiff.data[strip_offset:strip_offset + strip_count]
+        if len(raw_bytes) < row_stride * height:
+            raise ValueError(f"raw bytes too small {len(raw_bytes)} expected {row_stride * height}")
+    else:
+        import rawpy
+
+        with rawpy.imread(str(tiff.path)) as raw:
+            candidates = (raw.raw_image, raw.raw_image_visible)
+            matching = next(
+                (candidate for candidate in candidates if candidate.shape == (height, width)),
+                None,
+            )
+            if matching is None:
+                shapes = [candidate.shape for candidate in candidates]
+                raise ValueError(
+                    f"decoded RAW shapes {shapes} do not match IFD {(height, width)}"
+                )
+            decoded_raw = matching.copy()
 
     baseline_gain = 2.0 ** baseline
     grid_h, grid_v = app_grid_size(width, height)
 
     def normalized_raw_at(px, py):
-        pos = py * row_stride + px * 2
-        raw_value = unpack(tiff.endian, "H", raw_bytes, pos)
+        if decoded_raw is None:
+            pos = py * row_stride + px * 2
+            raw_value = unpack(tiff.endian, "H", raw_bytes, pos)
+        else:
+            raw_value = int(decoded_raw[py, px])
         black_at = black_level_for_pixel(black_rggb, app_cfa, px, py)
         return min(max((raw_value - black_at) / max(float(white) - black_at, 1.0), 0.0), 1.0)
 
@@ -247,44 +296,75 @@ def gain_at(pgtm, cell, table_input):
     )
 
 
-def semantic_table_inputs(packed_stats, cell, input_scale):
-    offset = cell * 8
-    # Mirror DngHdrProfileGainTableGenerator.packedStatsAt. The exact tail order statistics can
-    # be slightly below a histogram percentile at a quantization boundary; they describe the
-    # same ordered signal axis and must therefore be made non-decreasing before sampling PGTM.
-    p10 = min(max(packed_stats[offset], 0.0), 1.0)
-    p50 = max(p10, min(max(packed_stats[offset + 1], 0.0), 1.0))
-    p90 = max(p50, min(max(packed_stats[offset + 2], 0.0), 1.0))
-    p98 = max(p90, min(max(packed_stats[offset + 3], 0.0), 1.0))
-    raw_p995 = packed_stats[offset + 6]
-    p995 = max(p98, raw_p995 if raw_p995 > 0.0 else p98)
-    raw_p999 = packed_stats[offset + 7]
-    p999 = max(p995, raw_p999 if raw_p999 > 0.0 else p995)
-    return (
-        0.0,
-        p10 * input_scale,
-        0.5 * (p10 + p50) * input_scale,
-        p50 * input_scale,
-        p90 * input_scale,
-        p98 * input_scale,
-        p995 * input_scale,
-        p999 * input_scale,
-        1.0,
+def spatial_gain_at(pgtm, normalized_x, normalized_y, table_input):
+    """Sample an embedded map at an app-grid point using the DNG map geometry."""
+    source_x = (normalized_x - pgtm["origin_h"]) / max(pgtm["spacing_h"], 1e-12)
+    source_y = (normalized_y - pgtm["origin_v"]) / max(pgtm["spacing_v"], 1e-12)
+    source_x = min(max(source_x, 0.0), pgtm["map_h"] - 1.0)
+    source_y = min(max(source_y, 0.0), pgtm["map_v"] - 1.0)
+    x0 = int(math.floor(source_x))
+    y0 = int(math.floor(source_y))
+    x1 = min(x0 + 1, pgtm["map_h"] - 1)
+    y1 = min(y0 + 1, pgtm["map_v"] - 1)
+    fx = source_x - x0
+    fy = source_y - y0
+
+    top = (
+        gain_at(pgtm, y0 * pgtm["map_h"] + x0, table_input) * (1.0 - fx) +
+        gain_at(pgtm, y0 * pgtm["map_h"] + x1, table_input) * fx
     )
+    bottom = (
+        gain_at(pgtm, y1 * pgtm["map_h"] + x0, table_input) * (1.0 - fx) +
+        gain_at(pgtm, y1 * pgtm["map_h"] + x1, table_input) * fx
+    )
+    return top * (1.0 - fy) + bottom * fy
 
 
-def sample_semantic_gains(pgtm, packed_stats):
-    cell_count = pgtm["map_h"] * pgtm["map_v"]
-    input_scale = sum(pgtm["weights"])
+def sample_dense_gains(pgtm, map_h, map_v):
+    cell_count = map_h * map_v
     return [
-        gain_at(pgtm, cell, table_input)
+        spatial_gain_at(
+            pgtm,
+            cell % map_h / max(map_h - 1, 1),
+            cell // map_h / max(map_v - 1, 1),
+            table_input,
+        )
         for cell in range(cell_count)
-        for table_input in semantic_table_inputs(packed_stats, cell, input_scale)
+        for table_input in DENSE_TABLE_INPUTS
     ]
 
 
-def write_fixture(path, width, height, baseline, pgtm, packed_stats):
-    sampled_gains = sample_semantic_gains(pgtm, packed_stats)
+def average_noise_profile(tiff, ifds):
+    values = next(
+        (tiff.values(ifd, TAG_NOISE_PROFILE) for _, ifd in ifds if TAG_NOISE_PROFILE in ifd),
+        [],
+    )
+    pairs = [
+        (float(values[index]), float(values[index + 1]))
+        for index in range(0, len(values) - 1, 2)
+        if float(values[index]) > 0.0 or float(values[index + 1]) > 0.0
+    ]
+    if not pairs:
+        return 0.0, 0.0
+    return (
+        sum(pair[0] for pair in pairs) / len(pairs),
+        sum(pair[1] for pair in pairs) / len(pairs),
+    )
+
+
+def write_fixture(
+    path,
+    width,
+    height,
+    baseline,
+    map_h,
+    map_v,
+    pgtm,
+    packed_stats,
+    noise_slope,
+    noise_offset,
+):
+    sampled_gains = sample_dense_gains(pgtm, map_h, map_v)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as out:
         out.write(MAGIC)
@@ -293,14 +373,16 @@ def write_fixture(path, width, height, baseline, pgtm, packed_stats):
             width,
             height,
             baseline,
-            pgtm["map_h"],
-            pgtm["map_v"],
-            len(SEMANTIC_ANCHORS),
+            map_h,
+            map_v,
+            len(DENSE_TABLE_INPUTS),
             len(packed_stats),
             len(sampled_gains),
         ))
         out.write(struct.pack("<5f", *pgtm["weights"]))
         out.write(struct.pack("<f", float(pgtm["gamma"])))
+        out.write(struct.pack("<2f", noise_slope, noise_offset))
+        out.write(struct.pack(f"<{len(DENSE_TABLE_INPUTS)}f", *DENSE_TABLE_INPUTS))
         out.write(struct.pack(f"<{len(packed_stats)}f", *packed_stats))
         out.write(struct.pack(f"<{len(sampled_gains)}f", *sampled_gains))
 
@@ -330,16 +412,25 @@ def main():
         raw_ifd=raw_ifd,
         raw_offset=raw_offset,
     )
-    if (grid_h, grid_v) != (reference_pgtm["map_h"], reference_pgtm["map_v"]):
-        raise ValueError(
-            f"app grid {grid_h}x{grid_v} does not match PGTM grid "
-            f"{reference_pgtm['map_h']}x{reference_pgtm['map_v']}"
-        )
-    write_fixture(args.fixture, width, height, baseline, reference_pgtm, packed_stats)
+    noise_slope, noise_offset = average_noise_profile(tiff, ifds)
+    write_fixture(
+        args.fixture,
+        width,
+        height,
+        baseline,
+        grid_h,
+        grid_v,
+        reference_pgtm,
+        packed_stats,
+        noise_slope,
+        noise_offset,
+    )
     print(
         f"wrote {args.fixture} width={width} height={height} baseline={baseline:.6f} "
-        f"grid={grid_h}x{grid_v} semanticAnchors={len(SEMANTIC_ANCHORS)} "
-        f"stats={len(packed_stats)} sampledGains={grid_h * grid_v * len(SEMANTIC_ANCHORS)}"
+        f"grid={grid_h}x{grid_v} denseInputs={len(DENSE_TABLE_INPUTS)} "
+        f"sourceGrid={reference_pgtm['map_h']}x{reference_pgtm['map_v']} "
+        f"noise={noise_slope:.9g},{noise_offset:.9g} "
+        f"stats={len(packed_stats)} sampledGains={grid_h * grid_v * len(DENSE_TABLE_INPUTS)}"
     )
 
 

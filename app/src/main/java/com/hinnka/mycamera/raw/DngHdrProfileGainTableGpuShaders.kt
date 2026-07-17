@@ -240,52 +240,31 @@ internal object DngHdrProfileGainTableGpuShaders {
         precision highp float;
         precision highp int;
 
-        layout(std430, binding = 0) readonly buffer ExposurePlanBuffer {
-            float exposurePlans[];
+        layout(std430, binding = 0) readonly buffer CurvePlanBuffer {
+            float curvePlans[];
         };
         layout(std430, binding = 1) writeonly buffer GainCurveBuffer {
             float gainCurves[];
         };
-        layout(std430, binding = 2) readonly buffer WeightLutBuffer {
-            float weightLut[];
-        };
-
         uniform int uCellCount;
         uniform int uPointCount;
         uniform float uInputScale;
-        uniform float uWellExposedKey;
-        uniform float uMaxExposureGain;
-        uniform float uHighlightFusionStart;
-        uniform float uHighlightFusionEnd;
+        uniform float uMinTableGain;
+        uniform float uMaxTableGain;
+        uniform float uToeEnd;
+        uniform float uShapeQ;
+        uniform float uMinShapePower;
+        uniform float uMaxShapePower;
         uniform int uDiagnosticMode;
         uniform float uDiagnosticStart;
         uniform float uDiagnosticEnd;
         uniform float uDiagnosticFeather;
 
-        const float MIN_TABLE_GAIN = 0.05;
         const float CURVE_EPS = 1e-6;
-        const float EXPOSURE_STEPS_PER_EV = 128.0;
-        const float WEIGHT_STEPS_PER_EV = 256.0;
-        const float WEIGHT_MAX_DISTANCE_EV = 12.0;
 
         float smoothUnit(float edge0, float edge1, float value) {
             float amount = clamp((value - edge0) / max(edge1 - edge0, CURVE_EPS), 0.0, 1.0);
             return amount * amount * (3.0 - 2.0 * amount);
-        }
-
-        float quantizedExposureGain(float gain) {
-            float key = floor(log2(max(gain, CURVE_EPS)) * EXPOSURE_STEPS_PER_EV + 0.5);
-            return exp2(key / EXPOSURE_STEPS_PER_EV);
-        }
-
-        float sampledWeight(float distanceEv, int component) {
-            float scaled = abs(distanceEv) * WEIGHT_STEPS_PER_EV;
-            if (scaled >= WEIGHT_MAX_DISTANCE_EV * WEIGHT_STEPS_PER_EV) return 0.0;
-            int index = int(floor(scaled));
-            float fraction = scaled - float(index);
-            float first = weightLut[index * 2 + component];
-            float second = weightLut[(index + 1) * 2 + component];
-            return mix(first, second, fraction);
         }
 
         float diagnosticMask(float inputValue) {
@@ -310,81 +289,36 @@ internal object DngHdrProfileGainTableGpuShaders {
             int cellIndex = int(gl_GlobalInvocationID.x);
             if (cellIndex >= uCellCount) return;
 
-            // Some GLES drivers preserve the SSBO member's readonly qualifier when it is used
-            // directly as a function argument. Copy to ordinary locals before quantization.
-            float brightestPlanGain = exposurePlans[cellIndex * 2];
-            float darkestPlanGain = exposurePlans[cellIndex * 2 + 1];
-            float brightestGain = clamp(
-                quantizedExposureGain(brightestPlanGain),
-                uInputScale,
-                uMaxExposureGain
+            int planOffset = cellIndex * 3;
+            float blackGain = clamp(
+                curvePlans[planOffset], uMinTableGain, uMaxTableGain
             );
-            float darkestGain = clamp(
-                quantizedExposureGain(darkestPlanGain),
-                uInputScale,
-                brightestGain
+            float endpointGain = clamp(
+                curvePlans[planOffset + 1], uMinTableGain, uMaxTableGain
             );
-            float exposureGains[8];
-            float exposureGainEvs[8];
-            for (int exposure = 0; exposure < 8; ++exposure) {
-                float amount = float(exposure) / 7.0;
-                exposureGains[exposure] = exp2(mix(
-                    log2(brightestGain),
-                    log2(darkestGain),
-                    amount
-                ));
-                exposureGainEvs[exposure] = log2(exposureGains[exposure]);
-            }
-
-            float previousTrueOutput = 0.0;
+            float shapePower = clamp(
+                curvePlans[planOffset + 2], uMinShapePower, uMaxShapePower
+            );
+            float endpointRatio = blackGain / max(endpointGain, CURVE_EPS);
+            float shoulderAmount = pow(endpointRatio, uShapeQ) - 1.0;
             float previousFinalOutput = 0.0;
             int outputOffset = cellIndex * uPointCount;
             for (int point = 0; point < uPointCount; ++point) {
                 float tableInput = point == uPointCount - 1
                     ? 1.0
                     : float(point) / float(uPointCount);
-                float trueGain;
-                if (tableInput <= CURVE_EPS) {
-                    trueGain = brightestGain;
-                } else {
-                    float sceneInput = tableInput / uInputScale;
-                    float sceneFromKeyEv = log2(max(sceneInput, CURVE_EPS) / uWellExposedKey);
-                    float highlightStrength = smoothUnit(
-                        uHighlightFusionStart,
-                        uHighlightFusionEnd,
-                        sceneInput * exposureGains[7]
-                    );
-                    float weightSum = 0.0;
-                    float outputSum = 0.0;
-                    float nearestDistanceEv = 3.402823466e+38;
-                    float nearestOutput = 0.0;
-                    for (int exposure = 0; exposure < 8; ++exposure) {
-                        float exposed = max(sceneInput * exposureGains[exposure], CURVE_EPS);
-                        float distanceEv = sceneFromKeyEv + exposureGainEvs[exposure];
-                        float weight = mix(
-                            sampledWeight(distanceEv, 0),
-                            sampledWeight(distanceEv, 1),
-                            highlightStrength
-                        );
-                        float clippedOutput = min(exposed, 1.0);
-                        weightSum += weight;
-                        outputSum += weight * clippedOutput;
-                        if (abs(distanceEv) < nearestDistanceEv) {
-                            nearestDistanceEv = abs(distanceEv);
-                            nearestOutput = clippedOutput;
-                        }
-                    }
-                    float fusedOutput = weightSum <= 0.0
-                        ? nearestOutput
-                        : clamp(outputSum / weightSum, 0.0, 1.0);
-                    float monotonicOutput = max(previousTrueOutput, fusedOutput);
-                    trueGain = clamp(
-                        monotonicOutput / sceneInput,
-                        MIN_TABLE_GAIN,
-                        uMaxExposureGain
-                    );
-                    previousTrueOutput = monotonicOutput;
-                }
+                float shoulderInput = clamp(
+                    (tableInput - uToeEnd) / max(1.0 - uToeEnd, CURVE_EPS),
+                    0.0,
+                    1.0
+                );
+                float denominator = pow(
+                    max(1.0 + shoulderAmount * pow(shoulderInput, shapePower), CURVE_EPS),
+                    1.0 / uShapeQ
+                );
+                float trueGain = point == uPointCount - 1
+                    ? uInputScale
+                    : clamp(blackGain / denominator, uMinTableGain, uMaxTableGain);
 
                 float finalGain = trueGain;
                 if (uDiagnosticMode >= 0) {
@@ -394,11 +328,11 @@ internal object DngHdrProfileGainTableGpuShaders {
                         : mix(trueGain, 1.0, mask);
                     float monotonicOutput = max(previousFinalOutput, tableInput * mixedGain);
                     finalGain = tableInput <= CURVE_EPS
-                        ? clamp(mixedGain, MIN_TABLE_GAIN, uMaxExposureGain)
+                        ? clamp(mixedGain, uMinTableGain, uMaxTableGain)
                         : clamp(
                             monotonicOutput / tableInput,
-                            MIN_TABLE_GAIN,
-                            uMaxExposureGain
+                            uMinTableGain,
+                            uMaxTableGain
                         );
                     previousFinalOutput = monotonicOutput;
                 }

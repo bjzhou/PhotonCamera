@@ -5,187 +5,139 @@ import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sqrt
 
-/**
- * Spatial LTM stage fitted against Google PGTM cells from the Skyyking regression set.
- *
- * Each local synthetic-exposure stack is biased from local luminance and highlight topology.
- * Google-compatible plans adjust the brightest member; centered Photon plans translate both
- * endpoints to preserve their EV span. A normalized 3x3 convolution gives these decisions the
- * same spatial support as the profile map; exposure fusion still produces the final gain curve.
- */
+/** PXLs2-trained Gaussian parameter pyramid for PGTM black gain and shoulder shape. */
 internal object DngHdrLtmSpatialModel {
     private const val LEVEL_EPS = 0.006f
-    private const val TAIL_EPS = 0.04f
-    private const val MAX_LOCAL_EXPOSURE_OFFSET_EV = 1.25f
+    private const val TAIL_EPS = 0.040f
+    private const val FEATURE_COUNT = 11
 
-    fun buildExposurePlans(
+    private val BLACK_FINE = floatArrayOf(
+        0.080100003f, 0.038598747f, -0.009591165f, 0.040930166f,
+        -0.032663656f, 0.003484404f, -0.036142493f, -0.013543239f,
+        0.221111670f, -0.056745937f, 0.022797185f,
+    )
+    private val BLACK_REGIONAL = floatArrayOf(
+        0.050453932f, -0.164809241f, -0.025868995f, 0.024685689f,
+        -0.169930713f, 0.082901192f, 0.057923125f, 0.054644468f,
+        -0.628739524f, -0.120014771f, 0.272379151f,
+    )
+    private val SHAPE_FINE = floatArrayOf(
+        -0.042331190f, -0.002069818f, -0.003614245f, -0.011158727f,
+        0.025782988f, -0.011451446f, 0.188099210f, -0.026559214f,
+        -0.048570362f, 0.027670583f, -0.014421700f,
+    )
+    private val SHAPE_REGIONAL = floatArrayOf(
+        0.032147274f, 0.012769699f, -0.005806728f, -0.042285077f,
+        0.097232112f, -0.041291256f, 0.005268769f, -0.025812120f,
+        0.213336867f, 0.033524746f, -0.045624738f,
+    )
+
+    fun buildCurvePlans(
         cells: Array<HdrPgtmCellStats?>,
         grid: HdrPgtmGrid,
-        global: HdrPgtmCellStats,
-        globalPlan: HdrLtmExposurePlan,
-        minimumExposureGain: Float = globalPlan.darkestExposureGain,
-        maxExposureGain: Float,
-        preserveExposureSpan: Boolean = false,
-    ): Array<HdrLtmExposurePlan> {
-        val globalFeature = ToneFeature.from(global)
-        val features = Array(cells.size) { index ->
-            cells[index]?.takeIf { it.sampleWeight > 0f }?.let(ToneFeature::from) ?: globalFeature
-        }
-        val neighborhoods = smoothFeatures(features, grid)
-        // The global exposure plan represents a robust scene median. Center local residuals on
-        // the same statistic;
-        // a feature built from arithmetic-mean percentiles is biased in strongly bimodal scenes.
-        val referenceFeature = medianFeature(neighborhoods)
-        val saturatedScene = smoothStep(0.55f, 0.72f, global.highlightFraction) *
-            smoothStep(0.70f, 0.84f, global.p50)
-        val sparseSeparatedTail =
-            (1f - smoothStep(0.21f, 0.24f, global.p98)) *
-                (1f - smoothStep(1.15f, 1.45f, global.inputTailP95)) *
-                smoothStep(
-                    0.75f,
-                    1.20f,
-                    log2((global.inputTailP99 + TAIL_EPS) / (global.inputTailP95 + TAIL_EPS))
-                )
-        val residualScale = 1f + 2.20f * saturatedScene + 1.00f * sparseSeparatedTail
-        return Array(cells.size) { index ->
-            val cell = cells[index]
-            if (cell == null || cell.sampleWeight <= 0f) {
-                globalPlan
-            } else {
-                planLocalExposureRange(
-                    globalPlan = globalPlan,
-                    referenceFeature = referenceFeature,
-                    localFeature = neighborhoods[index],
-                    sampleWeight = cell.sampleWeight,
-                    residualScale = residualScale,
-                    minimumExposureGain = minimumExposureGain,
-                    maxExposureGain = maxExposureGain,
-                    preserveExposureSpan = preserveExposureSpan,
-                )
-            }
-        }
-    }
-
-    private fun planLocalExposureRange(
-        globalPlan: HdrLtmExposurePlan,
-        referenceFeature: ToneFeature,
-        localFeature: ToneFeature,
-        sampleWeight: Float,
-        residualScale: Float,
-        minimumExposureGain: Float,
-        maxExposureGain: Float,
-        preserveExposureSpan: Boolean,
-    ): HdrLtmExposurePlan {
-        val residualEv =
-            0.0070524f * (localFeature.logP10 - referenceFeature.logP10) +
-                0.0018840f * (localFeature.logP50 - referenceFeature.logP50) -
-                0.1109007f * (localFeature.logP90 - referenceFeature.logP90) +
-                0.0874353f * (localFeature.logP98 - referenceFeature.logP98) -
-                0.0166212f * (localFeature.fullRangeEv - referenceFeature.fullRangeEv) -
-                0.0036315f * (localFeature.upperRangeEv - referenceFeature.upperRangeEv) -
-                0.2828567f * (localFeature.sqrtHighlightFraction - referenceFeature.sqrtHighlightFraction) +
-                0.0116745f * (localFeature.tail995Ev - referenceFeature.tail995Ev) -
-                0.1805684f * (localFeature.tail999Ev - referenceFeature.tail999Ev)
-        val confidence = smoothStep(16f, 64f, sampleWeight)
-        val exposureOffsetEv = (residualEv * confidence * residualScale)
-            .coerceIn(-MAX_LOCAL_EXPOSURE_OFFSET_EV, MAX_LOCAL_EXPOSURE_OFFSET_EV)
-        if (!preserveExposureSpan) {
-            return globalPlan.copy(
-                brightestExposureGain = (
-                    globalPlan.brightestExposureGain * 2.0f.pow(exposureOffsetEv)
-                    ).coerceIn(globalPlan.darkestExposureGain, maxExposureGain)
+        globalPlan: HdrPgtmCurvePlan,
+        baselineExposureEv: Float,
+        noiseSlope: Float,
+        noiseOffset: Float,
+        curveParameters: HdrPgtmCurveParameters,
+    ): Array<HdrPgtmCurvePlan> {
+        val boundedGlobalPlan = globalPlan.copy(
+            blackGain = globalPlan.blackGain.coerceIn(
+                curveParameters.minBlackGain,
+                curveParameters.maxTableGain,
+            ),
+            shapePower = globalPlan.shapePower.coerceIn(
+                curveParameters.minShapePower,
+                curveParameters.maxShapePower,
+            ),
+        )
+        val fallbackStats = cells.filterNotNull().firstOrNull()
+            ?: return Array(cells.size) { boundedGlobalPlan }
+        val raw = Array(cells.size) { index ->
+            featureVector(
+                stats = cells[index] ?: fallbackStats,
+                baselineExposureEv = baselineExposureEv,
+                noiseSlope = noiseSlope,
+                noiseOffset = noiseOffset,
             )
         }
-        val minimumEv = log2(minimumExposureGain)
-        val maximumEv = log2(maxExposureGain)
-        val darkestEv = log2(globalPlan.darkestExposureGain)
-        val brightestEv = log2(globalPlan.brightestExposureGain)
-        val halfSpanEv = (brightestEv - darkestEv).coerceAtLeast(0f) * 0.5f
-        val requestedCenterEv = (darkestEv + brightestEv) * 0.5f + exposureOffsetEv
-        val centerEv = requestedCenterEv.coerceIn(
-            minimumEv + halfSpanEv,
-            maximumEv - halfSpanEv,
-        )
-        return HdrLtmExposurePlan(
-            brightestExposureGain = 2.0f.pow(centerEv + halfSpanEv),
-            darkestExposureGain = 2.0f.pow(centerEv - halfSpanEv),
+        val fine = smoothFeatures(raw, grid)
+        var regional = fine
+        repeat(3) { regional = smoothFeatures(regional, grid) }
+        val reference = medianFeature(regional)
+
+        return Array(cells.size) { index ->
+            if (cells[index] == null) {
+                boundedGlobalPlan
+            } else {
+                var blackOffsetEv = 0f
+                var shapeOffset = 0f
+                for (feature in 0 until FEATURE_COUNT) {
+                    val fineResidual = fine[index][feature] - regional[index][feature]
+                    val regionalResidual = regional[index][feature] - reference[feature]
+                    blackOffsetEv +=
+                        BLACK_FINE[feature] * fineResidual +
+                            BLACK_REGIONAL[feature] * regionalResidual
+                    shapeOffset +=
+                        SHAPE_FINE[feature] * fineResidual +
+                            SHAPE_REGIONAL[feature] * regionalResidual
+                }
+                globalPlan.copy(
+                    blackGain = (globalPlan.blackGain * 2.0f.pow(blackOffsetEv))
+                        .coerceIn(curveParameters.minBlackGain, curveParameters.maxTableGain),
+                    shapePower = (globalPlan.shapePower + shapeOffset).coerceIn(
+                        curveParameters.minShapePower,
+                        curveParameters.maxShapePower,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun featureVector(
+        stats: HdrPgtmCellStats,
+        baselineExposureEv: Float,
+        noiseSlope: Float,
+        noiseOffset: Float,
+    ): FloatArray {
+        val logP10 = log2(stats.p10 + LEVEL_EPS)
+        val logP50 = log2(stats.p50 + LEVEL_EPS)
+        val logP90 = log2(stats.p90 + LEVEL_EPS)
+        val logP98 = log2(stats.p98 + LEVEL_EPS)
+        return floatArrayOf(
+            logP10,
+            logP50,
+            logP90,
+            logP98,
+            logP98 - logP10,
+            logP98 - logP50,
+            sqrt(stats.highlightFraction.coerceIn(0f, 1f)),
+            log2((stats.p995Input + TAIL_EPS) / (stats.p98 + TAIL_EPS)),
+            log2((stats.p999Input + TAIL_EPS) / (stats.p995Input + TAIL_EPS)),
+            snrFeature(stats.p10, baselineExposureEv, noiseSlope, noiseOffset),
+            snrFeature(stats.p50, baselineExposureEv, noiseSlope, noiseOffset),
         )
     }
 
-    private fun medianFeature(source: Array<ToneFeature>): ToneFeature {
-        fun median(selector: (ToneFeature) -> Float): Float {
-            val values = FloatArray(source.size) { selector(source[it]) }
-            values.sort()
-            val center = values.size / 2
-            return if (values.size % 2 == 0) {
-                0.5f * (values[center - 1] + values[center])
-            } else {
-                values[center]
-            }
-        }
-        return ToneFeature(
-            logP10 = median { it.logP10 },
-            logP50 = median { it.logP50 },
-            logP90 = median { it.logP90 },
-            logP98 = median { it.logP98 },
-            fullRangeEv = median { it.fullRangeEv },
-            upperRangeEv = median { it.upperRangeEv },
-            sqrtHighlightFraction = median { it.sqrtHighlightFraction },
-            tail995Ev = median { it.tail995Ev },
-            tail999Ev = median { it.tail999Ev }
-        )
+    private fun snrFeature(
+        signal: Float,
+        baselineExposureEv: Float,
+        noiseSlope: Float,
+        noiseOffset: Float,
+    ): Float {
+        val sourceSignal = max(signal / DngBaselineExposure.exactGain(baselineExposureEv), 0f)
+        val variance = max(noiseSlope * sourceSignal + noiseOffset, 1e-12f)
+        return log2(1f + sourceSignal / sqrt(variance))
     }
 
     private fun smoothFeatures(
-        source: Array<ToneFeature>,
+        source: Array<FloatArray>,
         grid: HdrPgtmGrid,
-    ): Array<ToneFeature> {
-        return Array(source.size) { index ->
-            val x = index % grid.mapPointsH
-            val y = index / grid.mapPointsH
-            var weightSum = 0f
-            var logP10 = 0f
-            var logP50 = 0f
-            var logP90 = 0f
-            var logP98 = 0f
-            var fullRangeEv = 0f
-            var upperRangeEv = 0f
-            var sqrtHighlightFraction = 0f
-            var tail995Ev = 0f
-            var tail999Ev = 0f
-            forEachNeighbor(x, y, grid) { neighbor, weight ->
-                val feature = source[neighbor]
-                weightSum += weight
-                logP10 += feature.logP10 * weight
-                logP50 += feature.logP50 * weight
-                logP90 += feature.logP90 * weight
-                logP98 += feature.logP98 * weight
-                fullRangeEv += feature.fullRangeEv * weight
-                upperRangeEv += feature.upperRangeEv * weight
-                sqrtHighlightFraction += feature.sqrtHighlightFraction * weight
-                tail995Ev += feature.tail995Ev * weight
-                tail999Ev += feature.tail999Ev * weight
-            }
-            ToneFeature(
-                logP10 = logP10 / weightSum,
-                logP50 = logP50 / weightSum,
-                logP90 = logP90 / weightSum,
-                logP98 = logP98 / weightSum,
-                fullRangeEv = fullRangeEv / weightSum,
-                upperRangeEv = upperRangeEv / weightSum,
-                sqrtHighlightFraction = sqrtHighlightFraction / weightSum,
-                tail995Ev = tail995Ev / weightSum,
-                tail999Ev = tail999Ev / weightSum
-            )
-        }
-    }
-
-    private inline fun forEachNeighbor(
-        x: Int,
-        y: Int,
-        grid: HdrPgtmGrid,
-        block: (index: Int, weight: Float) -> Unit,
-    ) {
+    ): Array<FloatArray> = Array(source.size) { index ->
+        val x = index % grid.mapPointsH
+        val y = index / grid.mapPointsH
+        val result = FloatArray(FEATURE_COUNT)
+        var weightSum = 0f
         for (dy in -1..1) {
             val yy = (y + dy).coerceIn(0, grid.mapPointsV - 1)
             for (dx in -1..1) {
@@ -195,51 +147,31 @@ internal object DngHdrLtmSpatialModel {
                     dx == 0 || dy == 0 -> 2f
                     else -> 1f
                 }
-                block(yy * grid.mapPointsH + xx, weight)
+                val feature = source[yy * grid.mapPointsH + xx]
+                weightSum += weight
+                for (component in 0 until FEATURE_COUNT) {
+                    result[component] += feature[component] * weight
+                }
             }
         }
+        for (component in 0 until FEATURE_COUNT) result[component] /= weightSum
+        result
     }
 
-    private fun smoothStep(edge0: Float, edge1: Float, value: Float): Float {
-        val t = ((value - edge0) / max(edge1 - edge0, 1e-6f)).coerceIn(0f, 1f)
-        return t * t * (3f - 2f * t)
-    }
-
-    private fun log2(value: Float): Float {
-        return (ln(max(value, 1e-6f).toDouble()) / ln(2.0)).toFloat()
-    }
-
-    private data class ToneFeature(
-        val logP10: Float,
-        val logP50: Float,
-        val logP90: Float,
-        val logP98: Float,
-        val fullRangeEv: Float,
-        val upperRangeEv: Float,
-        val sqrtHighlightFraction: Float,
-        val tail995Ev: Float,
-        val tail999Ev: Float,
-    ) {
-        companion object {
-            fun from(stats: HdrPgtmCellStats): ToneFeature {
-                val logP10 = log2(stats.p10 + LEVEL_EPS)
-                val logP50 = log2(stats.p50 + LEVEL_EPS)
-                val logP90 = log2(stats.p90 + LEVEL_EPS)
-                val logP98 = log2(stats.p98 + LEVEL_EPS)
-                return ToneFeature(
-                    logP10 = logP10,
-                    logP50 = logP50,
-                    logP90 = logP90,
-                    logP98 = logP98,
-                    fullRangeEv = logP98 - logP10,
-                    upperRangeEv = logP98 - logP50,
-                    sqrtHighlightFraction = sqrt(stats.highlightFraction.coerceIn(0f, 1f)),
-                    tail995Ev = log2((stats.p995Input + TAIL_EPS) / (stats.p98 + TAIL_EPS)),
-                    tail999Ev = log2((stats.p999Input + TAIL_EPS) / (stats.p995Input + TAIL_EPS))
-                )
+    private fun medianFeature(source: Array<FloatArray>): FloatArray =
+        FloatArray(FEATURE_COUNT) { component ->
+            val values = FloatArray(source.size) { source[it][component] }
+            values.sort()
+            val center = values.size / 2
+            if (values.size % 2 == 0) {
+                0.5f * (values[center - 1] + values[center])
+            } else {
+                values[center]
             }
         }
-    }
+
+    private fun log2(value: Float): Float =
+        (ln(max(value, 1e-8f).toDouble()) / ln(2.0)).toFloat()
 }
 
 internal data class HdrPgtmGrid(
@@ -262,9 +194,4 @@ internal data class HdrPgtmCellStats(
     val inputTailP99: Float,
     val maxInput: Float,
     val sampleWeight: Float,
-)
-
-internal data class HdrLtmExposurePlan(
-    val brightestExposureGain: Float,
-    val darkestExposureGain: Float,
 )

@@ -119,7 +119,8 @@ internal object RawViewfinderExposureMatcher {
                 "matchLog2Error=${match.matchLog2Error} " +
                 "medianLog2Error=${match.medianLog2Error} " +
                 "trimmedMeanLog2Error=${match.trimmedMeanLog2Error} " +
-                "sampleCount=${match.sampleCount}"
+                "sampleCount=${match.sampleCount} " +
+                "perceptualWeightSum=${match.perceptualWeightSum}"
         )
         return match.matchLog2Error
     }

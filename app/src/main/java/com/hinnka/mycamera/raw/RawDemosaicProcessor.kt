@@ -277,7 +277,6 @@ class RawDemosaicProcessor {
     private var quadWriteOutputProgram = 0
     private var pgtmCellStatsProgram = 0
     private var pgtmGainCurvesProgram = 0
-    private var pgtmWeightLutBufferId = 0
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
@@ -2118,20 +2117,17 @@ class RawDemosaicProcessor {
             )
             return null
         }
-        if (pgtmCellStatsProgram == 0 ||
-            pgtmGainCurvesProgram == 0 ||
-            pgtmWeightLutBufferId == 0
-        ) {
+        if (pgtmCellStatsProgram == 0 || pgtmGainCurvesProgram == 0) {
             PLog.e(
                 TAG,
                 "GPU RAW PGTM programs unavailable: stats=$pgtmCellStatsProgram " +
-                    "curves=$pgtmGainCurvesProgram weights=$pgtmWeightLutBufferId",
+                    "curves=$pgtmGainCurvesProgram",
             )
             return null
         }
-        val fusionParameters = when (profileToneMapMode) {
-            RawProfileToneMapMode.Photon -> DngHdrProfileGainTableGenerator.PHOTON_FUSION_PARAMETERS
-            RawProfileToneMapMode.GooglePixel -> DngHdrProfileGainTableGenerator.GOOGLE_FUSION_PARAMETERS
+        val curveParameters = when (profileToneMapMode) {
+            RawProfileToneMapMode.Photon -> DngHdrProfileGainTableGenerator.PHOTON_CURVE_PARAMETERS
+            RawProfileToneMapMode.GooglePixel -> DngHdrProfileGainTableGenerator.GOOGLE_CURVE_PARAMETERS
             else -> return null
         }
         val safeStatsBounds = sanitizePgtmStatsBounds(statsBounds, width, height) ?: run {
@@ -2272,8 +2268,10 @@ class RawDemosaicProcessor {
                 height = height,
                 baselineExposureEv = baselineExposureEv,
                 packedCellStats = packedCellStats,
+                noiseSlope = metadata.noiseProfile.getOrElse(0) { 0f },
+                noiseOffset = metadata.noiseProfile.getOrElse(1) { 0f },
                 diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
-                fusionParameters = fusionParameters,
+                curveParameters = curveParameters,
             ) ?: return null
             val planReadyNs = System.nanoTime()
             if (plan.cellPlans.size != cellCount) {
@@ -2284,20 +2282,21 @@ class RawDemosaicProcessor {
                 return null
             }
 
-            val exposurePlanBuffer = ByteBuffer.allocateDirect(cellCount * 2 * Float.SIZE_BYTES)
+            val curvePlanBuffer = ByteBuffer.allocateDirect(cellCount * 3 * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder())
                 .asFloatBuffer()
             plan.cellPlans.forEach { cellPlan ->
-                exposurePlanBuffer.put(cellPlan.brightestExposureGain)
-                exposurePlanBuffer.put(cellPlan.darkestExposureGain)
+                curvePlanBuffer.put(cellPlan.blackGain)
+                curvePlanBuffer.put(cellPlan.endpointGain)
+                curvePlanBuffer.put(cellPlan.shapePower)
             }
-            exposurePlanBuffer.position(0)
+            curvePlanBuffer.position(0)
             val planBufferId = bufferIds[1]
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, planBufferId)
             GLES31.glBufferData(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
-                cellCount * 2 * Float.SIZE_BYTES,
-                exposurePlanBuffer,
+                cellCount * 3 * Float.SIZE_BYTES,
+                curvePlanBuffer,
                 GLES31.GL_STATIC_DRAW,
             )
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, planBufferId)
@@ -2312,12 +2311,6 @@ class RawDemosaicProcessor {
                 GLES31.GL_DYNAMIC_READ,
             )
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, gainBufferId)
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                2,
-                pgtmWeightLutBufferId,
-            )
-
             GLES31.glUseProgram(pgtmGainCurvesProgram)
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uCellCount"),
@@ -2332,20 +2325,28 @@ class RawDemosaicProcessor {
                 plan.inputScale,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uWellExposedKey"),
-                plan.fusionParameters.wellExposedKey,
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMinTableGain"),
+                plan.curveParameters.minTableGain,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMaxExposureGain"),
-                plan.fusionParameters.maxExposureGain,
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMaxTableGain"),
+                plan.curveParameters.maxTableGain,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uHighlightFusionStart"),
-                plan.fusionParameters.highlightFusionStart,
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uToeEnd"),
+                plan.curveParameters.toeEnd,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uHighlightFusionEnd"),
-                plan.fusionParameters.highlightFusionEnd,
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uShapeQ"),
+                plan.curveParameters.shapeQ,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMinShapePower"),
+                plan.curveParameters.minShapePower,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMaxShapePower"),
+                plan.curveParameters.maxShapePower,
             )
             val diagnosticMode = when (plan.diagnosticBand?.mode) {
                 DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
@@ -3406,7 +3407,6 @@ class RawDemosaicProcessor {
             "DNG_PGTM_GAIN_CURVES",
         )
         if (pgtmCellStatsProgram != 0 && pgtmGainCurvesProgram != 0) {
-            initPgtmWeightLutBuffer()
         }
 
         val fShaderLinearRcd = compileShader(
@@ -3450,28 +3450,6 @@ class RawDemosaicProcessor {
             WARP_RECTILINEAR_FRAGMENT_SHADER,
             "warpRectilinear"
         )
-    }
-
-    private fun initPgtmWeightLutBuffer() {
-        if (pgtmWeightLutBufferId != 0) return
-        val weights = DngHdrProfileGainTableGenerator.interleavedWellExposedWeightLut()
-        val buffer = ByteBuffer.allocateDirect(weights.size * Float.SIZE_BYTES)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(weights)
-        buffer.position(0)
-        val ids = IntArray(1)
-        GLES31.glGenBuffers(1, ids, 0)
-        pgtmWeightLutBufferId = ids[0]
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, pgtmWeightLutBufferId)
-        GLES31.glBufferData(
-            GLES31.GL_SHADER_STORAGE_BUFFER,
-            weights.size * Float.SIZE_BYTES,
-            buffer,
-            GLES31.GL_STATIC_DRAW,
-        )
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        checkGlError("initPgtmWeightLutBuffer")
     }
 
     private fun linkFragmentProgram(
@@ -8858,10 +8836,6 @@ class RawDemosaicProcessor {
         if (quadWriteOutputProgram != 0) GLES31.glDeleteProgram(quadWriteOutputProgram)
         if (pgtmCellStatsProgram != 0) GLES31.glDeleteProgram(pgtmCellStatsProgram)
         if (pgtmGainCurvesProgram != 0) GLES31.glDeleteProgram(pgtmGainCurvesProgram)
-        if (pgtmWeightLutBufferId != 0) {
-            GLES31.glDeleteBuffers(1, intArrayOf(pgtmWeightLutBufferId), 0)
-            pgtmWeightLutBufferId = 0
-        }
         if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
         if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)
         if (linearRawRgbProgram != 0) GLES31.glDeleteProgram(linearRawRgbProgram)

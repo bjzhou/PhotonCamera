@@ -11,8 +11,9 @@ data class GlesRawHdrInputFrame(
 
 internal object GlesRawHdrConfig {
     const val RGB_STRIPE_ROWS = 256
-    const val WEIGHT_SMOOTH_RADIUS = 2
-    const val WEIGHT_SMOOTH_HALO_ROWS = WEIGHT_SMOOTH_RADIUS
+    const val WEIGHT_SMOOTH_RADIUS = 3
+    const val WEIGHT_SMOOTH_PASSES = 2
+    const val WEIGHT_SMOOTH_HALO_ROWS = WEIGHT_SMOOTH_RADIUS * WEIGHT_SMOOTH_PASSES
     const val SHORT_ALIGNMENT_SCORE_BUFFER_BINDING = 8
     const val SHORT_ALIGNMENT_SCORE_STRIDE = 4
     const val ALIGN_LEVEL = 2
@@ -142,8 +143,6 @@ internal object GlesRawHdrShaders {
         uniform float uReferenceExposureScale;
         uniform int uDebugOutputSource;
 
-        const float MIN_EFFECTIVE_FUSION_WEIGHT = 0.02;
-
         bool finiteFloat(float value) {
             return !isnan(value) && !isinf(value);
         }
@@ -157,7 +156,7 @@ internal object GlesRawHdrShaders {
             p = clamp(p, ivec2(0), size - ivec2(1));
             vec2 weights = unpackHalf2x16(texelFetch(uWeightMap, p, 0).r);
             if (!finiteFloat(weights.x) || !finiteFloat(weights.y)) {
-                return vec2(0.0);
+                return vec2(1.0, 0.0);
             }
             return clamp(weights, vec2(0.0), vec2(1.0));
         }
@@ -208,19 +207,6 @@ internal object GlesRawHdrShaders {
             );
         }
 
-        bool shortRgbAvailableAtGlobal(vec2 globalPos) {
-            vec2 shortGlobal = globalPos + uShortRawOffset;
-            vec2 local = vec2(
-                shortGlobal.x,
-                shortGlobal.y - float(uShortSourceRowOffset)
-            );
-            ivec2 imageSize = textureSize(uWeightMap, 0);
-            return all(greaterThanEqual(shortGlobal, vec2(0.0))) &&
-                all(lessThanEqual(shortGlobal, vec2(imageSize - ivec2(1)))) &&
-                all(greaterThanEqual(local, vec2(0.0))) &&
-                all(lessThanEqual(local, vec2(uShortSourceSize - ivec2(1))));
-        }
-
         vec3 referenceRgbAtGlobal(vec2 globalPos) {
             vec2 local = vec2(globalPos.x, globalPos.y - float(uNormalSourceRowOffset));
             return clamp(
@@ -246,24 +232,20 @@ internal object GlesRawHdrShaders {
                 vec3(1.0)
             );
             vec3 referenceRgb = referenceRgbAtGlobal(vec2(outputPos));
-            bool shortAvailable = shortRgbAvailableAtGlobal(vec2(outputPos));
-            vec3 shortRgb = shortAvailable ?
-                shortRgbAtGlobal(vec2(outputPos)) : vec3(0.0);
+            vec3 shortRgb = shortRgbAtGlobal(vec2(outputPos));
             if (!finiteRgb(referenceRgb)) referenceRgb = accumulatedNormalRgb;
             if (!finiteRgb(accumulatedNormalRgb)) accumulatedNormalRgb = referenceRgb;
             vec2 frameWeights = fusionWeightsAt(outputPos);
-            if (!shortAvailable || !finiteRgb(shortRgb)) {
-                shortRgb = vec3(0.0);
+            if (!finiteRgb(shortRgb)) {
+                shortRgb = accumulatedNormalRgb;
                 frameWeights.y = 0.0;
             }
-            float weightSum = frameWeights.x + frameWeights.y;
-            vec3 rgb = weightSum > MIN_EFFECTIVE_FUSION_WEIGHT ?
-                (
-                    accumulatedNormalRgb * frameWeights.x +
-                    shortRgb * frameWeights.y
-                ) / weightSum :
-                referenceRgb;
-            if (!finiteRgb(rgb)) rgb = referenceRgb;
+            float weightSum = max(frameWeights.x + frameWeights.y, 1e-6);
+            vec3 rgb = (
+                accumulatedNormalRgb * frameWeights.x +
+                shortRgb * frameWeights.y
+            ) / weightSum;
+            if (!finiteRgb(rgb)) rgb = accumulatedNormalRgb;
             if (uDebugOutputSource == 1) {
                 rgb = accumulatedNormalRgb;
             } else if (uDebugOutputSource == 2) {
@@ -540,23 +522,47 @@ internal class GlesRawHdrWeightMap(
         GLES31.glDispatchCompute(groupCount(width), groupCount(inputs.weightRowCount), 1)
         publishWeightTexture("calculate HDR RGB weights")
 
-        smooth(
-            sourceTexture = weightTextureA,
-            targetTexture = weightTextureB,
-            referenceRgbTexture = inputs.referenceRgbTexture,
-            referenceRawTexture = inputs.referenceRawTexture,
-            lensShadingTexture = inputs.lensShadingTexture,
-            referenceSourceWidth = inputs.referenceSourceWidth,
-            referenceSourceHeight = inputs.referenceSourceHeight,
-            referenceSourceRowOffset = inputs.referenceSourceRowOffset,
-            weightRowOffset = inputs.weightRowOffset,
-            weightRowCount = inputs.weightRowCount,
-            noiseFloorVariance = inputs.noiseFloorVariance,
-            lscNoiseGainMax = inputs.lscNoiseGainMax,
-            label = "smooth HDR weights 5x5 joint bilateral",
-        )
-        outputTexture = weightTextureB
-        return weightTextureB
+        var sourceTexture = weightTextureA
+        var targetTexture = weightTextureB
+        repeat(GlesRawHdrConfig.WEIGHT_SMOOTH_PASSES) { pass ->
+            smooth(
+                sourceTexture = sourceTexture,
+                targetTexture = targetTexture,
+                referenceRgbTexture = inputs.referenceRgbTexture,
+                referenceRawTexture = inputs.referenceRawTexture,
+                referenceSourceWidth = inputs.referenceSourceWidth,
+                referenceSourceHeight = inputs.referenceSourceHeight,
+                referenceSourceRowOffset = inputs.referenceSourceRowOffset,
+                weightRowOffset = inputs.weightRowOffset,
+                weightRowCount = inputs.weightRowCount,
+                directionX = 1,
+                directionY = 0,
+                label = "smooth HDR weights horizontal pass $pass",
+            )
+            val horizontalSource = sourceTexture
+            sourceTexture = targetTexture
+            targetTexture = horizontalSource
+
+            smooth(
+                sourceTexture = sourceTexture,
+                targetTexture = targetTexture,
+                referenceRgbTexture = inputs.referenceRgbTexture,
+                referenceRawTexture = inputs.referenceRawTexture,
+                referenceSourceWidth = inputs.referenceSourceWidth,
+                referenceSourceHeight = inputs.referenceSourceHeight,
+                referenceSourceRowOffset = inputs.referenceSourceRowOffset,
+                weightRowOffset = inputs.weightRowOffset,
+                weightRowCount = inputs.weightRowCount,
+                directionX = 0,
+                directionY = 1,
+                label = "smooth HDR weights vertical pass $pass",
+            )
+            val verticalSource = sourceTexture
+            sourceTexture = targetTexture
+            targetTexture = verticalSource
+        }
+        outputTexture = sourceTexture
+        return sourceTexture
     }
 
     private fun smooth(
@@ -564,21 +570,19 @@ internal class GlesRawHdrWeightMap(
         targetTexture: Int,
         referenceRgbTexture: Int,
         referenceRawTexture: Int,
-        lensShadingTexture: Int,
         referenceSourceWidth: Int,
         referenceSourceHeight: Int,
         referenceSourceRowOffset: Int,
         weightRowOffset: Int,
         weightRowCount: Int,
-        noiseFloorVariance: Float,
-        lscNoiseGainMax: Float,
+        directionX: Int,
+        directionY: Int,
         label: String,
     ) {
         GLES31.glUseProgram(smoothProgram)
         backend.bindTexture(smoothProgram, "uSourceWeights", 0, sourceTexture)
         backend.bindTexture(smoothProgram, "uReferenceRgb", 1, referenceRgbTexture)
         backend.bindTexture(smoothProgram, "uReferenceRaw", 2, referenceRawTexture)
-        backend.bindTexture(smoothProgram, "uLensShadingMap", 3, lensShadingTexture)
         backend.bindImage(0, targetTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
         backend.setCommonUniforms(smoothProgram)
         GLES31.glUniform2i(
@@ -603,13 +607,10 @@ internal class GlesRawHdrWeightMap(
             backend.uniformLocation(smoothProgram, "uWeightRowCount"),
             weightRowCount,
         )
-        GLES31.glUniform1f(
-            backend.uniformLocation(smoothProgram, "uNoiseFloorVariance"),
-            noiseFloorVariance.coerceAtLeast(0f),
-        )
-        GLES31.glUniform1f(
-            backend.uniformLocation(smoothProgram, "uLscNoiseGainMax"),
-            lscNoiseGainMax.coerceAtLeast(1f),
+        GLES31.glUniform2i(
+            backend.uniformLocation(smoothProgram, "uDirection"),
+            directionX,
+            directionY,
         )
         GLES31.glUniform1f(
             backend.uniformLocation(smoothProgram, "uFullyUnsaturatedThreshold"),
@@ -772,18 +773,6 @@ internal class GlesRawHdrWeightMap(
                 );
             }
 
-            bool shortAvailableAt(vec2 globalPos) {
-                vec2 shortGlobal = globalPos + uShortRawOffset;
-                vec2 local = vec2(
-                    shortGlobal.x,
-                    shortGlobal.y - float(uShortSourceRowOffset)
-                );
-                return all(greaterThanEqual(shortGlobal, vec2(0.0))) &&
-                    all(lessThanEqual(shortGlobal, vec2(uImageSize - ivec2(1)))) &&
-                    all(greaterThanEqual(local, vec2(0.0))) &&
-                    all(lessThanEqual(local, vec2(uShortSourceSize - ivec2(1))));
-            }
-
             vec3 rgbNoiseVariance(
                 vec2 globalPos,
                 vec3 referenceNative,
@@ -893,14 +882,14 @@ internal class GlesRawHdrWeightMap(
                 );
             }
 
-            void storeWeightInputs(ivec2 p, vec2 inputs) {
-                if (any(isnan(inputs)) || any(isinf(inputs))) {
-                    inputs = vec2(0.0);
+            void storeWeights(ivec2 p, vec2 weights) {
+                if (any(isnan(weights)) || any(isinf(weights))) {
+                    weights = vec2(1.0, 0.0);
                 }
                 imageStore(
                     uOutputWeights,
                     p,
-                    uvec4(packHalf2x16(clamp(inputs, vec2(0.0), vec2(1.0))))
+                    uvec4(packHalf2x16(clamp(weights, vec2(0.0), vec2(1.0))))
                 );
             }
 
@@ -915,8 +904,12 @@ internal class GlesRawHdrWeightMap(
                 bool fullyUnsaturated =
                     referenceSaturation <= uFullyUnsaturatedThreshold;
 
+                if (fullySaturated) {
+                    storeWeights(p, vec2(0.0, 1.0));
+                    return;
+                }
                 if (fullyUnsaturated) {
-                    storeWeightInputs(p, vec2(0.0, 1.0));
+                    storeWeights(p, vec2(1.0, 0.0));
                     return;
                 }
 
@@ -925,24 +918,19 @@ internal class GlesRawHdrWeightMap(
                     uFullySaturatedThreshold,
                     referenceSaturation
                 );
-                float reliability = 0.0;
-                if (shortAvailableAt(globalPos)) {
-                    // Once the reference is clipped, photometric residuals are no longer
-                    // comparable. Structural alignment remains useful and deliberately
-                    // allows a poor short-frame candidate to fall back to the reference.
-                    reliability = fullySaturated ?
-                        alignmentConfidence(globalPos) :
-                        pow(
-                            max(
-                                noiseConfidence(globalPos) *
-                                    alignmentConfidence(globalPos) *
-                                    motionConfidence(globalPos),
-                                0.0
-                            ),
-                            1.0 / 3.0
-                        );
-                }
-                storeWeightInputs(p, vec2(saturationWeight, reliability));
+                float reliability = pow(
+                    max(
+                        noiseConfidence(globalPos) *
+                            alignmentConfidence(globalPos) *
+                            motionConfidence(globalPos),
+                        0.0
+                    ),
+                    1.0 / 3.0
+                );
+                float saturationTrust = saturationWeight * saturationWeight;
+                float shortWeight = saturationWeight *
+                    mix(reliability, 1.0, saturationTrust);
+                storeWeights(p, vec2(1.0, shortWeight));
             }
         """.trimIndent()
 
@@ -955,39 +943,20 @@ internal class GlesRawHdrWeightMap(
             uniform highp usampler2D uSourceWeights;
             uniform sampler2D uReferenceRgb;
             uniform highp usampler2D uReferenceRaw;
-            uniform sampler2D uLensShadingMap;
             layout(r32ui, binding = 0) writeonly uniform highp uimage2D uOutputWeights;
             uniform ivec2 uImageSize;
             uniform ivec2 uReferenceSourceSize;
             uniform int uReferenceSourceRowOffset;
             uniform int uWeightRowOffset;
             uniform int uWeightRowCount;
+            uniform ivec2 uDirection;
             uniform int uCfaPattern;
             uniform float uBlackLevel[4];
             uniform float uWhiteLevel;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uNoiseFloorVariance;
-            uniform float uLscNoiseGainMax;
             uniform float uFullyUnsaturatedThreshold;
             uniform float uFullySaturatedThreshold;
 
             const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-            const vec3 LUMA_SQUARED = LUMA * LUMA;
-            const float LOG_LUMA_SCALE = 8.0;
-            const float INVERSE_LOG_TWO = 1.44269504089;
-            const float LOG_LUMA_MODEL_VARIANCE = 0.0025;
-            const float CHROMA_MODEL_VARIANCE = 0.0036;
-            const float SATURATION_MODEL_VARIANCE = 0.1225;
-            const float SATURATION_GUIDE_STRENGTH = 0.20;
-
-            struct GuideStats {
-                float logLuma;
-                float logLumaVariance;
-                vec2 chroma;
-                float chromaTrust;
-                float saturationWeight;
-            };
 
             bool finiteFloat(float value) {
                 return !isnan(value) && !isinf(value);
@@ -1033,125 +1002,30 @@ internal class GlesRawHdrWeightMap(
                     vec3(0.0) : max(value, vec3(0.0));
             }
 
-            vec3 rgbLensShadingGainAt(ivec2 globalPos) {
-                vec2 uv = (vec2(globalPos) + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(
-                    uLensShadingMap,
-                    clamp(uv, vec2(0.0), vec2(1.0))
-                );
-                vec3 rgbGains = vec3(
-                    gains.r,
-                    0.5 * (gains.g + gains.b),
-                    gains.a
-                );
-                if (any(isnan(rgbGains)) || any(isinf(rgbGains))) {
-                    return vec3(1.0);
-                }
-                return clamp(
-                    rgbGains,
-                    vec3(1e-3),
-                    vec3(max(uLscNoiseGainMax, 1.0))
-                );
-            }
-
-            vec3 referenceRgbVarianceAt(ivec2 globalPos, vec3 referenceRgb) {
-                vec3 alpha = vec3(
-                    uNoiseAlphaByChannel[0],
-                    0.5 * (uNoiseAlphaByChannel[1] + uNoiseAlphaByChannel[2]),
-                    uNoiseAlphaByChannel[3]
-                );
-                vec3 beta = vec3(
-                    uNoiseBetaByChannel[0],
-                    0.5 * (uNoiseBetaByChannel[1] + uNoiseBetaByChannel[2]),
-                    uNoiseBetaByChannel[3]
-                );
-                vec3 gain = rgbLensShadingGainAt(globalPos);
-                vec3 variance =
-                    alpha * clamp(referenceRgb, vec3(0.0), vec3(1.0)) * gain +
-                    (beta + vec3(max(uNoiseFloorVariance, 0.0))) * gain * gain;
-                if (any(isnan(variance)) || any(isinf(variance))) {
-                    return vec3(1e-4);
-                }
-                return max(variance, vec3(1e-10));
-            }
-
-            vec2 weightInputsAt(ivec2 p) {
+            vec2 weightsAt(ivec2 p) {
                 p.x = clamp(p.x, 0, uImageSize.x - 1);
                 p.y = clamp(
                     p.y,
                     uWeightRowOffset,
                     uWeightRowOffset + uWeightRowCount - 1
                 );
-                vec2 inputs = unpackHalf2x16(texelFetch(uSourceWeights, p, 0).r);
-                return finiteFloat(inputs.x) && finiteFloat(inputs.y) ?
-                    clamp(inputs, vec2(0.0), vec2(1.0)) :
-                    vec2(0.0);
+                vec2 weights = unpackHalf2x16(texelFetch(uSourceWeights, p, 0).r);
+                return finiteFloat(weights.x) && finiteFloat(weights.y) ?
+                    clamp(weights, vec2(0.0), vec2(1.0)) :
+                    vec2(1.0, 0.0);
             }
 
-            GuideStats guideStatsAt(ivec2 globalPos, float saturationWeight) {
-                vec3 rgb = referenceNativeAt(globalPos);
-                vec3 variance = referenceRgbVarianceAt(globalPos, rgb);
-                float luma = max(dot(rgb, LUMA), 0.0);
-                float lumaVariance = max(dot(variance, LUMA_SQUARED), 1e-10);
-                float logArgument = 1.0 + LOG_LUMA_SCALE * luma;
-                float logSlope = LOG_LUMA_SCALE * INVERSE_LOG_TWO /
-                    max(logArgument, 1e-4);
-                float rgbSum = max(rgb.r + rgb.g + rgb.b, 1e-4);
-                float lumaSnr = luma / sqrt(lumaVariance);
-
-                GuideStats result;
-                result.logLuma = log2(logArgument);
-                result.logLumaVariance = max(
-                    lumaVariance * logSlope * logSlope,
-                    1e-8
-                );
-                result.chroma = vec2(rgb.r, rgb.b) / rgbSum;
-                result.chromaTrust =
-                    smoothstep(2.0, 8.0, lumaSnr) *
-                    (1.0 - smoothstep(0.15, 0.85, saturationWeight));
-                result.saturationWeight = saturationWeight;
-                return result;
-            }
-
-            float spatialWeight(ivec2 offset) {
-                int distanceSquared = offset.x * offset.x + offset.y * offset.y;
-                if (distanceSquared == 0) return 1.0;
-                if (distanceSquared == 1) return 0.80;
-                if (distanceSquared == 2) return 0.64;
-                if (distanceSquared == 4) return 0.41;
-                if (distanceSquared == 5) return 0.33;
-                return 0.17;
-            }
-
-            float guideWeight(GuideStats center, GuideStats neighbor) {
-                float logLumaDifference = neighbor.logLuma - center.logLuma;
-                float logLumaVariance =
-                    center.logLumaVariance + neighbor.logLumaVariance +
-                    LOG_LUMA_MODEL_VARIANCE;
-                float lumaDistance =
-                    logLumaDifference * logLumaDifference /
-                    max(logLumaVariance, 1e-6);
-
-                vec2 chromaDifference = neighbor.chroma - center.chroma;
-                float chromaDistance = dot(chromaDifference, chromaDifference) /
-                    CHROMA_MODEL_VARIANCE;
-                float chromaTrust = min(center.chromaTrust, neighbor.chromaTrust);
-
-                float saturationDifference =
-                    neighbor.saturationWeight - center.saturationWeight;
-                float saturationDistance =
-                    saturationDifference * saturationDifference /
-                    SATURATION_MODEL_VARIANCE;
-                float distance =
-                    lumaDistance +
-                    chromaTrust * chromaDistance +
-                    SATURATION_GUIDE_STRENGTH * saturationDistance;
-                return exp(-0.5 * clamp(distance, 0.0, 24.0));
+            float spatialWeight(int offset) {
+                int distance = abs(offset);
+                if (distance == 0) return 20.0;
+                if (distance == 1) return 15.0;
+                if (distance == 2) return 6.0;
+                return 1.0;
             }
 
             void storeWeights(ivec2 p, vec2 weights) {
                 if (!finiteFloat(weights.x) || !finiteFloat(weights.y)) {
-                    weights = vec2(0.0);
+                    weights = vec2(1.0, 0.0);
                 }
                 imageStore(
                     uOutputWeights,
@@ -1164,43 +1038,495 @@ internal class GlesRawHdrWeightMap(
                 ivec2 local = ivec2(gl_GlobalInvocationID.xy);
                 if (local.x >= uImageSize.x || local.y >= uWeightRowCount) return;
                 ivec2 p = ivec2(local.x, local.y + uWeightRowOffset);
+                vec3 referenceCenter = referenceNativeAt(p);
                 float referenceSaturation = referenceSaturationAt(p);
+                if (referenceSaturation >= uFullySaturatedThreshold) {
+                    storeWeights(p, vec2(0.0, 1.0));
+                    return;
+                }
                 if (referenceSaturation <= uFullyUnsaturatedThreshold) {
                     storeWeights(p, vec2(1.0, 0.0));
                     return;
                 }
 
-                vec2 centerInputs = weightInputsAt(p);
-                GuideStats centerGuide = guideStatsAt(p, centerInputs.x);
-                float shortPreferenceSum = 0.0;
+                float centerLuma = dot(referenceCenter, LUMA);
+                float shortWeightSum = 0.0;
                 float filterWeightSum = 0.0;
-                for (int y = -${GlesRawHdrConfig.WEIGHT_SMOOTH_RADIUS};
-                    y <= ${GlesRawHdrConfig.WEIGHT_SMOOTH_RADIUS}; ++y) {
-                    for (int x = -${GlesRawHdrConfig.WEIGHT_SMOOTH_RADIUS};
-                        x <= ${GlesRawHdrConfig.WEIGHT_SMOOTH_RADIUS}; ++x) {
-                        ivec2 offset = ivec2(x, y);
-                        ivec2 q = p + offset;
-                        vec2 sampleInputs = weightInputsAt(q);
-                        GuideStats sampleGuide = guideStatsAt(q, sampleInputs.x);
-                        float weight = spatialWeight(offset) *
-                            guideWeight(centerGuide, sampleGuide);
-                        shortPreferenceSum +=
-                            sampleInputs.x * sampleInputs.y * weight;
-                        filterWeightSum += weight;
-                    }
+                for (
+                    int offset = -${GlesRawHdrConfig.WEIGHT_SMOOTH_RADIUS};
+                    offset <= ${GlesRawHdrConfig.WEIGHT_SMOOTH_RADIUS};
+                    ++offset
+                ) {
+                    ivec2 q = p + uDirection * offset;
+                    float guideDifference = abs(
+                        dot(referenceNativeAt(q), LUMA) - centerLuma
+                    );
+                    float weight = spatialWeight(offset) *
+                        exp(-12.0 * guideDifference);
+                    shortWeightSum += weightsAt(q).y * weight;
+                    filterWeightSum += weight;
                 }
-                // Smooth the actual short-frame preference, not only the clipping mask.
-                // Low-confidence candidates therefore fade continuously to the normal
-                // accumulation even when that means leaving a highlight clipped.
-                float shortWeight = clamp(
-                    shortPreferenceSum / max(filterWeightSum, 1e-6),
-                    0.0,
-                    1.0
-                );
-                float referenceWeight = 1.0 - shortWeight;
-                storeWeights(p, vec2(referenceWeight, shortWeight));
+                float shortWeight = shortWeightSum / max(filterWeightSum, 1e-6);
+                storeWeights(p, vec2(1.0, shortWeight));
             }
         """.trimIndent()
 
+        private fun calculateWeightShader(rawCommon: String): String = """
+            #version 310 es
+            $rawCommon
+            layout(local_size_x = 16, local_size_y = 16) in;
+            uniform highp usampler2D uReferenceRaw;
+            uniform highp usampler2D uShortRaw;
+            uniform sampler2D uLensShadingMap;
+            layout(r32ui, binding = 0) writeonly uniform highp uimage2D uOutputWeights;
+            uniform ivec2 uImageSize;
+            uniform int uCfaPattern;
+            uniform float uBlackLevel[4];
+            uniform float uWhiteLevel;
+            uniform float uNoiseAlphaByChannel[4];
+            uniform float uNoiseBetaByChannel[4];
+            uniform float uReferenceExposureScale;
+            uniform vec2 uShortRawOffset;
+            uniform vec3 uCalculationGains;
+            uniform float uNoiseFloorVariance;
+            uniform float uLscNoiseGainMax;
+            uniform float uFullyUnsaturatedThreshold;
+            uniform float uFullySaturatedThreshold;
+
+            struct SampleStats {
+                float value;
+                float variance;
+                float sensor;
+            };
+
+            float finiteOr(float value, float fallback) {
+                return isnan(value) || isinf(value) ? fallback : value;
+            }
+
+            float finiteUnit(float value, float fallback) {
+                return clamp(finiteOr(value, fallback), 0.0, 1.0);
+            }
+
+            ivec2 phaseOffsetAt(ivec2 p, int period) {
+                return ivec2(p.x % period, p.y % period);
+            }
+
+            ivec2 maxLatticeForPhase(ivec2 phaseOffset, int period) {
+                return max((uImageSize - ivec2(1) - phaseOffset) / ivec2(period), ivec2(0));
+            }
+
+            SampleStats statsAtSample(
+                highp usampler2D source,
+                ivec2 p,
+                int channel
+            ) {
+                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
+                float raw = float(texelFetch(source, p, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
+                float sensor = clamp(max(raw - uBlackLevel[channel], 0.0) / range, 0.0, 1.0);
+                vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uImageSize);
+                vec4 lsc = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
+                float lscValue = max(
+                    finiteOr(lsc[lensShadingChannelAt(uCfaPattern, p)], 1.0),
+                    1e-3
+                );
+                float noiseGain = clamp(lscValue, 1e-3, max(uLscNoiseGainMax, 1.0));
+                SampleStats result;
+                result.value = finiteOr(sensor * lscValue, sensor);
+                float variance = max(
+                    uNoiseAlphaByChannel[channel] * clamp(sensor * noiseGain, 0.0, 1.0) *
+                        noiseGain +
+                        uNoiseBetaByChannel[channel] * noiseGain * noiseGain,
+                    max(uNoiseFloorVariance, 0.0) * noiseGain * noiseGain
+                );
+                result.variance = max(finiteOr(variance, 1e-10), 1e-10);
+                result.sensor = finiteUnit(sensor, 0.0);
+                return result;
+            }
+
+            SampleStats mixStats(
+                SampleStats a,
+                SampleStats b,
+                float weight
+            ) {
+                SampleStats result;
+                result.value = mix(a.value, b.value, weight);
+                result.variance = mix(a.variance, b.variance, weight);
+                result.sensor = mix(a.sensor, b.sensor, weight);
+                return result;
+            }
+
+            SampleStats sampleSamePhase(
+                highp usampler2D source,
+                vec2 rawPos,
+                ivec2 phaseOffset,
+                int period,
+                int channel
+            ) {
+                ivec2 maxLattice = maxLatticeForPhase(phaseOffset, period);
+                vec2 phase = vec2(phaseOffset);
+                vec2 latticePos = clamp(
+                    (rawPos - phase) / float(period),
+                    vec2(0.0),
+                    vec2(maxLattice)
+                );
+                ivec2 p0 = ivec2(floor(latticePos));
+                ivec2 p1 = min(p0 + ivec2(1), maxLattice);
+                vec2 f = latticePos - vec2(p0);
+                SampleStats s00 = statsAtSample(
+                    source,
+                    phaseOffset + p0 * period,
+                    channel
+                );
+                SampleStats s10 = statsAtSample(
+                    source,
+                    phaseOffset + ivec2(p1.x, p0.y) * period,
+                    channel
+                );
+                SampleStats s01 = statsAtSample(
+                    source,
+                    phaseOffset + ivec2(p0.x, p1.y) * period,
+                    channel
+                );
+                SampleStats s11 = statsAtSample(
+                    source,
+                    phaseOffset + p1 * period,
+                    channel
+                );
+                return mixStats(
+                    mixStats(s00, s10, f.x),
+                    mixStats(s01, s11, f.x),
+                    f.y
+                );
+            }
+
+            SampleStats workingReferenceAt(
+                ivec2 p,
+                ivec2 phaseOffset,
+                int period,
+                int channel
+            ) {
+                SampleStats result = sampleSamePhase(
+                    uReferenceRaw,
+                    vec2(p),
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                float gain = channel == 0 ? uCalculationGains.r :
+                    (channel == 3 ? uCalculationGains.b : uCalculationGains.g);
+                result.value *= gain * uReferenceExposureScale;
+                result.variance *= gain * gain *
+                    uReferenceExposureScale * uReferenceExposureScale;
+                return result;
+            }
+
+            SampleStats workingShortAt(
+                vec2 p,
+                ivec2 phaseOffset,
+                int period,
+                int channel
+            ) {
+                SampleStats result = sampleSamePhase(
+                    uShortRaw,
+                    p + uShortRawOffset,
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                float gain = channel == 0 ? uCalculationGains.r :
+                    (channel == 3 ? uCalculationGains.b : uCalculationGains.g);
+                result.value *= gain;
+                result.variance *= gain * gain;
+                return result;
+            }
+
+            float normalizedResidual(
+                SampleStats referenceStats,
+                SampleStats shortStats
+            ) {
+                float signal = max(referenceStats.value, shortStats.value);
+                float toleranceVariance = referenceStats.variance + shortStats.variance +
+                    pow(0.012 + 0.025 * signal, 2.0);
+                float residual = abs(referenceStats.value - shortStats.value) /
+                    sqrt(max(toleranceVariance, 1e-10));
+                return max(finiteOr(residual, 1e6), 0.0);
+            }
+
+            float noiseConfidence(
+                ivec2 p,
+                ivec2 phaseOffset,
+                int period,
+                int channel
+            ) {
+                SampleStats referenceStats = workingReferenceAt(
+                    p,
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats shortStats = workingShortAt(
+                    vec2(p),
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                float residual = max(normalizedResidual(referenceStats, shortStats) - 1.0, 0.0);
+                return finiteUnit(exp(-0.5 * pow(residual / 2.5, 2.0)), 0.0);
+            }
+
+            float alignmentConfidence(
+                ivec2 p,
+                ivec2 phaseOffset,
+                int period,
+                int channel
+            ) {
+                ivec2 dx = ivec2(period, 0);
+                ivec2 dy = ivec2(0, period);
+                SampleStats referenceLeft = workingReferenceAt(
+                    p - dx,
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats referenceRight = workingReferenceAt(
+                    p + dx,
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats referenceTop = workingReferenceAt(
+                    p - dy,
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats referenceBottom = workingReferenceAt(
+                    p + dy,
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats shortLeft = workingShortAt(
+                    vec2(p - dx),
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats shortRight = workingShortAt(
+                    vec2(p + dx),
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats shortTop = workingShortAt(
+                    vec2(p - dy),
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                SampleStats shortBottom = workingShortAt(
+                    vec2(p + dy),
+                    phaseOffset,
+                    period,
+                    channel
+                );
+                vec2 referenceGradient = vec2(
+                    referenceRight.value - referenceLeft.value,
+                    referenceBottom.value - referenceTop.value
+                );
+                vec2 shortGradient = vec2(
+                    shortRight.value - shortLeft.value,
+                    shortBottom.value - shortTop.value
+                );
+                float gradientVariance =
+                    referenceLeft.variance + referenceRight.variance +
+                    referenceTop.variance + referenceBottom.variance +
+                    shortLeft.variance + shortRight.variance +
+                    shortTop.variance + shortBottom.variance;
+                float residual = length(referenceGradient - shortGradient) /
+                    sqrt(max(gradientVariance + 0.0004, 1e-10));
+                residual = max(residual - 1.0, 0.0);
+                return finiteUnit(exp(-0.5 * pow(residual / 3.0, 2.0)), 0.0);
+            }
+
+            float motionConfidence(
+                ivec2 p,
+                ivec2 phaseOffset,
+                int period,
+                int channel
+            ) {
+                float residualSum = 0.0;
+                float residualSquaredSum = 0.0;
+                float weightSum = 0.0;
+                for (int y = -1; y <= 1; ++y) {
+                    for (int x = -1; x <= 1; ++x) {
+                        ivec2 samplePos = p + ivec2(x, y) * period;
+                        SampleStats referenceStats = workingReferenceAt(
+                            samplePos,
+                            phaseOffset,
+                            period,
+                            channel
+                        );
+                        SampleStats shortStats = workingShortAt(
+                            vec2(samplePos),
+                            phaseOffset,
+                            period,
+                            channel
+                        );
+                        float usableReference = 1.0 - smoothstep(
+                            uFullyUnsaturatedThreshold,
+                            uFullySaturatedThreshold,
+                            referenceStats.sensor
+                        );
+                        float residual = normalizedResidual(referenceStats, shortStats);
+                        residualSum += residual * usableReference;
+                        residualSquaredSum += residual * residual * usableReference;
+                        weightSum += usableReference;
+                    }
+                }
+                if (weightSum < 0.5) return 1.0;
+                float meanResidual = residualSum / weightSum;
+                float residualVariance = max(
+                    residualSquaredSum / weightSum - meanResidual * meanResidual,
+                    0.0
+                );
+                float motionEvidence = max(meanResidual - 1.5, 0.0) +
+                    0.35 * sqrt(residualVariance);
+                return finiteUnit(exp(-0.5 * pow(motionEvidence / 2.5, 2.0)), 0.0);
+            }
+
+            void main() {
+                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+                if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
+                int channel = bayerIndexAt(uCfaPattern, p);
+                int period = cfaPeriod(uCfaPattern);
+                ivec2 phaseOffset = phaseOffsetAt(p, period);
+                float referenceSensor = statsAtSample(uReferenceRaw, p, channel).sensor;
+                bool fullyUnsaturated = referenceSensor <= uFullyUnsaturatedThreshold;
+                bool fullySaturated = referenceSensor >= uFullySaturatedThreshold;
+
+                float referenceWeight = fullySaturated ? 0.0 : 1.0;
+                float shortWeight = 0.0;
+                if (fullySaturated) {
+                    shortWeight = 1.0;
+                } else if (fullyUnsaturated) {
+                    shortWeight = 0.0;
+                } else {
+                    float saturationWeight = smoothstep(
+                        uFullyUnsaturatedThreshold,
+                        uFullySaturatedThreshold,
+                        referenceSensor
+                    );
+                    float noise = noiseConfidence(p, phaseOffset, period, channel);
+                    float alignment = alignmentConfidence(p, phaseOffset, period, channel);
+                    float motion = motionConfidence(p, phaseOffset, period, channel);
+                    float reliability = pow(
+                        max(noise * alignment * motion, 0.0),
+                        1.0 / 3.0
+                    );
+                    float saturationTrust = saturationWeight * saturationWeight;
+                    shortWeight = saturationWeight *
+                        mix(reliability, 1.0, saturationTrust);
+                }
+                shortWeight = finiteUnit(shortWeight, 0.0);
+                imageStore(
+                    uOutputWeights,
+                    p,
+                    uvec4(packHalf2x16(vec2(
+                        referenceWeight,
+                        clamp(shortWeight, 0.0, 1.0)
+                    )))
+                );
+            }
+        """.trimIndent()
+
+        private fun smoothWeightShader(rawCommon: String): String = """
+            #version 310 es
+            $rawCommon
+            precision highp float;
+            precision highp int;
+            layout(local_size_x = 16, local_size_y = 16) in;
+            uniform highp usampler2D uSourceWeights;
+            uniform highp usampler2D uReferenceRaw;
+            layout(r32ui, binding = 0) writeonly uniform highp uimage2D uOutputWeights;
+            uniform ivec2 uImageSize;
+            uniform ivec2 uDirection;
+            uniform int uCfaPattern;
+            uniform float uBlackLevel[4];
+            uniform float uWhiteLevel;
+            uniform float uFullyUnsaturatedThreshold;
+            uniform float uFullySaturatedThreshold;
+
+            float finiteOr(float value, float fallback) {
+                return isnan(value) || isinf(value) ? fallback : value;
+            }
+
+            float spatialWeight(int offset) {
+                int distance = abs(offset);
+                if (distance == 0) return 20.0;
+                if (distance == 1) return 15.0;
+                if (distance == 2) return 6.0;
+                return 1.0;
+            }
+
+            float referenceSensorAt(ivec2 p) {
+                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
+                int channel = bayerIndexAt(uCfaPattern, p);
+                float raw = float(texelFetch(uReferenceRaw, p, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
+                return clamp(max(raw - uBlackLevel[channel], 0.0) / range, 0.0, 1.0);
+            }
+
+            vec2 weightsAt(ivec2 p) {
+                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
+                vec2 weights = unpackHalf2x16(texelFetch(uSourceWeights, p, 0).r);
+                if (any(isnan(weights)) || any(isinf(weights))) {
+                    return vec2(1.0, 0.0);
+                }
+                return clamp(weights, vec2(0.0), vec2(1.0));
+            }
+
+            void storeWeights(ivec2 p, vec2 weights) {
+                weights = vec2(
+                    finiteOr(weights.x, 1.0),
+                    finiteOr(weights.y, 0.0)
+                );
+                imageStore(
+                    uOutputWeights,
+                    p,
+                    uvec4(packHalf2x16(clamp(weights, vec2(0.0), vec2(1.0))))
+                );
+            }
+
+            void main() {
+                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+                if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
+                float referenceSensor = referenceSensorAt(p);
+                if (referenceSensor >= uFullySaturatedThreshold) {
+                    storeWeights(p, vec2(0.0, 1.0));
+                    return;
+                }
+                if (referenceSensor <= uFullyUnsaturatedThreshold) {
+                    storeWeights(p, vec2(1.0, 0.0));
+                    return;
+                }
+
+                float shortWeightSum = 0.0;
+                float filterWeightSum = 0.0;
+                for (int offset = -3; offset <= 3; ++offset) {
+                    ivec2 q = clamp(
+                        p + uDirection * offset,
+                        ivec2(0),
+                        uImageSize - ivec2(1)
+                    );
+                    float weight = spatialWeight(offset);
+                    shortWeightSum += weightsAt(q).y * weight;
+                    filterWeightSum += weight;
+                }
+                float shortWeight = shortWeightSum / max(filterWeightSum, 1e-6);
+                storeWeights(p, vec2(1.0, shortWeight));
+            }
+        """.trimIndent()
     }
 }
