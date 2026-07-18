@@ -276,7 +276,8 @@ class RawDemosaicProcessor {
     private var quadRefineProgram = 0
     private var quadWriteOutputProgram = 0
     private var pgtmCellStatsProgram = 0
-    private var pgtmGainCurvesProgram = 0
+    private var pgtmGoogleGainCurvesProgram = 0
+    private var pgtmPhotonGainCurvesProgram = 0
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
@@ -1284,10 +1285,9 @@ class RawDemosaicProcessor {
             if (generated != null) {
                 profileGainTableMap = generated
                 profileGainTableMapSource = "generated-gpu"
-            } else if (profileGainTableMap != null) {
-                // PGTM maps are curve-independent. A valid embedded map remains usable when the
-                // user switches between the Photon and Google profile curves.
-                profileGainTableMapSource = "embedded-reused"
+            } else if (profileToneMapMode != requestedProfileToneMapMode) {
+                profileGainTableMap = null
+                profileGainTableMapSource = "generation-failed"
             }
             if (profileGainTableMap != null) {
                 profileToneMapMode = requestedProfileToneMapMode
@@ -1387,8 +1387,15 @@ class RawDemosaicProcessor {
         }
         val hasProfileGainTableMap = actualMetadata.profileGainTableMap?.isValid == true
         val hasDngBaselineExposure = shouldApplyLinearDngBaselineExposure(actualMetadata)
-        val applyLinearDngBaselineExposure = !useAdobeProfilePipeline && hasDngBaselineExposure
-        val applyProfileDngBaselineExposure = useAdobeProfilePipeline
+        // Photon curves are authored in the physical BaselineExposure domain. Apply that exact
+        // 2^EV gain after PGTM in the linear pass for both EV signs; the generic Adobe negative
+        // exposure tone preserves white and would otherwise invalidate the analytic curve.
+        val photonPgtmExactBaseline = profileGainToneMapActive &&
+            requestedProfileToneMapMode == RawProfileToneMapMode.Photon
+        val applyLinearDngBaselineExposure = hasDngBaselineExposure &&
+            (!useAdobeProfilePipeline || photonPgtmExactBaseline)
+        val applyProfileDngBaselineExposure = useAdobeProfilePipeline &&
+            !photonPgtmExactBaseline
         val applyDcpBaselineExposureOffset =
             shouldApplyDcpBaselineExposureOffset(activeDcpRenderPlan)
         val useProfileExposureRamp = useAdobeProfilePipeline
@@ -2117,19 +2124,24 @@ class RawDemosaicProcessor {
             )
             return null
         }
-        if (pgtmCellStatsProgram == 0 || pgtmGainCurvesProgram == 0) {
+        val curveModel = when (profileToneMapMode) {
+            RawProfileToneMapMode.Photon -> HdrPgtmCurveModel.PHOTON
+            RawProfileToneMapMode.GooglePixel -> HdrPgtmCurveModel.GOOGLE
+            else -> return null
+        }
+        val curveProgram = when (curveModel) {
+            HdrPgtmCurveModel.GOOGLE -> pgtmGoogleGainCurvesProgram
+            HdrPgtmCurveModel.PHOTON -> pgtmPhotonGainCurvesProgram
+        }
+        if (pgtmCellStatsProgram == 0 || curveProgram == 0) {
             PLog.e(
                 TAG,
                 "GPU RAW PGTM programs unavailable: stats=$pgtmCellStatsProgram " +
-                    "curves=$pgtmGainCurvesProgram",
+                    "model=$curveModel curves=$curveProgram",
             )
             return null
         }
-        val curveParameters = when (profileToneMapMode) {
-            RawProfileToneMapMode.Photon -> DngHdrProfileGainTableGenerator.PHOTON_CURVE_PARAMETERS
-            RawProfileToneMapMode.GooglePixel -> DngHdrProfileGainTableGenerator.GOOGLE_CURVE_PARAMETERS
-            else -> return null
-        }
+        val exposureGain = DngBaselineExposure.exactGain(baselineExposureEv)
         val safeStatsBounds = sanitizePgtmStatsBounds(statsBounds, width, height) ?: run {
             PLog.e(TAG, "GPU RAW PGTM stats bounds invalid: source=${width}x$height bounds=$statsBounds")
             return null
@@ -2228,7 +2240,11 @@ class RawDemosaicProcessor {
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uBaselineGain"),
-                DngBaselineExposure.exactGain(baselineExposureEv),
+                if (curveModel == HdrPgtmCurveModel.PHOTON) 1f else exposureGain,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHighlightThreshold"),
+                if (curveModel == HdrPgtmCurveModel.PHOTON) 1f / exposureGain else 0.92f,
             )
             GLES31.glUniform3fv(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uCameraWhite"),
@@ -2271,31 +2287,49 @@ class RawDemosaicProcessor {
                 noiseSlope = metadata.noiseProfile.getOrElse(0) { 0f },
                 noiseOffset = metadata.noiseProfile.getOrElse(1) { 0f },
                 diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
-                curveParameters = curveParameters,
+                curveModel = curveModel,
             ) ?: return null
             val planReadyNs = System.nanoTime()
-            if (plan.cellPlans.size != cellCount) {
+            if (plan.cellCount != cellCount) {
                 PLog.e(
                     TAG,
-                    "GPU RAW PGTM plan count=${plan.cellPlans.size}, expected=$cellCount",
+                    "GPU RAW PGTM plan count=${plan.cellCount}, expected=$cellCount",
                 )
                 return null
             }
 
-            val curvePlanBuffer = ByteBuffer.allocateDirect(cellCount * 3 * Float.SIZE_BYTES)
+            val curvePlanFloatCount = when (plan.curveModel) {
+                HdrPgtmCurveModel.GOOGLE -> cellCount * 3
+                HdrPgtmCurveModel.PHOTON -> cellCount
+            }
+            val curvePlanBuffer = ByteBuffer.allocateDirect(
+                curvePlanFloatCount * Float.SIZE_BYTES
+            )
                 .order(ByteOrder.nativeOrder())
                 .asFloatBuffer()
-            plan.cellPlans.forEach { cellPlan ->
-                curvePlanBuffer.put(cellPlan.blackGain)
-                curvePlanBuffer.put(cellPlan.endpointGain)
-                curvePlanBuffer.put(cellPlan.shapePower)
+            when (plan.curveModel) {
+                HdrPgtmCurveModel.GOOGLE -> {
+                    val googlePlan = requireNotNull(plan.googlePlan)
+                    googlePlan.cellPlans.forEach { cellPlan ->
+                        curvePlanBuffer.put(cellPlan.blackGain)
+                        curvePlanBuffer.put(cellPlan.endpointGain)
+                        curvePlanBuffer.put(cellPlan.shapePower)
+                    }
+                }
+
+                HdrPgtmCurveModel.PHOTON -> {
+                    val photonPlan = requireNotNull(plan.photonPlan)
+                    photonPlan.cellPlans.forEach { cellPlan ->
+                        curvePlanBuffer.put(cellPlan.contrastExponent)
+                    }
+                }
             }
             curvePlanBuffer.position(0)
             val planBufferId = bufferIds[1]
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, planBufferId)
             GLES31.glBufferData(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
-                cellCount * 3 * Float.SIZE_BYTES,
+                curvePlanFloatCount * Float.SIZE_BYTES,
                 curvePlanBuffer,
                 GLES31.GL_STATIC_DRAW,
             )
@@ -2311,62 +2345,112 @@ class RawDemosaicProcessor {
                 GLES31.GL_DYNAMIC_READ,
             )
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, gainBufferId)
-            GLES31.glUseProgram(pgtmGainCurvesProgram)
+            GLES31.glUseProgram(curveProgram)
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uCellCount"),
+                GLES31.glGetUniformLocation(curveProgram, "uCellCount"),
                 cellCount,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uPointCount"),
+                GLES31.glGetUniformLocation(curveProgram, "uPointCount"),
                 plan.pointCount,
             )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uInputScale"),
-                plan.inputScale,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMinTableGain"),
-                plan.curveParameters.minTableGain,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMaxTableGain"),
-                plan.curveParameters.maxTableGain,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uToeEnd"),
-                plan.curveParameters.toeEnd,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uShapeQ"),
-                plan.curveParameters.shapeQ,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMinShapePower"),
-                plan.curveParameters.minShapePower,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uMaxShapePower"),
-                plan.curveParameters.maxShapePower,
-            )
+            when (plan.curveModel) {
+                HdrPgtmCurveModel.GOOGLE -> {
+                    val googlePlan = requireNotNull(plan.googlePlan)
+                    val parameters = googlePlan.curveParameters
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uInputScale"),
+                        googlePlan.inputScale,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMinTableGain"),
+                        parameters.minTableGain,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMaxTableGain"),
+                        parameters.maxTableGain,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uToeEnd"),
+                        parameters.toeEnd,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uShapeQ"),
+                        parameters.shapeQ,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMinShapePower"),
+                        parameters.minShapePower,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMaxShapePower"),
+                        parameters.maxShapePower,
+                    )
+                }
+
+                HdrPgtmCurveModel.PHOTON -> {
+                    val photonPlan = requireNotNull(plan.photonPlan)
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uExposureGain"),
+                        photonPlan.exposureGain,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMapGamma"),
+                        plan.gamma,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uExposedPivot"),
+                        photonPlan.exposedPivot,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uPivotOutput"),
+                        photonPlan.pivotOutput,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uEndpointOutput"),
+                        photonPlan.endpointOutput,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uLowSlope"),
+                        photonPlan.lowSlope,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uLowCurveLift"),
+                        photonPlan.lowCurveLift,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uShoulderParameter"),
+                        photonPlan.shoulderParameter,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMinTableGain"),
+                        photonPlan.minTableGain,
+                    )
+                    GLES31.glUniform1f(
+                        GLES31.glGetUniformLocation(curveProgram, "uMaxTableGain"),
+                        photonPlan.maxTableGain,
+                    )
+                }
+            }
             val diagnosticMode = when (plan.diagnosticBand?.mode) {
                 DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
                 DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
                 null -> -1
             }
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticMode"),
+                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticMode"),
                 diagnosticMode,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticStart"),
+                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticStart"),
                 plan.diagnosticBand?.start ?: 0f,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticEnd"),
+                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticEnd"),
                 plan.diagnosticBand?.end ?: 1f,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmGainCurvesProgram, "uDiagnosticFeather"),
+                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticFeather"),
                 plan.diagnosticBand?.feather ?: 0f,
             )
             val curveGpuStartNs = System.nanoTime()
@@ -2382,10 +2466,18 @@ class RawDemosaicProcessor {
             ) ?: return null
             val curvesGpuReadyNs = System.nanoTime()
             val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
+            val photonSummary = plan.photonPlan?.let { photonPlan ->
+                " photonBaselineGain=${photonPlan.exposureGain} " +
+                    "photonPivotSource=${photonPlan.sourcePivot} " +
+                    "photonFixedGray=${photonPlan.usesFixedGray} " +
+                    "photonGamma=${plan.gamma} " +
+                    "photonEndpoint=${photonPlan.endpointOutput} "
+            }.orEmpty()
             PLog.d(
                 TAG,
                 "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
                     "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
+                    photonSummary +
                     "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
                     "planCpuMs=${(planReadyNs - statsGpuReadyNs) / 1_000_000.0} " +
                     "curvesGpuMs=${(curvesGpuReadyNs - curveGpuStartNs) / 1_000_000.0} " +
@@ -2858,7 +2950,8 @@ class RawDemosaicProcessor {
         PLog.d(
             TAG,
             "Shader programs created: passthrough=$passthroughProgram " +
-                "pgtmStats=$pgtmCellStatsProgram pgtmCurves=$pgtmGainCurvesProgram"
+                "pgtmStats=$pgtmCellStatsProgram googlePgtmCurves=$pgtmGoogleGainCurvesProgram " +
+                "photonPgtmCurves=$pgtmPhotonGainCurvesProgram"
         )
     }
 
@@ -3402,12 +3495,14 @@ class RawDemosaicProcessor {
             DngHdrProfileGainTableGpuShaders.CELL_STATS,
             "DNG_PGTM_CELL_STATS",
         )
-        pgtmGainCurvesProgram = compileComputeProgram(
-            DngHdrProfileGainTableGpuShaders.GAIN_CURVES,
-            "DNG_PGTM_GAIN_CURVES",
+        pgtmGoogleGainCurvesProgram = compileComputeProgram(
+            DngHdrProfileGainTableGpuShaders.GOOGLE_GAIN_CURVES,
+            "DNG_GOOGLE_PGTM_GAIN_CURVES",
         )
-        if (pgtmCellStatsProgram != 0 && pgtmGainCurvesProgram != 0) {
-        }
+        pgtmPhotonGainCurvesProgram = compileComputeProgram(
+            DngHdrProfileGainTableGpuShaders.PHOTON_GAIN_CURVES,
+            "DNG_PHOTON_PGTM_GAIN_CURVES",
+        )
 
         val fShaderLinearRcd = compileShader(
             GLES30.GL_FRAGMENT_SHADER,
@@ -7646,7 +7741,10 @@ class RawDemosaicProcessor {
             workingColorSpace = basePlan?.workingColorSpace ?: workingColorSpace,
             baselineExposureOffset = basePlan?.baselineExposureOffset ?: 0f,
             defaultBlackRender = basePlan?.defaultBlackRender ?: DcpDefaultBlackRender.None,
-            supportsOverrange = basePlan?.supportsOverrange ?: false,
+            // Photon endpoint normalization may require a value above 1 before a negative
+            // BaselineExposure gain. Preserve it until exposure and the tone curve are applied.
+            supportsOverrange = mode == RawProfileToneMapMode.Photon ||
+                basePlan?.supportsOverrange == true,
             colorCorrectionMatrix = basePlan?.colorCorrectionMatrix ?: metadata.colorCorrectionMatrix,
             cameraWhite = basePlan?.cameraWhite ?: metadata.cameraWhite,
             hueSatMap = basePlan?.hueSatMap,
@@ -8167,8 +8265,9 @@ class RawDemosaicProcessor {
         val previewHeight = previewSize.height
         return try {
             setupLinearExposurePreviewFramebuffer(previewWidth, previewHeight)
-            val useAdobeSdkExposure =
-                colorEngine == RawRenderingEngine.AdobeCurve && useProfileExposureRamp
+            val useAdobeSdkExposure = colorEngine == RawRenderingEngine.AdobeCurve &&
+                useProfileExposureRamp &&
+                !applyLinearDngBaselineExposure
             val profileBaselineExposureOffsetEv = if (applyProfileDcpBaselineExposureOffset) {
                 dcpBaselineExposureOffsetOrZero(dcpRenderPlan)
             } else {
@@ -8835,7 +8934,12 @@ class RawDemosaicProcessor {
         if (quadRefineProgram != 0) GLES31.glDeleteProgram(quadRefineProgram)
         if (quadWriteOutputProgram != 0) GLES31.glDeleteProgram(quadWriteOutputProgram)
         if (pgtmCellStatsProgram != 0) GLES31.glDeleteProgram(pgtmCellStatsProgram)
-        if (pgtmGainCurvesProgram != 0) GLES31.glDeleteProgram(pgtmGainCurvesProgram)
+        if (pgtmGoogleGainCurvesProgram != 0) {
+            GLES31.glDeleteProgram(pgtmGoogleGainCurvesProgram)
+        }
+        if (pgtmPhotonGainCurvesProgram != 0) {
+            GLES31.glDeleteProgram(pgtmPhotonGainCurvesProgram)
+        }
         if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
         if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)
         if (linearRawRgbProgram != 0) GLES31.glDeleteProgram(linearRawRgbProgram)

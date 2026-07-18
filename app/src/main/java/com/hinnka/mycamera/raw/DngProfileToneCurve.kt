@@ -108,6 +108,10 @@ internal object DngProfileToneCurve {
         1.00000000f, 1.000000000f
     )
 
+    private val PHOTON_PGTM_TONE_CURVE_LUT by lazy {
+        DcpToneCurve(photonPgtmToneCurvePoints()).toLut(256)
+    }
+
     fun googleHdrToneCurvePoints(): FloatArray {
         return FloatArray(GOOGLE_HDR_TONE_CURVE_Y.size * 2) { index ->
             val pointIndex = index / 2
@@ -145,7 +149,30 @@ internal object DngProfileToneCurve {
     }
 
     fun photonPgtmToneCurveLut(sampleCount: Int = 256): FloatArray {
-        return DcpToneCurve(photonPgtmToneCurvePoints()).toLut(sampleCount)
+        return if (sampleCount == PHOTON_PGTM_TONE_CURVE_LUT.size) {
+            PHOTON_PGTM_TONE_CURVE_LUT.copyOf()
+        } else {
+            DcpToneCurve(photonPgtmToneCurvePoints()).toLut(sampleCount)
+        }
+    }
+
+    internal fun photonPgtmInputForOutput(output: Float): Float {
+        val target = output.coerceIn(0f, 1f)
+        val lut = PHOTON_PGTM_TONE_CURVE_LUT
+        if (target <= lut.first()) return 0f
+        if (target >= lut.last()) return 1f
+        for (index in 1 until lut.size) {
+            val upper = lut[index]
+            if (upper < target) continue
+            val lower = lut[index - 1]
+            val amount = if (upper > lower) {
+                (target - lower) / (upper - lower)
+            } else {
+                0f
+            }
+            return (index - 1 + amount) / (lut.size - 1f)
+        }
+        return 1f
     }
 
     fun oppoEmbeddedToneCurvePoints(): FloatArray {

@@ -8,6 +8,7 @@ internal fun DngHdrProfileGainTableGenerator.generateForCellStats(
     noiseSlope: Float,
     noiseOffset: Float,
     diagnosticBand: DngHdrProfileGainTableGenerator.DiagnosticBand? = null,
+    curveModel: HdrPgtmCurveModel = HdrPgtmCurveModel.GOOGLE,
 ): DngProfileGainTableMap? {
     val plan = planForCellStats(
         width = width,
@@ -17,6 +18,7 @@ internal fun DngHdrProfileGainTableGenerator.generateForCellStats(
         noiseSlope = noiseSlope,
         noiseOffset = noiseOffset,
         diagnosticBand = diagnosticBand,
+        curveModel = curveModel,
     ) ?: return null
     return mapFromGpuGains(plan, DngHdrProfileGainTableCpuReference.generate(plan))
 }

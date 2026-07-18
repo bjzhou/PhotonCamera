@@ -32,7 +32,7 @@ internal object DngHdrProfileGainTableGenerator {
     internal const val BASE_INPUT_WEIGHT_MIN = 0.1250f
     internal const val BASE_INPUT_WEIGHT_MAX = 0.3750f
 
-    private val BASE_INPUT_WEIGHTS = floatArrayOf(
+    internal val BASE_INPUT_WEIGHTS = floatArrayOf(
         BASE_INPUT_WEIGHT_RED,
         BASE_INPUT_WEIGHT_GREEN,
         BASE_INPUT_WEIGHT_BLUE,
@@ -40,8 +40,6 @@ internal object DngHdrProfileGainTableGenerator {
         BASE_INPUT_WEIGHT_MAX,
     )
 
-    // Keep complete, independent parameter sets even while values match. Google fitting and
-    // Photon look development can then change curve limits without adding mode branches.
     internal val GOOGLE_CURVE_PARAMETERS = HdrPgtmCurveParameters(
         minTableGain = 0.01f,
         maxTableGain = 4.80f,
@@ -53,18 +51,6 @@ internal object DngHdrProfileGainTableGenerator {
         minShapePower = 1.0f,
         maxShapePower = 1.425f,
         minInputScale = 0.25f,
-        maxInputScale = 1.05f,
-    )
-
-    internal val PHOTON_CURVE_PARAMETERS = HdrPgtmCurveParameters(
-        minTableGain = 0.01f,
-        maxTableGain = 4.80f,
-        minBlackGain = 0.50f,
-        toeEnd = 0.015f,
-        shapeQ = 2.445f,
-        minShapePower = 1.05f,
-        maxShapePower = 1.25f,
-        minInputScale = 0.05f,
         maxInputScale = 1.05f,
     )
 
@@ -82,7 +68,7 @@ internal object DngHdrProfileGainTableGenerator {
         noiseOffset: Float = FALLBACK_NOISE_OFFSET,
         tablePointCount: Int = TABLE_POINTS,
         diagnosticBand: DiagnosticBand? = null,
-        curveParameters: HdrPgtmCurveParameters = GOOGLE_CURVE_PARAMETERS,
+        curveModel: HdrPgtmCurveModel = HdrPgtmCurveModel.GOOGLE,
     ): HdrProfileGainTablePlan? {
         if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite()) return null
         val grid = chooseLtmGrid(width, height)
@@ -105,6 +91,20 @@ internal object DngHdrProfileGainTableGenerator {
             ?: FALLBACK_NOISE_SLOPE
         val safeNoiseOffset = noiseOffset.takeIf { it.isFinite() && it > 0f }
             ?: FALLBACK_NOISE_OFFSET
+        if (curveModel == HdrPgtmCurveModel.PHOTON) {
+            return DngPhotonProfileGainTableGenerator.plan(
+                grid = grid,
+                pointCount = tablePointCount.coerceIn(TABLE_POINTS, TABLE_POINTS),
+                baselineExposureEv = baselineExposureEv,
+                cells = cells,
+                global = global,
+                noiseSlope = safeNoiseSlope,
+                noiseOffset = safeNoiseOffset,
+                diagnosticBand = diagnosticBand?.sanitized(),
+            )
+        }
+
+        val curveParameters = GOOGLE_CURVE_PARAMETERS
         val inputScale = estimateInputScale(global, baselineExposureEv, curveParameters)
         val globalPlan = buildGlobalCurvePlan(
             stats = global,
@@ -122,11 +122,17 @@ internal object DngHdrProfileGainTableGenerator {
             curveParameters = curveParameters,
         )
         return HdrProfileGainTablePlan(
+            curveModel = HdrPgtmCurveModel.GOOGLE,
             grid = grid,
             pointCount = tablePointCount.coerceIn(TABLE_POINTS, TABLE_POINTS),
-            inputScale = inputScale,
-            curveParameters = curveParameters,
-            cellPlans = cellPlans,
+            mapInputWeights = ltmInputWeights(inputScale, curveParameters),
+            gamma = 1f,
+            googlePlan = GooglePgtmPlan(
+                inputScale = inputScale,
+                curveParameters = curveParameters,
+                cellPlans = cellPlans,
+            ),
+            photonPlan = null,
             diagnosticBand = diagnosticBand?.sanitized(),
         )
     }
@@ -308,8 +314,8 @@ internal object DngHdrProfileGainTableGenerator {
         mapOriginV = 0.0,
         mapOriginH = 0.0,
         mapPointsN = plan.pointCount,
-        mapInputWeights = ltmInputWeights(plan.inputScale, plan.curveParameters),
-        gamma = 1f,
+        mapInputWeights = plan.mapInputWeights,
+        gamma = plan.gamma,
         gains = gains,
         sourceTag = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2,
     )
@@ -357,12 +363,37 @@ internal object DngHdrProfileGainTableGenerator {
 }
 
 internal data class HdrProfileGainTablePlan(
+    val curveModel: HdrPgtmCurveModel,
     val grid: HdrPgtmGrid,
     val pointCount: Int,
+    val mapInputWeights: FloatArray,
+    val gamma: Float,
+    val googlePlan: GooglePgtmPlan?,
+    val photonPlan: PhotonPgtmPlan?,
+    val diagnosticBand: DngHdrProfileGainTableGenerator.DiagnosticBand?,
+) {
+    init {
+        require(mapInputWeights.size == 5 && mapInputWeights.all { it.isFinite() })
+        require(gamma.isFinite() && gamma in 0.125f..8f)
+        require((googlePlan != null) xor (photonPlan != null))
+        require(
+            when (curveModel) {
+                HdrPgtmCurveModel.GOOGLE -> googlePlan != null
+                HdrPgtmCurveModel.PHOTON -> photonPlan != null
+            }
+        )
+    }
+
+    val cellCount: Int
+        get() = grid.mapPointsH * grid.mapPointsV
+}
+
+internal enum class HdrPgtmCurveModel { GOOGLE, PHOTON }
+
+internal data class GooglePgtmPlan(
     val inputScale: Float,
     val curveParameters: HdrPgtmCurveParameters,
     val cellPlans: Array<HdrPgtmCurvePlan>,
-    val diagnosticBand: DngHdrProfileGainTableGenerator.DiagnosticBand?,
 )
 
 internal data class HdrPgtmCurveParameters(

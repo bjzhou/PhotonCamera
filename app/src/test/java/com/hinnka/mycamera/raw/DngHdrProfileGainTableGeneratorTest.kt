@@ -59,9 +59,10 @@ class DngHdrProfileGainTableGeneratorTest {
         fixtures().forEach { fixture ->
             val plan = plan(fixture)
             val gains = DngHdrProfileGainTableCpuReference.generate(plan)
-            val curveParameters = plan.curveParameters
-            plan.cellPlans.forEachIndexed { cell, cellPlan ->
-                assertEquals(plan.inputScale, cellPlan.endpointGain, 0f)
+            val googlePlan = requireNotNull(plan.googlePlan)
+            val curveParameters = googlePlan.curveParameters
+            googlePlan.cellPlans.forEachIndexed { cell, cellPlan ->
+                assertEquals(googlePlan.inputScale, cellPlan.endpointGain, 0f)
                 assertTrue(
                     cellPlan.blackGain in
                         curveParameters.minBlackGain..curveParameters.maxTableGain
@@ -82,7 +83,7 @@ class DngHdrProfileGainTableGeneratorTest {
                     )
                     assertTrue(
                         "${fixture.sourceName} output overflow=$output",
-                        output <= max(1f, plan.inputScale) + 2e-6f,
+                        output <= max(1f, googlePlan.inputScale) + 2e-6f,
                     )
                     if (tableInput <= curveParameters.toeEnd) {
                         assertEquals(cellPlan.blackGain, gain, 2e-6f)
@@ -90,7 +91,7 @@ class DngHdrProfileGainTableGeneratorTest {
                     previousOutput = output
                 }
                 assertEquals(
-                    plan.inputScale,
+                    googlePlan.inputScale,
                     gains[cell * plan.pointCount + plan.pointCount - 1],
                     1e-6f,
                 )
@@ -104,13 +105,13 @@ class DngHdrProfileGainTableGeneratorTest {
         val plans = fixtures.map(::plan)
         assertTrue(
             fixtures.zip(plans).any { (fixture, plan) ->
-                plan.inputScale * DngBaselineExposure.exactGain(
+                requireNotNull(plan.googlePlan).inputScale * DngBaselineExposure.exactGain(
                     fixture.baselineExposureEv
                 ) > 1.25f
             }
         )
-        assertTrue(plans.maxOf { it.inputScale } > 0.95f)
-        assertTrue(plans.minOf { it.inputScale } < 0.45f)
+        assertTrue(plans.maxOf { requireNotNull(it.googlePlan).inputScale } > 0.95f)
+        assertTrue(plans.minOf { requireNotNull(it.googlePlan).inputScale } < 0.45f)
     }
 
     @Test
@@ -119,8 +120,8 @@ class DngHdrProfileGainTableGeneratorTest {
         val quieter = plan(fixture, noiseOffset = fixture.noiseOffset * 0.25f)
         val noisier = plan(fixture, noiseOffset = fixture.noiseOffset * 4f)
         assertTrue(
-            median(noisier.cellPlans.map { it.blackGain }) <
-                median(quieter.cellPlans.map { it.blackGain })
+            median(requireNotNull(noisier.googlePlan).cellPlans.map { it.blackGain }) <
+                median(requireNotNull(quieter.googlePlan).cellPlans.map { it.blackGain })
         )
     }
 

@@ -22,6 +22,7 @@ internal object DngHdrProfileGainTableGpuShaders {
         uniform vec4 uBlackLevel;
         uniform float uWhiteLevel;
         uniform float uBaselineGain;
+        uniform float uHighlightThreshold;
         uniform vec3 uCameraWhite;
         uniform mat3 uColorCorrectionMatrix;
         uniform int uHueSatEnabled;
@@ -218,7 +219,7 @@ internal object DngHdrProfileGainTableGpuShaders {
                 }
                 int highlightCount = 0;
                 for (int sampleIndex = 0; sampleIndex < 256; ++sampleIndex) {
-                    if (inputSamples[sampleIndex] >= 0.92) ++highlightCount;
+                    if (inputSamples[sampleIndex] >= uHighlightThreshold) ++highlightCount;
                 }
                 cellStats[statsOffset] = inputSamples[25];
                 cellStats[statsOffset + 1] = inputSamples[127];
@@ -232,7 +233,7 @@ internal object DngHdrProfileGainTableGpuShaders {
         }
     """.trimIndent()
 
-    val GAIN_CURVES = """
+    val GOOGLE_GAIN_CURVES = """
         #version 310 es
 
         layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -331,6 +332,163 @@ internal object DngHdrProfileGainTableGpuShaders {
                         ? clamp(mixedGain, uMinTableGain, uMaxTableGain)
                         : clamp(
                             monotonicOutput / tableInput,
+                            uMinTableGain,
+                            uMaxTableGain
+                        );
+                    previousFinalOutput = monotonicOutput;
+                }
+                gainCurves[outputOffset + point] = finalGain;
+            }
+        }
+    """.trimIndent()
+
+    val PHOTON_GAIN_CURVES = """
+        #version 310 es
+
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        precision highp float;
+        precision highp int;
+
+        layout(std430, binding = 0) readonly buffer CurvePlanBuffer {
+            float curvePlans[];
+        };
+        layout(std430, binding = 1) writeonly buffer GainCurveBuffer {
+            float gainCurves[];
+        };
+        uniform int uCellCount;
+        uniform int uPointCount;
+        uniform float uExposureGain;
+        uniform float uMapGamma;
+        uniform float uExposedPivot;
+        uniform float uPivotOutput;
+        uniform float uEndpointOutput;
+        uniform float uLowSlope;
+        uniform float uLowCurveLift;
+        uniform float uShoulderParameter;
+        uniform float uMinTableGain;
+        uniform float uMaxTableGain;
+        uniform int uDiagnosticMode;
+        uniform float uDiagnosticStart;
+        uniform float uDiagnosticEnd;
+        uniform float uDiagnosticFeather;
+
+        const float CURVE_EPS = 1e-6;
+
+        float smoothUnit(float edge0, float edge1, float value) {
+            float amount = clamp(
+                (value - edge0) / max(edge1 - edge0, CURVE_EPS),
+                0.0,
+                1.0
+            );
+            return amount * amount * (3.0 - 2.0 * amount);
+        }
+
+        float diagnosticMask(float inputValue) {
+            float enter = uDiagnosticStart <= 0.0 || uDiagnosticFeather <= 0.0
+                ? (inputValue >= uDiagnosticStart ? 1.0 : 0.0)
+                : smoothUnit(
+                    uDiagnosticStart - uDiagnosticFeather,
+                    uDiagnosticStart + uDiagnosticFeather,
+                    inputValue
+                );
+            float exit = uDiagnosticEnd >= 1.0 || uDiagnosticFeather <= 0.0
+                ? (inputValue <= uDiagnosticEnd ? 1.0 : 0.0)
+                : 1.0 - smoothUnit(
+                    uDiagnosticEnd - uDiagnosticFeather,
+                    uDiagnosticEnd + uDiagnosticFeather,
+                    inputValue
+                );
+            return clamp(min(enter, exit), 0.0, 1.0);
+        }
+
+        float localContrastWarp(float exposedInput, float contrastExponent) {
+            float endpoint = max(uExposureGain, uExposedPivot + CURVE_EPS);
+            if (exposedInput <= uExposedPivot) {
+                float normalized = clamp(
+                    exposedInput / max(uExposedPivot, CURVE_EPS),
+                    0.0,
+                    1.0
+                );
+                return uExposedPivot * pow(normalized, contrastExponent);
+            }
+            float normalized = clamp(
+                (endpoint - exposedInput) /
+                    max(endpoint - uExposedPivot, CURVE_EPS),
+                0.0,
+                1.0
+            );
+            return endpoint -
+                (endpoint - uExposedPivot) * pow(normalized, contrastExponent);
+        }
+
+        float lowCurve(float exposedInput) {
+            float x = clamp(
+                exposedInput / max(uExposedPivot, CURVE_EPS),
+                0.0,
+                1.0
+            );
+            float oneMinusX = 1.0 - x;
+            float lifted = x +
+                uLowCurveLift * x * x * oneMinusX * oneMinusX;
+            return uPivotOutput * lifted;
+        }
+
+        float shoulderCurve(float exposedInput) {
+            float span = max(uExposureGain - uExposedPivot, CURVE_EPS);
+            float r = clamp((exposedInput - uExposedPivot) / span, 0.0, 1.0);
+            float shaped;
+            if (uShoulderParameter > 1e-4) {
+                shaped = log(1.0 + uShoulderParameter * r) /
+                    log(1.0 + uShoulderParameter);
+            } else if (uShoulderParameter < -1e-4) {
+                float convexA = -uShoulderParameter;
+                shaped = (exp(convexA * r) - 1.0) / (exp(convexA) - 1.0);
+            } else {
+                shaped = r;
+            }
+            return uPivotOutput + (uEndpointOutput - uPivotOutput) * shaped;
+        }
+
+        float globalCurve(float exposedInput) {
+            return exposedInput <= uExposedPivot
+                ? lowCurve(exposedInput)
+                : shoulderCurve(exposedInput);
+        }
+
+        void main() {
+            int cellIndex = int(gl_GlobalInvocationID.x);
+            if (cellIndex >= uCellCount) return;
+
+            float contrastExponent = clamp(curvePlans[cellIndex], 1.0, 1.18);
+            float previousFinalOutput = 0.0;
+            int outputOffset = cellIndex * uPointCount;
+            for (int point = 0; point < uPointCount; ++point) {
+                float tableInput = point == uPointCount - 1
+                    ? 1.0
+                    : float(point) / float(uPointCount);
+                float sourceInput = pow(max(tableInput, 0.0), 1.0 / uMapGamma);
+                float exposedInput = uExposureGain * sourceInput;
+                float warpedInput = localContrastWarp(exposedInput, contrastExponent);
+                float mappedOutput = globalCurve(warpedInput);
+                float trueGain = exposedInput <= CURVE_EPS
+                    ? clamp(uLowSlope, uMinTableGain, uMaxTableGain)
+                    : clamp(mappedOutput / exposedInput, uMinTableGain, uMaxTableGain);
+
+                float finalGain = trueGain;
+                if (uDiagnosticMode >= 0) {
+                    float mask = diagnosticMask(tableInput);
+                    float mixedGain = uDiagnosticMode == 0
+                        ? mix(1.0, trueGain, mask)
+                        : mix(trueGain, 1.0, mask);
+                    float monotonicOutput = max(
+                        previousFinalOutput,
+                        exposedInput * mixedGain
+                    );
+                    finalGain = exposedInput <= CURVE_EPS
+                        ? clamp(mixedGain, uMinTableGain, uMaxTableGain)
+                        : clamp(
+                            monotonicOutput / exposedInput,
                             uMinTableGain,
                             uMaxTableGain
                         );
