@@ -1,0 +1,49 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: bb147c1fa1de6c8e4e6f9ee0b6ff48bb39b16fe8a66e5234a7bfdf66ed326f11
+ * ELF offsets: 0x3092c99
+ * Symbols: clarityBlendLocalNextF_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly  uniform image2D uFullCorr;
+layout(rgba16f, binding = 1) writeonly uniform image2D uDst;
+layout(rgba16f, binding = 2) readonly  uniform image2D uBefore;
+layout(rgba16f, binding = 3) readonly  uniform image2D uLast;
+layout(r32f,    binding = 4) readonly  uniform image2D uLocalMap;
+
+layout(std140, binding = 5) uniform ClarityBlendLocalParams_UBO {
+    int w; int h;
+    float global_val; float local_val;
+    float alphaNeg; float alphaPos;
+    float localMapScaleX; float localMapScaleY;
+    int type;
+    int pad1;
+    int pad2;
+    int pad3;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+vec4 lookupLocal(ivec2 gid) {
+    ivec2 pos = ivec2(round(vec2(gid) * vec2(localMapScaleX, localMapScaleY)));
+    float mapVal = imageLoad(uLocalMap, pos).r;
+    float minValue = (type == 0) ? -1.0 : 0.0;
+    return vec4(clamp(mapVal * local_val + global_val, minValue, 1.0));
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    vec4 uncorr = imageLoad(uBefore, gid);
+    vec4 corr = imageLoad(uFullCorr, gid) - uncorr;
+    vec4 alpha = lookupLocal(gid);
+    vec4 prev = imageLoad(uLast, gid);
+    imageStore(uDst, gid, round(clamp(prev + corr * alpha, 0.0, 1.0) * 65535.0) / 65535.0);
+}

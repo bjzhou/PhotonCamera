@@ -1,0 +1,229 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: e1cd535a47146b36cb176de8b5658dc74be20180f1c78f78e4e09924d3fd964f
+ * ELF offsets: 0x30ad00c
+ * Symbols: denoiseCmosG1G2Cached_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly restrict uniform image2D uInputImage0; // 原始图像
+layout(rgba16f, binding = 1) readonly restrict uniform image2D uInputImage1; // cache0
+layout(rgba16f, binding = 2) readonly restrict uniform image2D uInputImage2; // cache1
+layout(rgba16f, binding = 3) readonly restrict uniform image2D uInputImage3; // cache2
+layout(rgba16f, binding = 4) readonly restrict uniform image2D uInputImage4; // cache3
+layout(rgba16f, binding = 5) writeonly uniform image2D outputImage;
+
+uniform float uLumaSqThr;
+uniform float uDarkLumaMinThr;
+uniform float uAvg2RedAtGreenRelThr;
+uniform float uAvg4GreenAtGreenRelThr;
+uniform float uCrossGreenThr;
+uniform float uColorDifferenceLow;
+uniform float uColorDifferenceHigh;
+uniform float uOfsSub;
+uniform float uOfsAdd;
+uniform int uKernSizeX; // = 2
+uniform int uKernSizeY; // = 8
+uniform ivec2 uImageSize;
+uniform ivec2 uMargin;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+struct NLMCheckG1G2 {
+    vec2 green1ValG1;
+    vec2 redSumG1;
+    vec2 blueSumG1;
+    vec2 greenSumG1;
+    vec2 horizSum;
+    vec2 vertSum;
+    vec2 diagRSum;
+    vec2 diagLSum;
+};
+
+
+NLMCheckG1G2 getG1G2Cached(ivec2 pos) {
+    vec4 val0 = imageLoad(uInputImage1, pos) * 65535.0;
+    vec4 val1 = imageLoad(uInputImage2, pos) * 65535.0;
+    vec4 val2 = imageLoad(uInputImage3, pos) * 65535.0;
+    vec4 val3 = imageLoad(uInputImage4, pos) * 65535.0;
+
+    NLMCheckG1G2 res;
+    res.green1ValG1 = val0.xy * 1.0;      // green1ValG1
+    res.redSumG1   = val0.zw * 2.0;      // redSumG1
+    res.blueSumG1  = val1.xy * 2.0;      // blueSumG1
+    res.greenSumG1 = val1.zw * 4.0;      // greenSumG1
+    res.horizSum   = val2.xy * 3.0;      // horizSum
+    res.vertSum    = val2.zw * 3.0;      // vertSum
+    res.diagRSum   = val3.xy * 3.0;      // diagRSum
+    res.diagLSum   = val3.zw * 3.0;      // diagLSum
+    return res;
+}
+
+vec2 noiseThreshold(vec2 value, float ofsSub, float ofsAdd) {
+    return sqrt(max(value - vec2(ofsSub), vec2(0.0))) + vec2(ofsAdd);
+}
+
+vec4 doG1G2BNR(ivec2 pos, bool isRedRow) {
+    NLMCheckG1G2 c = getG1G2Cached(pos);
+
+    vec2 redAveG1C = c.redSumG1 / 2.0;
+    vec2 blueAveG1C = c.blueSumG1 / 2.0;
+    vec2 greenAveG1C = c.greenSumG1 / 4.0;
+    vec2 lumaG1C = redAveG1C + c.green1ValG1 + greenAveG1C + blueAveG1C;
+    vec2 redBlueRatioG1C = (c.redSumG1 + vec2(1.0)) / (c.blueSumG1 + vec2(1.0));
+
+    vec2 lumaG1Thr = noiseThreshold(lumaG1C, uOfsSub, uOfsAdd) * vec2(uLumaSqThr);
+    lumaG1Thr = max(lumaG1Thr, vec2(uDarkLumaMinThr));
+    vec2 avg2RedatG1Thr = lumaG1Thr * vec2(uAvg2RedAtGreenRelThr);
+    vec2 avg4GreenAtG1Thr = lumaG1Thr * vec2(uAvg4GreenAtGreenRelThr);
+    vec2 crossGG1CThr = lumaG1Thr * vec2(uCrossGreenThr);
+
+    vec2 sum = vec2(0.0);
+    vec2 count = vec2(0.0);
+
+    for (int j = -uKernSizeY; j <= uKernSizeY; j++) {
+        for (int i = -uKernSizeX; i <= uKernSizeX; i++) {
+            ivec2 searchPos = pos + ivec2(i, j);
+            NLMCheckG1G2 s = getG1G2Cached(searchPos);
+
+            vec2 redAveG1S = s.redSumG1 / 2.0;
+            vec2 blueAveG1S = s.blueSumG1 / 2.0;
+            vec2 greenAveG1S = s.greenSumG1 / 4.0;
+            vec2 lumaG1S = redAveG1S + s.green1ValG1 + greenAveG1S + blueAveG1S;
+
+            bvec4 g_check = bvec4(
+                abs(lumaG1S.x - lumaG1C.x) <= lumaG1Thr.x,
+                abs(lumaG1S.y - lumaG1C.y) <= lumaG1Thr.y,
+                abs(lumaG1S.y - lumaG1C.x) <= lumaG1Thr.x,
+                abs(lumaG1S.x - lumaG1C.y) <= lumaG1Thr.y
+            );
+
+            bvec4 temp = bvec4(
+                abs(greenAveG1S.x - greenAveG1C.x) <= avg4GreenAtG1Thr.x,
+                abs(greenAveG1S.y - greenAveG1C.y) <= avg4GreenAtG1Thr.y,
+                abs(greenAveG1S.y - greenAveG1C.x) <= avg4GreenAtG1Thr.x,
+                abs(greenAveG1S.x - greenAveG1C.y) <= avg4GreenAtG1Thr.y
+            );
+            g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+
+            temp = bvec4(
+                abs(s.horizSum.x - c.horizSum.x) <= crossGG1CThr.x,
+                abs(s.horizSum.y - c.horizSum.y) <= crossGG1CThr.y,
+                abs(s.horizSum.y - c.horizSum.x) <= crossGG1CThr.x,
+                abs(s.horizSum.x - c.horizSum.y) <= crossGG1CThr.y
+            );
+            g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+
+            temp = bvec4(
+                abs(s.vertSum.x - c.vertSum.x) <= crossGG1CThr.x,
+                abs(s.vertSum.y - c.vertSum.y) <= crossGG1CThr.y,
+                abs(s.vertSum.y - c.vertSum.x) <= crossGG1CThr.x,
+                abs(s.vertSum.x - c.vertSum.y) <= crossGG1CThr.y
+            );
+            g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+
+            temp = bvec4(
+                abs(s.diagRSum.x - c.diagRSum.x) <= crossGG1CThr.x,
+                abs(s.diagRSum.y - c.diagRSum.y) <= crossGG1CThr.y,
+                abs(s.diagRSum.y - c.diagRSum.x) <= crossGG1CThr.x,
+                abs(s.diagRSum.x - c.diagRSum.y) <= crossGG1CThr.y
+            );
+            g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+
+            temp = bvec4(
+                abs(s.diagLSum.x - c.diagLSum.x) <= crossGG1CThr.x,
+                abs(s.diagLSum.y - c.diagLSum.y) <= crossGG1CThr.y,
+                abs(s.diagLSum.y - c.diagLSum.x) <= crossGG1CThr.x,
+                abs(s.diagLSum.x - c.diagLSum.y) <= crossGG1CThr.y
+            );
+            g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+
+            if (i == -uKernSizeX) {
+                g_check.w = false;
+            }
+            if (i == uKernSizeX) {
+                g_check.z = false;
+            }
+
+            if ((j & 1) == 0) {
+                temp = bvec4(
+                    abs(redAveG1S.x - redAveG1C.x) <= avg2RedatG1Thr.x,
+                    abs(redAveG1S.y - redAveG1C.y) <= avg2RedatG1Thr.y,
+                    abs(redAveG1S.y - redAveG1C.x) <= avg2RedatG1Thr.x,
+                    abs(redAveG1S.x - redAveG1C.y) <= avg2RedatG1Thr.y
+                );
+                g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+
+                temp = bvec4(
+                    abs(blueAveG1S.x - blueAveG1C.x) <= avg2RedatG1Thr.x,
+                    abs(blueAveG1S.y - blueAveG1C.y) <= avg2RedatG1Thr.y,
+                    abs(blueAveG1S.y - blueAveG1C.x) <= avg2RedatG1Thr.x,
+                    abs(blueAveG1S.x - blueAveG1C.y) <= avg2RedatG1Thr.y
+                );
+                g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+            } else {
+                vec2 redBlueRatioG1S = (s.blueSumG1 + vec2(1.0)) / (s.redSumG1 + vec2(1.0));
+                vec4 colorDifference = vec4(
+                    redBlueRatioG1S.x / redBlueRatioG1C.x,
+                    redBlueRatioG1S.y / redBlueRatioG1C.y,
+                    redBlueRatioG1S.y / redBlueRatioG1C.x,
+                    redBlueRatioG1S.x / redBlueRatioG1C.y
+                );
+
+                temp = bvec4(
+                    uColorDifferenceLow < colorDifference.x && colorDifference.x < uColorDifferenceHigh,
+                    uColorDifferenceLow < colorDifference.y && colorDifference.y < uColorDifferenceHigh,
+                    uColorDifferenceLow < colorDifference.z && colorDifference.z < uColorDifferenceHigh,
+                    uColorDifferenceLow < colorDifference.w && colorDifference.w < uColorDifferenceHigh
+                );
+                g_check = bvec4(g_check.x && temp.x, g_check.y && temp.y, g_check.z && temp.z, g_check.w && temp.w);
+            }
+
+            if (g_check.x) {
+                sum.x += s.green1ValG1.x;
+                count.x += 1.0;
+            }
+            if (g_check.y) {
+                sum.y += s.green1ValG1.y;
+                count.y += 1.0;
+            }
+            if (g_check.z) {
+                sum.x += s.green1ValG1.y;
+                count.x += 1.0;
+            }
+            if (g_check.w) {
+                sum.y += s.green1ValG1.x;
+                count.y += 1.0;
+            }
+        }
+    }
+
+    vec4 opix = imageLoad(uInputImage0, pos) * 65535.0;
+    if (isRedRow) {
+        if (count.y > 1.0) opix.w = round(sum.y / count.y);
+        if (count.x > 1.0) opix.y = round(sum.x / count.x);
+    } else {
+        if (count.x > 1.0) opix.x = round(sum.x / count.x);
+        if (count.y > 1.0) opix.z = round(sum.y / count.y);
+    }
+    return opix / 65535.0;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 globalPos = gid + uMargin;
+
+    if (globalPos.x >= uImageSize.x - uKernSizeX ||
+        globalPos.y >= uImageSize.y - uKernSizeY ||
+        globalPos.x < 0 || globalPos.y < 0) {
+        vec4 pixel = imageLoad(uInputImage0, globalPos);
+        imageStore(outputImage, gid, pixel);
+        return;
+    }
+
+    bool isRedRow = (globalPos.y & 1) == 0;
+    vec4 result = doG1G2BNR(globalPos, isRedRow);
+    imageStore(outputImage, gid, result);
+}

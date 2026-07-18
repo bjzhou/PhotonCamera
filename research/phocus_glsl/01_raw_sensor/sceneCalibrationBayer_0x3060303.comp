@@ -1,0 +1,139 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: ad02e35cd008c247df53d43a9649af52f9063e142b0515ad179780c11c18585c
+ * ELF offsets: 0x3060303
+ * Symbols: sceneCalibrationBayer_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// Input: 16-bit half float texture (Bayer, stored as RGBA16F)
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+// Gain map: float RGBA texture
+layout(rgba32f, binding = 1) readonly uniform image2D uGainMap;
+// Output: 16-bit half float texture
+layout(rgba16f, binding = 2) writeonly uniform image2D uOutputImage;
+
+// Uniform buffer object for parameters
+struct SceneCorrParams {
+    vec2 scale;
+    vec2 offset;
+    ivec2 margin;
+    ivec2 mapSize;
+    int blackOffset;
+    int orientation;
+    int debugMode;
+    int pad;
+};
+
+layout(std140, binding = 3) uniform SceneCalibrationParams {
+    SceneCorrParams params;
+} uParams;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Apply gain to pixel value
+// Input values are in [0, 1] range (half float normalized)
+vec4 ApplyGain(vec4 val, vec4 gain, int blackOffset) {
+    // Convert from normalized [0,1] to [0,65535] range
+    vec4 valScaled = val * 65535.0;
+    vec4 gained = clamp(vec4(blackOffset) + (valScaled - vec4(blackOffset)) * gain, 0.0, 65535.0);
+    // Preserve saturated pixels (65535, which is ~1.0 in normalized)
+    vec4 result = mix(gained, valScaled, step(0.9999, val));
+    // Convert back to normalized [0,1] range
+    return result / 65535.0;
+}
+
+// Bilinear interpolation for gain map sampling
+vec4 scaleLinear(vec2 pos, ivec2 maxPos) {
+    ivec2 basePos = ivec2(pos);
+    vec2 delta = pos - vec2(basePos);
+    
+    ivec2 p00 = clamp(basePos + ivec2(0, 0), ivec2(0), maxPos);
+    ivec2 p10 = clamp(basePos + ivec2(1, 0), ivec2(0), maxPos);
+    ivec2 p01 = clamp(basePos + ivec2(0, 1), ivec2(0), maxPos);
+    ivec2 p11 = clamp(basePos + ivec2(1, 1), ivec2(0), maxPos);
+    
+    vec4 v00 = imageLoad(uGainMap, p00);
+    vec4 v10 = imageLoad(uGainMap, p10);
+    vec4 v01 = imageLoad(uGainMap, p01);
+    vec4 v11 = imageLoad(uGainMap, p11);
+    
+    vec4 h0 = mix(v00, v10, delta.x);
+    vec4 h1 = mix(v01, v11, delta.x);
+    return mix(h0, h1, delta.y);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    int debugMode = uParams.params.debugMode;
+    
+    // Calculate map position for this tile (4x2 pixels per tile)
+    vec2 mapPos = (vec2(gid.x * 4.0, gid.y * 2.0) + uParams.params.offset) * uParams.params.scale;
+    vec4 gain = scaleLinear(mapPos, uParams.params.mapSize - ivec2(1));
+    
+    // Split gain for RGGB pattern: gain0 = (R, G), gain1 = (G, B)
+    vec4 gain0 = vec4(gain.xy, gain.xy);
+    vec4 gain1 = vec4(gain.zw, gain.zw);
+    
+    // Process two rows of pixels
+    ivec2 gid0 = ivec2(gid.x, gid.y * 2 + 0);
+    ivec2 gid1 = ivec2(gid.x, gid.y * 2 + 1);
+    
+    // Boundary check for output
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid0.x >= outputSize.x || gid0.y >= outputSize.y || 
+        gid1.x >= outputSize.x || gid1.y >= outputSize.y ||
+        gid0.x < 0 || gid0.y < 0 || gid1.x < 0 || gid1.y < 0) {
+        return;  // Skip out-of-bounds pixels
+    }
+    
+    ivec2 srcPos0 = gid0 + uParams.params.margin;
+    ivec2 srcPos1 = gid1 + uParams.params.margin;
+    bool boundaryError = false; // only take place when debugMode > 3
+    
+    // Boundary check for input texture
+    ivec2 inputSize = imageSize(uInputImage);
+    if (srcPos0.x < 0 || srcPos0.y < 0 || srcPos0.x >= inputSize.x || srcPos0.y >= inputSize.y) {
+        if (debugMode > 3) {
+            imageStore(uOutputImage, gid0, vec4(0.5, 0.0, 1.0, 1.0)); // purple error
+            boundaryError = true;
+        } else {
+            srcPos0 = clamp(srcPos0, ivec2(0), inputSize - ivec2(1));
+        }
+    }
+    if (srcPos1.x < 0 || srcPos1.y < 0 || srcPos1.x >= inputSize.x || srcPos1.y >= inputSize.y) {
+        if (debugMode > 3) {
+            imageStore(uOutputImage, gid1, vec4(1.0, 0.0, 1.0, 1.0); // cyan error
+            boundaryError = true;
+        } else {
+            srcPos1 = clamp(srcPos1, ivec2(0), inputSize - ivec2(1));
+        }
+    }
+
+    if (boundaryError) {
+        return;
+    }
+    
+    vec4 val0 = imageLoad(uInputImage, srcPos0);
+    vec4 val1 = imageLoad(uInputImage, srcPos1);
+    
+    vec4 result0 = ApplyGain(val0, gain0, uParams.params.blackOffset);
+    vec4 result1 = ApplyGain(val1, gain1, uParams.params.blackOffset);
+    
+    // Debug mode support
+    if (debugMode == 1) {
+        // Output original values
+        result0 = val0;
+        result1 = val1;
+    } else if (debugMode == 2) {
+        // Output gain values (normalized to [0,1])
+        result0 = gain0;
+        result1 = gain1;
+    }
+    
+    imageStore(uOutputImage, gid0, result0);
+    imageStore(uOutputImage, gid1, result1);
+}

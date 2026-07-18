@@ -1,0 +1,24 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: ea09e7937d80f293bd7655abc6e2abde296abeb033cc3b2d91dd064b9b4a5fc6
+ * ELF offsets: 0x3078b02
+ * Symbols: formatConvertU16ToHalfFloat_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
+layout(rgba16f,  binding = 1) writeonly uniform image2D outTex;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(outTex);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+    uvec4 src = imageLoad(inTex, coord);
+    imageStore(outTex, coord, vec4(src) / 65535.0);
+}

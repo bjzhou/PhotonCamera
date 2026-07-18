@@ -1,0 +1,56 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: d2230d98ddb2e920f96ff833d6b2b064edfe1fd367f3f1b7a1e0dae591238f06
+ * ELF offsets: 0x3014da8
+ * Symbols: demosaic_color_noise_filter_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D dstTex;
+layout(rgba16ui, binding = 2) readonly  uniform uimage2D ycceSmoothTex;
+
+int chromaSigned(uint c) {
+    int ic = int(c);
+    return (ic > 32767) ? (ic - 65536) : ic;
+}
+
+uint chromaUnsigned(int v) {
+    return uint(v & 0xFFFF);
+}
+
+float minMaxScale(float low, float value, float high) {
+    float clip = max(low, min(value, high));
+    return (clip - low) / (high - low);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    uvec4 pix1 = imageLoad(yccdTex, gid);
+    uvec4 pix2 = imageLoad(ycceSmoothTex, gid);
+
+    uint y = pix1.r;
+    int cr  = chromaSigned(pix1.g);
+    int cb  = chromaSigned(pix1.b);
+    int crSmooth = chromaSigned(pix2.g);
+    int cbSmooth = chromaSigned(pix2.b);
+    uint error   = pix2.a;
+
+    float errorScale = minMaxScale(100.0, float(error) / 4.0, 300.0);
+
+    float smoothSat = 1.0 + float(abs(crSmooth)) + float(abs(cbSmooth));
+    float normalSat = float(abs(cr)) + float(abs(cb));
+    float satScale = minMaxScale(0.5, normalSat / smoothSat, 1.0);
+
+    float factor = errorScale * satScale;
+    float finalCr = mix(float(cr), float(crSmooth), factor);
+    float finalCb = mix(float(cb), float(cbSmooth), factor);
+
+    imageStore(dstTex, gid, uvec4(y, chromaUnsigned(int(finalCr)), chromaUnsigned(int(finalCb)), error));
+}

@@ -1,0 +1,149 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 54604631e2fdfb4d993170190d5b8dab390379a81b500e43d337af975cade411
+ * ELF offsets: 0x30410af
+ * Symbols: demosaic_pass_0a1_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
+layout(std140, binding = 2) uniform DemosaicPass0a1Params_UBO {
+    int uParams_lq;
+    int uParams_tq;
+    int uParams_rq;
+    int uParams_bq;
+};
+
+ivec4 loadI(ivec2 p) {
+    return ivec4(imageLoad(inTex, p));
+}
+
+uvec4 toU16FromI(ivec4 v) {
+    return uvec4(clamp(v, ivec4(0), ivec4(65535)));
+}
+
+ivec4 smoothFilterFlt(ivec2 imgPos) {
+    ivec4 sum = ivec4(0);
+
+    ivec4 v1 = loadI(imgPos + ivec2(-1, -1));
+    sum.r = v1.a;
+
+    ivec4 v2 = loadI(imgPos + ivec2(-1, 0));
+    sum.r += 2 * v2.a;
+
+    ivec4 v3 = loadI(imgPos + ivec2(-1, 1));
+    sum.r += v3.a;
+
+    ivec4 v4 = loadI(imgPos + ivec2(0, -1));
+    sum.r += 2 * v4.r + v4.g;
+    sum.g = v4.r + 2 * v4.g + v4.b;
+    sum.b = v4.g + 2 * v4.b + v4.a;
+    sum.a = v4.b + 2 * v4.a;
+
+    ivec4 v5 = loadI(imgPos + ivec2(0, 0));
+    sum.r += 4 * v5.r + 2 * v5.g;
+    sum.g += 2 * v5.r + 4 * v5.g + 2 * v5.b;
+    sum.b += 2 * v5.g + 4 * v5.b + 2 * v5.a;
+    sum.a += 2 * v5.b + 4 * v5.a;
+
+    ivec4 v6 = loadI(imgPos + ivec2(0, 1));
+    sum.r += 2 * v6.r + v6.g;
+    sum.g += v6.r + 2 * v6.g + v6.b;
+    sum.b += v6.g + 2 * v6.b + v6.a;
+    sum.a += v6.b + 2 * v6.a;
+
+    ivec4 v7 = loadI(imgPos + ivec2(1, -1));
+    sum.a += v7.r;
+
+    ivec4 v8 = loadI(imgPos + ivec2(1, 0));
+    sum.a += 2 * v8.r;
+
+    ivec4 v9 = loadI(imgPos + ivec2(1, 1));
+    sum.a += v9.r;
+
+    return sum >> 4;
+}
+
+ivec4 smoothFilterLR(ivec2 imgPos, bool skipL, bool skipR) {
+    ivec4 sum = ivec4(0);
+
+    if (skipL) {
+        sum.r = 0;
+        imgPos.y += 1;
+    } else {
+        imgPos.x -= 1;
+        imgPos.y -= 1;
+        ivec4 v = loadI(imgPos);
+        sum.r = v.a;
+
+        imgPos.y += 1;
+        v = loadI(imgPos);
+        sum.r += 2 * v.a;
+
+        imgPos.y += 1;
+        v = loadI(imgPos);
+        sum.r += v.a;
+        imgPos.x += 1;
+    }
+
+    ivec4 v4 = loadI(imgPos);
+    sum.r += 2 * v4.r + v4.g;
+    sum.g = v4.r + 2 * v4.g + v4.b;
+    sum.b = v4.g + 2 * v4.b + v4.a;
+    sum.a = v4.b + 2 * v4.a;
+
+    imgPos.y -= 1;
+    ivec4 v5 = loadI(imgPos);
+    sum.r += 4 * v5.r + 2 * v5.g;
+    sum.g += 2 * v5.r + 4 * v5.g + 2 * v5.b;
+    sum.b += 2 * v5.g + 4 * v5.b + 2 * v5.a;
+    sum.a += 2 * v5.b + 4 * v5.a;
+
+    imgPos.y -= 1;
+    ivec4 v6 = loadI(imgPos);
+    sum.r += 2 * v6.r + v6.g;
+    sum.g += v6.r + 2 * v6.g + v6.b;
+    sum.b += v6.g + 2 * v6.b + v6.a;
+    sum.a += v6.b + 2 * v6.a;
+
+    if (skipR) {
+        sum.a = 0;
+    } else {
+        imgPos.x += 1;
+        ivec4 v7 = loadI(imgPos);
+        sum.a += v7.r;
+
+        imgPos.y += 1;
+        ivec4 v8 = loadI(imgPos);
+        sum.a += 2 * v8.r;
+
+        imgPos.y += 1;
+        ivec4 v9 = loadI(imgPos);
+        sum.a += v9.r;
+    }
+
+    if (skipL) sum.r = 0;
+    return sum >> 4;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    ivec4 result = ivec4(0);
+    if (gid.x > uParams_lq && gid.y >= uParams_tq && gid.x < uParams_rq && gid.y < uParams_bq) {
+        result = smoothFilterFlt(gid);
+    } else if (gid.x == uParams_lq && gid.y >= uParams_tq && gid.x < uParams_rq && gid.y < uParams_bq) {
+        result = smoothFilterLR(gid, true, false);
+    } else if (gid.x > uParams_lq && gid.y >= uParams_tq && gid.x == uParams_rq && gid.y < uParams_bq) {
+        result = smoothFilterLR(gid, false, true);
+    }
+
+    imageStore(outTex, gid, toU16FromI(result));
+}

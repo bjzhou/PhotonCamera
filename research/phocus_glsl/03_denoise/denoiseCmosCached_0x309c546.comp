@@ -1,0 +1,167 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 5a71694ed199c558d517899590d5a2c72f4d49e457ccf781e467e7c35119ad30
+ * ELF offsets: 0x309c546
+ * Symbols: denoiseCmosCached_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly restrict uniform image2D uInputImage0;
+layout(rgba16f, binding = 1) readonly restrict uniform image2D uInputImage1;
+layout(rgba16f, binding = 2) readonly restrict uniform image2D uInputImage2;
+layout(rgba16f, binding = 3) readonly restrict uniform image2D uInputImage3;
+layout(rgba16f, binding = 4) writeonly uniform image2D outputImage;
+
+uniform float uLumaSqThr;
+uniform float uOffset;
+uniform int   uKernSizeX;
+uniform int   uKernSizeY;
+uniform ivec2 uImageSize;
+uniform ivec2 uMargin;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+struct NLMCheckOld {
+    vec2 redValRed;
+    vec2 grSumHRed;
+    vec2 grSumVRed;
+    vec2 blueSumRed;
+    vec2 green1ValG1;
+    vec2 redSumG1;
+    vec2 blueSumG1;
+    vec2 greenSumG1;
+};
+
+NLMCheckOld getCmosCached(ivec2 pos) {
+    vec4 p0 = imageLoad(uInputImage0, pos) * 65535.0;
+    vec4 p1 = imageLoad(uInputImage1, pos) * 65535.0;
+    vec4 p2 = imageLoad(uInputImage2, pos) * 65535.0;
+    vec4 p3 = imageLoad(uInputImage3, pos) * 65535.0;
+
+    NLMCheckOld r;
+    r.redValRed   = p0.xy * 1.0;
+    r.grSumHRed   = p0.zw * 2.0;
+    r.grSumVRed   = p1.xy * 2.0;
+    r.blueSumRed  = p1.zw * 4.0;
+    r.green1ValG1 = p2.xy * 1.0;
+    r.redSumG1    = p2.zw * 2.0;
+    r.blueSumG1   = p3.xy * 2.0;
+    r.greenSumG1  = p3.zw * 4.0;
+    return r;
+}
+
+vec4 NonLocalMeans(ivec2 pos, bool evenRow) {
+    NLMCheckOld c = getCmosCached(pos);
+
+    // Red center derived quantities
+    vec2 grSumRedC     = c.grSumHRed + c.grSumVRed;
+    vec2 grAveRedC     = grSumRedC / 4.0;
+    vec2 blueAveRedC   = c.blueSumRed / 4.0;
+    vec2 lumaRedC      = c.redValRed + grAveRedC + blueAveRedC;
+    vec2 grBlueDiffRedC = grSumRedC - c.blueSumRed;
+    vec2 redGrDiffRedC  = grAveRedC - c.redValRed;
+
+    vec2 redAveG1C   = c.redSumG1  / 2.0;
+    vec2 blueAveG1C  = c.blueSumG1 / 2.0;
+    vec2 greenAveG1C = c.greenSumG1 / 4.0;
+    vec2 lumaG1C     = redAveG1C + c.green1ValG1 + blueAveG1C;
+    vec2 grRedDiffG1C  = redAveG1C  - greenAveG1C;
+    vec2 grBlueDiffG1C = blueAveG1C - greenAveG1C;
+
+    const float fGrGrAtRedRelThr   = 0.5;
+    const float fBlBlAtRedRelThr   = 0.5;
+    const float fGrGrAtGrRelThr    = 0.5;
+    const float fRdRdAtGreenRelThr = 1.0;
+    const float fBlBlAtGreenRelThr = 1.0;
+    const float fDiff4Thr          = 3.0;
+    const float fDiff24Thr         = 3.0;
+    const float fDiff14Thr         = 3.0;
+
+    vec2 lumaRThr      = sqrt(lumaRedC) * uLumaSqThr;
+    vec2 patternGRThr  = lumaRThr * fGrGrAtRedRelThr;
+    vec2 patternBRThr  = lumaRThr * fBlBlAtRedRelThr;
+    vec2 gBDiffRThr    = lumaRThr * fDiff4Thr;
+    vec2 redGrDiffRThr = lumaRThr * fDiff14Thr;
+
+    vec2 lumaG1Thr     = sqrt(lumaG1C) * uLumaSqThr;
+    vec2 patternRG1Thr2 = lumaG1Thr * fRdRdAtGreenRelThr;
+    vec2 patternBG1Thr2 = lumaG1Thr * fBlBlAtGreenRelThr;
+    vec2 patternGG1Thr  = lumaG1Thr * fGrGrAtGrRelThr;
+    vec2 gRDiffG1Thr    = lumaG1Thr * fDiff24Thr;
+    vec2 gBDiffG1Thr    = lumaG1Thr * fDiff24Thr;
+
+    vec2 sumR  = vec2(0.0); vec2 countR  = vec2(0.0);
+    vec2 sumG1 = vec2(0.0); vec2 countG1 = vec2(0.0);
+
+    for (int j = -uKernSizeY; j <= uKernSizeY; j += 2) {
+        for (int i = -uKernSizeX; i <= uKernSizeX; i++) {
+            NLMCheckOld s = getCmosCached(pos + ivec2(i, j));
+
+            vec2 grSumRedS     = s.grSumHRed + s.grSumVRed;
+            vec2 grAveRedS     = grSumRedS / 4.0;
+            vec2 blueAveRedS   = s.blueSumRed / 4.0;
+            vec2 lumaRedS      = s.redValRed + grAveRedS + blueAveRedS;
+            vec2 grBlueDiffRedS = grSumRedS - s.blueSumRed;
+            vec2 redGrDiffRedS  = grAveRedS - s.redValRed;
+
+            bvec4 r0 = bvec4(
+                abs(lumaRedS.x      - lumaRedC.x)      <= lumaRThr.x      && abs(grAveRedS.x      - grAveRedC.x)      <= patternGRThr.x  && abs(blueAveRedS.x    - blueAveRedC.x)    <= patternBRThr.x  && abs(grBlueDiffRedS.x - grBlueDiffRedC.x) <= gBDiffRThr.x    && abs(redGrDiffRedS.x  - redGrDiffRedC.x)  <= redGrDiffRThr.x,
+                abs(lumaRedS.y      - lumaRedC.y)      <= lumaRThr.y      && abs(grAveRedS.y      - grAveRedC.y)      <= patternGRThr.y  && abs(blueAveRedS.y    - blueAveRedC.y)    <= patternBRThr.y  && abs(grBlueDiffRedS.y - grBlueDiffRedC.y) <= gBDiffRThr.y    && abs(redGrDiffRedS.y  - redGrDiffRedC.y)  <= redGrDiffRThr.y,
+                abs(lumaRedS.y      - lumaRedC.x)      <= lumaRThr.x      && abs(grAveRedS.y      - grAveRedC.x)      <= patternGRThr.x  && abs(blueAveRedS.y    - blueAveRedC.x)    <= patternBRThr.x  && abs(grBlueDiffRedS.y - grBlueDiffRedC.x) <= gBDiffRThr.x    && abs(redGrDiffRedS.y  - redGrDiffRedC.x)  <= redGrDiffRThr.x,
+                abs(lumaRedS.x      - lumaRedC.y)      <= lumaRThr.y      && abs(grAveRedS.x      - grAveRedC.y)      <= patternGRThr.y  && abs(blueAveRedS.x    - blueAveRedC.y)    <= patternBRThr.y  && abs(grBlueDiffRedS.x - grBlueDiffRedC.y) <= gBDiffRThr.y    && abs(redGrDiffRedS.x  - redGrDiffRedC.y)  <= redGrDiffRThr.y
+            );
+            if (r0.x) { sumR.x += s.redValRed.x; countR.x += 1.0; }
+            if (r0.y) { sumR.y += s.redValRed.y; countR.y += 1.0; }
+            if (r0.z) { sumR.x += s.redValRed.y; countR.x += 1.0; }
+            if (r0.w) { sumR.y += s.redValRed.x; countR.y += 1.0; }
+
+            vec2 redAveG1S   = s.redSumG1  / 2.0;
+            vec2 blueAveG1S  = s.blueSumG1 / 2.0;
+            vec2 greenAveG1S = s.greenSumG1 / 4.0;
+            vec2 lumaG1S     = redAveG1S + s.green1ValG1 + blueAveG1S;
+            vec2 grRedDiffG1S  = redAveG1S  - greenAveG1S;
+            vec2 grBlueDiffG1S = blueAveG1S - greenAveG1S;
+
+            bvec4 g0 = bvec4(
+                abs(lumaG1S.x      - lumaG1C.x)      <= lumaG1Thr.x     && abs(redAveG1S.x    - redAveG1C.x)    <= patternRG1Thr2.x && abs(blueAveG1S.x   - blueAveG1C.x)   <= patternBG1Thr2.x && abs(grRedDiffG1S.x  - grRedDiffG1C.x)  <= gRDiffG1Thr.x   && abs(grBlueDiffG1S.x - grBlueDiffG1C.x) <= gBDiffG1Thr.x   && abs(greenAveG1S.x  - greenAveG1C.x)  <= patternGG1Thr.x,
+                abs(lumaG1S.y      - lumaG1C.y)      <= lumaG1Thr.y     && abs(redAveG1S.y    - redAveG1C.y)    <= patternRG1Thr2.y && abs(blueAveG1S.y   - blueAveG1C.y)   <= patternBG1Thr2.y && abs(grRedDiffG1S.y  - grRedDiffG1C.y)  <= gRDiffG1Thr.y   && abs(grBlueDiffG1S.y - grBlueDiffG1C.y) <= gBDiffG1Thr.y   && abs(greenAveG1S.y  - greenAveG1C.y)  <= patternGG1Thr.y,
+                abs(lumaG1S.y      - lumaG1C.x)      <= lumaG1Thr.x     && abs(redAveG1S.y    - redAveG1C.x)    <= patternRG1Thr2.x && abs(blueAveG1S.y   - blueAveG1C.x)   <= patternBG1Thr2.x && abs(grRedDiffG1S.y  - grRedDiffG1C.x)  <= gRDiffG1Thr.x   && abs(grBlueDiffG1S.y - grBlueDiffG1C.x) <= gBDiffG1Thr.x   && abs(greenAveG1S.y  - greenAveG1C.x)  <= patternGG1Thr.x,
+                abs(lumaG1S.x      - lumaG1C.y)      <= lumaG1Thr.y     && abs(redAveG1S.x    - redAveG1C.y)    <= patternRG1Thr2.y && abs(blueAveG1S.x   - blueAveG1C.y)   <= patternBG1Thr2.y && abs(grRedDiffG1S.x  - grRedDiffG1C.y)  <= gRDiffG1Thr.y   && abs(grBlueDiffG1S.x - grBlueDiffG1C.y) <= gBDiffG1Thr.y   && abs(greenAveG1S.x  - greenAveG1C.y)  <= patternGG1Thr.y
+            );
+            if (g0.x) { sumG1.x += s.green1ValG1.x; countG1.x += 1.0; }
+            if (g0.y) { sumG1.y += s.green1ValG1.y; countG1.y += 1.0; }
+            if (g0.z) { sumG1.x += s.green1ValG1.y; countG1.x += 1.0; }
+            if (g0.w) { sumG1.y += s.green1ValG1.x; countG1.y += 1.0; }
+        }
+    }
+
+    vec4 opix = vec4(c.redValRed.x, c.green1ValG1.x, c.redValRed.y, c.green1ValG1.y);
+    if (countR.x  > 1.0) opix.x = round(sumR.x  / countR.x);
+    if (countG1.x > 1.0) opix.y = round(sumG1.x / countG1.x);
+    if (countR.y  > 1.0) opix.z = round(sumR.y  / countR.y);
+    if (countG1.y > 1.0) opix.w = round(sumG1.y / countG1.y);
+
+    if (!evenRow)
+        opix = opix.yxwz;
+
+    opix = max(opix - vec4(uOffset), vec4(0.0));
+    return opix / 65535.0;
+}
+
+void main() {
+    ivec2 gid       = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 globalPos = gid + uMargin;
+
+    if (globalPos.x >= uImageSize.x - uKernSizeX ||
+        globalPos.y >= uImageSize.y - uKernSizeY  ||
+        globalPos.x < 0 || globalPos.y < 0) {
+        return;
+    }
+
+    bool isRedRow = (globalPos.y & 1) == 0;
+    vec4 result = NonLocalMeans(globalPos, isRedRow);
+    imageStore(outputImage, gid, result);
+}

@@ -1,0 +1,140 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 634bb04af760629a50d330b5e6d8ce621f2cadd6f146a0392ddef5f751d6c1a0
+ * ELF offsets: 0x308a48a
+ * Symbols: clarityUpScaleBlurSubAggU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uGauss;
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D uFullRes;
+layout(rgba16ui, binding = 2) readonly  uniform uimage2D uHalfRes;
+layout(rgba16ui, binding = 3) writeonly uniform uimage2D uDst;
+layout(rgba16ui, binding = 4) readonly  uniform uimage2D uPrevAgg;
+
+layout(std140, binding = 5) uniform ClarityAggParams_UBO {
+    int aggW;
+    int aggH;
+    float centerNorm;
+    float stepNorm;
+    int blurW;
+    int blurH;
+    float ba;
+    float bb;
+    float bc;
+    float be;
+    float bf;
+    float bi;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+vec4 readPaddedHalfU16(ivec2 pos, ivec2 pixSize) {
+    ivec2 maxPos = ivec2((pixSize.x + 3) / 4, pixSize.y) - 1;
+    vec4 val = vec4(imageLoad(uHalfRes, clamp(pos, ivec2(0), maxPos)));
+    if (pos.x >= maxPos.x) {
+        int rem = pixSize.x % 4;
+        if (rem == 1) val = val.xxxx;
+        else if (rem == 2) val = vec4(val.x, val.y, val.y, val.y);
+        else if (rem == 3) val = vec4(val.x, val.y, val.z, val.z);
+        if (pos.x > maxPos.x)
+            val = val.wwww;
+    }
+    return val;
+}
+
+vec4 combineUpscale(vec4 a, vec4 b, ivec2 pos) {
+    if ((pos.x & 1) == 1)
+        return vec4(a.yzw, b.x);
+    else
+        return vec4(a.w, b.xyz);
+}
+
+vec4 upScaleBlurU16(ivec2 pos) {
+    vec4 vs = vec4(0.0);
+    ivec2 p = pos / 2;
+    int deltaY1 = 1, deltaY2 = 0;
+
+    if ((pos.y & 1) != 0) {
+        p.y += 1;
+        deltaY1 = -1;
+        deltaY2 = (pos.y < 2) ? 0 : deltaY1;
+        if (2 * p.y >= blurH) { p.y--; deltaY1 = 0; }
+    } else if (pos.y == 0) {
+        deltaY1 = 0; deltaY2 = 1;
+    } else {
+        p.y -= 1;
+        deltaY2 = (pos.y < 2 || pos.y + 2 >= blurH) ? 0 : deltaY1;
+    }
+
+    ivec2 halfSize = ivec2((blurW + 1) / 2, (blurH + 1) / 2);
+
+    if (pos.x == 0) {
+        vec4 tb = readPaddedHalfU16(p, halfSize);
+        vs.x = ba*tb.x + bb*tb.x + bc*tb.y;  vs.y = bc*tb.x + bb*tb.x + ba*tb.y;
+        vs.z = ba*tb.x + bb*tb.y + bc*tb.z;  vs.w = bc*tb.x + bb*tb.y + ba*tb.z;
+        p.y += deltaY1;
+        tb = readPaddedHalfU16(p, halfSize);
+        vs.x += bb*tb.x + be*tb.x + bf*tb.y;  vs.y += bf*tb.x + be*tb.x + bb*tb.y;
+        vs.z += bb*tb.x + be*tb.y + bf*tb.z;  vs.w += bf*tb.x + be*tb.y + bb*tb.z;
+        p.y += deltaY2;
+        tb = readPaddedHalfU16(p, halfSize);
+        vs.x += bc*tb.x + bf*tb.x + bi*tb.y;  vs.y += bi*tb.x + bf*tb.x + bc*tb.y;
+        vs.z += bc*tb.x + bf*tb.y + bi*tb.z;  vs.w += bi*tb.x + bf*tb.y + bc*tb.z;
+    } else if ((4 * (pos.x + 1) >= blurW) && ((pos.x & 1) == 1)) {
+        p.x = (pos.x - 1) / 2;
+        vec4 ta = readPaddedHalfU16(p, halfSize);
+        vs.x = ba*ta.y + bb*ta.z + bc*ta.w;  vs.y = bc*ta.y + bb*ta.z + ba*ta.w;
+        vs.z = ba*ta.z + bb*ta.w + bc*ta.w;  vs.w = bc*ta.z + bb*ta.w + ba*ta.w;
+        p.y += deltaY1;
+        ta = readPaddedHalfU16(p, halfSize);
+        vs.x += bb*ta.y + be*ta.z + bf*ta.w;  vs.y += bf*ta.y + be*ta.z + bb*ta.w;
+        vs.z += bb*ta.z + be*ta.w + bf*ta.w;  vs.w += bf*ta.z + be*ta.w + bb*ta.w;
+        p.y += deltaY2;
+        ta = readPaddedHalfU16(p, halfSize);
+        vs.x += bc*ta.y + bf*ta.z + bi*ta.w;  vs.y += bi*ta.y + bf*ta.z + bc*ta.w;
+        vs.z += bc*ta.z + bf*ta.w + bi*ta.w;  vs.w += bi*ta.z + bf*ta.w + bc*ta.w;
+    } else {
+        p.x = (pos.x - 1) / 2;
+        vec4 cv = combineUpscale(readPaddedHalfU16(p, halfSize), readPaddedHalfU16(p + ivec2(1, 0), halfSize), pos);
+        vs.x = dot(vec3(ba, bb, bc), cv.xyz);  vs.y = dot(vec3(bc, bb, ba), cv.xyz);
+        vs.z = dot(vec3(ba, bb, bc), cv.yzw);  vs.w = dot(vec3(bc, bb, ba), cv.yzw);
+        p.y += deltaY1;
+        cv = combineUpscale(readPaddedHalfU16(p, halfSize), readPaddedHalfU16(p + ivec2(1, 0), halfSize), pos);
+        vs.x += dot(vec3(bb, be, bf), cv.xyz);  vs.y += dot(vec3(bf, be, bb), cv.xyz);
+        vs.z += dot(vec3(bb, be, bf), cv.yzw);  vs.w += dot(vec3(bf, be, bb), cv.yzw);
+        p.y += deltaY2;
+        cv = combineUpscale(readPaddedHalfU16(p, halfSize), readPaddedHalfU16(p + ivec2(1, 0), halfSize), pos);
+        vs.x += dot(vec3(bc, bf, bi), cv.xyz);  vs.y += dot(vec3(bi, bf, bc), cv.xyz);
+        vs.z += dot(vec3(bc, bf, bi), cv.yzw);  vs.w += dot(vec3(bi, bf, bc), cv.yzw);
+    }
+
+    return clamp(vs, 0.0, 65535.0);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    // iOS: int4 vs = upScaleBlur4(halfRes, gid, discs.blur)
+    ivec4 vs = ivec4(upScaleBlurU16(gid));
+    // iOS: int4 gauss4 = int4(gauss.read(gid))
+    ivec4 gauss4 = ivec4(imageLoad(uGauss, gid));
+    // iOS: int4 laplace4 = int4(fullRes.read(gid)) - vs   (NOT centered at 32768)
+    ivec4 laplace4 = ivec4(imageLoad(uFullRes, gid)) - vs;
+
+    // iOS: float4 res4 = float4(laplace4) * (1.0f - min(1.0f, float4(abs(gauss4 - discs.center)) / float4(discs.step)))
+    // center/step are uint16-scale values (e.g., center=3449, step=3449)
+    vec4 weight = 1.0 - min(vec4(1.0), abs(vec4(gauss4) - centerNorm) / stepNorm);
+    ivec4 resi = ivec4(vec4(laplace4) * weight);
+
+    // iOS: int4 prev4 = int4(dst.read(gid))
+    ivec4 prev4 = ivec4(imageLoad(uPrevAgg, gid));
+    // iOS: dst.write(ushort4(clamp(prev4 + resi, 0, 65535)), gid)
+    imageStore(uDst, gid, uvec4(clamp(prev4 + resi, 0, 65535)));
+}

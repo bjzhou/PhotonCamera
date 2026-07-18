@@ -1,0 +1,149 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 4e7ff25df3d5cf99208ee46fa417954a190ec2909af7bfb1eac95f363023f221
+ * ELF offsets: 0x3008d0f
+ * Symbols: sceneCalibrationRgb_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// Input: 16-bit half float texture (RGB, stored as RGBA16F)
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+// Gain map: float RGBA texture
+layout(rgba32f, binding = 1) readonly uniform image2D uGainMap;
+// Output: 16-bit half float texture
+layout(rgba16f, binding = 2) writeonly uniform image2D uOutputImage;
+
+// Uniform buffer object for parameters
+struct SceneCorrParams {
+    vec2 scale;
+    vec2 offset;
+    ivec2 margin;
+    ivec2 mapSize;
+    int blackOffset;
+    int orientation;
+    int debugMode;
+    int pad;
+};
+
+layout(std140, binding = 3) uniform SceneCalibrationParams {
+    SceneCorrParams params;
+} uParams;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Apply gain to pixel value
+// Input values are in [0, 1] range (half float normalized)
+vec4 ApplyGain(vec4 val, vec4 gain, int blackOffset) {
+    // Convert from normalized [0,1] to [0,65535] range
+    vec4 valScaled = val * 65535.0;
+    vec4 gained = clamp(vec4(blackOffset) + (valScaled - vec4(blackOffset)) * gain, 0.0, 65535.0);
+    // Preserve saturated pixels (65535, which is ~1.0 in normalized)
+    vec4 result = mix(gained, valScaled, step(0.9999, val));
+    // Convert back to normalized [0,1] range
+    return result / 65535.0;
+}
+
+// Bilinear interpolation for gain map sampling
+vec4 scaleLinear(vec2 pos, ivec2 maxPos) {
+    ivec2 basePos = ivec2(pos);
+    vec2 delta = pos - vec2(basePos);
+    
+    ivec2 p00 = clamp(basePos + ivec2(0, 0), ivec2(0), maxPos);
+    ivec2 p10 = clamp(basePos + ivec2(1, 0), ivec2(0), maxPos);
+    ivec2 p01 = clamp(basePos + ivec2(0, 1), ivec2(0), maxPos);
+    ivec2 p11 = clamp(basePos + ivec2(1, 1), ivec2(0), maxPos);
+    
+    vec4 v00 = imageLoad(uGainMap, p00);
+    vec4 v10 = imageLoad(uGainMap, p10);
+    vec4 v01 = imageLoad(uGainMap, p01);
+    vec4 v11 = imageLoad(uGainMap, p11);
+    
+    vec4 h0 = mix(v00, v10, delta.x);
+    vec4 h1 = mix(v01, v11, delta.x);
+    return mix(h0, h1, delta.y);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    int debugMode = uParams.params.debugMode;
+    
+    // Boundary check - must check BEFORE using gid
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y || gid.x < 0 || gid.y < 0) {
+        return;  // Skip out-of-bounds pixels
+    }
+
+    ivec2 srcPos = gid + uParams.params.margin;
+    vec4 val = imageLoad(uInputImage, srcPos);
+    vec4 result = val;
+    
+    // Boundary check for srcPos to prevent reading from invalid texture regions
+    // This is critical when previous filter (RgbNr) uses tile rendering
+    ivec2 inputSize = imageSize(uInputImage);
+    if (srcPos.x < 0 || srcPos.y < 0 || srcPos.x >= inputSize.x || srcPos.y >= inputSize.y) {
+        if (debugMode > 3) {
+            imageStore(uOutputImage, gid, vec4(1.0, 0.0, 1.0, 1.0)); // Output magenta for error pixels
+            return;
+        }
+        // clamp to valid positions
+        srcPos = clamp(srcPos, ivec2(0), inputSize - ivec2(1));
+    }
+
+    // Debug option 1: Output original texture
+    if (debugMode == 1) {
+        imageStore(uOutputImage, gid, result);
+        return;
+    }
+
+    // Debug option 2: Check calculated gain values (with proper scaling)
+    if (debugMode == 2) {
+        vec2 mapPos = (vec2(srcPos) + uParams.params.offset) * uParams.params.scale;
+        vec4 gain = scaleLinear(mapPos, uParams.params.mapSize - ivec2(1));
+
+        // Check for invalid gain values
+        if (any(isnan(gain)) || any(isinf(gain))) {
+            imageStore(uOutputImage, gid, vec4(1.0, 0.0, 1.0, 1.0)); // Magenta for NaN/Inf
+            return;
+        }
+
+        // Visualize gain values in different ranges
+        float avgGain = (gain.r + gain.g + gain.b) / 3.0;
+        if (avgGain < 0.5) {
+            imageStore(uOutputImage, gid, vec4(1.0, 0.0, 0.0, 1.0)); // Red for very low gain
+        } else if (avgGain > 1.5) {
+            imageStore(uOutputImage, gid, vec4(0.0, 0.0, 1.0, 1.0)); // Blue for very high gain
+        } else {
+            // Green channel shows normalized gain in [0.5, 1.5] range
+            float normalizedGain = avgGain - 0.5;
+            imageStore(uOutputImage, gid, vec4(0.0, normalizedGain, 0.0, 1.0));
+        }
+        return;
+    }
+
+    // Debug option 3: Visualize gain map sampling coordinates
+    if (debugMode == 3) {
+        vec2 mapPos = (vec2(srcPos) + uParams.params.offset) * uParams.params.scale;
+        ivec2 mapSize = uParams.params.mapSize;
+        
+        // Visualize normalized map coordinates
+        vec4 mapCoordColor = vec4(mapPos.x / float(mapSize.x), mapPos.y / float(mapSize.y), 0.0, 1.0);
+
+        // Check if map coordinates are out of bounds
+        if (mapPos.x < 0.0 || mapPos.y < 0.0 || mapPos.x >= float(mapSize.x) || mapPos.y >= float(mapSize.y)) {
+            imageStore(uOutputImage, gid, vec4(0.0, 1.0, 1.0, 1.0)); // Cyan for out of bounds
+        } else {
+            imageStore(uOutputImage, gid, mapCoordColor);
+        }
+        return;
+    }
+
+    // Calculate map position
+    vec2 mapPos = (vec2(srcPos) + uParams.params.offset) * uParams.params.scale;
+    vec4 gainRgb = scaleLinear(mapPos, uParams.params.mapSize - ivec2(1));
+
+    result = ApplyGain(val, gainRgb, uParams.params.blackOffset);
+    imageStore(uOutputImage, gid, result);
+}

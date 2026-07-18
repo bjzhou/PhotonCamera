@@ -1,0 +1,112 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 0efa5c950f6502ed9836a8cd18dc935a686aa8e8033e3d36d9cb96ca7d92b347
+ * ELF offsets: 0x30555c4
+ * Symbols: demosaic_pass_0a2_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16ui, binding = 0) readonly uniform uimage2D inTex;
+layout(rgba16f,  binding = 1) writeonly uniform image2D outTex;
+layout(std140, binding = 2) uniform DemosaicPass0a2Params_UBO {
+    int uParams_l;
+    int uParams_t;
+    int uParams_r;
+    int uParams_b;
+    float uParams_stdDeviation;
+    float uParams_pad0;
+    float uParams_pad1;
+    float uParams_pad2;
+};
+
+vec4 loadU(ivec2 p) {
+    return vec4(imageLoad(inTex, p));
+}
+
+vec2 scaleFilterFlt(float v_2, float v_1, float v0, float v1, float v2, float stdDeviation) {
+    float minG = min(min(v0, v_2), v2);
+    if (minG < stdDeviation)
+        return vec2(1.0, 0.0);
+
+    float rbSum = v_1 + v1;
+    float rbDif = abs(v_1 - v1);
+    float greenSum0 = v_2 + v0;
+    float greenDif0 = abs(v_2 - v0);
+    float greenSum2 = v0 + v2;
+    float greenDif2 = abs(v0 - v2);
+
+    vec2 gsr = vec2(1.0 / (greenSum0 + 1.0), 1.0 / (greenSum2 + 1.0));
+    float rgScale0 = v_1 * 2.0 * gsr.x;
+    float rgScale1 = rbSum / (v0 * 2.0 + 1.0);
+    float rgScale2 = v1 * 2.0 * gsr.y;
+
+    float difScale1 = rbDif / (rbSum + 1.0);
+    float difScale0 = greenDif0 * gsr.x;
+    float difScale2 = greenDif2 * gsr.y;
+
+    vec2 res;
+    res.y = difScale0 + difScale1 + difScale2;
+    if (res.y > 0.05) {
+        float ryr = 1.5 / res.y;
+        rgScale0 = rgScale0 * ryr * (res.y - difScale0);
+        rgScale1 = rgScale1 * ryr * (res.y - difScale1);
+        rgScale2 = rgScale2 * ryr * (res.y - difScale2);
+    }
+
+    res.x = rgScale0 + rgScale1 + rgScale2;
+    if (res.x != 0.0) res.x = 3.0 / res.x;
+    return res;
+}
+
+void main() {
+    ivec2 outputPos = ivec2(gl_GlobalInvocationID.xy);
+
+    int gid_x = outputPos.x / 4;
+    int gid_y = outputPos.y;
+    int outputIndex = outputPos.x % 4;
+
+    if (gid_x <= uParams_l || gid_x >= uParams_r ||
+        gid_y < uParams_t || gid_y >= uParams_b) {
+        return;
+    }
+
+    ivec2 inputPixelCoord = ivec2(gid_x, gid_y * 2);
+    vec4 v_2 = loadU(inputPixelCoord + ivec2(0, -2));
+    vec4 v_1 = loadU(inputPixelCoord + ivec2(0, -1));
+    vec4 v0  = loadU(inputPixelCoord + ivec2(0,  0));
+    vec4 v1  = loadU(inputPixelCoord + ivec2(0,  1));
+    vec4 v2  = loadU(inputPixelCoord + ivec2(0,  2));
+    vec4 v3  = loadU(inputPixelCoord + ivec2(0,  3));
+
+    vec2 out_h, out_v;
+    if (outputIndex == 0) {
+        out_v = scaleFilterFlt(v_1.r, v0.r, v1.r, v2.r, v3.r, uParams_stdDeviation);
+        vec4 in_1 = loadU(inputPixelCoord + ivec2(-1, 1));
+        vec4 in0 = v1;
+        out_h = scaleFilterFlt(in_1.b, in_1.a, in0.r, in0.g, in0.b, uParams_stdDeviation);
+    } else if (outputIndex == 1) {
+        out_v = scaleFilterFlt(v_2.g, v_1.g, v0.g, v1.g, v2.g, uParams_stdDeviation);
+        vec4 in_1 = loadU(inputPixelCoord + ivec2(-1, 0));
+        vec4 in0 = v0;
+        out_h = scaleFilterFlt(in_1.a, in0.r, in0.g, in0.b, in0.a, uParams_stdDeviation);
+    } else if (outputIndex == 2) {
+        out_v = scaleFilterFlt(v_1.b, v0.b, v1.b, v2.b, v3.b, uParams_stdDeviation);
+        vec4 in0 = v1;
+        vec4 in1 = loadU(inputPixelCoord + ivec2(1, 1));
+        out_h = scaleFilterFlt(in0.r, in0.g, in0.b, in0.a, in1.r, uParams_stdDeviation);
+    } else {
+        out_v = scaleFilterFlt(v_2.a, v_1.a, v0.a, v1.a, v2.a, uParams_stdDeviation);
+        vec4 in0 = v0;
+        vec4 in1 = loadU(inputPixelCoord + ivec2(1, 0));
+        out_h = scaleFilterFlt(in0.g, in0.b, in0.a, in1.r, in1.g, uParams_stdDeviation);
+    }
+
+    imageStore(outTex, outputPos, vec4(out_h.x, out_v.x, out_h.y, out_v.y));
+}

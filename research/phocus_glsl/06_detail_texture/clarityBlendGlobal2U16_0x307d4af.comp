@@ -1,0 +1,56 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 6b8f2d419337fcc8a01151c32132da494e4ca9eebdb9143574c425b4c88edf2c
+ * ELF offsets: 0x307d4af
+ * Symbols: clarityBlendGlobal2U16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uFullCorrA;  // neg correction
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D uDst;
+layout(rgba16ui, binding = 2) readonly  uniform uimage2D uBefore;     // original gray
+layout(rgba16ui, binding = 3) readonly  uniform uimage2D uFullCorrB;  // pos correction
+
+layout(std140, binding = 4) uniform ClarityBlendLocalParams_UBO {
+    int w;
+    int h;
+    float global_val;
+    float local_val;
+    float alphaNeg;
+    float alphaPos;
+    float localMapScaleX;
+    float localMapScaleY;
+    int type;
+    int pad1;
+    int pad2;
+    int pad3;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    // iOS: float4 uncorr = float4(before.read(gid)) / 65535.0f
+    vec4 uncorr = vec4(imageLoad(uBefore, gid)) / 65535.0;
+    // iOS: float4 corrA = float4(fullCorrA.read(gid)) / 65535.0f - uncorr
+    vec4 corrA = vec4(imageLoad(uFullCorrA, gid)) / 65535.0 - uncorr;
+    // iOS: float4 corrB = float4(fullCorrB.read(gid)) / 65535.0f - uncorr
+    vec4 corrB = vec4(imageLoad(uFullCorrB, gid)) / 65535.0 - uncorr;
+
+    // iOS: float4 alpha = float4(blnd.global)
+    float alpha = global_val;
+    // iOS: float4 a = select(float4(blnd.alphaPos), float4(blnd.alphaNeg), alpha < float4(0.0f))
+    vec4 a = (alpha < 0.0) ? vec4(alphaNeg) : vec4(alphaPos);
+    // iOS: float4 corr = a * corrB + (1.0 - a) * corrA
+    vec4 corr = a * corrB + (1.0 - a) * corrA;
+
+    // iOS: dst.write(ushort4(clamp((uncorr + corr*alpha)*65535.0f, 0.0f, 65535.0f)), gid)
+    imageStore(uDst, gid, uvec4(clamp((uncorr + corr * alpha) * 65535.0, 0.0, 65535.0)));
+}

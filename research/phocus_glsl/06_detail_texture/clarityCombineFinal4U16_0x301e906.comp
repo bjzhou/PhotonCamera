@@ -1,0 +1,103 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 14ec460a9b79553f33b090ab75ff8e3a9897c15eb3d346703914db856fdab2df
+ * ELF offsets: 0x301e906
+ * Symbols: clarityCombineFinal4U16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(rgba16f,  binding = 0) readonly  uniform image2D  uInput;   // original RgbX
+layout(rgba16ui, binding = 1) readonly  uniform uimage2D uGray;    // processed PackedUint16 gray
+layout(rgba16ui, binding = 2) readonly  uniform uimage2D uGrayRef; // reference (uncorrected) PackedUint16 gray = textureG[0]
+layout(rgba16f,  binding = 3) writeonly uniform image2D  uOutput;  // final RgbX
+
+layout(std140, binding = 4) uniform ClarityCombineFinalParams_UBO {
+    int marginX;
+    int marginY;
+    int pad1;
+    int pad2;
+};
+
+layout(std140, binding = 5) uniform ClarityCenterGammaParams_UBO {
+    float xGamma;
+    float centerVal;
+    float stretchFactor;
+    int gamPad;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// iOS: ushort4 shiftBytes(ushort4 left, ushort4 right, int amount)
+uvec4 shiftBytesU(uvec4 left, uvec4 right, int amount) {
+    if (amount == 0) return left;
+    if (amount == 1 || amount == -3) return uvec4(left.yzw, right.x);
+    if (amount == 2 || amount == -2) return uvec4(left.zw, right.xy);
+    if (amount == 3 || amount == -1) return uvec4(left.w, right.xyz);
+    return left;
+}
+
+// factor = processedGray / referenceGray, applied to the (HDR) rgb.
+//
+// iOS clarityCombine divides by g=(r+g+b)/3 of the *uint16* input, where HDR highlights are
+// already clamped to 1.0 (iOS keeps clarity SDR and handles HDR in the client gainmap layer).
+// Android clarity runs on rgba16f and keeps values > 1.0, so dividing by the unclamped rgb
+// luminance flattens HDR highlights: for a near-neutral highlight rgb≈g the result collapses
+// to ≈grays, so e.g. a sun core and its halo end up equally bright (overexposed, bug-0018).
+// The reference gray (textureG[0], the uncorrected stretched gray) comes from the Phase-1 gray
+// which clamps to [0,1], so it ≈ the clamped luminance iOS divides by; using it gives
+// out = rgb * (processed/reference), preserving the HDR rgb gradient. Mirrors the FastPreview
+// path (ClarityCreateFinalFactorsU16), including its [0.25,4.0] factor clamp.
+vec4 clarityCombine(vec4 src, float gray, float refGray) {
+    float factor = (refGray > 0.00002) ? clamp(gray / refGray, 0.25, 4.0) : 1.0;
+    return vec4(src.rgb * factor, src.a);
+}
+
+// Inverse gamma/stretch transform: uint16 stretched-gray → linear gray (mirrors iOS / FastPreview).
+vec4 toLinearGray(uvec4 packed) {
+    return pow(vec4(packed) / 65535.0, vec4(2.0 / xGamma)) / stretchFactor;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(uOutput);
+    if (gid.x >= outSize.x || gid.y >= outSize.y) return;
+
+    // iOS: auto grayPos = uint2(gid.x + opts.marginX/4, gid.y + opts.marginY)
+    ivec2 grayPos = ivec2(gid.x + marginX / 4, gid.y + marginY);
+    // iOS: auto graysIn = gray.read(grayPos)
+    uvec4 graysIn = imageLoad(uGray,    grayPos);
+    uvec4 refIn   = imageLoad(uGrayRef, grayPos);
+
+    // iOS: if (opts.marginX%4 != 0)
+    //        graysIn = shiftBytes(graysIn, gray.read(uint2(grayPos.x+1, grayPos.y)), opts.marginX%4)
+    int misalign = marginX % 4;
+    if (misalign != 0) {
+        uvec4 graysNext = imageLoad(uGray,    ivec2(grayPos.x + 1, grayPos.y));
+        uvec4 refNext   = imageLoad(uGrayRef, ivec2(grayPos.x + 1, grayPos.y));
+        graysIn = shiftBytesU(graysIn, graysNext, misalign);
+        refIn   = shiftBytesU(refIn,   refNext,   misalign);
+    }
+
+    // Inverse transform both processed and reference gray into linear space.
+    vec4 grays = toLinearGray(graysIn);
+    vec4 refs  = toLinearGray(refIn);
+
+    // Process 4 RGB pixels per thread
+    // iOS: auto in = uint2(gid.x*4 + opts.marginX, gid.y + opts.marginY)
+    ivec2 inBase = ivec2(gid.x * 4 + marginX, gid.y + marginY);
+
+    vec4 rgb0 = imageLoad(uInput, ivec2(inBase.x + 0, inBase.y));
+    vec4 rgb1 = imageLoad(uInput, ivec2(inBase.x + 1, inBase.y));
+    vec4 rgb2 = imageLoad(uInput, ivec2(inBase.x + 2, inBase.y));
+    vec4 rgb3 = imageLoad(uInput, ivec2(inBase.x + 3, inBase.y));
+
+    imageStore(uOutput, ivec2(gid.x * 4 + 0, gid.y), clarityCombine(rgb0, grays.x, refs.x));
+    imageStore(uOutput, ivec2(gid.x * 4 + 1, gid.y), clarityCombine(rgb1, grays.y, refs.y));
+    imageStore(uOutput, ivec2(gid.x * 4 + 2, gid.y), clarityCombine(rgb2, grays.z, refs.z));
+    imageStore(uOutput, ivec2(gid.x * 4 + 3, gid.y), clarityCombine(rgb3, grays.w, refs.w));
+}

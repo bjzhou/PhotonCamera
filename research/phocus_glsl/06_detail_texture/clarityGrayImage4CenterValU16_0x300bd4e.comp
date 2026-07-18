@@ -1,0 +1,69 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 54c35774225149ef4345604d5dbd9ea8016a8f6e3ddfea8dafda40aa17b5d450
+ * ELF offsets: 0x300bd4e
+ * Symbols: clarityGrayImage4CenterValU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uSrc;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D uDst;
+
+layout(std140, binding = 2) uniform ClarityStretchFactorParams_UBO {
+    float stretchFactor;
+    float xGammaHalf;
+    int wSrc;
+    int hSrc;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+uvec4 ReadWithPaddingU16(ivec2 gid) {
+    uvec4 v = imageLoad(uSrc, gid);
+    if (gid.y >= hSrc) {
+        ivec2 pos = gid;
+        pos.y = hSrc - 1;
+        if (4 * gid.x + 3 >= wSrc) {
+            int lastx = wSrc - 1;
+            pos.x = lastx / 4;
+            v = imageLoad(uSrc, pos);
+            int idx = lastx & 3;
+            uint lastVal = v[idx];
+            v.w = lastVal;
+            if (4 * gid.x + 2 >= wSrc) v.z = lastVal;
+            if (4 * gid.x + 1 >= wSrc) v.y = lastVal;
+            if (4 * gid.x + 0 >= wSrc) v.x = lastVal;
+        } else {
+            v = imageLoad(uSrc, pos);
+        }
+    } else if (4 * gid.x + 3 >= wSrc) {
+        ivec2 pos = gid;
+        int lastx = wSrc - 1;
+        pos.x = lastx / 4;
+        v = imageLoad(uSrc, pos);
+        int idx = lastx & 3;
+        uint lastVal = v[idx];
+        v.w = lastVal;
+        if (4 * gid.x + 2 >= wSrc) v.z = lastVal;
+        if (4 * gid.x + 1 >= wSrc) v.y = lastVal;
+        if (4 * gid.x + 0 >= wSrc) v.x = lastVal;
+    }
+    return v;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    uvec4 raw = ReadWithPaddingU16(gid);
+    // iOS: float4 v = ReadWithPadding(...) → returns v / 65535.0
+    vec4 v = vec4(raw) / 65535.0;
+    // iOS: pow(v * gamma.stretchFactor, gamma.xGamma * 0.5) → * 65535 → ushort
+    vec4 normalized = pow(v * stretchFactor, vec4(xGammaHalf));
+    imageStore(uDst, gid, uvec4(clamp(normalized * 65535.0, 0.0, 65535.0)));
+}

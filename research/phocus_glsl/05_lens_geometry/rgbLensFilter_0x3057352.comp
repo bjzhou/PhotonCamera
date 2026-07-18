@@ -1,0 +1,347 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: a21099023c7ef59d903395303ee0c0bfdfe05463d171713e599ee2d21d390291
+ * ELF offsets: 0x3057352
+ * Symbols: rgbLensFilter_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp sampler2D;
+precision highp image2D;
+
+// input textures (sampler2D — RGBA16F works on all GPUs)
+layout(binding = 0) uniform sampler2D uInputTexture0;
+
+// vignette table (image2D — Mali-safe, imageLoad works with float formats)
+layout(r32f, binding = 1) readonly uniform image2D uVignetteTable;
+// output image
+layout(rgba16f, binding = 2) writeonly uniform image2D uOutputImage;
+// extra textures (sampler2D — HTS distortion/aberration maps)
+layout(binding = 3) uniform sampler2D uHtsDistTexture;
+layout(binding = 4) uniform sampler2D uHtsAberTexture;
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+struct RGBLensParams {
+    vec3 matA;
+    float redOffset;
+    vec3 matB;
+    float greenOffset;
+    vec3 matC;
+    float blueOffset;
+
+    vec4 redParam;
+    vec4 greenParam;
+    vec4 blueParam;
+    float pixelSize;
+    float xOffset;
+    float yOffset;
+    float xCenterOffset;
+    float yCenterOffset;
+    int xMargin;
+    int yMargin;
+    int xMax;
+    int yMax;
+    int xKeystoneLimit;
+    int yKeystoneLimit;
+    float vignAmount;
+    float imageScale;
+    int vignTableDiv;
+
+    float offsetScale;
+    int xMaxMap;
+    int yMaxMap;
+
+    int doVignetting;
+    int doDistortion;
+    int doAberration;
+    int doHts;
+    int blackOutOfBounds;
+    vec2 padding;
+};
+
+layout(std140, binding = 0) uniform ShaderParams {
+    RGBLensParams params;
+} uParams;
+
+uniform int uEnableFastMode;
+
+vec2 KeystoneTransform(in mat3 mat, in vec2 pos)
+{
+    vec3 posF = vec3(pos.x, pos.y, 1.0);
+    vec3 keystonePos = mat * posF;
+    return vec2(keystonePos.x / keystonePos.z, keystonePos.y / keystonePos.z);
+}
+
+vec2 ApplyParams(in vec2 pos, in vec4 param, in float paramOffset)
+{
+    float radiusP2 = pos.x * pos.x + pos.y * pos.y;
+    float radius = sqrt(radiusP2);
+    vec4 coeffs = vec4(radius, radiusP2, radiusP2 * radius, radiusP2 * radiusP2);
+    vec4 cors = param * coeffs;
+    float cor = cors.x + cors.y + cors.z + cors.w + paramOffset;
+    return pos * cor;
+}
+
+float CalculateVignFactor(in vec2 offPos, in RGBLensParams params)
+{
+    vec2 rad = offPos / params.imageScale * params.pixelSize;
+    float radius = sqrt(rad.x * rad.x + rad.y * rad.y) * float(params.vignTableDiv);
+    int radiusIndex = int(floor(radius));
+    radiusIndex = clamp(radiusIndex, 0, 4500 - 1);
+    // imageLoad — Mali-safe for float textures (directly accesses global uVignetteTable)
+    float tv = imageLoad(uVignetteTable, ivec2(radiusIndex, 0)).r;
+    float factor = 1.0f + (tv - 1.0f) * params.vignAmount;
+    return factor;
+}
+
+float CubicWeight(float x)
+{
+    x = abs(x);
+    if (x <= 1.0f) { return 1.5f * x * x * x - 2.5f * x * x + 1.0f; }
+    else if (x < 2.0f) { return -0.5f * x * x * x + 2.5f * x * x - 4.0f * x + 2.0f; }
+    return 0.0f;
+}
+
+float Lanczos(float x)
+{
+    float PI = 3.14f;
+    float a = 4.0f;
+    if (abs(x) < 1e-6) { return 1.0f; }
+    return a * sin(PI * x) * sin(PI * x / a) / (pow(PI, 2.0f) * pow(x, 2.0f));
+}
+
+vec4 MixRgbBicubicLine(const in sampler2D inTexture, in ivec2 pos, in vec2 delta, in ivec2 margin, in ivec2 maxSize,
+                       inout float sum_f, inout vec4 minimum, inout vec4 maximum)
+{
+    float fy = CubicWeight(delta.y);
+    if (pos.y < margin.y || pos.y >= maxSize.y) fy = 0.0f;
+    float f_1 = CubicWeight(delta.x + 1.0f);
+    float f0  = CubicWeight(delta.x + 0.0f);
+    float f1  = CubicWeight(delta.x - 1.0f);
+    float f2  = CubicWeight(delta.x - 2.0f);
+    if (pos.x - 1 < margin.x || pos.x - 1 >= maxSize.x) f_1 = 0.0f;
+    if (pos.x + 0 < margin.x || pos.x + 0 >= maxSize.x) f0 = 0.0f;
+    if (pos.x + 1 < margin.x || pos.x + 1 >= maxSize.x) f1 = 0.0f;
+    if (pos.x + 2 < margin.x || pos.x + 2 >= maxSize.x) f2 = 0.0f;
+    sum_f += fy * (f_1 + f0 + f1 + f2);
+    vec4 p_1 = texelFetch(inTexture, ivec2(pos.x - 1, pos.y), 0);
+    vec4 p0  = texelFetch(inTexture, ivec2(pos.x + 0, pos.y), 0);
+    vec4 p1  = texelFetch(inTexture, ivec2(pos.x + 1, pos.y), 0);
+    vec4 p2  = texelFetch(inTexture, ivec2(pos.x + 2, pos.y), 0);
+    minimum = min(minimum, min(p0, p1));
+    maximum = max(maximum, max(p0, p1));
+    return fy * (f_1 * p_1 + f0 * p0 + f1 * p1 + f2 * p2);
+}
+
+vec4 MixRgbLanczosLine(const in sampler2D inTexture, in ivec2 pos, in vec2 delta, in ivec2 margin, in ivec2 maxSize,
+                       inout float sum_f, inout vec4 minimum, inout vec4 maximum)
+{
+    float fy = Lanczos(delta.y);
+    if (pos.y < margin.y || pos.y >= maxSize.y) fy = 0.0f;
+    float f_3 = Lanczos(delta.x + 3.0f);
+    float f_2 = Lanczos(delta.x + 2.0f);
+    float f_1 = Lanczos(delta.x + 1.0f);
+    float f0  = Lanczos(delta.x + 0.0f);
+    float f1  = Lanczos(delta.x - 1.0f);
+    float f2  = Lanczos(delta.x - 2.0f);
+    float f3  = Lanczos(delta.x - 3.0f);
+    float f4  = Lanczos(delta.x - 4.0f);
+    if (pos.x - 3 < margin.x || pos.x - 3 >= maxSize.x) f_3 = 0.0f;
+    if (pos.x - 2 < margin.x || pos.x - 2 >= maxSize.x) f_2 = 0.0f;
+    if (pos.x - 1 < margin.x || pos.x - 1 >= maxSize.x) f_1 = 0.0f;
+    if (pos.x + 0 < margin.x || pos.x + 0 >= maxSize.x) f0 = 0.0f;
+    if (pos.x + 1 < margin.x || pos.x + 1 >= maxSize.x) f1 = 0.0f;
+    if (pos.x + 2 < margin.x || pos.x + 2 >= maxSize.x) f2 = 0.0f;
+    if (pos.x + 3 < margin.x || pos.x + 3 >= maxSize.x) f3 = 0.0f;
+    if (pos.x + 4 < margin.x || pos.x + 4 >= maxSize.x) f4 = 0.0f;
+    sum_f += fy * (f_3 + f_2 + f_1 + f0 + f1 + f2 + f3 + f4);
+    vec4 p_3 = texelFetch(inTexture, ivec2(pos.x - 3, pos.y), 0);
+    vec4 p_2 = texelFetch(inTexture, ivec2(pos.x - 2, pos.y), 0);
+    vec4 p_1 = texelFetch(inTexture, ivec2(pos.x - 1, pos.y), 0);
+    vec4 p0  = texelFetch(inTexture, ivec2(pos.x + 0, pos.y), 0);
+    vec4 p1  = texelFetch(inTexture, ivec2(pos.x + 1, pos.y), 0);
+    vec4 p2  = texelFetch(inTexture, ivec2(pos.x + 2, pos.y), 0);
+    vec4 p3  = texelFetch(inTexture, ivec2(pos.x + 3, pos.y), 0);
+    vec4 p4  = texelFetch(inTexture, ivec2(pos.x + 4, pos.y), 0);
+    minimum = min(minimum, min(p0, p1));
+    maximum = max(maximum, max(p0, p1));
+    return fy * (f_3 * p_3 + f_2 * p_2 + f_1 * p_1 + f0 * p0 + f1 * p1 + f2 * p2 + f3 * p3 + f4 * p4);
+}
+
+vec4 InterpolateBicubicRgb(const in sampler2D inTexture, in ivec2 imgSize, in vec2 offset, in ivec2 pos, in float factor)
+{
+    ivec2 margin = ivec2(max(pos.x, 0), max(pos.y, 0));
+    vec2 indexPos = vec2(pos) + offset;
+    vec2 base = floor(indexPos);
+    vec2 delta = indexPos - base;
+    float sum_f = 0.0f;
+    vec4 maximum = vec4(0.0f);
+    vec4 minimum = vec4(1.0f);
+    vec4 unused = vec4(0.0f);
+    vec4 sum_p = MixRgbBicubicLine(inTexture, ivec2(base.x, base.y - 1.0f), vec2(delta.x, delta.y + 1.0f), margin, imgSize, sum_f, unused, unused)
+               + MixRgbBicubicLine(inTexture, ivec2(base.x, base.y + 0.0f), vec2(delta.x, delta.y + 0.0f), margin, imgSize, sum_f, minimum, maximum)
+               + MixRgbBicubicLine(inTexture, ivec2(base.x, base.y + 1.0f), vec2(delta.x, delta.y - 1.0f), margin, imgSize, sum_f, minimum, maximum)
+               + MixRgbBicubicLine(inTexture, ivec2(base.x, base.y + 2.0f), vec2(delta.x, delta.y - 2.0f), margin, imgSize, sum_f, unused, unused);
+    const float minFloatVal = 1e-6;
+    vec4 h = abs(sum_f) > minFloatVal ? sum_p / sum_f : vec4(0.0f);
+    h = clamp(h, minimum, maximum);
+    return h * factor;
+}
+
+vec4 InterpolateLanczosRgb(const in sampler2D inTexture, in ivec2 imgSize, in vec2 offset, in ivec2 pos, in float factor)
+{
+    ivec2 margin = ivec2(max(pos.x, 0), max(pos.y, 0));
+    vec2 indexPos = vec2(pos) + offset;
+    vec2 base = floor(indexPos);
+    vec2 delta = indexPos - base;
+    float sum_f = 0.0f;
+    vec4 maximum = vec4(0.0f);
+    vec4 minimum = vec4(1.0f);
+    vec4 unused = vec4(0.0f);
+    vec4 sum_p = MixRgbLanczosLine(inTexture, ivec2(base.x, base.y - 3.0f), vec2(delta.x, delta.y + 3.0f), margin, imgSize, sum_f, unused, unused)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y - 2.0f), vec2(delta.x, delta.y + 2.0f), margin, imgSize, sum_f, unused, unused)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y - 1.0f), vec2(delta.x, delta.y + 1.0f), margin, imgSize, sum_f, unused, unused)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y + 0.0f), vec2(delta.x, delta.y + 0.0f), margin, imgSize, sum_f, minimum, maximum)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y + 1.0f), vec2(delta.x, delta.y - 1.0f), margin, imgSize, sum_f, minimum, maximum)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y + 2.0f), vec2(delta.x, delta.y - 2.0f), margin, imgSize, sum_f, unused, unused)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y + 3.0f), vec2(delta.x, delta.y - 3.0f), margin, imgSize, sum_f, unused, unused)
+               + MixRgbLanczosLine(inTexture, ivec2(base.x, base.y + 4.0f), vec2(delta.x, delta.y - 4.0f), margin, imgSize, sum_f, unused, unused);
+    const float minFloatVal = 1e-6;
+    vec4 h = abs(sum_f) > minFloatVal ? sum_p / sum_f : vec4(0.0f);
+    h = clamp(h, minimum, maximum);
+    return h * factor;
+}
+
+vec3 RgbLensInterpolationFastCubic(const in sampler2D inTexture, in vec2 wantedR, in vec2 wantedG,
+    in vec2 wantedB, in vec3 factor, in RGBLensParams params, bool greenOnly)
+{
+    vec3 rgb = vec3(0.0f);
+    ivec2 margin = ivec2(params.xMargin, params.yMargin);
+    ivec2 imgSize = ivec2(params.xMax, params.yMax);
+    if (greenOnly) {
+        rgb = InterpolateBicubicRgb(inTexture, imgSize, wantedG, -margin, factor.g).rgb;
+    } else {
+        rgb.r = InterpolateBicubicRgb(inTexture, imgSize, wantedR, -margin, factor.r).r;
+        rgb.g = InterpolateBicubicRgb(inTexture, imgSize, wantedG, -margin, factor.g).g;
+        rgb.b = InterpolateBicubicRgb(inTexture, imgSize, wantedB, -margin, factor.b).b;
+    }
+    return rgb;
+}
+
+vec3 RgbLensInterpolationLanczos(const in sampler2D inTexture, in vec2 wantedR, in vec2 wantedG,
+    in vec2 wantedB, in vec3 factor, in RGBLensParams params, bool greenOnly)
+{
+    vec3 rgb = vec3(0.0f);
+    ivec2 margin = ivec2(params.xMargin, params.yMargin);
+    ivec2 imgSize = ivec2(params.xMax, params.yMax);
+    if (greenOnly) {
+        rgb = InterpolateLanczosRgb(inTexture, imgSize, wantedG, -margin, factor.g).rgb;
+    } else {
+        rgb.r = InterpolateLanczosRgb(inTexture, imgSize, wantedR, -margin, factor.r).r;
+        rgb.g = InterpolateLanczosRgb(inTexture, imgSize, wantedG, -margin, factor.g).g;
+        rgb.b = InterpolateLanczosRgb(inTexture, imgSize, wantedB, -margin, factor.b).b;
+    }
+    return rgb;
+}
+
+void CalculateRGBFactor(in RGBLensParams params, in vec2 pos,
+                        inout vec2 wantedG, inout vec4 wantedRB, inout vec3 factor)
+{
+    vec2 lensPos = pos + vec2(params.xCenterOffset, params.yCenterOffset);
+    if (params.doDistortion == 1) {
+        wantedG = pos - ApplyParams(lensPos / params.imageScale, params.greenParam, params.greenOffset) * params.imageScale;
+    }
+    if (params.doAberration == 1) {
+        wantedRB.xy = pos - ApplyParams(lensPos / params.imageScale, params.redParam, params.redOffset) * params.imageScale;
+        wantedRB.zw = pos - ApplyParams(lensPos / params.imageScale, params.blueParam, params.blueOffset) * params.imageScale;
+    }
+    if (params.doVignetting == 1) {
+        float calcVal = CalculateVignFactor(wantedG + vec2(params.xCenterOffset, params.yCenterOffset), params);
+        factor = vec3(calcVal);
+    }
+    if (params.doVignetting == 1 && params.doAberration == 1) {
+        factor.r = CalculateVignFactor(wantedRB.xy + vec2(params.xCenterOffset, params.yCenterOffset), params);
+        factor.b = CalculateVignFactor(wantedRB.zw + vec2(params.xCenterOffset, params.yCenterOffset), params);
+    }
+}
+
+vec4 HtsLookup(const in sampler2D textureMap, in vec2 pos, in ivec2 mapSize)
+{
+    vec2 maxPos = vec2(mapSize - 1);
+    pos = clamp(pos, vec2(0.0f), maxPos);
+    ivec2 basePos = ivec2(floor(pos));
+    ivec2 basePos1 = clamp(basePos + 1, ivec2(0), ivec2(maxPos));
+    vec2 delta = pos - vec2(basePos);
+    vec4 p00 = texelFetch(textureMap, basePos, 0);
+    vec4 p10 = texelFetch(textureMap, ivec2(basePos1.x, basePos.y), 0);
+    vec4 p01 = texelFetch(textureMap, ivec2(basePos.x, basePos1.y), 0);
+    vec4 p11 = texelFetch(textureMap, basePos1, 0);
+    vec4 h0 = mix(p00, p10, delta.x);
+    vec4 h1 = mix(p01, p11, delta.x);
+    return mix(h0, h1, delta.y);
+}
+
+void CalculateRGBFactorHts(in RGBLensParams params, in vec2 pos, const in sampler2D texMapGV, const in sampler2D texMapRB,
+                           inout vec2 wantedG, inout vec4 wantedRB, inout vec3 factor)
+{
+    ivec2 mapSize = ivec2(params.xMaxMap, params.yMaxMap);
+    if (params.doDistortion == 1) {
+        wantedG += HtsLookup(texMapGV, pos * params.imageScale, mapSize).xy * params.offsetScale;
+    }
+    wantedRB = vec4(wantedG, wantedG);
+    if (params.doAberration == 1) {
+        wantedRB += HtsLookup(texMapRB, pos * params.imageScale, mapSize) * params.offsetScale;
+    }
+    if (params.doVignetting == 1) {
+        factor.g += HtsLookup(texMapGV, wantedG * params.imageScale, mapSize).z * params.vignAmount;
+    }
+    if (params.doVignetting == 1 && params.doAberration == 1) {
+        factor.r += HtsLookup(texMapGV, wantedRB.xy * params.imageScale, mapSize).z * params.vignAmount;
+        factor.b += HtsLookup(texMapGV, wantedRB.zw * params.imageScale, mapSize).z * params.vignAmount;
+    }
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(uOutputImage);
+    if (gid.x >= outSize.x || gid.y >= outSize.y) return;
+
+    vec2 outLocalPos = vec2(gid);
+
+    RGBLensParams params = uParams.params;
+    ivec2 marginOffset = ivec2(int(params.xOffset) - params.xMargin, int(params.yOffset) - params.yMargin);
+    ivec2 srcPos = ivec2(outLocalPos) + marginOffset;
+    vec4 pixelColor = texelFetch(uInputTexture0, srcPos, 0);
+
+    vec2 outGlobalPos = outLocalPos + vec2(float(params.xOffset), float(params.yOffset));
+
+    mat3 mat = mat3(params.matA, params.matB, params.matC);
+    vec2 pos = KeystoneTransform(mat, outGlobalPos);
+    float alpha = pixelColor.a;
+
+    if (params.blackOutOfBounds == 1 && (any(lessThan(pos, vec2(0.0))) || any(greaterThan(pos, vec2(params.xKeystoneLimit, params.yKeystoneLimit))))) {
+        imageStore(uOutputImage, gid, vec4(vec3(0.0), alpha));
+        return;
+    }
+
+    vec2 wantedG = pos;
+    vec4 wantedRB = vec4(pos, pos);
+    vec3 factor = vec3(1.0f);
+
+    if (params.doHts == 1) {
+        CalculateRGBFactorHts(params, pos, uHtsDistTexture, uHtsAberTexture, wantedG, wantedRB, factor);
+    } else {
+       CalculateRGBFactor(params, pos, wantedG, wantedRB, factor);
+    }
+
+    bool greenOnly = params.doAberration == 0;
+    vec3 rgb = vec3(0.0);
+    if (uEnableFastMode == 1) {
+        rgb = RgbLensInterpolationFastCubic(uInputTexture0, wantedRB.xy, wantedG, wantedRB.zw, factor, params, greenOnly);
+    } else {
+        rgb = RgbLensInterpolationLanczos(uInputTexture0, wantedRB.xy, wantedG, wantedRB.zw, factor, params, greenOnly);
+    }
+    imageStore(uOutputImage, gid, vec4(rgb, alpha));
+}

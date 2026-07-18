@@ -1,0 +1,89 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: ffddf4600d0c7322e96cdcb76b02364d0dab0d4054c1f25090cb2249815e16eb
+ * ELF offsets: 0x2ffa214
+ * Symbols: clarityDiscretImage4CenterValU16_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D uSrc;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D uDst;
+
+layout(std140, binding = 2) uniform ClarityDiscretParams_UBO {
+    int wSrc;
+    int hSrc;
+    float discretisation;
+    float stretchFactor;
+    float xGammaHalf;
+    int pad1;
+    int pad2;
+    int pad3;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+uvec4 ReadWithPaddingU16(ivec2 gid) {
+    uvec4 v = imageLoad(uSrc, gid);
+    if (gid.y >= hSrc) {
+        ivec2 pos = gid;
+        pos.y = hSrc - 1;
+        if (4 * gid.x + 3 >= wSrc) {
+            int lastx = wSrc - 1;
+            pos.x = lastx / 4;
+            v = imageLoad(uSrc, pos);
+            int idx = lastx & 3;
+            uint lastVal = v[idx];
+            v.w = lastVal;
+            if (4 * gid.x + 2 >= wSrc) v.z = lastVal;
+            if (4 * gid.x + 1 >= wSrc) v.y = lastVal;
+            if (4 * gid.x + 0 >= wSrc) v.x = lastVal;
+        } else {
+            v = imageLoad(uSrc, pos);
+        }
+    } else if (4 * gid.x + 3 >= wSrc) {
+        ivec2 pos = gid;
+        int lastx = wSrc - 1;
+        pos.x = lastx / 4;
+        v = imageLoad(uSrc, pos);
+        int idx = lastx & 3;
+        uint lastVal = v[idx];
+        v.w = lastVal;
+        if (4 * gid.x + 2 >= wSrc) v.z = lastVal;
+        if (4 * gid.x + 1 >= wSrc) v.y = lastVal;
+        if (4 * gid.x + 0 >= wSrc) v.x = lastVal;
+    }
+    return v;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(uDst);
+    if (gid.x >= dstSize.x || gid.y >= dstSize.y) return;
+
+    // iOS: float4 v = ReadWithPadding(src, hSrc, wSrc, gid)  → v / 65535.0f
+    uvec4 raw = ReadWithPaddingU16(gid);
+    vec4 v = vec4(raw) / 65535.0;
+
+    // iOS: float4 j = pow(v * stretchFactor, xGamma) * 65535.0
+    vec4 j = pow(v * stretchFactor, vec4(xGammaHalf)) * 65535.0;
+
+    // iOS: iclarity=100, factor=1, discSlope=0, parValLow=0, parValHigh=0, sigma=0.055
+    const float sigma = 0.055;
+    const float clarity = 2.0;     // 100 / 50
+    const float factor = 1.0;
+
+    // Calculate sigma curve
+    vec4 img_ref = (j / 65535.0) - discretisation;
+    vec4 img_refSq = img_ref * img_ref;
+    vec4 remapPixel = factor * clarity * img_ref * exp(-img_refSq / (2.0 * sigma * sigma));
+
+    // iOS: val = remapPixel * 65535.0f + 32768.0f
+    vec4 val = remapPixel * 65535.0 + 32768.0;
+
+    // iOS: dst.write(ushort4(clamp(val, 0.0f, 65535.0f)), gid)
+    imageStore(uDst, gid, uvec4(clamp(val, 0.0, 65535.0)));
+}

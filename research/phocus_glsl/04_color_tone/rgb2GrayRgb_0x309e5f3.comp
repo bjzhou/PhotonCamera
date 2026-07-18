@@ -1,0 +1,80 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: b781b236056b8b51679cea5da2e98b07839ed5db74eedbec1a0123685792bff7
+ * ELF offsets: 0x309e5f3
+ * Symbols: rgb2GrayRgb_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp image2D;
+
+// Input: 16-bit half float texture (RGB, stored as RGBA16F)
+layout(rgba16f, binding = 0) readonly uniform image2D uInputImage;
+// Output: 16-bit half float texture (RGB, stored as RGBA16F)
+layout(rgba16f, binding = 1) writeonly uniform image2D uOutputImage;
+
+// Uniform buffer object for parameters
+struct GrayParams {
+    vec4 factors;       // RGB factors (R, G, B, unused)
+    ivec2 margin;       // Texture coordinate margin
+    int debugMode;      // Debug mode
+    int pad;            // Padding for std140 alignment
+};
+
+layout(std140, binding = 2) uniform GrayParams_UBO {
+    GrayParams params;
+} uParams;
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Convert RGB to grayscale
+float AsGray(vec4 rgb, vec3 factors) {
+    return clamp(dot(rgb.rgb, factors), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    int debugMode = uParams.params.debugMode;
+    
+    // Boundary check for output
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y || gid.x < 0 || gid.y < 0) {
+        return;  // Skip out-of-bounds pixels
+    }
+    
+    // Calculate input position with margin
+    ivec2 inPos = gid + uParams.params.margin;
+    
+    // Boundary check for input texture
+    ivec2 inputSize = imageSize(uInputImage);
+    if (inPos.x < 0 || inPos.y < 0 || inPos.x >= inputSize.x || inPos.y >= inputSize.y) {
+        if (debugMode > 2) {
+            imageStore(uOutputImage, gid, vec4(1.0, 0.0, 1.0, 1.0)); // Magenta for boundary error
+            return;
+        }
+        inPos = clamp(inPos, ivec2(0), inputSize - ivec2(1));
+    }
+    
+    vec4 rgb = imageLoad(uInputImage, inPos);
+    
+    // Debug mode 1: Pass-through input RGB
+    if (debugMode == 1) {
+        imageStore(uOutputImage, gid, rgb);
+        return;
+    }
+    
+    // Debug mode 2: Visualize factors as color
+    if (debugMode == 2) {
+        vec4 factorViz = vec4(uParams.params.factors.rgb, 1.0);
+        imageStore(uOutputImage, gid, factorViz);
+        return;
+    }
+    
+    // Convert RGB to grayscale
+    float gray = AsGray(rgb, uParams.params.factors.rgb);
+    
+    // Output as RGB with all channels set to gray value (alpha = 0)
+    // Matching iOS Metal: output.write(ushort4(gray, gray, gray, 0), gid)
+    imageStore(uOutputImage, gid, vec4(gray, gray, gray, 0.0));
+}

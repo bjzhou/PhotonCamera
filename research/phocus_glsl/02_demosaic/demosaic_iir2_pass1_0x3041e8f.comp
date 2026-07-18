@@ -1,0 +1,85 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 9c22e56ab98ccba2df1047cf363f263ad92e146700c596b8622b03af6ca5233b
+ * ELF offsets: 0x3041e8f
+ * Symbols: demosaic_iir2_pass1_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp uimage2D;
+layout(local_size_x = 1, local_size_y = 1) in;
+
+layout(rgba16ui, binding = 0) readonly  uniform uimage2D srcTex;
+layout(rgba16ui, binding = 1) writeonly uniform uimage2D dstTex;
+
+layout(std140, binding = 2) uniform IIR2Coefs_UBO {
+    vec4 a_10;
+    vec4 b_10;
+    vec4 a_dyn_1;
+    vec4 b_dyn_1;
+    vec4 a_dyn_2;
+    vec4 b_dyn_2;
+    int uWidth;
+    int uHeight;
+    int uDirection;
+    int uAxis;
+};
+
+struct Delayer {
+    float x0, x1, y0, y1;
+};
+
+float delayerApply(inout Delayer d, float val, vec4 pCoefA, vec4 pCoefB, bool useShort) {
+    float sum = pCoefA[0] * val;
+    sum += pCoefA[1] * d.x0 - pCoefB[1] * d.y0;
+    sum += pCoefA[2] * d.x1 - pCoefB[2] * d.y1;
+    d.x1 = d.x0;
+    d.y1 = d.y0;
+    d.x0 = val;
+    if (useShort)
+        d.y0 = sum;
+    else
+        d.y0 = max(0.0, min(sum, 65535.0));
+    return d.y0;
+}
+
+int chromaSigned(uint c) {
+    int ic = int(c);
+    return (ic > 32767) ? (ic - 65536) : ic;
+}
+
+uint chromaUnsigned(int v) {
+    return uint(v & 0xFFFF);
+}
+
+void main() {
+    int outerIdx = (uAxis == 0) ? int(gl_GlobalInvocationID.y) : int(gl_GlobalInvocationID.x);
+    int outerLimit = (uAxis == 0) ? uHeight : uWidth;
+    int innerSize = (uAxis == 0) ? uWidth : uHeight;
+    if (outerIdx >= outerLimit) return;
+
+    int start = (uDirection == 0) ? 0 : innerSize - 1;
+    int step  = (uDirection == 0) ? 1 : -1;
+
+    Delayer d_p10    = Delayer(0.0, 0.0, 0.0, 0.0);
+    Delayer d_norm1r = Delayer(0.0, 0.0, 0.0, 0.0);
+    Delayer d_norm1b = Delayer(0.0, 0.0, 0.0, 0.0);
+    Delayer d_norm2r = Delayer(0.0, 0.0, 0.0, 0.0);
+    Delayer d_norm2b = Delayer(0.0, 0.0, 0.0, 0.0);
+
+    for (int i = 0; i < innerSize; i++) {
+        int innerIdx = start + i * step;
+        ivec2 pos = (uAxis == 0) ? ivec2(innerIdx, outerIdx) : ivec2(outerIdx, innerIdx);
+        uvec4 pix = imageLoad(srcTex, pos);
+
+        float Y  = delayerApply(d_p10,    float(pix.r), a_10, b_10, false);
+        float cr = delayerApply(d_norm1r, float(chromaSigned(pix.g)), a_dyn_1, b_dyn_1, true);
+        float cb = delayerApply(d_norm1b, float(chromaSigned(pix.b)), a_dyn_1, b_dyn_1, true);
+        cr = delayerApply(d_norm2r, cr, a_dyn_2, b_dyn_2, true);
+        cb = delayerApply(d_norm2b, cb, a_dyn_2, b_dyn_2, true);
+
+        imageStore(dstTex, pos, uvec4(uint(Y), chromaUnsigned(int(cr)), chromaUnsigned(int(cb)), pix.a));
+    }
+}

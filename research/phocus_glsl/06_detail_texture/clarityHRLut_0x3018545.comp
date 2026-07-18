@@ -1,0 +1,43 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: c6ae77a81dd90ba4bd65dbd390ad5e7f025658e36eed95f19a4483189728b65a
+ * ELF offsets: 0x3018545
+ * Symbols: clarityHRLut_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+precision highp uimage2D;
+
+layout(rgba16ui, binding = 0) writeonly uniform uimage2D uDst;
+
+layout(std140, binding = 1) uniform ClarityLutParams_UBO {
+    float xGamma;
+    float centerVal;
+    float stretchFactor;
+    int pad;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+float curveHR(float x, float cV) {
+    const float kMaxHRGamma = 5.0;
+    cV = cV * 1.2;
+    cV = clamp(cV, 0.005, 0.995);
+    if (x > cV)
+        return 1.0 - pow((1.0 - x) / (1.0 - cV), 1.0 / kMaxHRGamma) * (1.0 - cV);
+    else
+        return x;
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    if (gid.x >= 256 || gid.y >= 256) return;
+
+    float x = float(gid.x + gid.y * 256) / 65535.0;
+    // centerVal is in uint16 space from iOS, pass as-is
+    float result = pow(curveHR(pow(x, 1.0 / xGamma), centerVal / 65535.0), xGamma);
+    imageStore(uDst, gid, uvec4(uint(result * 65535.0 + 0.5), 0u, 0u, 0u));
+}

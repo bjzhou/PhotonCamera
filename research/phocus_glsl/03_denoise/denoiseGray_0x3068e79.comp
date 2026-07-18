@@ -1,0 +1,222 @@
+/*
+ * Recovered from a compiled proprietary binary for personal study.
+ * SHA-256: 3b723b58db314faac1498ff32b0957b78e2656ad65c28e36e11f52941507401f
+ * ELF offsets: 0x3068e79
+ * Symbols: denoiseGray_computeShaderSource
+ */
+
+#version 310 es
+precision highp float;
+precision highp int;
+precision highp image2D;
+
+layout(rgba16f, binding = 0) readonly  uniform image2D uInputImage;
+layout(rgba16f, binding = 1) writeonly uniform image2D uOutputImage;
+
+layout(std140, binding = 2) uniform DenoiseGrayParams_UBO {
+    int marginX;        // packed texel units (pixel margin / 4)
+    int marginY;
+    int offset;         // fSubtractOffset in uint16 space
+    float lumaSqThr;    // CMOS: sqrt-luma threshold / CCD: channel threshold
+    float patternThr;   // pattern threshold
+    int kernelSizeX;    // search window X in pixel units
+    int kernelSizeY;    // search window Y in pixel units
+    int useCmos;        // 1=CMOS, 0=CCD
+    int debugMode;      // debug mode (0=normal, 1-5=debug)
+    int pad;
+    int pad1;
+    int pad2;
+};
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// ============================================================================
+// Read a packed texel and convert from [0,1] to uint16 [0,65535] integer space
+// ============================================================================
+ivec4 readTexel(ivec2 pos) {
+    vec4 val = imageLoad(uInputImage, pos);
+    return ivec4(val * 65535.0 + 0.5);
+}
+
+// ============================================================================
+// addWithOffset: combines two rows with a 2 sub-pixel offset
+// Matches Metal: int4(leftA.w, int3(middleA.xyz)) + int4(int3(middleB.yzw), rightB.x)
+// ============================================================================
+ivec4 addWithOffset(ivec4 leftA, ivec4 middleA, ivec4 middleB, ivec4 rightB) {
+    return ivec4(leftA.w, middleA.x, middleA.y, middleA.z)
+         + ivec4(middleB.y, middleB.z, middleB.w, rightB.x);
+}
+
+// ============================================================================
+// PatchFeatures: precomputed features for a 3x3 neighborhood
+// ============================================================================
+struct PatchFeatures {
+    ivec4 center;
+    ivec4 lum;
+    ivec4 hor;
+    ivec4 ver;
+    ivec4 diagN;
+    ivec4 diagZ;
+};
+
+PatchFeatures loadPatch(ivec2 pos) {
+    ivec4 c  = readTexel(pos);
+    ivec4 l  = readTexel(pos + ivec2(-1,  0));
+    ivec4 r  = readTexel(pos + ivec2( 1,  0));
+    ivec4 t  = readTexel(pos + ivec2( 0, -1));
+    ivec4 b  = readTexel(pos + ivec2( 0,  1));
+    ivec4 lt = readTexel(pos + ivec2(-1, -1));
+    ivec4 rt = readTexel(pos + ivec2( 1, -1));
+    ivec4 lb = readTexel(pos + ivec2(-1,  1));
+    ivec4 rb = readTexel(pos + ivec2( 1,  1));
+
+    PatchFeatures f;
+    f.center = c;
+    f.ver   = t + b;
+    f.hor   = addWithOffset(l, c, c, r);
+    f.diagN = addWithOffset(lt, t, b, rb);
+    f.diagZ = addWithOffset(lb, b, t, rt);
+    // luminance: (center*8 + horizontal + vertical + diagN + diagZ) / 2 / 2 / 4
+    f.lum = (c * 8 + f.hor + f.ver + f.diagN + f.diagZ) / 2 / 2 / 4;
+    return f;
+}
+
+// ============================================================================
+// Component-wise AND for bvec4 (GLSL doesn't support && on bvec4)
+// ============================================================================
+bvec4 band(bvec4 a, bvec4 b) {
+    return bvec4(ivec4(a) * ivec4(b));
+}
+
+// ============================================================================
+// Similarity tests
+// Broadcasting: source's channel [ch] is broadcast, compared against center's full vector
+// This matches Metal: abs(Left::get(source.feature()) - center.feature()) < threshold
+// Result[i] = true means source's channel[ch] is similar to center's channel[i]
+// ============================================================================
+
+// CMOS similarity: luminance + pattern features
+bvec4 isSimilarCmos(int ch, PatchFeatures src, PatchFeatures ctr, ivec4 lumaThr, ivec4 patThr) {
+    bvec4 r = lessThan(abs(ivec4(src.lum[ch])    - ctr.lum),   lumaThr);
+    r = band(r, lessThan(abs(ivec4(src.hor[ch])   - ctr.hor),   patThr * 2));
+    r = band(r, lessThan(abs(ivec4(src.ver[ch])   - ctr.ver),   patThr * 2));
+    r = band(r, lessThan(abs(ivec4(src.diagN[ch]) - ctr.diagN), patThr));
+    r = band(r, lessThan(abs(ivec4(src.diagZ[ch]) - ctr.diagZ), patThr));
+    return r;
+}
+
+// CCD similarity: center value + pattern features
+bvec4 isSimilarCcd(int ch, PatchFeatures src, PatchFeatures ctr, ivec4 chThr, ivec4 patThr) {
+    bvec4 r = lessThan(abs(ivec4(src.center[ch])  - ctr.center), chThr);
+    r = band(r, lessThan(abs(ivec4(src.hor[ch])    - ctr.hor),    patThr));
+    r = band(r, lessThan(abs(ivec4(src.ver[ch])    - ctr.ver),    patThr));
+    r = band(r, lessThan(abs(ivec4(src.diagN[ch])  - ctr.diagN),  patThr));
+    r = band(r, lessThan(abs(ivec4(src.diagZ[ch])  - ctr.diagZ),  patThr));
+    return r;
+}
+
+// ============================================================================
+// Main kernel
+// ============================================================================
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+
+    // Boundary check for output texture
+    ivec2 outputSize = imageSize(uOutputImage);
+    if (gid.x >= outputSize.x || gid.y >= outputSize.y) {
+        return;
+    }
+
+    // Calculate source position (in packed texel coords)
+    ivec2 pos = gid + ivec2(marginX, marginY);
+
+    // Load center kernel (3x3 patch) and precompute features
+    PatchFeatures ctr = loadPatch(pos);
+
+    // ---- Debug mode 1: Pass-through (output original input) ----
+    if (debugMode == 1) {
+        imageStore(uOutputImage, gid, vec4(ctr.center) / 65535.0);
+        return;
+    }
+
+    // ---- Debug mode 2: Visualize luminance feature ----
+    if (debugMode == 2) {
+        imageStore(uOutputImage, gid, vec4(ctr.lum) / 65535.0);
+        return;
+    }
+
+    // ---- Compute thresholds (matching iOS Metal exactly in uint16 space) ----
+    ivec4 lumaThr;
+    ivec4 pat2Thr;
+    if (useCmos != 0) {
+        // CMOS: lumaThr = floor(sqrt(luminance) * lumaSqThr)
+        //        pat2Thr = floor(lumaThr * patternThr)
+        lumaThr = ivec4(floor(sqrt(vec4(ctr.lum)) * lumaSqThr));
+        pat2Thr = ivec4(floor(vec4(lumaThr) * patternThr));
+    } else {
+        // CCD: fixed thresholds
+        lumaThr = ivec4(int(lumaSqThr));
+        pat2Thr = ivec4(int(patternThr));
+    }
+
+    // ---- Non-Local Means loop over search window ----
+    // Metal: for iy in [-kernelSizeY, kernelSizeY], ix in [-kernelSizeX/4, kernelSizeX/4]
+    // skipX = skipY = 1 (matching Metal)
+    int halfKX = kernelSizeX / 4;
+
+    vec4 sumVal = vec4(0.0);
+    vec4 countVal = vec4(0.0);
+
+    for (int iy = -kernelSizeY; iy <= kernelSizeY; iy++) {
+        for (int ix = -halfKX; ix <= halfKX; ix++) {
+            // Load source kernel and precompute features
+            PatchFeatures src = loadPatch(pos + ivec2(ix, iy));
+
+            // Per-channel similarity test and accumulation
+            // Matches Metal: sum.add(source.isSimilar<GetX/Y/Z/W>(center, ...), source.center.x/y/z/w)
+            for (int ch = 0; ch < 4; ch++) {
+                bvec4 sim;
+                if (useCmos != 0) {
+                    sim = isSimilarCmos(ch, src, ctr, lumaThr, pat2Thr);
+                } else {
+                    sim = isSimilarCcd(ch, src, ctr, lumaThr, pat2Thr);
+                }
+                // Add source.center[ch] (scalar broadcast) to each output channel where similar
+                sumVal   += vec4(sim) * float(src.center[ch]);
+                countVal += vec4(sim);
+            }
+        }
+    }
+
+    // ---- Debug mode 3: Visualize match count ratio ----
+    if (debugMode == 3) {
+        int totalSearched = (2 * kernelSizeY + 1) * (2 * halfKX + 1) * 4;
+        vec4 ratio = countVal / float(totalSearched);
+        imageStore(uOutputImage, gid, ratio);
+        return;
+    }
+
+    // ---- Debug mode 4: Visualize threshold (lumaThr normalized) ----
+    if (debugMode == 4) {
+        vec4 thrViz = vec4(lumaThr) / 65535.0;
+        imageStore(uOutputImage, gid, thrViz);
+        return;
+    }
+
+    // ---- Average and subtract offset ----
+    // Matches Metal: ushort4(sum.average() - offset)
+    vec4 avg = sumVal / max(countVal, vec4(1.0));
+    ivec4 result = ivec4(avg) - offset;
+    result = max(result, ivec4(0));
+
+    // ---- Debug mode 5: Output with offset subtraction only (no denoising) ----
+    if (debugMode == 5) {
+        ivec4 noDenoiseResult = max(ctr.center - offset, ivec4(0));
+        imageStore(uOutputImage, gid, vec4(noDenoiseResult) / 65535.0);
+        return;
+    }
+
+    // Convert back to normalized [0,1] for half float output
+    vec4 outVal = vec4(result) / 65535.0;
+    imageStore(uOutputImage, gid, outVal);
+}
