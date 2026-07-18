@@ -2880,11 +2880,19 @@ class GlesYuvStacker(
                 return max(max(value.r, value.g), value.b);
             }
 
-            float validity(vec3 rgb) {
+            float deghostValidity(vec3 rgb) {
                 float y = luma(rgb);
                 float blackGate = smoothstep(0.055, 0.145, y);
                 float whiteGate = 1.0 - smoothstep(0.865, 0.975, max3(rgb));
                 return clamp(blackGate * whiteGate, 0.0, 1.0);
+            }
+
+            float highlightValidity(vec3 rgb) {
+                // Fusion happens after YCbCr-to-RGB conversion has clamped every
+                // channel to [0, 1]. Once any channel reaches the shoulder there
+                // is no reliable chroma left in that exposure. Reject the clipped
+                // observation and let a shorter exposure provide the highlight.
+                return 1.0 - smoothstep(0.960, 0.995, max3(rgb));
             }
 
             float referenceStructure(ivec2 coord) {
@@ -2927,7 +2935,7 @@ class GlesYuvStacker(
 
                 float sideLuma = luma(side);
                 float referenceLuma = luma(reference);
-                float comparable = validity(side) * validity(reference) * referenceStructure(ivec2(x, y));
+                float comparable = deghostValidity(side) * deghostValidity(reference) * referenceStructure(ivec2(x, y));
                 if (comparable <= 0.001) {
                     return 0.0;
                 }
@@ -2977,12 +2985,20 @@ class GlesYuvStacker(
                 vec3 expo = exp(-(expoDelta * expoDelta) / 0.08);
                 float wellExposedness = expo.r * expo.g * expo.b;
 
-                float weight =
+                float qualityWeight =
                     pow(max(contrast, 0.0), uContrastWeight) *
                     pow(max(saturation, 0.0), uSaturationWeight) *
                     pow(max(wellExposedness, 0.0), uExposureWeight);
-                weight = weight * computeDeghostAlpha(coord) + 1e-12;
-                fragColor = vec4(weight, weight, weight, 1.0);
+                float admissibility = highlightValidity(rgb) * computeDeghostAlpha(coord);
+
+                // Store independent weight tiers. Flat or neutral regions have no
+                // contrast/saturation and therefore no quality weight; the next
+                // pass can then fall back to well-exposedness without assigning an
+                // equal share to clipped frames. The final tier preserves a valid
+                // deterministic choice if all quality metrics become too small.
+                float primaryWeight = qualityWeight * admissibility;
+                float fallbackWeight = wellExposedness * admissibility;
+                fragColor = vec4(primaryWeight, fallbackWeight, admissibility, 1.0);
             }
         """.trimIndent()
 
@@ -2995,11 +3011,31 @@ class GlesYuvStacker(
             uniform sampler2D uWeight1;
             uniform sampler2D uWeight2;
             void main() {
-                float w0 = texture(uWeight0, vTexCoord).r;
-                float w1 = texture(uWeight1, vTexCoord).r;
-                float w2 = texture(uWeight2, vTexCoord).r;
-                float sum = max(w0 + w1 + w2, 1e-12);
-                fragColor = vec4(w0 / sum, w1 / sum, w2 / sum, 1.0);
+                vec3 raw0 = texture(uWeight0, vTexCoord).rgb;
+                vec3 raw1 = texture(uWeight1, vTexCoord).rgb;
+                vec3 raw2 = texture(uWeight2, vTexCoord).rgb;
+                vec3 weights;
+
+                float primarySum = raw0.r + raw1.r + raw2.r;
+                if (primarySum > 1e-6) {
+                    weights = vec3(raw0.r, raw1.r, raw2.r) / primarySum;
+                } else {
+                    float fallbackSum = raw0.g + raw1.g + raw2.g;
+                    if (fallbackSum > 1e-6) {
+                        weights = vec3(raw0.g, raw1.g, raw2.g) / fallbackSum;
+                    } else {
+                        float admissibleSum = raw0.b + raw1.b + raw2.b;
+                        if (admissibleSum > 1e-6) {
+                            weights = vec3(raw0.b, raw1.b, raw2.b) / admissibleSum;
+                        } else {
+                            // No exposure contains recoverable highlight data.
+                            // Preserve the denoised zero-EV reference instead of
+                            // averaging equally with clipped side frames.
+                            weights = vec3(1.0, 0.0, 0.0);
+                        }
+                    }
+                }
+                fragColor = vec4(weights, 1.0);
             }
         """.trimIndent()
 
