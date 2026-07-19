@@ -38,7 +38,65 @@ class GlesRawStackerShaderTest {
     fun productionShadersCompileAndLinkOnDevice() {
         validateMode(RawStackMode.MFNR)
         validateMode(RawStackMode.MFSR)
+        validateRadianceMode()
         validateHdrMode()
+    }
+
+    private fun validateRadianceMode() {
+        val stacker = GlesRawStacker(
+            width = 64,
+            height = 64,
+            cfaPattern = 0,
+            blackLevel = floatArrayOf(64f, 64f, 64f, 64f),
+            whiteLevel = 4095,
+            noiseModel = floatArrayOf(0.001f, 0.00001f),
+            lensShading = null,
+            lensShadingWidth = 0,
+            lensShadingHeight = 0,
+            tuning = RawStackTuningProfile(
+                mode = RawStackMode.MFSR,
+                superResolution = RawStackSuperResolutionTuning(outputScale = 1.5f),
+            ),
+            debugConfig = RawStackDebugConfig.Disabled,
+            fusionPipeline = RawFusionPipeline.RADIANCE_RGB,
+        )
+        try {
+            invokePrivate(stacker, "initEgl")
+            invokePrivate(stacker, "ensureGles31")
+            invokePrivate(stacker, "initPrograms")
+            invokePrivate(stacker, "initResources")
+            invokePrivate(stacker, "applyRawRenderState")
+            invokePrivate(stacker, "ensureRadianceRcdStripeResources", 64)
+            invokePrivate(stacker, "runRcdStripe", 0, 64, "instrumentation Radiance", true)
+            invokePrivate(
+                stacker,
+                "storeRcdRgbStripe",
+                readPrivateInt(stacker, "radianceRgbStripeTexture"),
+                64,
+                "instrumentation Radiance RGB store",
+                1f,
+                false,
+            )
+            invokePrivate(stacker, "clearSuperResolutionAccumulator")
+            invokePrivate(
+                stacker,
+                "accumulateRadianceFusionFrame",
+                true,
+                0,
+                64,
+                readPrivateInt(stacker, "flowTexture"),
+                readPrivateInt(stacker, "robustnessTexture"),
+                readPrivateInt(stacker, "tileMaskTexture"),
+                1f,
+                1f,
+                0,
+                64,
+            )
+            invokePrivate(stacker, "captureRadianceReferenceBase", 64)
+            invokePrivate(stacker, "normalizeSuperResolutionStripe", 0, 64, 0)
+        } finally {
+            invokePrivate(stacker, "release")
+        }
     }
 
     private fun validateHdrMode() {
@@ -109,12 +167,7 @@ class GlesRawStackerShaderTest {
             invokePrivate(stacker, "clearAccumulator")
             invokePrivate(stacker, "accumulateFrame", refRaw, true, 1f, false)
             if (mode == RawStackMode.MFSR) {
-                invokePrivate(
-                    stacker,
-                    "reconstructSuperResolutionStripes",
-                    createSuperResolutionDecision(),
-                    emptyList<Any>(),
-                )
+                invokePrivate(stacker, "clearSuperResolutionAccumulator")
             }
             invokePrivate(
                 stacker,
@@ -161,13 +214,4 @@ class GlesRawStackerShaderTest {
         }
     }
 
-    private fun createSuperResolutionDecision(): Any {
-        val decisionClass = GlesRawStacker::class.java.declaredClasses.first {
-            it.simpleName == "SuperResolutionOutputDecision"
-        }
-        return decisionClass.declaredConstructors.first { it.parameterCount == 7 }.run {
-            isAccessible = true
-            newInstance("SUPER_RESOLUTION", null, 1, 1f, 1, 4, listOf(1, 0, 0, 0))
-        }
-    }
 }

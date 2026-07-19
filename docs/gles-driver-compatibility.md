@@ -50,6 +50,32 @@ MFSR accumulator 只保存 `weightedValue + weight`，使用一张 `R32UI`，为
 所有读取 accumulator 的 fragment/compute shader 必须使用 `usampler2D`，取出 `uint` 后再
 调用 `unpackHalf2x16`。禁止把 `R32UI` texture 绑定给普通 `sampler2D`。
 
+### Radiance RGB accumulator
+
+`GlesRawRadianceFusion` 同样遵循上述限制，不使用 `RGBA32F/RGBA16F` read/write image。
+每个输出像素使用四张 `R32UI`：
+
+1. NR `sumR + sumG`
+2. NR `sumB + weight`
+3. Detail `sumR + sumG`
+4. Detail `sumB + weight`
+
+四张纹理均通过 `packHalf2x16` 原位累积。参考帧连续 RGB 底图在参考帧累积完成后，由
+`usampler2D` 读取 NR accumulator，再写入单独的 `RGBA16F writeonly image2D`。最终
+normalize 只能通过四个 `usampler2D` 和一个普通 `sampler2D` 读取这些资源。
+
+这样 compute pass 同时最多绑定四个 read/write image，且所有 read/write image 都是已经
+在 PMA110 验证过的 `R32UI`。
+
+Radiance 每帧先通过项目既有的 RCD pass 得到条带式 `RGBA16F` 连续 RGB。RCD 结果通过
+`writeonly image2D` 写入、在 accumulator pass 中只作为普通线性过滤 `sampler2D` 读取，
+不作为 read/write image。这样避免分别插值 R/G/B CFA 平面造成的绿色 zipper 和孤立伪色，
+同时把 accumulator pass 的 RAW/LSC 邻域读取缩减为少量 RGB texture sample。
+
+窄核 Detail accumulator 默认只向宽核 NR 结果注入亮度高频；色度由宽核分支持有。只有在
+多帧细节支持度和一致性都足够高时，才允许通过 `detailChromaStrength` 恢复一部分窄核色度。
+这样可避免对齐残差重新被放大成彩色 zipper。
+
 ### 验收要求
 
 相关修改至少验证以下路径：
@@ -60,6 +86,7 @@ MFSR accumulator 只保存 `weightedValue + weight`，使用一张 `R32UI`，为
 - `R32UI` imageLoad/imageStore
 - `usampler2D` normalize
 - MFNR 与 MFSR 两种模式
+- Radiance clear、accumulate、reference-base capture 与 normalize 四个 pass
 
 桌面静态检查和 Kotlin 编译不能替代真机验证。新增格式前应优先扩展
 `app/src/androidTest/java/com/hinnka/mycamera/processor/GlesRawStackerShaderTest.kt`，让测试实际
