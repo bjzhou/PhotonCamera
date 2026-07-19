@@ -200,6 +200,15 @@ class RawDemosaicProcessor {
         private const val RCD_VH_DIR_BINDING = 4
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MIN_WB_GAIN = 1e-3f
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MAX_WB_GAIN = 64.0f
+        // PASS_3 needs 16 pixels, and the following color-noise stages consume another
+        // three one-pixel neighborhoods before the final ROI crop. Keep the offset a
+        // multiple of four so the packed RGBA Bayer layout remains aligned.
+        private const val VGN_WORK_HALO = 20
+        // Phocus' color-noise control is an integer level. Level 50 selects 4LP table entry
+        // min(level, 40) + 4 = 44 for pass 1 and entry min(level, 74) - 30 = 20 for pass 3.
+        // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
+        private const val VGN_COLOR_NOISE_LEVEL = 50
+        private const val VGN_ADVANCED_COLOR_NOISE_ENABLED = true
         private const val FILMIC_GREY_SOURCE = 0.1845f
         private const val FILMIC_OUTPUT_POWER = 3.614815775f
         private const val FILMIC_DISPLAY_BLACK = 0.0001517634f
@@ -270,6 +279,7 @@ class RawDemosaicProcessor {
     private var rcdStep42Program = 0
     private var rcdStep43Program = 0
     private var rcdWriteOutputProgram = 0
+    private val vgnPrograms = IntArray(VgnShaders.PROGRAM_SOURCES.size)
     private var quadPopulateProgram = 0
     private var quadGreenProgram = 0
     private var quadChromaProgram = 0
@@ -1468,267 +1478,19 @@ class RawDemosaicProcessor {
                         highlightReconstructionEnabled = rawDomainHighlightReconstructionEnabled
                     )
                 } else {
-            // Bayer RCD Compute Shader 处理路径 (1:1 直接映射自 darktable RCD)
-            val ssboIds = IntArray(9)
-            GLES31.glGenBuffers(9, ssboIds, 0)
-            val extraMargin = 1024 * 1024 // 1MB 额外余量，彻底防止移动端 GPU 推测性越界读取越界崩溃
-            val fullSize = actualWidth * actualHeight * 4 + extraMargin
-            val sizes = intArrayOf(
-                fullSize, // CFA_Buf (0)
-                fullSize, // RGB0_Buf (1)
-                fullSize, // RGB1_Buf (2)
-                fullSize, // RGB2_Buf (3)
-                fullSize, // VH_Dir_Buf (4)
-                fullSize, // LPF_Buf (5)
-                fullSize, // P_Diff_Buf (6)
-                fullSize, // Q_Diff_Buf (7)
-                fullSize  // PQ_Dir_Buf (8)
-            )
-            for (i in 0 until 9) {
-                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, ssboIds[i])
-                GLES31.glBufferData(
-                    GLES31.GL_SHADER_STORAGE_BUFFER,
-                    sizes[i],
-                    null,
-                    GLES31.GL_DYNAMIC_DRAW
-                )
-                if (i < 8) {
-                    GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, i, ssboIds[i])
+                if (actualMetadata.frameCount > 1) {
+                    runStandardBayerRcdDemosaic(actualMetadata, actualWidth, actualHeight)
+                } else {
+                    // Linear HDR/MFSR helpers below also call the old RCD method directly.
+                    runSingleFrameVgnDemosaic(
+                        metadata = actualMetadata,
+                        width = actualWidth,
+                        height = actualHeight,
+                        highlightReconstructionEnabled = rawDomainHighlightReconstructionEnabled,
+                    )
+                }
                 }
             }
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-
-            // 2.0 Populate (黑电平扣除、镜头阴影校正与高光重建；输出保持 camera RGB)
-            val blackLevel4 = FloatArray(4) { idx ->
-                actualMetadata.blackLevel.getOrElse(idx) {
-                    actualMetadata.blackLevel.firstOrNull() ?: 0f
-                }
-                    .coerceAtLeast(0f)
-            }
-
-            GLES31.glUseProgram(rcdPopulateProgram)
-            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uRawTexture"),
-                RCD_RAW_TEXTURE_UNIT
-            )
-            bindLensShadingForRcdPopulate(actualMetadata)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uBlackLevel"),
-                1,
-                blackLevel4,
-                0
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uWhiteLevel"),
-                actualMetadata.whiteLevel
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightClipThreshold"),
-                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightCeiling"),
-                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdPopulateProgram, "uHighlightReconstructionEnabled"),
-                if (rawDomainHighlightReconstructionEnabled) 1 else 0
-            )
-            val metadataWbGains = actualMetadata.whiteBalanceGains
-            val calculationWbGains = demosaicCalculationWbGains(actualMetadata)
-            val lscSize = lensShadingLogString(actualMetadata)
-            PLog.d(
-                TAG,
-                "RCD populate: cfa=${actualMetadata.cfaPattern} black=${blackLevel4.contentToString()} " +
-                        "white=${actualMetadata.whiteLevel} metadataWb=${metadataWbGains.contentToString()} " +
-                        "calculationWb=${calculationWbGains.contentToString()} " +
-                        "lsc=$lscSize " +
-                        "highlightReconstruction=$rawDomainHighlightReconstructionEnabled " +
-                        "highlightThreshold=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD} " +
-                        "highlightCeiling=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING} " +
-                        "blacks=${rawBlackPointCorrection.coerceIn(-1f, 1f)} " +
-                        "whites=${rawWhitePointCorrection.coerceIn(-1f, 1f)}"
-            )
-            GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(
-                    rcdPopulateProgram,
-                    "uWhiteBalanceGains"
-                ), 1, calculationWbGains, 0
-            )
-            GLES31.glDispatchCompute((actualWidth + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Populate")
-
-            // 2.1 Step 1 (共享内存垂直与水平梯度估计)
-            GLES31.glUseProgram(rcdStep1Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep1Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glDispatchCompute((actualWidth + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 1")
-
-            // 2.2 Step 2 (低通滤波 LPF 计算)
-            GLES31.glUseProgram(rcdStep2Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep2Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdStep2Program, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glDispatchCompute((actualWidth / 2 + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 2")
-
-            // 2.3 Step 3 (绿通道在红蓝位置的边缘自适应插值)
-            GLES31.glUseProgram(rcdStep3Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep3Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdStep3Program, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glDispatchCompute((actualWidth / 2 + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 3")
-
-            // 2.4 Step 4_0 (对角线高通滤波差分计算)
-            GLES31.glUseProgram(rcdStep40Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep40Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glDispatchCompute((actualWidth / 2 + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 4_0")
-
-            // 2.5 Step 4_1 (对角线方向强弱度选择)
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                RCD_PQ_WRITE_BINDING,
-                ssboIds[8]
-            )
-            GLES31.glUseProgram(rcdStep41Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep41Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdStep41Program, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glDispatchCompute((actualWidth / 2 + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 4_1")
-
-            // 2.6 Step 4_2 (红蓝通道在红蓝位置色差引导插值)
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                RCD_PQ_READ_BINDING,
-                ssboIds[8]
-            )
-            GLES31.glUseProgram(rcdStep42Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep42Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdStep42Program, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glDispatchCompute((actualWidth / 2 + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 4_2")
-
-            // 2.7 Step 4_3 (红蓝通道在绿色位置插值)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, RCD_VH_DIR_BINDING, ssboIds[4])
-            GLES31.glUseProgram(rcdStep43Program)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdStep43Program, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdStep43Program, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glDispatchCompute((actualWidth / 2 + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-            checkGlError("RCD Step 4_3")
-
-            // 2.8 Write Output (组合输出到 RGBA16F 纹理)
-            GLES31.glUseProgram(rcdWriteOutputProgram)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uImageSize"),
-                actualWidth,
-                actualHeight
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCfaPattern"),
-                actualMetadata.cfaPattern
-            )
-            GLES31.glUniform3f(
-                GLES31.glGetUniformLocation(rcdWriteOutputProgram, "uCalculationGains"),
-                calculationWbGains[0],
-                1f,
-                calculationWbGains[3]
-            )
-            GLES31.glBindImageTexture(
-                RCD_OUTPUT_IMAGE_UNIT,
-                demosaicTextureId,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES31.GL_RGBA16F
-            )
-            GLES31.glDispatchCompute((actualWidth + 15) / 16, (actualHeight + 15) / 16, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
-            checkGlError("RCD Write Output")
-
-            GLES31.glBindImageTexture(
-                RCD_OUTPUT_IMAGE_UNIT,
-                0,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES31.GL_RGBA16F
-            )
-
-            // 强制等待 GPU 彻底完成所有之前的渲染和计算指令，确保 SSBO 被 GPU 完全读取完毕后再进行安全删除
-            GLES30.glFinish()
-
-            // 清理 SSBO
-            GLES31.glDeleteBuffers(9, ssboIds, 0)
-            for (i in 0 until 8) {
-                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, i, 0)
-            }
-            }
-            }
-
             dngWarpRectilinear?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }?.let { warps ->
                 var appliedWarpCount = 0
                 for (offset in warps.indices step 8) {
@@ -2794,7 +2556,8 @@ class RawDemosaicProcessor {
                 rcdStep42Program == 0 || rcdStep43Program == 0 || rcdWriteOutputProgram == 0 ||
                 quadPopulateProgram == 0 || quadGreenProgram == 0 || quadChromaProgram == 0 ||
                 quadRefineProgram == 0 || quadWriteOutputProgram == 0 ||
-                linearRcdProgram == 0 || linearRawRgbProgram == 0
+                linearRcdProgram == 0 || linearRawRgbProgram == 0 ||
+                vgnPrograms.any { it == 0 }
             ) {
                 PLog.e(
                     TAG, "Critical shader programs failed to compile or link. " +
@@ -2807,7 +2570,8 @@ class RawDemosaicProcessor {
                             "quadPopulate=$quadPopulateProgram quadGreen=$quadGreenProgram " +
                             "quadChroma=$quadChromaProgram quadRefine=$quadRefineProgram " +
                             "quadWrite=$quadWriteOutputProgram " +
-                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram"
+                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram " +
+                            "vgn=${vgnPrograms.contentToString()}"
                 )
                 return false
             }
@@ -3491,6 +3255,9 @@ class RawDemosaicProcessor {
         rcdStep42Program = compileComputeProgram(RcdShaders.STEP_4_2, "STEP_4_2")
         rcdStep43Program = compileComputeProgram(RcdShaders.STEP_4_3, "STEP_4_3")
         rcdWriteOutputProgram = compileComputeProgram(RcdShaders.WRITE_OUTPUT, "WRITE_OUTPUT")
+        VgnShaders.PROGRAM_SOURCES.forEachIndexed { index, (label, source) ->
+            vgnPrograms[index] = compileComputeProgram(source, "VGN_${label.uppercase(Locale.ROOT)}")
+        }
         quadPopulateProgram = compileComputeProgram(QuadBayerShaders.POPULATE, "QUAD_POPULATE")
         quadGreenProgram = compileComputeProgram(QuadBayerShaders.GREEN, "QUAD_GREEN")
         quadChromaProgram = compileComputeProgram(QuadBayerShaders.CHROMA, "QUAD_CHROMA")
@@ -5285,6 +5052,696 @@ class RawDemosaicProcessor {
             else -> {
                 "${metadata.lensShadingMapWidth}x${metadata.lensShadingMapHeight},camera2"
             }
+        }
+    }
+
+    private data class VgnImageBinding(
+        val unit: Int,
+        val texture: Int,
+        val access: Int,
+        val format: Int,
+    )
+
+    private fun createVgnTexture(internalFormat: Int, width: Int, height: Int, label: String): Int {
+        require(width > 0 && height > 0) { "Invalid VGN texture size for $label: ${width}x$height" }
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        check(ids[0] != 0) { "Failed to allocate VGN texture for $label" }
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        checkGlError("VGN allocate $label ${width}x$height")
+        return ids[0]
+    }
+
+    private fun vgnUbo(capacity: Int, writer: ByteBuffer.() -> Unit): ByteBuffer {
+        val buffer = ByteBuffer.allocateDirect(capacity).order(ByteOrder.nativeOrder())
+        buffer.writer()
+        buffer.limit(buffer.position())
+        buffer.position(0)
+        return buffer
+    }
+
+    private fun vgnBoundsUbo(left: Int, top: Int, right: Int, bottom: Int): ByteBuffer =
+        vgnUbo(16) {
+            putInt(left)
+            putInt(top)
+            putInt(right)
+            putInt(bottom)
+        }
+
+    private fun vgnThresholdBoundsUbo(
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        edgeThreshold: Int,
+        vngThreshold: Int,
+    ): ByteBuffer = vgnUbo(32) {
+        putInt(left)
+        putInt(top)
+        putInt(right)
+        putInt(bottom)
+        putInt(edgeThreshold)
+        putInt(vngThreshold)
+        putInt(0)
+        putInt(0)
+    }
+
+    private data class VgnIirCoefficients(
+        val a10: FloatArray,
+        val b10: FloatArray,
+        val aDyn1: FloatArray,
+        val bDyn1: FloatArray,
+        val aDyn2: FloatArray,
+        val bDyn2: FloatArray,
+    )
+
+    // Exact coefficient rows selected by CDemosaicFilter::FilterResultGpu for color-noise
+    // level 50. a10/b10 is GetIIRFilter2LPCoefFloat(14); the two dynamic sections are the
+    // cascaded biquads returned by GetIIRFilter4LPCoefFloat(44) and (20), respectively.
+    private val vgnIirPass1Coefficients = VgnIirCoefficients(
+        a10 = floatArrayOf(0.0674552768f, 0.134910554f, 0.0674552768f, 0f),
+        b10 = floatArrayOf(1f, -1.14298046f, 0.412801594f, 0f),
+        aDyn1 = floatArrayOf(0.00580812711f, 0.0116162542f, 0.00580812711f, 0f),
+        bDyn1 = floatArrayOf(1f, -1.86380053f, 0.887032986f, 0f),
+        aDyn2 = floatArrayOf(0.00537849404f, 0.0107569881f, 0.00537849404f, 0f),
+        bDyn2 = floatArrayOf(1f, -1.72593343f, 0.747447371f, 0f),
+    )
+
+    private val vgnIirPass3Coefficients = VgnIirCoefficients(
+        a10 = vgnIirPass1Coefficients.a10,
+        b10 = vgnIirPass1Coefficients.b10,
+        aDyn1 = floatArrayOf(0.0331984349f, 0.0663968697f, 0.0331984349f, 0f),
+        bDyn1 = floatArrayOf(1f, -1.61172712f, 0.744520843f, 0f),
+        aDyn2 = floatArrayOf(0.0281187538f, 0.0562375076f, 0.0281187538f, 0f),
+        bDyn2 = floatArrayOf(1f, -1.36511719f, 0.47759226f, 0f),
+    )
+
+    private fun vgnIirUbo(
+        width: Int,
+        height: Int,
+        direction: Int,
+        axis: Int,
+        coefficients: VgnIirCoefficients,
+    ): ByteBuffer {
+        return vgnUbo(112) {
+            for (value in coefficients.a10) putFloat(value)
+            for (value in coefficients.b10) putFloat(value)
+            for (value in coefficients.aDyn1) putFloat(value)
+            for (value in coefficients.bDyn1) putFloat(value)
+            for (value in coefficients.aDyn2) putFloat(value)
+            for (value in coefficients.bDyn2) putFloat(value)
+            putInt(width)
+            putInt(height)
+            putInt(direction)
+            putInt(axis)
+        }
+    }
+
+    private fun dispatchVgnPass(
+        programIndex: Int,
+        groupCountX: Int,
+        groupCountY: Int,
+        label: String,
+        uboId: Int,
+        uboBinding: Int? = null,
+        ubo: ByteBuffer? = null,
+        vararg images: VgnImageBinding,
+    ) {
+        val program = vgnPrograms[programIndex]
+        check(program != 0) { "VGN program unavailable: $label" }
+        GLES31.glUseProgram(program)
+        for (image in images) {
+            GLES31.glBindImageTexture(
+                image.unit,
+                image.texture,
+                0,
+                false,
+                0,
+                image.access,
+                image.format,
+            )
+        }
+        if (uboBinding != null && ubo != null) {
+            GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, uboId)
+            GLES31.glBufferData(
+                GLES31.GL_UNIFORM_BUFFER,
+                ubo.remaining(),
+                ubo,
+                GLES31.GL_DYNAMIC_DRAW,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, uboBinding, uboId)
+            GLES31.glBindBuffer(GLES31.GL_UNIFORM_BUFFER, 0)
+        }
+        GLES31.glDispatchCompute(groupCountX.coerceAtLeast(1), groupCountY.coerceAtLeast(1), 1)
+        GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+        checkGlError("VGN $label")
+    }
+
+    private fun unbindVgnImages() {
+        for (unit in 0..5) {
+            GLES31.glBindImageTexture(
+                unit,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_READ_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+        }
+    }
+
+    private fun runVgnIirPass(
+        programIndex: Int,
+        source: Int,
+        destination: Int,
+        uboId: Int,
+        width: Int,
+        height: Int,
+        direction: Int,
+        axis: Int,
+        coefficients: VgnIirCoefficients,
+        label: String,
+    ) {
+        val groupsX = if (axis == 0) 1 else width
+        val groupsY = if (axis == 0) height else 1
+        dispatchVgnPass(
+            programIndex = programIndex,
+            groupCountX = groupsX,
+            groupCountY = groupsY,
+            label = label,
+            uboId = uboId,
+            uboBinding = 2,
+            ubo = vgnIirUbo(width, height, direction, axis, coefficients),
+            VgnImageBinding(0, source, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+            VgnImageBinding(1, destination, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+        )
+    }
+
+    /**
+     * Packed Bayer VGN demosaic used only by processInternal's ordinary single-frame CFA path.
+     * The multi-frame/HDR entry points deliberately retain runStandardBayerRcdDemosaic().
+     */
+    private fun runSingleFrameVgnDemosaic(
+        metadata: RawMetadata,
+        width: Int,
+        height: Int,
+        highlightReconstructionEnabled: Boolean,
+    ) {
+        require(metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
+            "VGN requires a standard 2x2 Bayer CFA, got ${metadata.cfaPattern}"
+        }
+        require(width >= 64 && height >= 64) {
+            "VGN input is too small for the 16-pixel reference halo: ${width}x$height"
+        }
+
+        val phaseX = if (metadata.cfaPattern == RawMetadata.CFA_GRBG ||
+            metadata.cfaPattern == RawMetadata.CFA_BGGR
+        ) 1 else 0
+        val phaseY = if (metadata.cfaPattern == RawMetadata.CFA_GBRG ||
+            metadata.cfaPattern == RawMetadata.CFA_BGGR
+        ) 1 else 0
+        // The reference shaders operate on a canonical RGGB work domain. Offsetting the
+        // photo ROI by the source CFA phase preserves that parity without translating the
+        // finished RGB image. The surrounding pixels are edge-extended support data only.
+        val roiLeft = VGN_WORK_HALO + phaseX
+        val roiTop = VGN_WORK_HALO + phaseY
+        val roiRight = roiLeft + width
+        val roiBottom = roiTop + height
+        val packedWidth = (roiRight + VGN_WORK_HALO + 3) / 4
+        val workWidth = packedWidth * 4
+        val workHeight = ((roiBottom + VGN_WORK_HALO + 1) / 2) * 2
+        val halfHeight = workHeight / 2
+        val groupsPackedX = (packedWidth + 15) / 16
+        val groupsWorkX = (workWidth + 15) / 16
+        val groupsWorkY = (workHeight + 15) / 16
+        val groupsHalfHeight = (halfHeight + 15) / 16
+        val groupsOutputX = (width + 15) / 16
+        val groupsOutputY = (height + 15) / 16
+        val calculationGains = demosaicCalculationWbGains(metadata)
+        val blackLevel4 = FloatArray(4) { index ->
+            metadata.blackLevel.getOrElse(index) { metadata.blackLevel.firstOrNull() ?: 0f }
+                .coerceAtLeast(0f)
+        }
+        val (_, noiseOffset) = resolveDenoiseProfileNoiseModel(metadata, 1f)
+        // Phocus feeds PASS_0A2 with black/read-noise deviation, not the total noise at
+        // middle grey. Its GetInterpolateThresholds() then clamps blackStd / demosaicGain
+        // to [1, 100] and derives the two direction thresholds as 50/gain and 400/gain.
+        // PREPARE_PACKED_RAW already normalizes the sensor range and applies the calculation
+        // neutral, so the corresponding demosaic gain in this work domain is exactly 1.
+        val standardDeviation =
+            (sqrt(noiseOffset.coerceAtLeast(1e-10f)) * 65535f).coerceIn(1f, 100f)
+        val edgeThreshold = 50
+        val vngThreshold = 400
+        val liveTextures = linkedSetOf<Int>()
+        fun allocate(format: Int, textureWidth: Int, textureHeight: Int, label: String): Int =
+            createVgnTexture(format, textureWidth, textureHeight, label).also(liveTextures::add)
+        fun releaseTexture(texture: Int) {
+            if (liveTextures.remove(texture)) {
+                GLES30.glDeleteTextures(1, intArrayOf(texture), 0)
+            }
+        }
+
+        val uboIds = IntArray(1)
+        GLES31.glGenBuffers(1, uboIds, 0)
+        check(uboIds[0] != 0) { "Failed to allocate VGN UBO" }
+
+        try {
+            val packedFloat = allocate(GLES30.GL_RGBA16F, packedWidth, workHeight, "packed float")
+            val packedBayer = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed Bayer")
+            val packedSmooth = allocate(GLES30.GL_RGBA16UI, packedWidth, workHeight, "packed smooth")
+            val scaleTexture = allocate(GLES30.GL_RGBA16F, workWidth, halfHeight, "scale")
+            val medianTexture = allocate(GLES30.GL_RGBA16F, packedWidth, halfHeight, "median")
+            val edgeTexture = allocate(GLES30.GL_RGBA16I, packedWidth, workHeight, "edge")
+            val full0 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 0")
+            val full1 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 1")
+
+            val prepareProgram = vgnPrograms[VgnShaders.PROGRAM_PREPARE]
+            GLES31.glUseProgram(prepareProgram)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(prepareProgram, "uRawTexture"),
+                RCD_RAW_TEXTURE_UNIT,
+            )
+            bindLensShadingForProgram(prepareProgram, metadata)
+            GLES31.glUniform2i(GLES31.glGetUniformLocation(prepareProgram, "uImageSize"), width, height)
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(prepareProgram, "uPackedSize"),
+                packedWidth,
+                workHeight,
+            )
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(prepareProgram, "uSourceOffset"),
+                roiLeft,
+                roiTop,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(prepareProgram, "uCfaPattern"),
+                metadata.cfaPattern,
+            )
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(prepareProgram, "uBlackLevel"),
+                1,
+                blackLevel4,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(prepareProgram, "uWhiteLevel"),
+                metadata.whiteLevel,
+            )
+            GLES31.glUniform4fv(
+                GLES31.glGetUniformLocation(prepareProgram, "uCalculationGains"),
+                1,
+                calculationGains,
+                0,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(prepareProgram, "uHighlightClipThreshold"),
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(prepareProgram, "uHighlightCeiling"),
+                RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(prepareProgram, "uHighlightReconstructionEnabled"),
+                if (highlightReconstructionEnabled) 1 else 0,
+            )
+            GLES31.glBindImageTexture(
+                0,
+                packedFloat,
+                0,
+                false,
+                0,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+            GLES31.glDispatchCompute(groupsPackedX, groupsWorkY, 1)
+            GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+            checkGlError("VGN prepare packed RAW")
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_NEUTRAL,
+                groupsPackedX,
+                groupsWorkY,
+                "neutral",
+                uboIds[0],
+                2,
+                vgnUbo(48) {
+                    putInt(0); putInt(0); putInt(packedWidth); putInt(workHeight)
+                    putInt(4096); putInt(4096); putInt(4096); putInt(0)
+                    putInt(12); putInt(0); putInt(0); putInt(0)
+                },
+                VgnImageBinding(0, packedFloat, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(1, packedBayer, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0A1,
+                groupsPackedX,
+                groupsWorkY,
+                "pass 0A1",
+                uboIds[0],
+                2,
+                vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
+                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, packedSmooth, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0A2,
+                groupsWorkX,
+                groupsHalfHeight,
+                "pass 0A2",
+                uboIds[0],
+                2,
+                vgnUbo(32) {
+                    putInt(0); putInt(1); putInt(packedWidth - 1); putInt((workHeight - 2) / 2)
+                    putFloat(standardDeviation); putFloat(0f); putFloat(0f); putFloat(0f)
+                },
+                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, scaleTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0B,
+                groupsPackedX,
+                groupsHalfHeight,
+                "pass 0B",
+                uboIds[0],
+                2,
+                vgnBoundsUbo(1, 0, packedWidth - 1, workHeight - 4),
+                VgnImageBinding(0, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(1, medianTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_0C,
+                groupsPackedX,
+                groupsWorkY,
+                "pass 0C",
+                uboIds[0],
+                2,
+                vgnBoundsUbo(0, 1, packedWidth - 1, workHeight - 1),
+                VgnImageBinding(0, packedSmooth, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, edgeTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16I),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_1,
+                groupsWorkX,
+                groupsWorkY,
+                "pass 1",
+                uboIds[0],
+                5,
+                vgnThresholdBoundsUbo(
+                    12,
+                    12,
+                    workWidth - 12,
+                    workHeight - 12,
+                    edgeThreshold,
+                    vngThreshold,
+                ),
+                VgnImageBinding(0, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, edgeTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16I),
+                VgnImageBinding(2, scaleTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(3, medianTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F),
+                VgnImageBinding(4, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_2,
+                groupsWorkX,
+                groupsWorkY,
+                "pass 2",
+                uboIds[0],
+                2,
+                vgnBoundsUbo(13, 13, workWidth - 13, workHeight - 13),
+                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_3,
+                groupsWorkX,
+                groupsWorkY,
+                "pass 3",
+                uboIds[0],
+                4,
+                vgnThresholdBoundsUbo(
+                    16,
+                    16,
+                    workWidth - 16,
+                    workHeight - 16,
+                    edgeThreshold,
+                    vngThreshold,
+                ),
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, packedBayer, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(2, edgeTexture, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16I),
+                VgnImageBinding(3, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            unbindVgnImages()
+            releaseTexture(packedFloat)
+            releaseTexture(packedSmooth)
+            releaseTexture(scaleTexture)
+            releaseTexture(medianTexture)
+            releaseTexture(edgeTexture)
+            releaseTexture(packedBayer)
+
+            val full2 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 2")
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_1,
+                groupsWorkX,
+                groupsWorkY,
+                "color noise 1",
+                uboIds[0],
+                2,
+                vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
+                VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            dispatchVgnPass(
+                VgnShaders.PROGRAM_COLOR_NOISE_2,
+                groupsWorkX,
+                groupsWorkY,
+                "color noise 2",
+                uboIds[0],
+                2,
+                vgnBoundsUbo(8, 8, workWidth - 8, workHeight - 8),
+                VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                VgnImageBinding(1, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+            )
+
+            if (VGN_ADVANCED_COLOR_NOISE_ENABLED) {
+                val full3 = allocate(GLES30.GL_RGBA16UI, workWidth, workHeight, "full 3")
+
+                dispatchVgnPass(
+                    VgnShaders.PROGRAM_COLOR_NOISE_3_YCCD,
+                    groupsWorkX,
+                    groupsWorkY,
+                    "color noise 3 YCCD",
+                    uboIds[0],
+                    4,
+                    vgnBoundsUbo(12, 12, workWidth - 12, workHeight - 12),
+                    VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, full0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(3, full3, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                )
+
+                dispatchVgnPass(
+                    VgnShaders.PROGRAM_IIR2_1_INIT,
+                    1,
+                    workHeight,
+                    "IIR2 pass 1 init",
+                    uboIds[0],
+                    3,
+                    vgnIirUbo(workWidth, workHeight, 0, 0, vgnIirPass1Coefficients),
+                    VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                )
+                runVgnIirPass(
+                    VgnShaders.PROGRAM_IIR2_1,
+                    full2,
+                    full3,
+                    uboIds[0],
+                    workWidth,
+                    workHeight,
+                    1,
+                    0,
+                    vgnIirPass1Coefficients,
+                    "IIR2 pass 1 horizontal reverse",
+                )
+                runVgnIirPass(
+                    VgnShaders.PROGRAM_IIR2_1,
+                    full3,
+                    full2,
+                    uboIds[0],
+                    workWidth,
+                    workHeight,
+                    0,
+                    1,
+                    vgnIirPass1Coefficients,
+                    "IIR2 pass 1 vertical forward",
+                )
+                runVgnIirPass(
+                    VgnShaders.PROGRAM_IIR2_1,
+                    full2,
+                    full3,
+                    uboIds[0],
+                    workWidth,
+                    workHeight,
+                    1,
+                    1,
+                    vgnIirPass1Coefficients,
+                    "IIR2 pass 1 vertical reverse",
+                )
+
+                dispatchVgnPass(
+                    VgnShaders.PROGRAM_CALCULATE_COLOR_NOISE_ERROR,
+                    groupsWorkX,
+                    groupsWorkY,
+                    "calculate color noise error",
+                    uboIds[0],
+                    images = arrayOf(
+                        VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                        VgnImageBinding(1, full3, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                        VgnImageBinding(2, full2, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                    ),
+                )
+
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, uboIds[0], workWidth,
+                    workHeight, 0, 0, vgnIirPass1Coefficients,
+                    "IIR2 pass 2 horizontal forward")
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, uboIds[0], workWidth,
+                    workHeight, 1, 0, vgnIirPass1Coefficients,
+                    "IIR2 pass 2 horizontal reverse")
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full2, full3, uboIds[0], workWidth,
+                    workHeight, 0, 1, vgnIirPass1Coefficients,
+                    "IIR2 pass 2 vertical forward")
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_2, full3, full2, uboIds[0], workWidth,
+                    workHeight, 1, 1, vgnIirPass1Coefficients,
+                    "IIR2 pass 2 vertical reverse")
+
+                dispatchVgnPass(
+                    VgnShaders.PROGRAM_COLOR_NOISE_FILTER,
+                    groupsWorkX,
+                    groupsWorkY,
+                    "color noise filter",
+                    uboIds[0],
+                    images = arrayOf(
+                        VgnImageBinding(0, full0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                        VgnImageBinding(1, full1, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI),
+                        VgnImageBinding(2, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    ),
+                )
+
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, uboIds[0], workWidth,
+                    workHeight, 0, 0, vgnIirPass3Coefficients,
+                    "IIR2 pass 3 horizontal forward")
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, uboIds[0], workWidth,
+                    workHeight, 1, 0, vgnIirPass3Coefficients,
+                    "IIR2 pass 3 horizontal reverse")
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full1, full0, uboIds[0], workWidth,
+                    workHeight, 0, 1, vgnIirPass3Coefficients,
+                    "IIR2 pass 3 vertical forward")
+                runVgnIirPass(VgnShaders.PROGRAM_IIR2_3, full0, full1, uboIds[0], workWidth,
+                    workHeight, 1, 1, vgnIirPass3Coefficients,
+                    "IIR2 pass 3 vertical reverse")
+
+                dispatchVgnPass(
+                    VgnShaders.PROGRAM_YUV_TO_RGB,
+                    groupsOutputX,
+                    groupsOutputY,
+                    "YUV to RGB",
+                    uboIds[0],
+                    2,
+                    vgnUbo(32) {
+                        putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
+                        putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
+                    },
+                    VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, linearOutputTextureId, GLES31.GL_WRITE_ONLY,
+                        GLES30.GL_RGBA16F),
+                )
+            } else {
+                // PASS_3 is YCCD with a direction mask, not a displayable final image.
+                // The reference COLOR_NOISE_PASS_3 performs the required four-phase chroma
+                // fusion and writes RGB while cropping the padded work domain to the photo ROI.
+                dispatchVgnPass(
+                    VgnShaders.PROGRAM_COLOR_NOISE_3,
+                    groupsOutputX,
+                    groupsOutputY,
+                    "color noise 3 RGB",
+                    uboIds[0],
+                    3,
+                    vgnUbo(32) {
+                        putInt(roiLeft); putInt(roiTop); putInt(roiRight); putInt(roiBottom)
+                        putFloat(1f); putFloat(0f); putFloat(0f); putFloat(0f)
+                    },
+                    VgnImageBinding(0, full1, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(1, full2, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI),
+                    VgnImageBinding(2, linearOutputTextureId, GLES31.GL_WRITE_ONLY,
+                        GLES30.GL_RGBA16F),
+                )
+                PLog.d(TAG, "Single-frame VGN color-noise IIR chain disabled")
+            }
+
+            val compositeProgram = vgnPrograms[VgnShaders.PROGRAM_COMPOSITE]
+            GLES31.glUseProgram(compositeProgram)
+            GLES31.glUniform2i(
+                GLES31.glGetUniformLocation(compositeProgram, "uImageSize"),
+                width,
+                height,
+            )
+            GLES31.glUniform3f(
+                GLES31.glGetUniformLocation(compositeProgram, "uCalculationGains"),
+                calculationGains[0],
+                1f,
+                calculationGains[3],
+            )
+            GLES31.glBindImageTexture(0, linearOutputTextureId, 0, false, 0,
+                GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glBindImageTexture(1, demosaicTextureId, 0, false, 0,
+                GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glDispatchCompute(groupsOutputX, groupsOutputY, 1)
+            GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
+            checkGlError("VGN composite camera RGB")
+
+            PLog.d(
+                TAG,
+                "Single-frame VGN complete: size=${width}x$height work=${workWidth}x$workHeight " +
+                    "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
+                    "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
+                    "vngThreshold=$vngThreshold colorNoiseLevel=$VGN_COLOR_NOISE_LEVEL " +
+                    "calculationWb=${calculationGains.contentToString()} " +
+                    "lsc=${lensShadingLogString(metadata)}",
+            )
+            GLES30.glFinish()
+        } finally {
+            unbindVgnImages()
+            for (binding in 0..5) {
+                GLES31.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, binding, 0)
+            }
+            if (uboIds[0] != 0) GLES31.glDeleteBuffers(1, uboIds, 0)
+            if (liveTextures.isNotEmpty()) {
+                val textures = liveTextures.toIntArray()
+                GLES30.glDeleteTextures(textures.size, textures, 0)
+                liveTextures.clear()
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         }
     }
 
@@ -8970,6 +9427,10 @@ class RawDemosaicProcessor {
         if (rcdStep42Program != 0) GLES31.glDeleteProgram(rcdStep42Program)
         if (rcdStep43Program != 0) GLES31.glDeleteProgram(rcdStep43Program)
         if (rcdWriteOutputProgram != 0) GLES31.glDeleteProgram(rcdWriteOutputProgram)
+        vgnPrograms.forEachIndexed { index, program ->
+            if (program != 0) GLES31.glDeleteProgram(program)
+            vgnPrograms[index] = 0
+        }
         if (quadPopulateProgram != 0) GLES31.glDeleteProgram(quadPopulateProgram)
         if (quadGreenProgram != 0) GLES31.glDeleteProgram(quadGreenProgram)
         if (quadChromaProgram != 0) GLES31.glDeleteProgram(quadChromaProgram)

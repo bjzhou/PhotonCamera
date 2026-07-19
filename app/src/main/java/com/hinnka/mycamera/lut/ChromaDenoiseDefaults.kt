@@ -1,7 +1,7 @@
 package com.hinnka.mycamera.lut
 
 object ChromaDenoiseDefaults {
-    const val RAW_CAPTURE_DEFAULT_STRENGTH = 0.5f
+    const val RAW_CAPTURE_DEFAULT_STRENGTH = 0.0f
     private const val MIN_ACTIVE_NOISE_BANDWIDTH = 1.0f
     private const val MAX_NOISE_BANDWIDTH = 8.0f
     private const val FULL_OUTPUT_STRENGTH_POINT = 0.5f
