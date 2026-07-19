@@ -35,6 +35,9 @@ class OglBokehProcessor {
         aperture: Float
     ): Bitmap? {
         try {
+            val halfFloatOutput = originalImage.config == Bitmap.Config.RGBA_F16
+            val linearInput = originalImage.colorSpace?.id ==
+                ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB).id
             initEGL(originalImage.width, originalImage.height)
             initGL()
 
@@ -96,7 +99,17 @@ class OglBokehProcessor {
             val outputTex = IntArray(1)
             GLES30.glGenTextures(1, outputTex, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, outputTex[0])
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, originalImage.width, originalImage.height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                originalImage.width,
+                originalImage.height,
+                0,
+                GLES30.GL_RGBA,
+                if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                null
+            )
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
             GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
 
@@ -118,6 +131,10 @@ class OglBokehProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth"), focusDepth)
             GLES30.glUniform2f(GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize"), 1.0f / originalImage.width, 1.0f / originalImage.height)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(bokehProgramId, "uLinearInput"),
+                if (linearInput) 1 else 0
+            )
 
             val identity = FloatArray(16)
             android.opengl.Matrix.setIdentityM(identity, 0)
@@ -128,11 +145,22 @@ class OglBokehProcessor {
 
             // Read back to Bitmap
             val resultBitmap = Bitmap.createBitmap(originalImage.width, originalImage.height,
-                Bitmap.Config.ARGB_8888, false, originalImage.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB))
-            val bufferByteCount = originalImage.width.toLong() * originalImage.height.toLong() * 4L
+                if (halfFloatOutput) Bitmap.Config.RGBA_F16 else Bitmap.Config.ARGB_8888,
+                false,
+                originalImage.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB))
+            val bytesPerPixel = if (halfFloatOutput) 8L else 4L
+            val bufferByteCount = originalImage.width.toLong() * originalImage.height.toLong() * bytesPerPixel
             val buffer = LargeDirectBuffer.allocate(bufferByteCount, "OGL bokeh readback") ?: return null
             try {
-                GLES30.glReadPixels(0, 0, originalImage.width, originalImage.height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buffer)
+                GLES30.glReadPixels(
+                    0,
+                    0,
+                    originalImage.width,
+                    originalImage.height,
+                    GLES30.GL_RGBA,
+                    if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                    buffer
+                )
                 resultBitmap.copyPixelsFromBuffer(buffer)
             } finally {
                 LargeDirectBuffer.free(buffer)
@@ -187,7 +215,29 @@ class OglBokehProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, magFilter)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+        if (bitmap.config == Bitmap.Config.RGBA_F16) {
+            val buffer = LargeDirectBuffer.allocate(bitmap.byteCount.toLong(), "OGL bokeh RGBA_F16 upload")
+                ?: throw IllegalStateException("Unable to allocate RGBA_F16 upload buffer")
+            try {
+                bitmap.copyPixelsToBuffer(buffer)
+                buffer.position(0)
+                GLES30.glTexImage2D(
+                    GLES30.GL_TEXTURE_2D,
+                    0,
+                    GLES30.GL_RGBA16F,
+                    bitmap.width,
+                    bitmap.height,
+                    0,
+                    GLES30.GL_RGBA,
+                    GLES30.GL_HALF_FLOAT,
+                    buffer
+                )
+            } finally {
+                LargeDirectBuffer.free(buffer)
+            }
+        } else {
+            GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bitmap, 0)
+        }
         if (mipmap) {
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         }

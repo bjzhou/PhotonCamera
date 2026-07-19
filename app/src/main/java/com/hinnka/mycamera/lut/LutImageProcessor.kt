@@ -19,6 +19,7 @@ import com.hinnka.mycamera.raw.RawShaders
 import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.LargeDirectBuffer
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -34,6 +35,12 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sqrt
+
+data class LutStackRenderResult(
+    val bitmap: Bitmap,
+    /** RGBA_F16 sidecar; R stores the unbounded linear-light luminance ratio. */
+    val luminanceGainMap: Bitmap?,
+)
 
 /**
  * LUT 图片处理器
@@ -92,6 +99,7 @@ class LutImageProcessor {
     private var bitmapChromaDenoiseGuideProgram = 0
     private var bitmapChromaDenoiseProgram = 0
     private var lutSharpenProgram = 0
+    private var lutLuminanceGainProgram = 0
 
     private val bitmapDenoiseTexId = IntArray(2)
     private val bitmapDenoiseFboId = IntArray(2)
@@ -720,6 +728,192 @@ class LutImageProcessor {
                 rawToneMappingParameters = rawToneMappingParameters
             )
         }
+    }
+
+    /**
+     * Applies the complete LUT stack and emits its pixel-aligned linear-light luminance ratio as
+     * an RGBA_F16 sidecar. The sidecar is context-independent and can be consumed by the later HDR
+     * gainmap EGL context without retaining the full pre-LUT SDR bitmap.
+     */
+    suspend fun applyLutStackWithLuminanceGain(
+        bitmap: Bitmap,
+        isHlgInput: Boolean = false,
+        baselineLayer: LutRenderLayer?,
+        creativeLayer: LutRenderLayer?,
+        sharpeningValue: Float = 0f,
+        noiseReductionValue: Float = 0f,
+        chromaNoiseReductionValue: Float = 0f,
+        linearInputToneMap: Boolean = false,
+        linearInputExposureEv: Float = 0f,
+        naturalLightDefaultChromaDenoise: Boolean = false,
+        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+        luminanceGainDownsample: Int = 1,
+    ): LutStackRenderResult {
+        val rendered = applyLutStack(
+            bitmap = bitmap,
+            isHlgInput = isHlgInput,
+            baselineLayer = baselineLayer,
+            creativeLayer = creativeLayer,
+            sharpeningValue = sharpeningValue,
+            noiseReductionValue = noiseReductionValue,
+            chromaNoiseReductionValue = chromaNoiseReductionValue,
+            linearInputToneMap = linearInputToneMap,
+            linearInputExposureEv = linearInputExposureEv,
+            naturalLightDefaultChromaDenoise = naturalLightDefaultChromaDenoise,
+            rawRenderingEngine = rawRenderingEngine,
+            rawToneMappingParameters = rawToneMappingParameters,
+        )
+        val luminanceGainMap = if (isHlgInput || !bitmap.colorSpace.isEncodedSrgbFamily() ||
+            !rendered.colorSpace.isEncodedSrgbFamily()
+        ) {
+            PLog.e(
+                TAG,
+                "LUT luminance sidecar requires encoded sRGB input/output: " +
+                    "isHlg=$isHlgInput, before=${bitmap.colorSpace}, after=${rendered.colorSpace}"
+            )
+            null
+        } else withContext(glDispatcher) {
+            currentCoroutineContext().ensureActive()
+            if (!isInitialized || lutLuminanceGainProgram == 0) {
+                PLog.e(TAG, "Cannot create LUT luminance sidecar: GL program unavailable")
+                null
+            } else {
+                createLutLuminanceGainMap(bitmap, rendered, luminanceGainDownsample)
+            }
+        }
+        return LutStackRenderResult(rendered, luminanceGainMap)
+    }
+
+    private fun ColorSpace?.isEncodedSrgbFamily(): Boolean {
+        val colorSpaceId = this?.id ?: return false
+        return colorSpaceId == ColorSpace.get(ColorSpace.Named.SRGB).id ||
+            colorSpaceId == ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB).id
+    }
+
+    private fun createLutLuminanceGainMap(
+        beforeLut: Bitmap,
+        afterLut: Bitmap,
+        downsample: Int,
+    ): Bitmap? {
+        if (beforeLut.width != afterLut.width || beforeLut.height != afterLut.height ||
+            beforeLut.width <= 0 || beforeLut.height <= 0
+        ) {
+            PLog.e(
+                TAG,
+                "LUT luminance sidecar inputs are not aligned: " +
+                    "before=${beforeLut.width}x${beforeLut.height}, " +
+                    "after=${afterLut.width}x${afterLut.height}"
+            )
+            return null
+        }
+        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        val safeDownsample = downsample.coerceAtLeast(1)
+        val outputWidth = ((beforeLut.width + safeDownsample - 1) / safeDownsample).coerceAtLeast(1)
+        val outputHeight = ((beforeLut.height + safeDownsample - 1) / safeDownsample).coerceAtLeast(1)
+
+        val textures = IntArray(3)
+        val framebuffers = IntArray(1)
+        GLES30.glGenTextures(3, textures, 0)
+        GLES30.glGenFramebuffers(1, framebuffers, 0)
+        try {
+            uploadLuminanceSidecarInput(textures[0], beforeLut)
+            uploadLuminanceSidecarInput(textures[1], afterLut)
+
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[2])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                GLES30.GL_RGBA16F,
+                outputWidth,
+                outputHeight,
+                0,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                null,
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffers[0])
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                textures[2],
+                0,
+            )
+            val framebufferStatus = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            if (framebufferStatus != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                PLog.e(TAG, "LUT luminance sidecar framebuffer incomplete: $framebufferStatus")
+                return null
+            }
+
+            GLES30.glViewport(0, 0, outputWidth, outputHeight)
+            GLES30.glUseProgram(lutLuminanceGainProgram)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[0])
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(lutLuminanceGainProgram, "uBeforeLutTexture"),
+                0,
+            )
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[1])
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(lutLuminanceGainProgram, "uAfterLutTexture"),
+                1,
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(lutLuminanceGainProgram, "uOffset"),
+                LUT_LUMINANCE_OFFSET,
+            )
+            drawQuad(lutLuminanceGainProgram)
+            checkGlError("renderLutLuminanceGainMap")
+
+            val byteCount = outputWidth.toLong() * outputHeight.toLong() * 8L
+            val readback = LargeDirectBuffer.allocate(byteCount, "LUT luminance gain RGBA16F")
+                ?: return null
+            try {
+                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+                GLES30.glReadPixels(
+                    0,
+                    0,
+                    outputWidth,
+                    outputHeight,
+                    GLES30.GL_RGBA,
+                    GLES30.GL_HALF_FLOAT,
+                    readback,
+                )
+                checkGlError("readLutLuminanceGainMap")
+                readback.position(0)
+                return Bitmap.createBitmap(
+                    outputWidth,
+                    outputHeight,
+                    Bitmap.Config.RGBA_F16,
+                    true,
+                    ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB),
+                ).also { it.copyPixelsFromBuffer(readback) }
+            } finally {
+                LargeDirectBuffer.free(readback)
+            }
+        } finally {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glDeleteFramebuffers(1, framebuffers, 0)
+            GLES30.glDeleteTextures(3, textures, 0)
+        }
+    }
+
+    private fun uploadLuminanceSidecarInput(textureId: Int, bitmap: Bitmap) {
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        val uploadBitmap = bitmap.asGlUploadCompatibleBitmap()
+        android.opengl.GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, uploadBitmap, 0)
+        if (uploadBitmap !== bitmap) uploadBitmap.recycle()
     }
 
     suspend fun applyChromaDenoise(bitmap: Bitmap, strength: Float = 0.1f): Bitmap = withContext(glDispatcher) {
@@ -1506,6 +1700,11 @@ class LutImageProcessor {
         uLchChromaAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchChromaAdjustments")
         uLchLightnessAdjustmentsLoc = GLES30.glGetUniformLocation(shaderProgram, "uLchLightnessAdjustments")
         uPrimaryCalibrationMatrixLoc = GLES30.glGetUniformLocation(shaderProgram, "uPrimaryCalibrationMatrix")
+        lutLuminanceGainProgram = createFragmentProgram(
+            Shaders.SIMPLE_VERTEX_SHADER,
+            LUT_LUMINANCE_GAIN_SHADER,
+            "LutLuminanceGain",
+        )
     }
 
     private fun initBitmapDenoiseProfilePrograms() {
@@ -2823,6 +3022,10 @@ class LutImageProcessor {
             GLES30.glDeleteProgram(lutSharpenProgram)
             lutSharpenProgram = 0
         }
+        if (lutLuminanceGainProgram != 0) {
+            GLES30.glDeleteProgram(lutLuminanceGainProgram)
+            lutLuminanceGainProgram = 0
+        }
         for (i in 0..1) {
             if (bitmapDenoiseTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(bitmapDenoiseTexId[i]), 0)
             if (bitmapDenoiseFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bitmapDenoiseFboId[i]), 0)
@@ -2872,6 +3075,7 @@ class LutImageProcessor {
         private const val TAG = "LutImageProcessor"
         private const val BITMAP_DENOISE_A = 0.008f
         private const val BITMAP_DENOISE_B = 0.0005f
+        private const val LUT_LUMINANCE_OFFSET = 1e-4f
         private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
         private const val EGL_CONTEXT_PRIORITY_LOW_IMG = 0x3103
 
@@ -2903,6 +3107,43 @@ class LutImageProcessor {
 
             void main() {
                 fragColor = texture(uInputTexture, vTexCoord);
+            }
+        """.trimIndent()
+
+        private val LUT_LUMINANCE_GAIN_SHADER = """
+            #version 300 es
+            precision highp float;
+
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            uniform sampler2D uBeforeLutTexture;
+            uniform sampler2D uAfterLutTexture;
+            uniform float uOffset;
+
+            float srgbToLinear(float value) {
+                float magnitude = abs(value);
+                float linearMagnitude = magnitude <= 0.04045
+                    ? magnitude / 12.92
+                    : pow((magnitude + 0.055) / 1.055, 2.4);
+                return sign(value) * linearMagnitude;
+            }
+
+            vec3 srgbToLinear(vec3 value) {
+                return vec3(
+                    srgbToLinear(value.r),
+                    srgbToLinear(value.g),
+                    srgbToLinear(value.b)
+                );
+            }
+
+            void main() {
+                const vec3 LINEAR_SRGB_LUMA = vec3(0.2126, 0.7152, 0.0722);
+                vec3 beforeLinear = srgbToLinear(texture(uBeforeLutTexture, vTexCoord).rgb);
+                vec3 afterLinear = srgbToLinear(texture(uAfterLutTexture, vTexCoord).rgb);
+                float beforeLuma = max(dot(beforeLinear, LINEAR_SRGB_LUMA), 0.0);
+                float afterLuma = max(dot(afterLinear, LINEAR_SRGB_LUMA), 0.0);
+                float gain = (afterLuma + uOffset) / (beforeLuma + uOffset);
+                fragColor = vec4(gain, 0.0, 0.0, 1.0);
             }
         """.trimIndent()
 

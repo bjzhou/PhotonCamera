@@ -1407,6 +1407,10 @@ class RawDemosaicProcessor {
             profileWorkingColorSpace,
             engineWorkingColorSpace
         )
+        val profileToLinearSrgbTransform = computeWorkingToOutputTransform(
+            profileWorkingColorSpace,
+            ColorSpace.SRGB,
+        )
         val linearColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
             metadata = actualMetadata,
             dcpRenderPlan = activeDcpRenderPlan
@@ -1874,6 +1878,41 @@ class RawDemosaicProcessor {
                     "dcpBaselineExposureOffsetApplied=$applyDcpBaselineExposureOffset"
             )
 
+            // The HDR reference branches directly from undenoised, demosaicked camera RGB.
+            // It intentionally excludes denoise, ProfileGainMap, edit exposure, rendering engines,
+            // their additional tone mapping, and output sharpening. The complete ACR3 reference
+            // curve is applied. Its output contract is linear extended sRGB.
+            val hdrReferenceBitmap = if (includeHdrReference) {
+                setupHdrReferenceFramebuffer(actualWidth, actualHeight)
+                renderHdrReferencePass(
+                    metadata = actualMetadata,
+                    inputTextureId = demosaicTextureId,
+                    colorCorrectionMatrix = linearColorCorrectionMatrix,
+                    cameraWhite = linearCameraWhite,
+                    hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                    profileToLinearSrgb = profileToLinearSrgbTransform,
+                )
+                setupOutputFramebuffer(finalWidth, finalHeight)
+                renderOutputPass(
+                    actualRotation,
+                    actualWidth,
+                    actualHeight,
+                    bounds,
+                    hdrReferenceTextureId,
+                )
+                val hdrPixels = readPixels(
+                    finalWidth,
+                    finalHeight,
+                    android.graphics.ColorSpace.get(
+                        android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB
+                    ),
+                )
+                releaseHdrReferenceFramebuffer()
+                hdrPixels
+            } else {
+                null
+            }
+
             // Chroma denoise runs first in the un-white-balanced camera RGB domain,
             // where the DNG/Camera2 R/B noise model is valid. It writes to the spare
             // full-resolution texture and preserves green while filtering R-G/B-G.
@@ -1950,40 +1989,6 @@ class RawDemosaicProcessor {
             //     demosaicFramebufferId = 0
             // }
             // demosaicWidth = 0; demosaicHeight = 0
-            val hdrReferenceBitmap = if (includeHdrReference) {
-                setupHdrReferenceFramebuffer(actualWidth, actualHeight)
-                renderHdrReferencePass(
-                    metadata = actualMetadata,
-                    inputTextureId = outputTexture
-                )
-                setupOutputFramebuffer(finalWidth, finalHeight)
-                renderOutputPass(
-                    actualRotation,
-                    actualWidth,
-                    actualHeight,
-                    bounds,
-                    hdrReferenceTextureId
-                )
-                val hdrPixels = readPixels(
-                    finalWidth,
-                    finalHeight,
-                    android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.EXTENDED_SRGB)
-                )
-                // hdrReferenceTextureId 已被 outputPass 消费
-                if (hdrReferenceTextureId != 0) {
-                    GLES30.glDeleteTextures(1, intArrayOf(hdrReferenceTextureId), 0)
-                    hdrReferenceTextureId = 0
-                }
-                if (hdrReferenceFramebufferId != 0) {
-                    GLES30.glDeleteFramebuffers(1, intArrayOf(hdrReferenceFramebufferId), 0)
-                    hdrReferenceFramebufferId = 0
-                }
-                hdrReferenceWidth = 0; hdrReferenceHeight = 0
-                hdrPixels
-            } else {
-                null
-            }
-
             // 5. 第二步：Combined Pass (HDR Linear -> LDR sRGB + LUT)
             val combinedInputTexture = if (colorEngine == RawRenderingEngine.DarktableFilmic) {
                 val reconstructedTexture = renderDarktableFilmicHighlightReconstruction(
@@ -2841,7 +2846,7 @@ class RawDemosaicProcessor {
         val fShaderHdrReference =
             compileShader(
                 GLES30.GL_FRAGMENT_SHADER,
-                RawShaders.HDR_REFERENCE_FRAGMENT_SHADER,
+                RawHdrReferenceShaders.FRAGMENT_SHADER,
                 "hdrReferenceFragment"
             )
         if (vShader != 0 && fShaderHdrReference != 0) {
@@ -6182,6 +6187,19 @@ class RawDemosaicProcessor {
         checkGlError("setupHdrReferenceFramebuffer")
     }
 
+    private fun releaseHdrReferenceFramebuffer() {
+        if (hdrReferenceTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(hdrReferenceTextureId), 0)
+            hdrReferenceTextureId = 0
+        }
+        if (hdrReferenceFramebufferId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(hdrReferenceFramebufferId), 0)
+            hdrReferenceFramebufferId = 0
+        }
+        hdrReferenceWidth = 0
+        hdrReferenceHeight = 0
+    }
+
     private fun setupSharpenFramebuffer(width: Int, height: Int) {
         if (sharpenWidth == width && sharpenHeight == height && sharpenFramebufferId != 0) {
             return
@@ -7610,7 +7628,11 @@ class RawDemosaicProcessor {
 
     private fun renderHdrReferencePass(
         metadata: RawMetadata,
-        inputTextureId: Int
+        inputTextureId: Int,
+        colorCorrectionMatrix: FloatArray,
+        cameraWhite: FloatArray,
+        hueSatMap: DcpHueSatMap?,
+        profileToLinearSrgb: FloatArray,
     ) {
         GLES30.glUseProgram(hdrReferenceProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, hdrReferenceFramebufferId)
@@ -7620,14 +7642,34 @@ class RawDemosaicProcessor {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(hdrReferenceProgram, "uInputTexture"), 0)
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uHighlightStart"),
-            RawHdrReferenceMath.HIGHLIGHT_START
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(hdrReferenceProgram, "uCameraToProfile"),
+            1,
+            false,
+            transposeMatrix3x3(colorCorrectionMatrix),
+            0,
+        )
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(hdrReferenceProgram, "uProfileToLinearSrgb"),
+            1,
+            false,
+            transposeMatrix3x3(profileToLinearSrgb),
+            0,
+        )
+        val safeCameraWhite = sanitizeCameraWhite(cameraWhite)
+        GLES30.glUniform3f(
+            GLES30.glGetUniformLocation(hdrReferenceProgram, "uCameraWhite"),
+            safeCameraWhite[0],
+            safeCameraWhite[1],
+            safeCameraWhite[2],
         )
         GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(hdrReferenceProgram, "uWhitePointSceneLuma"),
-            RawHdrReferenceMath.WHITE_POINT_SCENE_LUMA
+            GLES30.glGetUniformLocation(hdrReferenceProgram, "uExposureGain"),
+            RawHdrReferenceMath.exposureGain(metadata.baselineExposure),
         )
+        val acr3Curve = ACR3Curve.samples()
+        bindCurveCombinedResource(hdrReferenceProgram, acr3Curve)
+        bindLinearDcpHueSatMap(hdrReferenceProgram, hueSatMap)
 
         val identityMatrix = FloatArray(16)
         GlMatrix.setIdentityM(identityMatrix, 0)

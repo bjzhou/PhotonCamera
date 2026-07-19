@@ -11,7 +11,8 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
         if (source.sourceKind != SourceKind.SDR_BITMAP) return null
 
-        val fullHdrRatio = source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO
+        val fullHdrRatio = (source.displayHdrSdrRatio.takeIf { it > 1f } ?: DEFAULT_FULL_HDR_RATIO)
+            .coerceIn(MIN_FULL_HDR_RATIO, MAX_GAIN_RATIO)
         val gainmapBitmap = createGainmapBitmap(source.sdrBase, fullHdrRatio, strength) ?: return null
         val gainmap = Gainmap(gainmapBitmap).apply {
             setRatioMin(MIN_GAIN_RATIO, MIN_GAIN_RATIO, MIN_GAIN_RATIO)
@@ -43,21 +44,25 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
             val srcY = ((y + 0.5f) * sdrBase.height / height).toInt().coerceIn(0, sdrBase.height - 1)
             for (x in 0 until width) {
                 val srcX = ((x + 0.5f) * sdrBase.width / width).toInt().coerceIn(0, sdrBase.width - 1)
-                val sample = ProgressiveGainmapMath.sampleSdr(sdrBase, srcX, srcY)
-                val ratio = ProgressiveGainmapMath.progressiveToneRatio(
-                    sample = sample,
+                val color = sdrBase.getColor(srcX, srcY)
+                val encodedSrgbLuma = EstimatedSdrGainmapMath.encodedSrgbLuma(
+                    red = color.red(),
+                    green = color.green(),
+                    blue = color.blue(),
+                )
+                val ratio = EstimatedSdrGainmapMath.estimateGainRatio(
+                    encodedSrgbLuma = encodedSrgbLuma,
                     fullHdrRatio = fullHdrRatio,
                     maxGainRatio = MAX_GAIN_RATIO
                 ).let {
                     HdrGainmapStrength.applyToRatio(it, MIN_GAIN_RATIO, MAX_GAIN_RATIO, strength)
                 }
-                val encoded = ProgressiveGainmapMath.encodeRatio(ratio, MIN_GAIN_RATIO, MAX_GAIN_RATIO)
+                val encoded = EstimatedSdrGainmapMath.encodeRatio(ratio, MIN_GAIN_RATIO, MAX_GAIN_RATIO)
                 pixels[index++] = encoded.toByte()
             }
         }
 
-        val blurred = ProgressiveGainmapMath.blurGainmap(pixels, width, height, BLUR_RADIUS)
-        contents.copyPixelsFromBuffer(ByteBuffer.wrap(blurred))
+        contents.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
         return contents
     }
 
@@ -66,7 +71,7 @@ class EstimatedSdrGainmapProducer : GainmapProducer {
         private const val MIN_GAIN_RATIO = 1.0f
         private const val MAX_GAIN_RATIO = 4.0f
         private const val EPSILON = 1e-4f
-        private const val BLUR_RADIUS = 3
+        private const val MIN_FULL_HDR_RATIO = 1.02f
         private const val DEFAULT_FULL_HDR_RATIO = 1.8f
     }
 }

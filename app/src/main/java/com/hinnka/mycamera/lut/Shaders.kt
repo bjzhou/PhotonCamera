@@ -547,6 +547,7 @@ object Shaders {
         uniform float uAperture;
         uniform float uFocusDepth;
         uniform vec2 uTexelSize;
+        uniform int uLinearInput;
 
         const float PI = 3.14159265359;
         const float GOLDEN_ANGLE = 2.39996323;
@@ -751,10 +752,12 @@ object Shaders {
         }
 
         vec3 toLinear(vec3 color) {
+            if (uLinearInput != 0) return max(color, vec3(0.0));
             return pow(clamp(color, 0.0, 1.0), vec3(LENS_GAMMA));
         }
 
         vec3 toDisplay(vec3 color) {
+            if (uLinearInput != 0) return max(color, vec3(0.0));
             return pow(max(color, vec3(0.0)), vec3(1.0 / LENS_GAMMA));
         }
 
@@ -820,7 +823,9 @@ object Shaders {
                     
                     // 更加平滑的高光增强曲线
                     float highlight = max(0.0, luma - 0.55);
-                    float hdrBoost = 1.0 + pow(highlight, 1.8) * 18.0 * smoothstep(1.5, 5.0, sCoc);
+                    float hdrBoost = uLinearInput != 0
+                        ? 1.0
+                        : 1.0 + pow(highlight, 1.8) * 18.0 * smoothstep(1.5, 5.0, sCoc);
 
                     float edge = smoothstep(0.75, 1.03, r / max(sCoc, 0.1));
                     float ring = 1.0 + edge * 0.3 * smoothstep(1.5, 5.0, sCoc);
@@ -832,7 +837,9 @@ object Shaders {
             }
 
             vec3 finalColor = accWeight > 0.001 ? toDisplay(accColor / accWeight) : centerColor.rgb;
-            finalColor = clamp(finalColor, 0.0, 1.0);
+            if (uLinearInput == 0) {
+                finalColor = clamp(finalColor, 0.0, 1.0);
+            }
 
             fragColor = vec4(finalColor, centerColor.a);
         }

@@ -4,7 +4,6 @@ class UnifiedGainmapProducer(
     private val producers: List<GainmapProducer> = listOf(
         EmbeddedGainmapProducer(),
         GpuReferenceGainmapProducer(),
-        HlgGainmapProducer(),
         EstimatedSdrGainmapProducer(),
     )
 ) : GainmapProducer {

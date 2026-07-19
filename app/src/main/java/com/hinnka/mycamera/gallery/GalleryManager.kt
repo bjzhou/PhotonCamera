@@ -2003,6 +2003,11 @@ object GalleryManager {
                     it.recycle()
                 }
             }
+            preparedUltraHdrSource?.lutLuminanceGainMap?.bitmap?.let {
+                if (!it.isRecycled) {
+                    it.recycle()
+                }
+            }
             preparedUltraHdrSource?.sdrBase?.let {
                 if (it !== bitmap && !it.isRecycled) {
                     it.recycle()
@@ -2912,6 +2917,11 @@ object GalleryManager {
                     it.recycle()
                 }
             }
+            preparedUltraHdrSource?.lutLuminanceGainMap?.bitmap?.let {
+                if (!it.isRecycled) {
+                    it.recycle()
+                }
+            }
             preparedUltraHdrSource?.sdrBase?.let {
                 if (it !== bitmap && !it.isRecycled) {
                     it.recycle()
@@ -3347,6 +3357,11 @@ object GalleryManager {
             )
         }
         preparedUltraHdrSource?.hdrReference?.bitmap?.let {
+            if (!it.isRecycled) {
+                it.recycle()
+            }
+        }
+        preparedUltraHdrSource?.lutLuminanceGainMap?.bitmap?.let {
             if (!it.isRecycled) {
                 it.recycle()
             }

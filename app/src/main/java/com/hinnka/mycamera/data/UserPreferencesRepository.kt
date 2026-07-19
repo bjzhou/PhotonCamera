@@ -198,7 +198,7 @@ data class UserPreferences(
     val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
-    val autoEnableHdr: Boolean = false,
+    val autoEnableHdr: Boolean = true,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
@@ -609,7 +609,7 @@ class UserPreferencesRepository(private val context: Context) {
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
-                autoEnableHdr = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: false,
+                autoEnableHdr = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: true,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,

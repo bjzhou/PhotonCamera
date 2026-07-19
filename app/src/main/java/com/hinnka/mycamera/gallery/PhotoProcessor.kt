@@ -14,8 +14,11 @@ import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.frame.FrameTemplate
 import com.hinnka.mycamera.hdr.GainmapResult
 import com.hinnka.mycamera.hdr.GainmapSourceSet
-import com.hinnka.mycamera.hdr.HlgImageProcessor
 import com.hinnka.mycamera.hdr.HdrBuffer
+import com.hinnka.mycamera.hdr.HdrBufferEncoding
+import com.hinnka.mycamera.hdr.LuminanceGainMap
+import com.hinnka.mycamera.hdr.LuminanceGainMapEncoding
+import com.hinnka.mycamera.hdr.RawGainmapMath
 import com.hinnka.mycamera.hdr.SourceKind
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.ColorCorrectionPipelineResolver
@@ -49,7 +52,6 @@ class PhotoProcessor(
     private val depthBokehProcessor: DepthBokehProcessor,
     private val userPreferencesRepository: UserPreferencesRepository,
 ) {
-    private val hlgImageProcessor = HlgImageProcessor()
     private val colorCorrectionPipelineResolver = ColorCorrectionPipelineResolver(lutManager)
 
     data class HdrFrameOutput(
@@ -149,6 +151,7 @@ class PhotoProcessor(
                     val finalChromaNoiseReduction =
                         metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
                         
+                    var lutLuminanceGainBitmap: Bitmap? = null
                     val sdrBitmap = processBitmap(
                         context = context,
                         photoId = photoId,
@@ -158,10 +161,28 @@ class PhotoProcessor(
                         noiseReduction = finalNoiseReduction,
                         chromaNoiseReduction = finalChromaNoiseReduction,
                         useComputationalAperture = true,
-                        applyFrameWatermark = false
+                        applyFrameWatermark = false,
+                        onLutLuminanceGainMap = { lutLuminanceGainBitmap = it },
+                        lutLuminanceGainDownsample = RawGainmapMath.DOWNSAMPLE,
                     )
-                    source.sdrBase.recycle()
-                    source = source.copy(sdrBase = sdrBitmap)
+                    lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
+                        applyCrop(it, metadata, "ai_lut_luminance_gain")
+                    }
+                    lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
+                        alignLutLuminanceGainMapToSdr(sdrBitmap, it)
+                    }
+                    val previousSdrBase = source.sdrBase
+                    val previousLutLuminanceGainMap = source.lutLuminanceGainMap?.bitmap
+                    source = source.copy(
+                        sdrBase = sdrBitmap,
+                        lutLuminanceGainMap = lutLuminanceGainBitmap?.let {
+                            LuminanceGainMap(it, LuminanceGainMapEncoding.LINEAR_RATIO)
+                        },
+                    )
+                    if (previousLutLuminanceGainMap?.isRecycled == false) {
+                        previousLutLuminanceGainMap.recycle()
+                    }
+                    if (!previousSdrBase.isRecycled) previousSdrBase.recycle()
                 }
             }
         }
@@ -199,10 +220,6 @@ class PhotoProcessor(
         }
 
         return null
-    }
-
-    fun hasDeferredHlgSource(metadata: MediaMetadata): Boolean {
-        return hlgImageProcessor.isHlgCapture(metadata)
     }
 
     private fun readDisplayHdrSdrRatio(): Float = GalleryManager.hdrSdrRatio
@@ -258,27 +275,40 @@ class PhotoProcessor(
             photoId?.let { id -> GalleryManager.saveBokehPhoto(context, id, sdrBitmap) }
         }
 
-        sdrBitmap = lutImageProcessor.applyLutStack(
+        val lutStackResult = lutImageProcessor.applyLutStackWithLuminanceGain(
             sdrBitmap,
             isHlgInput = false,
             colorCorrection.baselineLayer,
             colorCorrection.creativeLayer,
             0f,
             noiseReductionValue = 0f,
-            chromaNoiseReductionValue = 0f
+            chromaNoiseReductionValue = 0f,
+            luminanceGainDownsample = RawGainmapMath.DOWNSAMPLE,
         )
+        sdrBitmap = lutStackResult.bitmap
+        var lutLuminanceGainBitmap = lutStackResult.luminanceGainMap
 
         hdrReferenceBitmap = hdrReferenceBitmap?.let { alignHdrReferenceSizeToSdr(sdrBitmap, it, "raw_pre_crop") }
+        lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
+            applyCrop(it, metadata, "raw_lut_luminance_gain")
+        }
         sdrBitmap = applyCrop(sdrBitmap, metadata, "raw_sdr")
         hdrReferenceBitmap = hdrReferenceBitmap?.let { applyCrop(it, metadata, "raw_hdr") }
         hdrReferenceBitmap = hdrReferenceBitmap?.let { alignHdrReferenceSizeToSdr(sdrBitmap, it, "raw_post_crop") }
+        lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
+            alignLutLuminanceGainMapToSdr(sdrBitmap, it)
+        }
 
         GainmapSourceSet(
             sdrBase = sdrBitmap,
+            lutLuminanceGainMap = lutLuminanceGainBitmap?.let {
+                LuminanceGainMap(it, LuminanceGainMapEncoding.LINEAR_RATIO)
+            },
             hdrReference = hdrReferenceBitmap?.let {
                 HdrBuffer(
                     bitmap = it,
-                    description = "raw_scene_normalized"
+                    encoding = HdrBufferEncoding.LINEAR_SRGB,
+                    description = "raw_linear_srgb_baseline_acr3_linear",
                 )
             },
             sourceKind = SourceKind.RAW,
@@ -374,6 +404,23 @@ class PhotoProcessor(
             aspectAligned.recycle()
         }
         return scaled
+    }
+
+    private fun alignLutLuminanceGainMapToSdr(sdrBitmap: Bitmap, gainMap: Bitmap): Bitmap {
+        val targetWidth = ((sdrBitmap.width + RawGainmapMath.DOWNSAMPLE - 1) /
+            RawGainmapMath.DOWNSAMPLE).coerceAtLeast(1)
+        val targetHeight = ((sdrBitmap.height + RawGainmapMath.DOWNSAMPLE - 1) /
+            RawGainmapMath.DOWNSAMPLE).coerceAtLeast(1)
+        if (gainMap.width == targetWidth && gainMap.height == targetHeight) return gainMap
+
+        PLog.d(
+            "PhotoProcessor",
+            "Align LUT luminance sidecar ${gainMap.width}x${gainMap.height} -> " +
+                "${targetWidth}x$targetHeight"
+        )
+        val aligned = Bitmap.createScaledBitmap(gainMap, targetWidth, targetHeight, true)
+        if (aligned !== gainMap && !gainMap.isRecycled) gainMap.recycle()
+        return aligned
     }
 
     private fun cropHdrReferenceToSdrAspect(
@@ -670,6 +717,8 @@ class PhotoProcessor(
         chromaNoiseReduction: Float = 0f,
         useComputationalAperture: Boolean = false,
         applyFrameWatermark: Boolean = true,
+        onLutLuminanceGainMap: ((Bitmap?) -> Unit)? = null,
+        lutLuminanceGainDownsample: Int = 1,
     ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
         val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
@@ -693,15 +742,30 @@ class PhotoProcessor(
         }
 
         // 1. 应用 LUT
-        result = lutImageProcessor.applyLutStack(
-            result,
-            isHlgInput = shouldDecodeHlgInput(metadata),
-            colorCorrection.baselineLayer,
-            colorCorrection.creativeLayer,
-            finalSharpening,
-            finalNoiseReduction,
-            finalChromaNoiseReduction
-        )
+        if (onLutLuminanceGainMap != null) {
+            val lutStackResult = lutImageProcessor.applyLutStackWithLuminanceGain(
+                result,
+                isHlgInput = shouldDecodeHlgInput(metadata),
+                colorCorrection.baselineLayer,
+                colorCorrection.creativeLayer,
+                finalSharpening,
+                finalNoiseReduction,
+                finalChromaNoiseReduction,
+                luminanceGainDownsample = lutLuminanceGainDownsample,
+            )
+            result = lutStackResult.bitmap
+            onLutLuminanceGainMap(lutStackResult.luminanceGainMap)
+        } else {
+            result = lutImageProcessor.applyLutStack(
+                result,
+                isHlgInput = shouldDecodeHlgInput(metadata),
+                colorCorrection.baselineLayer,
+                colorCorrection.creativeLayer,
+                finalSharpening,
+                finalNoiseReduction,
+                finalChromaNoiseReduction
+            )
+        }
 
         result = applyCrop(result, metadata, "bitmap")
         if (applyFrameWatermark) {

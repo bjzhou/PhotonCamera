@@ -1295,7 +1295,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val autoEnableHdr: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.autoEnableHdr }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val useHdrScreenMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useHdrScreenMode }
@@ -2355,7 +2355,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ): Boolean {
         if (hasEmbeddedGainmap) return true
         if (rawToneMappingParameters?.normalized()?.useGooglePixelToneMap == true) return true
-        return userPrefs?.autoEnableHdr ?: false
+        return userPrefs?.autoEnableHdr ?: true
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {

@@ -1,27 +1,39 @@
 package com.hinnka.mycamera.raw
 
-import kotlin.math.max
-import kotlin.math.min
-
 object RawHdrReferenceMath {
-    const val HIGHLIGHT_START = 0.50f
-    const val WHITE_POINT_SCENE_LUMA = 2.4f
+    const val ACR3_BLEND_START = 0.09f
+    const val LINEAR_GAIN_START = 0.18f
 
-    fun expandedSceneLuma(
-        luma: Float,
-        highlightStart: Float = HIGHLIGHT_START,
-        whitePointSceneLuma: Float = WHITE_POINT_SCENE_LUMA,
-    ): Float {
-        if (!luma.isFinite()) return 0f
-        val safeLuma = luma.coerceAtLeast(0f)
-        val whitePoint = whitePointSceneLuma.coerceAtLeast(1f)
-        val highlight = smoothstep(highlightStart, 1f, safeLuma)
-        val lift = 1f + (whitePoint - 1f) * highlight
-        return max(safeLuma, min(safeLuma * lift, whitePoint))
+    fun exposureEv(baselineExposureEv: Float): Float =
+        DngBaselineExposure.sanitize(baselineExposureEv)
+
+    fun exposureGain(baselineExposureEv: Float): Float =
+        DngBaselineExposure.exactGain(baselineExposureEv)
+
+    fun toneValue(value: Float, curve: FloatArray = ACR3Curve.samples()): Float {
+        val safeValue = value.coerceAtLeast(0f)
+        val curveAtAnchor = sampleCurve(curve, LINEAR_GAIN_START)
+        val linearGain = curveAtAnchor / LINEAR_GAIN_START
+        val linearValue = safeValue * linearGain
+        if (safeValue <= ACR3_BLEND_START) return sampleCurve(curve, safeValue)
+        if (safeValue >= LINEAR_GAIN_START) return linearValue
+
+        val blend = smoothstep(ACR3_BLEND_START, LINEAR_GAIN_START, safeValue)
+        val curveValue = sampleCurve(curve, safeValue)
+        return curveValue + (linearValue - curveValue) * blend
+    }
+
+    private fun sampleCurve(curve: FloatArray, value: Float): Float {
+        require(curve.isNotEmpty()) { "Curve must not be empty" }
+        if (curve.size == 1) return curve[0]
+
+        val position = value.coerceIn(0f, 1f) * (curve.size - 1)
+        val lowerIndex = position.toInt().coerceAtMost(curve.lastIndex - 1)
+        val fraction = position - lowerIndex
+        return curve[lowerIndex] + (curve[lowerIndex + 1] - curve[lowerIndex]) * fraction
     }
 
     private fun smoothstep(edge0: Float, edge1: Float, value: Float): Float {
-        if (edge0 == edge1) return if (value >= edge1) 1f else 0f
         val t = ((value - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
         return t * t * (3f - 2f * t)
     }
