@@ -250,7 +250,13 @@ class RawDemosaicProcessor {
 
     // 单线程调度器，确保所有 EGL 操作在同一线程
     private val glDispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "RawDemosaicProcessor-GL").apply { isDaemon = true }
+        Thread(
+            {
+                GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
+                r.run()
+            },
+            "RawDemosaicProcessor-GL",
+        ).apply { isDaemon = true }
     }.asCoroutineDispatcher()
 
     // EGL 资源
@@ -5201,6 +5207,10 @@ class RawDemosaicProcessor {
         GLES31.glDispatchCompute(groupCountX.coerceAtLeast(1), groupCountY.coerceAtLeast(1), 1)
         GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("VGN $label")
+        // Bound the background compute queue to one full-resolution pass. This provides an
+        // inter-context scheduling point for RenderThread/SurfaceFlinger and lets the driver
+        // reclaim VGN intermediates as soon as their last pass has completed.
+        GlesGpuScheduler.waitForGpuCheckpoint(TAG, "VGN $label")
     }
 
     private fun unbindVgnImages() {
@@ -5254,6 +5264,7 @@ class RawDemosaicProcessor {
         height: Int,
         highlightReconstructionEnabled: Boolean,
     ) {
+        val demosaicStartNs = System.nanoTime()
         require(metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
             "VGN requires a standard 2x2 Bayer CFA, got ${metadata.cfaPattern}"
         }
@@ -5386,6 +5397,7 @@ class RawDemosaicProcessor {
             GLES31.glDispatchCompute(groupsPackedX, groupsWorkY, 1)
             GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
             checkGlError("VGN prepare packed RAW")
+            GlesGpuScheduler.waitForGpuCheckpoint(TAG, "VGN prepare packed RAW")
 
             dispatchVgnPass(
                 VgnShaders.PROGRAM_NEUTRAL,
@@ -5726,10 +5738,10 @@ class RawDemosaicProcessor {
                     "roi=$roiLeft,$roiTop,$roiRight,$roiBottom cfa=${metadata.cfaPattern} " +
                     "stdDev=$standardDeviation edgeThreshold=$edgeThreshold " +
                     "vngThreshold=$vngThreshold colorNoiseLevel=$VGN_COLOR_NOISE_LEVEL " +
+                    "gpuSliced=true tookMs=${(System.nanoTime() - demosaicStartNs) / 1_000_000} " +
                     "calculationWb=${calculationGains.contentToString()} " +
                     "lsc=${lensShadingLogString(metadata)}",
             )
-            GLES30.glFinish()
         } finally {
             unbindVgnImages()
             for (binding in 0..5) {
