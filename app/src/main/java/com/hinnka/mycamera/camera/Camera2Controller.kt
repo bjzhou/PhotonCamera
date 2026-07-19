@@ -438,10 +438,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveImageReaderMaxImages(): Int {
         val currentState = _state.value
-        val multiFrameCount = currentState.multiFrameCount.coerceIn(
-            MultiFrameConfig.MIN_FRAME_COUNT,
-            MultiFrameConfig.MAX_FRAME_COUNT
-        )
+        val multiFrameCount = MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
         val requestedImages = when {
             currentState.useHdrComposition && currentState.useMFNR ->
                 maxOf(
@@ -465,10 +462,8 @@ class Camera2Controller(private val context: Context) {
             currentState.burstCapturing -> BURST_CAPTURE_BATCH_SIZE
             currentState.hdrBracketCapturing -> currentState.hdrBracketFrameCount
                 .coerceAtLeast(HDR_BRACKET_BASE_CAPTURE_COUNT)
-            currentState.useMFNR || currentState.useMFSR -> currentState.multiFrameCount.coerceIn(
-                MultiFrameConfig.MIN_FRAME_COUNT,
-                MultiFrameConfig.MAX_FRAME_COUNT
-            )
+            currentState.useMFNR || currentState.useMFSR ->
+                MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
 
             else -> 1
         }
@@ -5008,7 +5003,15 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setUseMFNR(useMultiFrame: Boolean) {
-        _state.value = _state.value.copy(useMFNR = useMultiFrame)
+        val currentState = _state.value
+        _state.value = currentState.copy(
+            useMFNR = useMultiFrame,
+            multiFrameCount = if (useMultiFrame) {
+                MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
+            } else {
+                currentState.multiFrameCount
+            },
+        )
     }
 
     fun setUseHdrComposition(useHdrComposition: Boolean) {
@@ -5016,7 +5019,15 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setUseMFSR(useSuperResolution: Boolean) {
-        _state.value = _state.value.copy(useMFSR = useSuperResolution)
+        val currentState = _state.value
+        _state.value = currentState.copy(
+            useMFSR = useSuperResolution,
+            multiFrameCount = if (useSuperResolution) {
+                MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
+            } else {
+                currentState.multiFrameCount
+            },
+        )
     }
 
     fun setUseMultipleExposure(useMultipleExposure: Boolean) {
@@ -5032,10 +5043,7 @@ class Camera2Controller(private val context: Context) {
 
     fun setMultiFrameCount(multiFrameCount: Int) {
         _state.value = _state.value.copy(
-            multiFrameCount = multiFrameCount.coerceIn(
-                MultiFrameConfig.MIN_FRAME_COUNT,
-                MultiFrameConfig.MAX_FRAME_COUNT
-            )
+            multiFrameCount = MultiFrameConfig.normalizeFrameCount(multiFrameCount),
         )
     }
 
@@ -5518,10 +5526,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveHdrBracketZeroEvFrameCount(state: CameraState): Int {
         return if (state.useMFNR || state.useMFSR) {
-            state.multiFrameCount.coerceIn(
-                MultiFrameConfig.MIN_FRAME_COUNT,
-                MultiFrameConfig.MAX_FRAME_COUNT
-            )
+            MultiFrameConfig.normalizeFrameCount(state.multiFrameCount)
         } else {
             0
         }
@@ -5553,6 +5558,8 @@ class Camera2Controller(private val context: Context) {
                 )
                 return
             }
+            val session = captureSession
+                ?: throw IllegalStateException("Capture session unavailable")
 
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
@@ -5616,19 +5623,25 @@ class Camera2Controller(private val context: Context) {
 
                 PLog.d(
                     TAG,
-                    "Capture request built and ready to send. ISO: ${_state.value.iso}, shutter: ${_state.value.shutterSpeed}, AE: ${_state.value.isAutoExposure}"
+                    "Capture request built and ready to send. ISO: ${currentState.iso}, " +
+                        "shutter: ${currentState.shutterSpeed}, AE: ${currentState.isAutoExposure}"
                 )
             }
 
-            if (state.value.useMFNR || _state.value.useMFSR) {
+            if (currentState.useMFNR || currentState.useMFSR) {
                 // Burst Mode
-                val requests = ArrayList<CaptureRequest>()
-                val request = captureBuilder.build()
-                for (i in 0 until state.value.multiFrameCount) {
-                    requests.add(request)
+                val requestedFrameCount = currentState.multiFrameCount
+                val frameCount = MultiFrameConfig.normalizeFrameCount(requestedFrameCount)
+                if (frameCount != requestedFrameCount) {
+                    PLog.w(
+                        TAG,
+                        "Normalized invalid multi-frame count $requestedFrameCount to $frameCount",
+                    )
                 }
+                val request = captureBuilder.build()
+                val requests = List(frameCount) { request }
 
-                captureSession?.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
                     override fun onCaptureStarted(
                         session: CameraCaptureSession,
                         request: CaptureRequest,
@@ -5687,7 +5700,7 @@ class Camera2Controller(private val context: Context) {
 
             } else {
                 // Single Capture Mode
-                captureSession?.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
                     override fun onCaptureStarted(
                         session: CameraCaptureSession,
                         request: CaptureRequest,
@@ -5737,6 +5750,8 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to perform capture", e)
             _state.value = _state.value.copy(isCapturing = false)
+            burstGyroRecorder.stop()
+            resetPreviewAfterCapture()
         }
     }
 

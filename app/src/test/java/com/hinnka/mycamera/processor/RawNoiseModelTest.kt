@@ -39,26 +39,66 @@ class RawNoiseModelTest {
     }
 
     @Test
-    fun noiseModelNormalizesSensorCoefficientsForShaderDomain() {
-        val varianceScale = SENSOR_SCALE * SENSOR_SCALE
+    fun noiseModelKeepsAlreadyNormalizedSensorCoefficientsInShaderDomain() {
         val model = RawNoiseModel.fromCamera2NoiseProfile(
             floatArrayOf(
-                SENSOR_SCALE, varianceScale,
-                SENSOR_SCALE * 0.5f, varianceScale * 0.25f,
-                0f, 0f,
-                SENSOR_SCALE * 0.1f, varianceScale * 0.1f,
+                0.001f, 0.00001f,
+                0.002f, 0.00002f,
+                0.003f, 0.00003f,
+                0.004f, 0.00004f,
             ),
         )
 
         assertArrayEquals(
-            floatArrayOf(1f, 0.5f, 0f, 0.1f),
+            floatArrayOf(0.001f, 0.002f, 0.003f, 0.004f),
             model.normalizedShotNoiseForShader(),
-            0.000001f,
+            0f,
         )
         assertArrayEquals(
-            floatArrayOf(1f, 0.25f, 0f, 0.1f),
+            floatArrayOf(0.00001f, 0.00002f, 0.00003f, 0.00004f),
             model.normalizedReadNoiseForShader(),
-            0.000001f,
+            0f,
+        )
+    }
+
+    @Test
+    fun camera2PhaseNoiseIsReorderedToCanonicalBayerChannels() {
+        val model = RawNoiseModel.fromCamera2NoiseProfile(
+            floatArrayOf(
+                1f, 10f,
+                2f, 20f,
+                3f, 30f,
+                4f, 40f,
+            ),
+        )
+
+        assertArrayEquals(
+            floatArrayOf(2f, 1f, 4f, 3f),
+            model.normalizedShotNoiseForShader(cfaPattern = 1),
+            0f,
+        )
+        assertArrayEquals(
+            floatArrayOf(30f, 40f, 10f, 20f),
+            model.normalizedReadNoiseForShader(cfaPattern = 2),
+            0f,
+        )
+    }
+
+    @Test
+    fun threePlaneDngNoiseExpandsGreenWithoutCfaReordering() {
+        val model = RawNoiseModel.fromCamera2NoiseProfile(
+            floatArrayOf(
+                1f, 10f,
+                2f, 20f,
+                3f, 30f,
+                0f, 0f,
+            ),
+        )
+
+        assertArrayEquals(
+            floatArrayOf(1f, 2f, 2f, 3f),
+            model.normalizedShotNoiseForShader(cfaPattern = 3),
+            0f,
         )
     }
 
@@ -79,9 +119,5 @@ class RawNoiseModelTest {
         assertFalse(negative.hasValidCamera2Profile)
         assertArrayEquals(FloatArray(4), negative.shotNoise, 0f)
         assertArrayEquals(FloatArray(4), negative.readNoise, 0f)
-    }
-
-    private companion object {
-        const val SENSOR_SCALE = 65535.0f
     }
 }

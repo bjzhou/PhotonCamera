@@ -15,8 +15,8 @@ object RcdShaders {
     /** PPG 最深的递归邻域半径，用于验证条带是否包含完整输入。 */
     const val PPG_RADIUS = 4
 
-    /** 条带调用方在输出采样范围之外至少保留的 RCD 输入行数。 */
-    const val STRIPE_HALO_ROWS = OUTPUT_MARGIN + 1
+    /** 区域调用方在输出采样范围之外至少保留的 RCD 输入像素数。 */
+    const val REGION_HALO_PX = OUTPUT_MARGIN + 1
 
     const val HIGHLIGHT_RECONSTRUCTION_THRESHOLD = 0.985f
     const val HIGHLIGHT_RECONSTRUCTION_CEILING = 8.0f
@@ -933,12 +933,12 @@ object RcdShaders {
     """.trimIndent()
 
     /**
-     * HDR/MFSR 条带 RCD 的统一照片边界收尾。
+     * HDR/MFSR 条带与 Radiance 二维分片共用的照片边界收尾。
      *
-     * 仅覆盖照片的真实外圈，不把条带边界当作照片边界。位于内部条带 halo 外缘、邻域尚未
-     * 上传完整的行会跳过；它们不属于该条带的有效采样域，并会在相邻条带拥有完整邻域时处理。
+     * 仅覆盖照片的真实外圈，不把工作区域边界当作照片边界。位于内部 halo 外缘、邻域尚未
+     * 上传完整的像素会跳过；它们不属于该区域的有效采样域，并会在相邻区域拥有完整邻域时处理。
      */
-    val STRIPE_BORDER_PPG = """
+    val REGION_BORDER_PPG = """
         #version 310 es
         precision highp float;
         precision highp int;
@@ -949,9 +949,9 @@ object RcdShaders {
         layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
         layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
 
-        uniform ivec2 uStripeSize;
+        uniform ivec2 uRegionSize;
         uniform ivec2 uFullImageSize;
-        uniform int uGlobalRowOffset;
+        uniform ivec2 uGlobalOrigin;
         uniform int uCfaPattern;
 
         #define RED 0
@@ -994,8 +994,8 @@ object RcdShaders {
 
         int indexAt(ivec2 coord) {
             ivec2 safe = mirrorCoord(coord);
-            int localY = safe.y - uGlobalRowOffset;
-            return localY * uStripeSize.x + safe.x;
+            ivec2 local = safe - uGlobalOrigin;
+            return local.y * uRegionSize.x + local.x;
         }
 
         int colorAt(ivec2 coord) {
@@ -1011,8 +1011,8 @@ object RcdShaders {
 
         void main() {
             ivec2 local = ivec2(gl_GlobalInvocationID.xy);
-            if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
-            ivec2 global = ivec2(local.x, local.y + uGlobalRowOffset);
+            if (local.x >= uRegionSize.x || local.y >= uRegionSize.y) return;
+            ivec2 global = local + uGlobalOrigin;
 
             bool horizontalBorder = global.x < RCD_OUTPUT_MARGIN ||
                 global.x >= uFullImageSize.x - RCD_OUTPUT_MARGIN;
@@ -1020,34 +1020,40 @@ object RcdShaders {
                 global.y >= uFullImageSize.y - RCD_OUTPUT_MARGIN;
             if (!horizontalBorder && !verticalBorder) return;
 
+            int minRequiredX = uFullImageSize.x - 1;
+            int maxRequiredX = 0;
             int minRequiredY = uFullImageSize.y - 1;
             int maxRequiredY = 0;
-            for (int dy = -PPG_RADIUS; dy <= PPG_RADIUS; ++dy) {
-                int sampleY = mirrorIndex(global.y + dy, uFullImageSize.y);
+            for (int delta = -PPG_RADIUS; delta <= PPG_RADIUS; ++delta) {
+                int sampleX = mirrorIndex(global.x + delta, uFullImageSize.x);
+                int sampleY = mirrorIndex(global.y + delta, uFullImageSize.y);
+                minRequiredX = min(minRequiredX, sampleX);
+                maxRequiredX = max(maxRequiredX, sampleX);
                 minRequiredY = min(minRequiredY, sampleY);
                 maxRequiredY = max(maxRequiredY, sampleY);
             }
-            int stripeEnd = uGlobalRowOffset + uStripeSize.y;
-            if (minRequiredY < uGlobalRowOffset || maxRequiredY >= stripeEnd) return;
+            ivec2 regionEnd = uGlobalOrigin + uRegionSize;
+            if (minRequiredX < uGlobalOrigin.x || maxRequiredX >= regionEnd.x ||
+                minRequiredY < uGlobalOrigin.y || maxRequiredY >= regionEnd.y) return;
 
             vec3 color = ppgColorAt(global);
-            int index = local.y * uStripeSize.x + local.x;
+            int index = local.y * uRegionSize.x + local.x;
             rgb0[index] = color.r;
             rgb1[index] = color.g;
             rgb2[index] = color.b;
         }
     """.trimIndent()
 
-    /** 原始 RAW 条带到 RCD CFA/RGB 工作缓冲的统一适配 shader。 */
-    fun stripePopulate(rawCommon: String): String = """
+    /** 原始 RAW 条带/分片到 RCD CFA/RGB 工作缓冲的统一适配 shader。 */
+    fun regionPopulate(rawCommon: String): String = """
         #version 310 es
         $rawCommon
         layout(local_size_x = 16, local_size_y = 16) in;
-        uniform highp usampler2D uRawStripe;
+        uniform highp usampler2D uRawRegion;
         uniform sampler2D uLensShadingMap;
-        uniform ivec2 uStripeSize;
+        uniform ivec2 uRegionSize;
         uniform ivec2 uFullImageSize;
-        uniform int uGlobalRowOffset;
+        uniform ivec2 uGlobalOrigin;
         uniform int uCfaPattern;
         uniform vec4 uBlackLevel;
         uniform float uWhiteLevel;
@@ -1062,19 +1068,19 @@ object RcdShaders {
         const float HIGHLIGHT_CEILING = $HIGHLIGHT_RECONSTRUCTION_CEILING;
 
         ivec2 clampLocal(ivec2 p) {
-            return clamp(p, ivec2(0), uStripeSize - ivec2(1));
+            return clamp(p, ivec2(0), uRegionSize - ivec2(1));
         }
 
         ivec2 globalAt(ivec2 local) {
             local = clampLocal(local);
-            return ivec2(local.x, local.y + uGlobalRowOffset);
+            return local + uGlobalOrigin;
         }
 
         float sensorNormalizedAt(ivec2 local) {
             local = clampLocal(local);
             ivec2 global = globalAt(local);
             int channel = bayerIndexAt(uCfaPattern, global);
-            float raw = float(texelFetch(uRawStripe, local, 0).r);
+            float raw = float(texelFetch(uRawRegion, local, 0).r);
             float range = max(uWhiteLevel - uBlackLevel[channel], 1.0);
             return max(raw - uBlackLevel[channel], 0.0) / range;
         }
@@ -1119,8 +1125,8 @@ object RcdShaders {
 
         void main() {
             ivec2 local = ivec2(gl_GlobalInvocationID.xy);
-            if (local.x >= uStripeSize.x || local.y >= uStripeSize.y) return;
-            ivec2 global = ivec2(local.x, local.y + uGlobalRowOffset);
+            if (local.x >= uRegionSize.x || local.y >= uRegionSize.y) return;
+            ivec2 global = local + uGlobalOrigin;
             int channel = bayerIndexAt(uCfaPattern, global);
             float sensor = sensorNormalizedAt(local);
             float value = calculationSampleAt(local);
@@ -1129,7 +1135,7 @@ object RcdShaders {
                 float reconstructed = estimateOpposedLinear(local, colorAt(local), value);
                 value = min(mix(value, reconstructed, clipMask), HIGHLIGHT_CEILING);
             }
-            int index = local.y * uStripeSize.x + local.x;
+            int index = local.y * uRegionSize.x + local.x;
             cfa[index] = value;
             rgb0[index] = channel == 0 ? value : 0.0;
             rgb1[index] = (channel == 1 || channel == 2) ? value : 0.0;

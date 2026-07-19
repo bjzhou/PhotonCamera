@@ -37,6 +37,7 @@ class RawSuperResolutionStripePlannerTest {
         val last = RawSuperResolutionStripePlanner.sourceRowBand(1792, 208, 2f, -2f, 10f, 8, 1000)
 
         assertEquals(0, first.firstRow)
+        assertEquals(0, last.firstRow % 8)
         assertEquals(1000, last.endExclusive)
     }
 }

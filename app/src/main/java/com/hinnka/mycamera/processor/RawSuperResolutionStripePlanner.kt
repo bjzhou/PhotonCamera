@@ -37,10 +37,11 @@ internal object RawSuperResolutionStripePlanner {
         val safeMaxFlow = maxFlowYPlanePx.takeIf { it.isFinite() } ?: 0f
         val minFlow = min(safeMinFlow, safeMaxFlow) * 2f
         val maxFlow = max(safeMinFlow, safeMaxFlow) * 2f
-        val gatherMargin = cfaPeriod.coerceAtLeast(2) + RcdShaders.STRIPE_HALO_ROWS
+        val gatherMargin = cfaPeriod.coerceAtLeast(2) + RcdShaders.REGION_HALO_PX
+        val phase = cfaPeriod.coerceAtLeast(2)
         var first = floor(firstReferenceRaw + minFlow - gatherMargin).toInt().coerceIn(0, rawHeight - 1)
-        // RCD shaders evaluate CFA parity in stripe-local coordinates. Preserve the global phase.
-        if ((first and 1) != 0) first = (first - 1).coerceAtLeast(0)
+        // RCD shaders evaluate CFA phase in region-local coordinates. Preserve the global phase.
+        first -= first % phase
         val endExclusive = ceil(lastReferenceRaw + maxFlow + gatherMargin + 1f)
             .toInt()
             .coerceIn(first + 1, rawHeight)

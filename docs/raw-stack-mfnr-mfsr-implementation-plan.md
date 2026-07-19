@@ -247,10 +247,8 @@ data class RawStackTuningProfile(
   - `residualTauBase`
   - `residualTauEdge`
   - `residualPower`
-  - `flowPenaltyStartPx`
-  - `flowPenaltyDecay`
   - `flowRangePenaltyStartPx`
-  - `flowRangePenaltyDecay`
+  - `flowRangeRejectPx`
   - `centerMixFlat`
   - `centerMixEdge`
   - `minMixFlat`

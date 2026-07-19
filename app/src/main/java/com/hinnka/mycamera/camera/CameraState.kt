@@ -345,7 +345,7 @@ data class CameraState(
     val isRawSupported: Boolean = false,
     val useMFNR: Boolean = false,
     val useHdrComposition: Boolean = false,
-    val multiFrameCount: Int = 0,
+    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT,
     val useMFSR: Boolean = false,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,

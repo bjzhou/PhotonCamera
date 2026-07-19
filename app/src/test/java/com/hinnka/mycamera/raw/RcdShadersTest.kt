@@ -18,9 +18,9 @@ class RcdShadersTest {
     }
 
     @Test
-    fun stripeRcdUsesTheSamePpgKernelOnTheRealPhotoBorder() {
+    fun regionRcdUsesTheSamePpgKernelOnTheRealPhotoBorder() {
         val fullImageShader = RcdShaders.WRITE_OUTPUT
-        val stripeShader = RcdShaders.STRIPE_BORDER_PPG
+        val regionShader = RcdShaders.REGION_BORDER_PPG
         val sharedKernelLines = listOf(
             "float ppgGreenAt(ivec2 coord)",
             "vec3 ppgColorAt(ivec2 coord)",
@@ -30,9 +30,9 @@ class RcdShadersTest {
 
         sharedKernelLines.forEach { line ->
             assertTrue(fullImageShader.contains(line))
-            assertTrue(stripeShader.contains(line))
+            assertTrue(regionShader.contains(line))
         }
-        assertTrue(stripeShader.contains("vec3 color = ppgColorAt(global);"))
-        assertTrue(stripeShader.contains("mirrorIndex(global.y + dy, uFullImageSize.y)"))
+        assertTrue(regionShader.contains("vec3 color = ppgColorAt(global);"))
+        assertTrue(regionShader.contains("mirrorIndex(global.y + delta, uFullImageSize.y)"))
     }
 }

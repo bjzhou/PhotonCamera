@@ -2,6 +2,7 @@ package com.hinnka.mycamera.processor
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -57,7 +58,10 @@ class GlesRawStackerShaderTest {
                 mode = RawStackMode.MFSR,
                 superResolution = RawStackSuperResolutionTuning(outputScale = 1.5f),
             ),
-            debugConfig = RawStackDebugConfig.Disabled,
+            debugConfig = RawStackDebugConfig(
+                visualizeRadianceFusionRejections = true,
+                visualizeRadianceSrDetail = true,
+            ),
             fusionPipeline = RawFusionPipeline.RADIANCE_RGB,
         )
         try {
@@ -66,34 +70,73 @@ class GlesRawStackerShaderTest {
             invokePrivate(stacker, "initPrograms")
             invokePrivate(stacker, "initResources")
             invokePrivate(stacker, "applyRawRenderState")
-            invokePrivate(stacker, "ensureRadianceRcdStripeResources", 64)
-            invokePrivate(stacker, "runRcdStripe", 0, 64, "instrumentation Radiance", true)
+            assertTrue(
+                "Radiance must initialize its VGN reference adapter",
+                readPrivateInt(stacker, "radianceVgnFinalProgram") != 0,
+            )
+            assertTrue(
+                "Radiance must initialize its non-reference semantic resolver",
+                readPrivateInt(stacker, "radianceSemanticResolveProgram") != 0,
+            )
+            // Exercise the Radiance RGBA16F tile-confidence target, not just shader linking.
+            // RG are independent NR/detail confidence; BA carry NR rejection reason/severity.
+            invokePrivate(stacker, "computeTileMask")
+            val sourceRegion = RadianceTileRect(0, 0, 64, 64)
+            val outputRegion = RadianceTileRect(0, 0, 96, 96)
+            val tile = RadianceTile(
+                index = 0,
+                rawCore = sourceRegion,
+                outputCore = outputRegion,
+                outputWorking = outputRegion,
+            )
+            invokePrivate(stacker, "ensureRadianceTileResources", 64, 64)
             invokePrivate(
                 stacker,
-                "storeRcdRgbStripe",
-                readPrivateInt(stacker, "radianceRgbStripeTexture"),
-                64,
-                "instrumentation Radiance RGB store",
-                1f,
-                false,
+                "runRadianceReferenceVgn",
+                sourceRegion,
+                "instrumentation Radiance reference",
             )
             invokePrivate(stacker, "clearSuperResolutionAccumulator")
             invokePrivate(
                 stacker,
                 "accumulateRadianceFusionFrame",
                 true,
-                0,
-                64,
+                sourceRegion,
+                outputRegion,
                 readPrivateInt(stacker, "flowTexture"),
                 readPrivateInt(stacker, "robustnessTexture"),
                 readPrivateInt(stacker, "tileMaskTexture"),
                 1f,
                 1f,
                 0,
-                64,
+                0,
+                outputRegion,
+                false,
             )
-            invokePrivate(stacker, "captureRadianceReferenceBase", 64)
-            invokePrivate(stacker, "normalizeSuperResolutionStripe", 0, 64, 0)
+            invokePrivate(stacker, "captureRadianceReferenceBase", 96, 96)
+            invokePrivate(
+                stacker,
+                "runRadianceSemanticProxy",
+                sourceRegion,
+                "instrumentation Radiance non-reference",
+            )
+            invokePrivate(
+                stacker,
+                "accumulateRadianceFusionFrame",
+                false,
+                sourceRegion,
+                outputRegion,
+                readPrivateInt(stacker, "flowTexture"),
+                readPrivateInt(stacker, "robustnessTexture"),
+                readPrivateInt(stacker, "tileMaskTexture"),
+                1f,
+                1f,
+                0,
+                1,
+                outputRegion,
+                true,
+            )
+            invokePrivate(stacker, "normalizeRadianceTile", tile, 1, 1)
         } finally {
             invokePrivate(stacker, "release")
         }
@@ -120,6 +163,7 @@ class GlesRawStackerShaderTest {
             invokePrivate(stacker, "initHdrPrograms")
             invokePrivate(stacker, "initResources")
             invokePrivate(stacker, "applyRawRenderState")
+            assertUnifiedRcdPpgInitialized(stacker, "HDR")
 
             val refRaw = readPrivateInt(stacker, "refRaw")
             invokePrivate(stacker, "clearAccumulator")
@@ -212,6 +256,13 @@ class GlesRawStackerShaderTest {
             isAccessible = true
             getInt(target)
         }
+    }
+
+    private fun assertUnifiedRcdPpgInitialized(stacker: GlesRawStacker, mode: String) {
+        assertTrue(
+            "$mode must initialize the shared RCD photo-border PPG program",
+            readPrivateInt(stacker, "rcdRegionBorderPpgProgram") != 0,
+        )
     }
 
 }
