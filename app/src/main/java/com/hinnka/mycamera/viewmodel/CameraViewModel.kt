@@ -1493,6 +1493,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                     "accepted=${orderedFrames.size}, " +
                                     "normal=${orderedNormalFrames.size}, " +
                                     "short=${if (exposurePlan.shortIndex != null) 1 else 0}, " +
+                                    "long=${exposurePlan.longIndices.size}, " +
                                     "rejected=${gyroSelection.rejectedIndices.joinToString()}, " +
                                     "cost=${referencePlan?.referenceCost}",
                             )
@@ -5127,11 +5128,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rollingShutterSkewNs = metadata?.rollingShutterSkewNs
                 ?: captureResult?.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
             gyroWindow = metadata?.gyroWindow,
+            channelNoiseProfile = metadata?.channelNoiseProfile,
             role = when (
                 metadata?.multiFrameCaptureRole
                     ?: (captureResult?.request?.tag as? MultiFrameCaptureRole)
             ) {
                 MultiFrameCaptureRole.SHORT -> RawBurstFrameRole.HIGHLIGHT_SHORT
+                MultiFrameCaptureRole.LONG -> RawBurstFrameRole.SHADOW_LONG
                 else -> RawBurstFrameRole.NORMAL
             },
         )

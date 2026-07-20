@@ -1,9 +1,12 @@
 package com.hinnka.mycamera.processor
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.io.File
 
 class GlesRawRadianceFusionShadersTest {
     @Test
@@ -62,6 +65,33 @@ class GlesRawRadianceFusionShadersTest {
         assertTrue(debugShader.contains("if (highlightWeight > 1e-4)"))
         assertTrue(debugShader.contains("rgb = vec3(0.0, 1.0, 0.0)"))
         assertFalse(productionShader.contains("rgb = vec3(0.0, 1.0, 0.0)"))
+    }
+
+    @Test
+    fun longParticipationDebugColorsOnlyPositiveFinalNrWeightGreen() {
+        val clear = GlesRawRadianceFusionShaders.clearAccumulator(
+            trackRejections = false,
+            trackLongParticipation = true,
+        )
+        val accumulate = GlesRawRadianceFusionShaders.accumulate(
+            rawCommon = "",
+            trackLongParticipation = true,
+        )
+        val normalize = GlesRawRadianceFusionShaders.normalize(
+            showRejections = false,
+            showLongParticipation = true,
+        )
+
+        assertTrue(clear.contains("imageStore(uLongParticipation, p, uvec4(0u))"))
+        assertTrue(accumulate.contains("uIsLongFrame != 0"))
+        assertTrue(accumulate.contains("any(greaterThan(nrWeight, vec3(1e-7)))"))
+        assertTrue(
+            accumulate.contains(
+                "imageStore(uLongParticipation, accumulatorP, uvec4(1u))",
+            ),
+        )
+        assertTrue(normalize.contains("texelFetch(uLongParticipation, p, 0).r != 0u"))
+        assertTrue(normalize.contains("rgb = vec3(0.0, 1.0, 0.0)"))
     }
 
     @Test
@@ -141,6 +171,103 @@ class GlesRawRadianceFusionShadersTest {
         assertTrue(shader.contains("channelConsistency = vec3(chromaConfidence.x, 1.0, chromaConfidence.y)"))
         assertTrue(shader.contains("float sharedConsistency = min(chromaConfidence.x, chromaConfidence.y)"))
         assertFalse(shader.contains("float sensorPrecision"))
+    }
+
+    @Test
+    fun longFramesNormalizeRadianceAndNoiseFromActualExposure() {
+        val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
+
+        assertTrue(shader.contains("uniform float uExposureScale"))
+        assertTrue(shader.contains("sourceRgb.detail * radiometricScale"))
+        assertTrue(shader.contains("sourceRgb.denoise * radiometricScale"))
+        assertTrue(shader.contains("uniform float uReferenceNoiseAlpha[4]"))
+        assertTrue(shader.contains("uniform float uCurrentNoiseAlpha[4]"))
+        assertTrue(shader.contains("referenceRgb / max(radiometricScale, 1e-4)"))
+        assertTrue(shader.contains("radiometricScale * radiometricScale"))
+        assertTrue(shader.contains("uLongPrecisionWeightCap"))
+    }
+
+    @Test
+    fun saturatedLongRawIsRejectedBeforeExposureScaling() {
+        val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = true)
+
+        assertTrue(shader.contains("uniform highp usampler2D uRawRegion"))
+        assertTrue(shader.contains("float longHeadroomConfidence(vec2 sourceRaw)"))
+        assertTrue(shader.contains("rawSensorNormAt(phaseOrigin + ivec2(x, y))"))
+        assertTrue(shader.contains("float longClipConfidence = longHeadroomConfidence(sourceRaw)"))
+        assertTrue(shader.contains("longClipConfidence * clamp(uLongDetailWeightScale"))
+        assertTrue(shader.contains("13.0,"))
+        assertTrue(shader.contains("uIsLongFrame != 0 ? 1.0 - longClipConfidence"))
+    }
+
+    @Test
+    fun longEligibilityRequiresUnclippedObservableSupportAtComposedFlow() {
+        val shader = GlesRawRadianceFusionShaders.longEligibility
+
+        assertTrue(shader.contains("uniform sampler2D uReferenceProxy"))
+        assertTrue(shader.contains("uniform sampler2D uCurrentProxy"))
+        assertTrue(shader.contains("uniform sampler2D uComposedFlow"))
+        assertTrue(shader.contains("min(referenceSample.g, currentSample.g)"))
+        assertTrue(shader.contains("min(referenceSample.b, currentSample.b)"))
+        assertTrue(shader.contains("eligibilitySum += validity * observability"))
+    }
+
+    @Test
+    fun generatedLongFusionShadersPassAvailableNdkValidator() {
+        val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
+        val validator = sdkRoot?.let(::File)
+            ?.resolve("ndk")
+            ?.listFiles()
+            ?.sortedByDescending { it.name }
+            ?.asSequence()
+            ?.mapNotNull { ndk ->
+                ndk.resolve("shader-tools")
+                    .walkTopDown()
+                    .firstOrNull { it.name == "glslc" && it.canExecute() }
+            }
+            ?.firstOrNull()
+        assumeTrue("Android NDK glslc is unavailable", validator != null)
+
+        val rawCommonStub = "int bayerIndexAt(int cfaPattern, ivec2 p) { return 0; }"
+        val sources = listOf(
+            "compute" to GlesRawRadianceFusionShaders.accumulate(
+                rawCommon = rawCommonStub,
+                trackRejections = true,
+                trackParticipation = true,
+                trackLongParticipation = true,
+            ),
+            "fragment" to GlesRawRadianceFusionShaders.longEligibility,
+        )
+        sources.forEach { (stage, source) ->
+            val sourceFile = File.createTempFile("radiance-long-", ".$stage")
+            val outputFile = File.createTempFile("radiance-long-", ".spv")
+            try {
+                // glslc emits SPIR-V even for syntax-only validation and requires ESSL 3.10.
+                // The production fragment shader remains ESSL 3.00 for GLES 3.0 compatibility;
+                // 3.10 does not change any syntax used by this shader.
+                val validatorSource = if (stage == "fragment") {
+                    source.replaceFirst("#version 300 es", "#version 310 es")
+                } else {
+                    source
+                }
+                sourceFile.writeText(validatorSource)
+                val process = ProcessBuilder(
+                    checkNotNull(validator).absolutePath,
+                    "--target-env=opengl",
+                    "-fauto-map-locations",
+                    "-fauto-bind-uniforms",
+                    "-fshader-stage=$stage",
+                    sourceFile.absolutePath,
+                    "-o",
+                    outputFile.absolutePath,
+                ).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                assertEquals("$stage: $output", 0, process.waitFor())
+            } finally {
+                sourceFile.delete()
+                outputFile.delete()
+            }
+        }
     }
 
     @Test
@@ -240,6 +367,9 @@ class GlesRawRadianceFusionShadersTest {
         assertFalse(clear.contains("uFusionRejections"))
         assertFalse(accumulate.contains("uFusionRejections"))
         assertFalse(accumulate.contains("uFusionParticipationStats"))
+        assertFalse(clear.contains("uLongParticipation"))
+        assertFalse(accumulate.contains("uLongParticipation"))
+        assertFalse(normalize.contains("uLongParticipation"))
         assertFalse(normalize.contains("uFusionRejections"))
         assertFalse(normalize.contains("uDebugNeutralRgb"))
     }

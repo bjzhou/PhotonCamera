@@ -78,6 +78,42 @@ class GlesRawStacker(
             maxYPlanePx = maxFlowYPlanePx,
         )
     }
+    private data class RadianceLongAlignment(
+        val plan: RawRadianceLongFramePlan,
+        val anchorFrameIndex: Int,
+        val flowTexture: Int,
+        val robustnessTexture: Int,
+        val tileMaskTexture: Int,
+        val registrationWeight: Float,
+        val detailWeight: Float,
+        val minFlowXPlanePx: Float,
+        val maxFlowXPlanePx: Float,
+        val minFlowYPlanePx: Float,
+        val maxFlowYPlanePx: Float,
+        val validTileFraction: Float,
+        val coveredQuadrants: Int,
+    ) {
+        fun flowBounds(): RadianceFlowBounds = RadianceFlowBounds(
+            minXPlanePx = minFlowXPlanePx,
+            maxXPlanePx = maxFlowXPlanePx,
+            minYPlanePx = minFlowYPlanePx,
+            maxYPlanePx = maxFlowYPlanePx,
+        )
+    }
+    private data class RadianceFlowSupport(
+        val validTileFraction: Float,
+        val validTileCount: Int,
+        val coveredQuadrants: Int,
+        val eligibleTileCount: Int,
+        val eligibleQuadrants: Int,
+        val eligibleCoverage: Float,
+        val requiredQuadrants: Int,
+        val frameWeight: Float,
+        val minFlowXPlanePx: Float,
+        val maxFlowXPlanePx: Float,
+        val minFlowYPlanePx: Float,
+        val maxFlowYPlanePx: Float,
+    )
     private data class ReadOutputTiming(
         val elapsedMs: Long,
         val glReadMs: Long,
@@ -208,6 +244,8 @@ class GlesRawStacker(
         radianceFusionEnabled && hwmfDebug.visualizeRadianceSrDetail
     private val visualizeRadianceHighlightReconstruction =
         radianceFusionEnabled && hwmfDebug.visualizeRadianceHighlightReconstruction
+    private val visualizeRadianceLongParticipation =
+        radianceFusionEnabled && hwmfDebug.visualizeRadianceLongParticipation
     private val logRadianceFusionParticipation =
         radianceFusionEnabled && hwmfDebug.logRadianceFusionParticipation
     private val dualTileConfidence = radianceFusionEnabled
@@ -301,6 +339,7 @@ class GlesRawStacker(
     private var radianceHighlightValidateFlowProgram = 0
     private var radianceHighlightPropagateFlowProgram = 0
     private var radianceHighlightComposeFlowProgram = 0
+    private var radianceLongEligibilityProgram = 0
     private var radianceReferenceBaseProgram = 0
     private val radianceVgnPrograms = IntArray(VgnShaders.PROGRAM_3 + 1)
     private var radianceVgnFinalProgram = 0
@@ -357,6 +396,7 @@ class GlesRawStacker(
     private var radianceReferenceBaseTexture = 0
     private var radianceFusionRejectionTexture = 0
     private var radianceFusionRejectionScratchTexture = 0
+    private var radianceLongParticipationTexture = 0
     private var radianceRgbTileTexture = 0
     private var radianceSemanticSeedTexture = 0
     private var radianceVgnPackedFloatTexture = 0
@@ -401,6 +441,7 @@ class GlesRawStacker(
     private var hdrShortRawOffsetY = 0f
     private var hdrWeightMap: GlesRawHdrWeightMap? = null
     private var activeRadianceHighlightFrame: RawRadianceHighlightFrame? = null
+    private var activeRadianceLongFrames: List<RawRadianceLongFramePlan> = emptyList()
 
     fun process(images: List<SafeImage>): RawStackResult? {
         return processFrames(images.map { RawStackFrame(it) })
@@ -409,12 +450,15 @@ class GlesRawStacker(
     internal fun processFrames(
         frames: List<RawStackFrame>,
         highlightFrame: RawRadianceHighlightFrame? = null,
+        longFrames: List<RawRadianceLongFramePlan> = emptyList(),
     ): RawStackResult? {
         val images = frames.map { it.image }
         activeRadianceHighlightFrame = highlightFrame?.takeIf { radianceFusionEnabled }
+        activeRadianceLongFrames = longFrames.takeIf { radianceFusionEnabled }.orEmpty()
         val ownedImages = buildList {
             addAll(images)
             activeRadianceHighlightFrame?.shortFrame?.image?.let(::add)
+            activeRadianceLongFrames.forEach { add(it.longFrame.image) }
         }
         if (images.isEmpty() || width <= 0 || height <= 0) {
             ownedImages.forEach { it.close() }
@@ -614,6 +658,15 @@ class GlesRawStacker(
                 GlesGpuScheduler.yieldToUiRenderer()
             }
 
+            val longAlignments = prepareRadianceLongAlignments(
+                longFrames = activeRadianceLongFrames,
+                frames = frames,
+                acceptedFrames = acceptedSuperResolutionFrames,
+                referencePyramid = refPyramid,
+                currentPyramid = curPyramid,
+            )
+            // Highlight is prepared last because its composed flow currently occupies the shared
+            // auxiliary-flow texture. Long flows have already been copied into dedicated caches.
             val highlightAlignment = activeRadianceHighlightFrame?.let { highlight ->
                 prepareRadianceHighlightAlignment(
                     highlight = highlight,
@@ -631,10 +684,13 @@ class GlesRawStacker(
             val reconstructionReadTiming = when {
                 radianceFusionEnabled -> reconstructRadianceTiles(
                     referenceImage = images[0],
+                    frames = frames,
                     acceptedFrames = acceptedSuperResolutionFrames,
-                    candidateFrameCount = (images.size - 1).coerceAtLeast(0),
+                    candidateFrameCount = (images.size - 1).coerceAtLeast(0) +
+                        activeRadianceLongFrames.size,
                     outputBuffer = outputBuffer,
                     highlightAlignment = highlightAlignment,
+                    longAlignments = longAlignments,
                 )
                 superResolutionEnabled -> reconstructSuperResolutionStripes(
                     referenceImage = images[0],
@@ -967,7 +1023,8 @@ class GlesRawStacker(
             if (radianceFusionEnabled) {
                 clearSuperResolutionAccumulatorProgram = linkComputeProgram(
                     GlesRawRadianceFusionShaders.clearAccumulator(
-                        visualizeRadianceFusionRejections,
+                        trackRejections = visualizeRadianceFusionRejections,
+                        trackLongParticipation = visualizeRadianceLongParticipation,
                     ),
                     if (visualizeRadianceFusionRejections) {
                         "raw_radiance_clear_r32ui_rgba16f_writeonly"
@@ -980,6 +1037,7 @@ class GlesRawStacker(
                         RAW_COMMON,
                         trackRejections = visualizeRadianceFusionRejections,
                         trackParticipation = logRadianceFusionParticipation,
+                        trackLongParticipation = visualizeRadianceLongParticipation,
                     ),
                     if (visualizeRadianceFusionRejections) {
                         "raw_radiance_accumulate_r32ui_read_write_rgba16f_ping_pong_writeonly"
@@ -996,6 +1054,7 @@ class GlesRawStacker(
                     GlesRawRadianceFusionShaders.normalize(
                         showRejections = visualizeRadianceFusionRejections,
                         showSrDetail = visualizeRadianceSrDetail,
+                        showLongParticipation = visualizeRadianceLongParticipation,
                     ),
                     "raw_radiance_normalize_r32ui_usampler",
                 )
@@ -1008,9 +1067,12 @@ class GlesRawStacker(
                             reconstructHighlights = true,
                             showHighlightReconstruction =
                                 visualizeRadianceHighlightReconstruction,
+                            showLongParticipation = visualizeRadianceLongParticipation,
                         ),
                         "raw_radiance_highlight_normalize_r32ui_usampler",
                     )
+                }
+                if (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty()) {
                     radianceHighlightValidateFlowProgram = linkGraphicsProgram(
                         FULLSCREEN_VERTEX_SHADER,
                         GlesRawRadianceFusionShaders.validateHighlightFlow,
@@ -1025,6 +1087,13 @@ class GlesRawStacker(
                         FULLSCREEN_VERTEX_SHADER,
                         GlesRawRadianceFusionShaders.composeHighlightFlow,
                         "raw_radiance_highlight_compose_flow",
+                    )
+                }
+                if (activeRadianceLongFrames.isNotEmpty()) {
+                    radianceLongEligibilityProgram = linkGraphicsProgram(
+                        FULLSCREEN_VERTEX_SHADER,
+                        GlesRawRadianceFusionShaders.longEligibility,
+                        "raw_radiance_long_eligibility",
                     )
                 }
                 if (radianceUsesVgnSemanticBackend) {
@@ -1199,7 +1268,9 @@ class GlesRawStacker(
         }
         if (superResolutionEnabled && RawStackRuntimeDebug.enabled) {
             val accumulatorBytesPerPixel = if (radianceFusionEnabled) {
-                4L * 4L + 8L + if (visualizeRadianceFusionRejections) 16L else 0L
+                4L * 4L + 8L +
+                    (if (visualizeRadianceFusionRejections) 16L else 0L) +
+                    (if (visualizeRadianceLongParticipation) 4L else 0L)
             } else {
                 4L * 3L
             }
@@ -1253,7 +1324,9 @@ class GlesRawStacker(
         curProxy = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
         flowTexture = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
         flowScratchTexture = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
-        if (radianceFusionEnabled && activeRadianceHighlightFrame != null) {
+        if (radianceFusionEnabled &&
+            (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty())
+        ) {
             radianceHighlightReverseFlowTexture = createTexture2D(
                 gridWidth,
                 gridHeight,
@@ -1340,6 +1413,14 @@ class GlesRawStacker(
                         superResolutionAccumulatorWidth,
                         superResolutionAccumulatorHeight,
                         GLES30.GL_RGBA16F,
+                        GLES30.GL_NEAREST,
+                    )
+                }
+                if (visualizeRadianceLongParticipation) {
+                    radianceLongParticipationTexture = createTexture2D(
+                        superResolutionAccumulatorWidth,
+                        superResolutionAccumulatorHeight,
+                        GLES30.GL_R32UI,
                         GLES30.GL_NEAREST,
                     )
                 }
@@ -1818,11 +1899,24 @@ class GlesRawStacker(
         proxyTexture: Int,
         label: String,
         exposureScale: Float = 1.0f,
+        noiseModel: RawNoiseModel = rawNoiseModel,
     ) {
         GLES31.glUseProgram(proxyProgram)
         bindTexture(proxyProgram, "uRaw", 0, rawTexture)
         bindImage(1, proxyTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
         setCommonUniforms(proxyProgram)
+        GLES31.glUniform1fv(
+            uniformLocation(proxyProgram, "uNoiseAlphaByChannel[0]"),
+            4,
+            noiseModel.normalizedShotNoiseForShader(cfaPattern),
+            0,
+        )
+        GLES31.glUniform1fv(
+            uniformLocation(proxyProgram, "uNoiseBetaByChannel[0]"),
+            4,
+            noiseModel.normalizedReadNoiseForShader(cfaPattern),
+            0,
+        )
         GLES31.glUniform2i(GLES31.glGetUniformLocation(proxyProgram, "uProxySize"), planeWidth, planeHeight)
         GLES31.glUniform1f(GLES31.glGetUniformLocation(proxyProgram, "uExposureScale"), exposureScale)
         GLES31.glDispatchCompute(groupCount(planeWidth), groupCount(planeHeight), 1)
@@ -2598,6 +2692,7 @@ class GlesRawStacker(
                 curProxy,
                 "Radiance highlight short exposure-normalized",
                 exposureScale = highlight.exposureRatio,
+                noiseModel = frameNoiseModel(highlight.shortFrame),
             )
             buildPyramid(currentPyramid)
 
@@ -2668,7 +2763,399 @@ class GlesRawStacker(
         }.getOrNull()
     }
 
-    private fun validateRadianceHighlightFlow() {
+    private fun prepareRadianceLongAlignments(
+        longFrames: List<RawRadianceLongFramePlan>,
+        frames: List<RawStackFrame>,
+        acceptedFrames: List<AcceptedSuperResolutionFrame>,
+        referencePyramid: List<TextureLevel>,
+        currentPyramid: List<TextureLevel>,
+    ): List<RadianceLongAlignment> {
+        if (!radianceFusionEnabled || longFrames.isEmpty() || frames.isEmpty()) return emptyList()
+        val acceptedNormalIndices = buildList {
+            add(0)
+            acceptedFrames.forEach { frame -> add(frame.frameIndex) }
+        }.distinct()
+        return longFrames.mapNotNull { plan ->
+            val anchorFrameIndex = acceptedNormalIndices.minByOrNull { frameIndex ->
+                timestampDistance(
+                    frames[frameIndex].sensorTimestampNs,
+                    plan.longFrame.sensorTimestampNs,
+                )
+            } ?: return@mapNotNull null
+            val anchorIsReference = anchorFrameIndex == 0
+            val anchorAlignment = if (anchorIsReference) {
+                null
+            } else {
+                acceptedFrames.firstOrNull { it.frameIndex == anchorFrameIndex }
+                    ?: return@mapNotNull null
+            }
+            runCatching {
+                val anchor = frames[anchorFrameIndex]
+                uploadRawTexture(anchor.image, curRaw, "Radiance long anchor")
+                buildProxy(curRaw, refProxy, "Radiance long anchor")
+                buildPyramid(referencePyramid)
+
+                uploadRawTexture(plan.longFrame.image, curRaw, "Radiance long source")
+                buildProxy(
+                    curRaw,
+                    curProxy,
+                    "Radiance long exposure-normalized",
+                    exposureScale = plan.exposureScale,
+                    noiseModel = frameNoiseModel(plan.longFrame),
+                )
+                buildPyramid(currentPyramid)
+
+                val longAlignLevel = alignLevel.coerceAtMost(referencePyramid.lastIndex)
+                drawAlignment(
+                    reference = referencePyramid[longAlignLevel],
+                    current = currentPyramid[longAlignLevel],
+                    levelScale = 1 shl longAlignLevel,
+                    outputTexture = flowTexture,
+                    outputGridWidth = gridWidth,
+                    outputGridHeight = gridHeight,
+                    outputTileSpacing = flowGridSpacing,
+                    preAlignment = null,
+                    label = "Radiance long anchor-to-source",
+                )
+                refineFlow(
+                    referenceProxyTexture = refProxy,
+                    currentProxyTexture = curProxy,
+                    targetFlowTexture = flowTexture,
+                    scratchFlowTexture = flowScratchTexture,
+                )
+                smoothFlow(flowTexture, flowScratchTexture)
+
+                drawAlignment(
+                    reference = currentPyramid[longAlignLevel],
+                    current = referencePyramid[longAlignLevel],
+                    levelScale = 1 shl longAlignLevel,
+                    outputTexture = radianceHighlightReverseFlowTexture,
+                    outputGridWidth = gridWidth,
+                    outputGridHeight = gridHeight,
+                    outputTileSpacing = flowGridSpacing,
+                    preAlignment = null,
+                    label = "Radiance long source-to-anchor",
+                )
+                refineFlow(
+                    referenceProxyTexture = curProxy,
+                    currentProxyTexture = refProxy,
+                    targetFlowTexture = radianceHighlightReverseFlowTexture,
+                    scratchFlowTexture = flowScratchTexture,
+                )
+                smoothFlow(radianceHighlightReverseFlowTexture, flowScratchTexture)
+                validateRadianceHighlightFlow(
+                    consistencyStartPx = radianceFusionTuning.longFlowFbConsistencyStartPx,
+                    consistencyFullPx = radianceFusionTuning.longFlowFbConsistencyFullPx,
+                    label = "long",
+                )
+                propagateRadianceHighlightFlow(
+                    targetTexture = flowTexture,
+                    guideProxyTexture = refProxy,
+                    label = "long-anchor-to-source",
+                )
+
+                // Admit the long frame on the direct anchor -> long edge. The normal anchor has
+                // already passed its own frame admission, so multiplying its reference -> anchor
+                // confidence into this global gate would test the same edge twice and makes the
+                // result depend on which normal frame happened to become the burst reference.
+                computeRadianceLongEligibility(
+                    frameIndex = plan.sourceFrameIndex,
+                    sourceFlowTexture = flowTexture,
+                    stage = "direct",
+                )
+                val directSupport = summarizeRadianceLongFlow(
+                    plan = plan,
+                    anchorFrameIndex = anchorFrameIndex,
+                    sourceFlowTexture = flowTexture,
+                    stage = "direct",
+                    enforceAdmission = true,
+                ) ?: return@runCatching null
+
+                if (!anchorIsReference) {
+                    copyRgbaTexture(
+                        checkNotNull(anchorAlignment).flowTexture,
+                        radianceHighlightAnchorFlowTexture,
+                        gridWidth,
+                        gridHeight,
+                        "Radiance long anchor flow copy",
+                    )
+                    uploadRawTexture(frames.first().image, curRaw, "Radiance long reference guide")
+                    buildProxy(curRaw, refProxy, "Radiance long reference guide")
+                    propagateRadianceHighlightFlow(
+                        targetTexture = radianceHighlightAnchorFlowTexture,
+                        guideProxyTexture = refProxy,
+                        label = "long-reference-to-anchor",
+                    )
+                }
+                composeRadianceHighlightFlow(anchorIsReference)
+                computeRadianceLongEligibility(
+                    frameIndex = plan.sourceFrameIndex,
+                    sourceFlowTexture = radianceHighlightComposedFlowTexture,
+                    stage = "composed",
+                )
+                val composedSupport = checkNotNull(
+                    summarizeRadianceLongFlow(
+                        plan = plan,
+                        anchorFrameIndex = anchorFrameIndex,
+                        sourceFlowTexture = radianceHighlightComposedFlowTexture,
+                        stage = "composed",
+                        enforceAdmission = false,
+                    ),
+                )
+
+                copyRgbaTexture(
+                    radianceHighlightComposedFlowTexture,
+                    flowTexture,
+                    gridWidth,
+                    gridHeight,
+                    "Radiance long composed flow copy",
+                )
+                computeRobustness()
+                computeTileMask()
+
+                val cachedFlow = createTexture2D(
+                    gridWidth,
+                    gridHeight,
+                    GLES30.GL_RGBA16F,
+                    GLES30.GL_LINEAR,
+                )
+                val cachedRobustness = createTexture2D(
+                    planeWidth,
+                    planeHeight,
+                    GLES30.GL_R16F,
+                    GLES30.GL_NEAREST,
+                )
+                val cachedTileMask = createTexture2D(
+                    gridWidth,
+                    gridHeight,
+                    GLES30.GL_RGBA16F,
+                    GLES30.GL_LINEAR,
+                )
+                copyRgbaTexture(
+                    flowTexture,
+                    cachedFlow,
+                    gridWidth,
+                    gridHeight,
+                    "Radiance long cached flow ${plan.sourceFrameIndex}",
+                )
+                copyScalarTexture(
+                    robustnessTexture,
+                    cachedRobustness,
+                    planeWidth,
+                    planeHeight,
+                    "Radiance long cached robustness ${plan.sourceFrameIndex}",
+                )
+                copyRgbaTexture(
+                    tileMaskTexture,
+                    cachedTileMask,
+                    gridWidth,
+                    gridHeight,
+                    "Radiance long cached tile mask ${plan.sourceFrameIndex}",
+                )
+                RadianceLongAlignment(
+                    plan = plan,
+                    anchorFrameIndex = anchorFrameIndex,
+                    flowTexture = cachedFlow,
+                    robustnessTexture = cachedRobustness,
+                    tileMaskTexture = cachedTileMask,
+                    // The validated seed coverage is an admission gate, not a merge-weight
+                    // multiplier. Once a bracket frame has enough spatially distributed
+                    // correspondences, propagated flow, robustness and the tile mask own local
+                    // rejection. Attenuating the whole frame again made accepted long frames
+                    // enter with effectively zero weight.
+                    registrationWeight = directSupport.frameWeight,
+                    detailWeight = directSupport.frameWeight,
+                    minFlowXPlanePx = composedSupport.minFlowXPlanePx,
+                    maxFlowXPlanePx = composedSupport.maxFlowXPlanePx,
+                    minFlowYPlanePx = composedSupport.minFlowYPlanePx,
+                    maxFlowYPlanePx = composedSupport.maxFlowYPlanePx,
+                    validTileFraction = directSupport.validTileFraction,
+                    coveredQuadrants = directSupport.coveredQuadrants,
+                )
+            }.onFailure { error ->
+                PLog.w(
+                    TAG,
+                    "Radiance long alignment failed frame=${plan.sourceFrameIndex}; excluded",
+                    error,
+                )
+            }.getOrNull()
+        }
+    }
+
+    private fun summarizeRadianceLongFlow(
+        plan: RawRadianceLongFramePlan,
+        anchorFrameIndex: Int,
+        sourceFlowTexture: Int,
+        stage: String,
+        enforceAdmission: Boolean,
+    ): RadianceFlowSupport? {
+        val (values, eligibilityValues) = readFlowTextures(
+            textures = listOf(
+                sourceFlowTexture,
+                flowScratchTexture,
+            ),
+            textureWidth = gridWidth,
+            textureHeight = gridHeight,
+            label = "Radiance long $stage flow ${plan.sourceFrameIndex}",
+        )
+        val confidenceThreshold = radianceFusionTuning.longFlowMinimumConfidence
+            .coerceIn(0f, 1f)
+        val eligibilityThreshold = radianceFusionTuning.longEligibilityMinimumSupport
+            .coerceIn(0f, 1f)
+        var validTiles = 0
+        var eligibleTiles = 0
+        var minX = 0f
+        var maxX = 0f
+        var minY = 0f
+        var maxY = 0f
+        val quadrants = BooleanArray(4)
+        val eligibleTilesByQuadrant = IntArray(4)
+        var meanValiditySum = 0f
+        var meanObservabilitySum = 0f
+        var insideFractionSum = 0f
+        var diagnosticTileCount = 0
+        var offset = 0
+        while (offset + 3 < values.size) {
+            val tileIndex = offset / 4
+            val flowX = values[offset]
+            val flowY = values[offset + 1]
+            val confidence = values[offset + 3]
+            val eligibility = eligibilityValues[offset]
+            val validity = eligibilityValues[offset + 1]
+            val observability = eligibilityValues[offset + 2]
+            val insideFraction = eligibilityValues[offset + 3]
+            if (validity.isFinite() && observability.isFinite() && insideFraction.isFinite()) {
+                meanValiditySum += validity
+                meanObservabilitySum += observability
+                insideFractionSum += insideFraction
+                diagnosticTileCount++
+            }
+            val tileX = tileIndex % gridWidth
+            val tileY = tileIndex / gridWidth
+            val quadrant = (if (tileY >= gridHeight / 2) 2 else 0) +
+                if (tileX >= gridWidth / 2) 1 else 0
+            val eligible = eligibility.isFinite() && eligibility >= eligibilityThreshold
+            if (eligible) {
+                eligibleTiles++
+                eligibleTilesByQuadrant[quadrant]++
+                // Source-region bounds must cover every potentially usable warped sample. Flow
+                // confidence is intentionally not part of this bound: after direct admission,
+                // composed confidence remains a soft, pixel-local signal rather than a second
+                // hard frame gate.
+                if (flowX.isFinite() && flowY.isFinite()) {
+                    minX = minOf(minX, flowX)
+                    maxX = maxOf(maxX, flowX)
+                    minY = minOf(minY, flowY)
+                    maxY = maxOf(maxY, flowY)
+                }
+            }
+            if (eligible && flowX.isFinite() && flowY.isFinite() && confidence.isFinite() &&
+                confidence >= confidenceThreshold
+            ) {
+                validTiles++
+                quadrants[quadrant] = true
+            }
+            offset += 4
+        }
+        val totalTiles = (gridWidth * gridHeight).coerceAtLeast(1)
+        val validFraction = validTiles.toFloat() / totalTiles
+        val diagnosticDenominator = diagnosticTileCount.coerceAtLeast(1).toFloat()
+        val meanValidity = meanValiditySum / diagnosticDenominator
+        val meanObservability = meanObservabilitySum / diagnosticDenominator
+        val meanInsideFraction = insideFractionSum / diagnosticDenominator
+        val coveredQuadrants = quadrants.count { it }
+        val minimumEligibleTilesPerQuadrant =
+            radianceFusionTuning.longEligibilityMinimumTilesPerQuadrant.coerceAtLeast(1)
+        val eligibleQuadrants = eligibleTilesByQuadrant.count { tileCount ->
+            tileCount >= minimumEligibleTilesPerQuadrant
+        }
+        val admission = planRadianceLongAdmission(
+            validTileCount = validTiles,
+            coveredQuadrants = coveredQuadrants,
+            eligibleTileCount = eligibleTiles,
+            eligibleQuadrants = eligibleQuadrants,
+            minimumValidTiles = radianceFusionTuning.longFlowMinimumValidTiles,
+            minimumQuadrants = radianceFusionTuning.longFlowMinimumQuadrants,
+            minimumEligibleCoverage = radianceFusionTuning.longFlowMinimumEligibleCoverage,
+        )
+        if (enforceAdmission && admission.frameWeight <= 0f) {
+            PLog.w(
+                TAG,
+                "Radiance long $stage alignment rejected frame=${plan.sourceFrameIndex} " +
+                    "coverage=$validFraction validTiles=$validTiles/$totalTiles " +
+                    "eligibleTiles=$eligibleTiles eligibleCoverage=${admission.eligibleCoverage} " +
+                    "meanValidity=$meanValidity meanObservability=$meanObservability " +
+                    "meanInside=$meanInsideFraction " +
+                    "quadrants=$coveredQuadrants/$eligibleQuadrants " +
+                    "requiredQuadrants=${admission.requiredQuadrants} " +
+                    "anchor=$anchorFrameIndex",
+            )
+            return null
+        }
+        PLog.i(
+            TAG,
+            if (enforceAdmission) {
+                "Radiance long $stage alignment accepted frame=${plan.sourceFrameIndex} "
+            } else {
+                "Radiance long $stage support frame=${plan.sourceFrameIndex} "
+            } +
+                "actualEv=${plan.exposureDeltaEv} scale=${plan.exposureScale} " +
+                "coverage=$validFraction validTiles=$validTiles/$totalTiles " +
+                "eligibleTiles=$eligibleTiles eligibleCoverage=${admission.eligibleCoverage} " +
+                "meanValidity=$meanValidity meanObservability=$meanObservability " +
+                "meanInside=$meanInsideFraction " +
+                "quadrants=$coveredQuadrants/$eligibleQuadrants " +
+                "requiredQuadrants=${admission.requiredQuadrants} " +
+                "anchor=$anchorFrameIndex gateWeight=${admission.frameWeight} " +
+                "admissionDomain=${if (enforceAdmission) stage else "direct"} " +
+                "flow=[$minX,$maxX]x[$minY,$maxY]",
+        )
+        return RadianceFlowSupport(
+            validTileFraction = validFraction,
+            validTileCount = validTiles,
+            coveredQuadrants = coveredQuadrants,
+            eligibleTileCount = eligibleTiles,
+            eligibleQuadrants = eligibleQuadrants,
+            eligibleCoverage = admission.eligibleCoverage,
+            requiredQuadrants = admission.requiredQuadrants,
+            frameWeight = admission.frameWeight,
+            minFlowXPlanePx = minX,
+            maxFlowXPlanePx = maxX,
+            minFlowYPlanePx = minY,
+            maxFlowYPlanePx = maxY,
+        )
+    }
+
+    private fun computeRadianceLongEligibility(
+        frameIndex: Int,
+        sourceFlowTexture: Int,
+        stage: String,
+    ) {
+        val program = radianceLongEligibilityProgram
+        check(program != 0)
+        bindFramebufferOutput(flowScratchTexture, "Radiance long $stage eligibility $frameIndex")
+        GLES30.glViewport(0, 0, gridWidth, gridHeight)
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uReferenceProxy", 0, refProxy)
+        bindTexture(program, "uCurrentProxy", 1, curProxy)
+        bindTexture(program, "uComposedFlow", 2, sourceFlowTexture)
+        GLES31.glUniform2i(uniformLocation(program, "uGridSize"), gridWidth, gridHeight)
+        GLES31.glUniform2i(uniformLocation(program, "uPlaneSize"), planeWidth, planeHeight)
+        GLES31.glUniform1i(uniformLocation(program, "uTileSize"), flowGridSpacing)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("Radiance long $stage eligibility $frameIndex")
+    }
+
+    private fun timestampDistance(first: Long, second: Long): Long {
+        if (first <= 0L || second <= 0L) return Long.MAX_VALUE
+        return if (first >= second) first - second else second - first
+    }
+
+    private fun validateRadianceHighlightFlow(
+        consistencyStartPx: Float = radianceFusionTuning.highlightFlowFbConsistencyStartPx,
+        consistencyFullPx: Float = radianceFusionTuning.highlightFlowFbConsistencyFullPx,
+        label: String = "highlight",
+    ) {
         val program = radianceHighlightValidateFlowProgram
         check(program != 0)
         bindFramebufferOutput(flowScratchTexture, "Radiance highlight FB validation")
@@ -2681,22 +3168,22 @@ class GlesRawStacker(
         GLES31.glUniform1i(uniformLocation(program, "uTileSize"), flowGridSpacing)
         GLES31.glUniform1f(
             uniformLocation(program, "uFbConsistencyStart"),
-            radianceFusionTuning.highlightFlowFbConsistencyStartPx.coerceAtLeast(0f),
+            consistencyStartPx.coerceAtLeast(0f),
         )
         GLES31.glUniform1f(
             uniformLocation(program, "uFbConsistencyFull"),
-            radianceFusionTuning.highlightFlowFbConsistencyFullPx.coerceAtLeast(
-                radianceFusionTuning.highlightFlowFbConsistencyStartPx + 1e-3f,
+            consistencyFullPx.coerceAtLeast(
+                consistencyStartPx + 1e-3f,
             ),
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        finishFramebufferPass("Radiance highlight FB validation")
+        finishFramebufferPass("Radiance $label FB validation")
         copyRgbaTexture(
             flowScratchTexture,
             flowTexture,
             gridWidth,
             gridHeight,
-            "Radiance highlight validated flow copy",
+            "Radiance $label validated flow copy",
         )
     }
 
@@ -3906,6 +4393,14 @@ class GlesRawStacker(
                     GLES30.GL_RGBA16F,
                 )
             }
+            if (visualizeRadianceLongParticipation) {
+                bindImage(
+                    7,
+                    radianceLongParticipationTexture,
+                    GLES31.GL_WRITE_ONLY,
+                    GLES30.GL_R32UI,
+                )
+            }
         } else {
             bindImage(0, superResolutionAccumulatorTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
             bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
@@ -4187,6 +4682,10 @@ class GlesRawStacker(
         frameTileMaskTexture: Int,
         registrationWeight: Float,
         detailWeight: Float,
+        exposureScale: Float,
+        isLongFrame: Boolean,
+        referenceNoiseModel: RawNoiseModel,
+        frameNoiseModel: RawNoiseModel,
         fusionStatsBuffer: Int,
         fusionStatsIndex: Int,
         fusionStatsCoreRegion: RadianceTileRect,
@@ -4204,6 +4703,12 @@ class GlesRawStacker(
             "uReferenceBase",
             6,
             radianceReferenceBaseTexture,
+        )
+        bindTexture(
+            accumulateSuperResolutionProgram,
+            "uRawRegion",
+            8,
+            rcdRawRegionTexture,
         )
         bindImage(
             0,
@@ -4259,6 +4764,14 @@ class GlesRawStacker(
                 if (recordFusionRejections) 1 else 0,
             )
         }
+        if (visualizeRadianceLongParticipation) {
+            bindImage(
+                7,
+                radianceLongParticipationTexture,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_R32UI,
+            )
+        }
         if (logRadianceFusionParticipation) {
             check(fusionStatsBuffer != 0) { "Radiance fusion stats buffer is unavailable" }
             GLES31.glBindBufferBase(
@@ -4286,6 +4799,34 @@ class GlesRawStacker(
             )
         }
         setCommonUniforms(accumulateSuperResolutionProgram)
+        val referenceNoiseAlpha = referenceNoiseModel.normalizedShotNoiseForShader(cfaPattern)
+        val referenceNoiseBeta = referenceNoiseModel.normalizedReadNoiseForShader(cfaPattern)
+        val currentNoiseAlpha = frameNoiseModel.normalizedShotNoiseForShader(cfaPattern)
+        val currentNoiseBeta = frameNoiseModel.normalizedReadNoiseForShader(cfaPattern)
+        GLES31.glUniform1fv(
+            uniformLocation(accumulateSuperResolutionProgram, "uReferenceNoiseAlpha[0]"),
+            4,
+            referenceNoiseAlpha,
+            0,
+        )
+        GLES31.glUniform1fv(
+            uniformLocation(accumulateSuperResolutionProgram, "uReferenceNoiseBeta[0]"),
+            4,
+            referenceNoiseBeta,
+            0,
+        )
+        GLES31.glUniform1fv(
+            uniformLocation(accumulateSuperResolutionProgram, "uCurrentNoiseAlpha[0]"),
+            4,
+            currentNoiseAlpha,
+            0,
+        )
+        GLES31.glUniform1fv(
+            uniformLocation(accumulateSuperResolutionProgram, "uCurrentNoiseBeta[0]"),
+            4,
+            currentNoiseBeta,
+            0,
+        )
         GLES31.glUniform2i(
             uniformLocation(accumulateSuperResolutionProgram, "uImageSize"),
             width,
@@ -4325,6 +4866,14 @@ class GlesRawStacker(
             if (isReference) 1 else 0,
         )
         GLES31.glUniform1i(
+            uniformLocation(accumulateSuperResolutionProgram, "uIsLongFrame"),
+            if (isLongFrame) 1 else 0,
+        )
+        GLES31.glUniform1f(
+            uniformLocation(accumulateSuperResolutionProgram, "uExposureScale"),
+            exposureScale.coerceIn(1e-4f, 64f),
+        )
+        GLES31.glUniform1i(
             uniformLocation(accumulateSuperResolutionProgram, "uSemanticEncoding"),
             if (radianceUsesVgnSemanticBackend) 1 else 0,
         )
@@ -4339,6 +4888,32 @@ class GlesRawStacker(
         GLES31.glUniform1f(
             uniformLocation(accumulateSuperResolutionProgram, "uRegistrationDetailWeight"),
             if (isReference) 1f else detailWeight.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(accumulateSuperResolutionProgram, "uLongClipStart"),
+            radianceFusionTuning.longClipStart.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(accumulateSuperResolutionProgram, "uLongClipFull"),
+            radianceFusionTuning.longClipFull.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(accumulateSuperResolutionProgram, "uLongPrecisionWeightCap"),
+            if (isLongFrame &&
+                (!referenceNoiseModel.hasValidCamera2Profile ||
+                    !frameNoiseModel.hasValidCamera2Profile)
+            ) {
+                minOf(
+                    radianceFusionTuning.longPrecisionWeightCap.coerceAtLeast(1f),
+                    (1f / exposureScale.coerceAtLeast(1e-4f)).coerceAtLeast(1f),
+                )
+            } else {
+                radianceFusionTuning.longPrecisionWeightCap.coerceAtLeast(1f)
+            },
+        )
+        GLES31.glUniform1f(
+            uniformLocation(accumulateSuperResolutionProgram, "uLongDetailWeightScale"),
+            radianceFusionTuning.longDetailWeightScale.coerceIn(0f, 1f),
         )
         GLES31.glUniform1f(
             uniformLocation(accumulateSuperResolutionProgram, "uDenoiseSigmaRawPx"),
@@ -4398,6 +4973,12 @@ class GlesRawStacker(
             radianceFusionRejectionTexture = radianceFusionRejectionScratchTexture
             radianceFusionRejectionScratchTexture = previousRejections
         }
+    }
+
+    private fun frameNoiseModel(frame: RawStackFrame): RawNoiseModel {
+        val profile = frame.channelNoiseProfile ?: return rawNoiseModel
+        val model = RawNoiseModel.fromCamera2NoiseProfile(profile)
+        return if (model.hasValidCamera2Profile) model else rawNoiseModel
     }
 
     private fun captureRadianceReferenceBase(regionWidth: Int, regionHeight: Int) {
@@ -4800,11 +5381,11 @@ class GlesRawStacker(
 
     private fun logRadianceFusionStats(
         buffer: Int,
-        frameIndices: IntArray,
+        frameLabels: List<String>,
         candidateFrameCount: Int,
     ) {
-        if (buffer == 0 || frameIndices.isEmpty()) return
-        val uintCount = frameIndices.size * RADIANCE_FUSION_STATS_STRIDE
+        if (buffer == 0 || frameLabels.isEmpty()) return
+        val uintCount = frameLabels.size * RADIANCE_FUSION_STATS_STRIDE
         val byteCount = uintCount * Int.SIZE_BYTES
         val stats = try {
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer)
@@ -4837,7 +5418,10 @@ class GlesRawStacker(
         var nonReferenceNrWeight = 0L
         var nonReferenceDetailAccepted = 0L
         var nonReferenceDetailWeight = 0L
-        frameIndices.forEachIndexed { statsIndex, frameIndex ->
+        var longSamples = 0L
+        var longNrAccepted = 0L
+        var longNrWeight = 0L
+        frameLabels.forEachIndexed { statsIndex, frameLabel ->
             val offset = statsIndex * RADIANCE_FUSION_STATS_STRIDE
             val samples = uintStat(stats, offset)
             val nrAccepted = uintStat(stats, offset + 1)
@@ -4858,13 +5442,23 @@ class GlesRawStacker(
             }
             PLog.i(
                 TAG,
-                "Radiance merge frame=$frameIndex statsIndex=$statsIndex samples=$samples " +
+                "Radiance merge frame=$frameLabel statsIndex=$statsIndex samples=$samples " +
                     "nrParticipation=${nrParticipation.percentString()} " +
                     "nrRejected=${(1f - nrParticipation).percentString()} " +
                     "nrMergeFactor=${nrMergeFactor.formatWeight()} " +
                     "srDetailParticipation=${detailParticipation.percentString()} " +
                     "srDetailFactor=${detailMergeFactor.formatWeight()}",
             )
+            if (frameLabel.startsWith("long:") &&
+                nrMergeFactor < radianceFusionTuning.longMergeFactorTarget
+            ) {
+                PLog.w(
+                    TAG,
+                    "Radiance long merge factor below target frame=$frameLabel " +
+                        "actual=${nrMergeFactor.formatWeight()} " +
+                        "target=${radianceFusionTuning.longMergeFactorTarget.formatWeight()}",
+                )
+            }
             if (statsIndex > 0) {
                 nonReferenceSamples += samples
                 nonReferenceNrAccepted += nrAccepted
@@ -4872,9 +5466,14 @@ class GlesRawStacker(
                 nonReferenceDetailAccepted += detailAccepted
                 nonReferenceDetailWeight += detailWeight
             }
+            if (frameLabel.startsWith("long:")) {
+                longSamples += samples
+                longNrAccepted += nrAccepted
+                longNrWeight += nrWeight
+            }
         }
 
-        val acceptedNonReferenceFrames = (frameIndices.size - 1).coerceAtLeast(0)
+        val acceptedNonReferenceFrames = (frameLabels.size - 1).coerceAtLeast(0)
         val frameAdmission = if (candidateFrameCount > 0) {
             acceptedNonReferenceFrames.toFloat() / candidateFrameCount
         } else {
@@ -4899,7 +5498,7 @@ class GlesRawStacker(
         }
         PLog.i(
             TAG,
-            "Radiance merge summary mergeFrameCount=${frameIndices.size} " +
+            "Radiance merge summary mergeFrameCount=${frameLabels.size} " +
                 "candidateNonReferenceFrames=$candidateFrameCount " +
                 "acceptedNonReferenceFrames=$acceptedNonReferenceFrames " +
                 "globalRejectedFrames=${(candidateFrameCount - acceptedNonReferenceFrames).coerceAtLeast(0)} " +
@@ -4911,14 +5510,28 @@ class GlesRawStacker(
                 "averageSrDetailFactor=${averageDetailFactor.formatWeight()} " +
                 "sampleStep=${hwmfDebug.radianceFusionStatsSampleStep}",
         )
+        if (longSamples > 0L) {
+            val longParticipation = ratioStat(longNrAccepted, longSamples)
+            val longMergeFactor = longNrWeight.toFloat() /
+                (longSamples * RADIANCE_FUSION_WEIGHT_QUANTIZATION)
+            PLog.i(
+                TAG,
+                "Radiance long participation accepted=${longParticipation.percentString()} " +
+                    "rejected=${(1f - longParticipation).percentString()} " +
+                    "averageMergeFactor=${longMergeFactor.formatWeight()} " +
+                    "acceptedLongFrames=${frameLabels.count { it.startsWith("long:") }}",
+            )
+        }
     }
 
     private fun reconstructRadianceTiles(
         referenceImage: SafeImage,
+        frames: List<RawStackFrame>,
         acceptedFrames: List<AcceptedSuperResolutionFrame>,
         candidateFrameCount: Int,
         outputBuffer: ByteBuffer,
         highlightAlignment: RadianceHighlightAlignment?,
+        longAlignments: List<RadianceLongAlignment>,
     ): ReadOutputTiming {
         check(radianceFusionEnabled)
         check(radianceTiles.isNotEmpty())
@@ -4932,6 +5545,11 @@ class GlesRawStacker(
                 val frameRegion = radianceSourceRegion(tile, frame.flowBounds())
                 requiredRcdWidth = max(requiredRcdWidth, frameRegion.width)
                 requiredRcdHeight = max(requiredRcdHeight, frameRegion.height)
+            }
+            longAlignments.forEach { alignment ->
+                val longRegion = radianceSourceRegion(tile, alignment.flowBounds())
+                requiredRcdWidth = max(requiredRcdWidth, longRegion.width)
+                requiredRcdHeight = max(requiredRcdHeight, longRegion.height)
             }
             highlightAlignment?.let { highlight ->
                 val highlightRegion = radianceSourceRegion(tile, highlight.flowBounds())
@@ -4947,28 +5565,35 @@ class GlesRawStacker(
             ?: throw IllegalStateException("Failed to allocate Radiance tile readback")
         val readbackAllocMs = System.currentTimeMillis() - readbackAllocStart
         val output = outputBuffer.apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
-        val fusionStatsFrameIndices = IntArray(acceptedFrames.size + 1).also { indices ->
-            indices[0] = 0
-            acceptedFrames.forEachIndexed { index, frame ->
-                indices[index + 1] = frame.frameIndex
+        val fusionStatsFrameLabels = buildList {
+            add("normal:0")
+            acceptedFrames.forEach { frame -> add("normal:${frame.frameIndex}") }
+            longAlignments.forEach { alignment ->
+                add("long:${alignment.plan.sourceFrameIndex}")
             }
         }
         val fusionStatsBuffer = if (logRadianceFusionParticipation) {
-            createRadianceFusionStatsBuffer(fusionStatsFrameIndices.size)
+            createRadianceFusionStatsBuffer(fusionStatsFrameLabels.size)
         } else {
             0
         }
         val rejectionFrameOrdinal = hwmfDebug.radianceFusionRejectionFrameOrdinal
-        val rejectionFrame = acceptedFrames.getOrNull(rejectionFrameOrdinal)
+        val rejectionNormalFrame = acceptedFrames.getOrNull(rejectionFrameOrdinal)
+        val rejectionLongIndex = rejectionFrameOrdinal - acceptedFrames.size
+        val rejectionLongFrame = longAlignments.getOrNull(rejectionLongIndex)
+        val hasRejectionFrame = rejectionNormalFrame != null || rejectionLongFrame != null
         if (visualizeRadianceFusionRejections) {
             PLog.i(
                 TAG,
                 "Radiance rejection overlay target acceptedOrdinal=$rejectionFrameOrdinal " +
-                    "frame=${rejectionFrame?.frameIndex ?: "unavailable"}",
+                    "frame=${rejectionNormalFrame?.let { "normal:${it.frameIndex}" } ?: ""}" +
+                    "${rejectionLongFrame?.let { "long:${it.plan.sourceFrameIndex}" } ?: ""}" +
+                    if (!hasRejectionFrame) "unavailable" else "",
             )
         }
         var totalGlReadMs = 0L
         var totalCopyMs = 0L
+        val referenceFrameNoiseModel = frameNoiseModel(frames.first())
         RawStackRuntimeDebug.i(TAG) {
             "Radiance tiled reconstruction tiles=${radianceTiles.size} " +
                 "backend=${if (radianceUsesVgnSemanticBackend) "vgn-semantic" else "rcd-fallback"} " +
@@ -4978,7 +5603,9 @@ class GlesRawStacker(
                 "rejectionOverlay=$visualizeRadianceFusionRejections " +
                 "srDetailOverlay=$visualizeRadianceSrDetail " +
                 "highlightOverlay=$visualizeRadianceHighlightReconstruction " +
-                "candidates=$candidateFrameCount accepted=${acceptedFrames.size}"
+                "longParticipationOverlay=$visualizeRadianceLongParticipation " +
+                "candidates=$candidateFrameCount acceptedNormal=${acceptedFrames.size} " +
+                "acceptedLong=${longAlignments.size}"
         }
         try {
             radianceTiles.forEach { tile ->
@@ -5003,6 +5630,10 @@ class GlesRawStacker(
                     frameTileMaskTexture = tileMaskTexture,
                     registrationWeight = 1f,
                     detailWeight = 1f,
+                    exposureScale = 1f,
+                    isLongFrame = false,
+                    referenceNoiseModel = referenceFrameNoiseModel,
+                    frameNoiseModel = referenceFrameNoiseModel,
                     fusionStatsBuffer = fusionStatsBuffer,
                     fusionStatsIndex = 0,
                     fusionStatsCoreRegion = tile.outputCore,
@@ -5026,10 +5657,43 @@ class GlesRawStacker(
                         frameTileMaskTexture = frame.tileMaskTexture,
                         registrationWeight = frame.registrationWeight,
                         detailWeight = frame.detailWeight,
+                        exposureScale = 1f,
+                        isLongFrame = false,
+                        referenceNoiseModel = referenceFrameNoiseModel,
+                        frameNoiseModel = frameNoiseModel(frames[frame.frameIndex]),
                         fusionStatsBuffer = fusionStatsBuffer,
                         fusionStatsIndex = statsFrameIndex + 1,
                         fusionStatsCoreRegion = tile.outputCore,
-                        recordFusionRejections = statsFrameIndex == rejectionFrameOrdinal,
+                        recordFusionRejections = rejectionNormalFrame != null &&
+                            statsFrameIndex == rejectionFrameOrdinal,
+                    )
+                }
+
+                longAlignments.forEachIndexed { longIndex, alignment ->
+                    val sourceRegion = radianceSourceRegion(tile, alignment.flowBounds())
+                    reconstructRadianceNonReferenceTile(
+                        image = alignment.plan.longFrame.image,
+                        sourceRegion = sourceRegion,
+                        label = "Radiance long ${alignment.plan.sourceFrameIndex} tile ${tile.index}",
+                    )
+                    accumulateRadianceFusionFrame(
+                        isReference = false,
+                        sourceRegion = sourceRegion,
+                        accumulatorRegion = tile.outputWorking,
+                        frameFlowTexture = alignment.flowTexture,
+                        frameRobustnessTexture = alignment.robustnessTexture,
+                        frameTileMaskTexture = alignment.tileMaskTexture,
+                        registrationWeight = alignment.registrationWeight,
+                        detailWeight = alignment.detailWeight,
+                        exposureScale = alignment.plan.exposureScale,
+                        isLongFrame = true,
+                        referenceNoiseModel = referenceFrameNoiseModel,
+                        frameNoiseModel = frameNoiseModel(alignment.plan.longFrame),
+                        fusionStatsBuffer = fusionStatsBuffer,
+                        fusionStatsIndex = acceptedFrames.size + longIndex + 1,
+                        fusionStatsCoreRegion = tile.outputCore,
+                        recordFusionRejections = rejectionLongFrame != null &&
+                            longIndex == rejectionLongIndex,
                     )
                 }
 
@@ -5046,7 +5710,7 @@ class GlesRawStacker(
                 normalizeRadianceTile(
                     tile,
                     globalAlignmentRejectCount = 0,
-                    acceptedFusionFrameCount = if (rejectionFrame != null) 1 else 0,
+                    acceptedFusionFrameCount = if (hasRejectionFrame) 1 else 0,
                     highlightAlignment = highlightAlignment,
                     highlightSourceRegion = highlightSourceRegion,
                 )
@@ -5058,7 +5722,7 @@ class GlesRawStacker(
             if (logRadianceFusionParticipation) {
                 logRadianceFusionStats(
                     buffer = fusionStatsBuffer,
-                    frameIndices = fusionStatsFrameIndices,
+                    frameLabels = fusionStatsFrameLabels,
                     candidateFrameCount = candidateFrameCount,
                 )
             }
@@ -5644,6 +6308,14 @@ class GlesRawStacker(
                 "uFusionRejections",
                 7,
                 radianceFusionRejectionTexture,
+            )
+        }
+        if (visualizeRadianceLongParticipation) {
+            bindTexture(
+                program,
+                "uLongParticipation",
+                12,
+                radianceLongParticipationTexture,
             )
         }
         setCommonUniforms(program)

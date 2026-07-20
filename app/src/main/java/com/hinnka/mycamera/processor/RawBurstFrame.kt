@@ -6,6 +6,7 @@ import com.hinnka.mycamera.model.SafeImage
 enum class RawBurstFrameRole {
     NORMAL,
     HIGHLIGHT_SHORT,
+    SHADOW_LONG,
     HDR_SHORT,
     HDR_LONG,
 }
@@ -61,6 +62,7 @@ data class RawStackFrame(
     val lensState: Int? = null,
     val rollingShutterSkewNs: Long? = null,
     val gyroWindow: GyroExposureWindow? = null,
+    val channelNoiseProfile: FloatArray? = null,
     val role: RawBurstFrameRole = RawBurstFrameRole.NORMAL,
     val preAlignmentToReference: RawFramePreAlignment? = null,
 )

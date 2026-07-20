@@ -400,6 +400,7 @@ class Camera2Controller(private val context: Context) {
             .get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)
             ?.coerceAtLeast(1)
             ?: 100
+        val channelNoiseProfile = captureChannelNoiseProfile(result)
         return CapturedFrameMetadata(
             sensorTimestampNs = sensorTimestampNs,
             frameNumber = result.frameNumber,
@@ -411,8 +412,25 @@ class Camera2Controller(private val context: Context) {
             lensState = result.get(CaptureResult.LENS_STATE),
             rollingShutterSkewNs = result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
             gyroWindow = burstGyroRecorder.exposureWindow(sensorTimestampNs, exposureTimeNs),
+            channelNoiseProfile = channelNoiseProfile,
             multiFrameCaptureRole = result.request.tag as? MultiFrameCaptureRole,
         )
+    }
+
+    private fun captureChannelNoiseProfile(result: CaptureResult): FloatArray? {
+        return result.get(CaptureResult.SENSOR_NOISE_PROFILE)
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { profile ->
+                FloatArray(profile.size * 2) { coefficientIndex ->
+                    val pair = profile[coefficientIndex / 2]
+                    val coefficient = if ((coefficientIndex and 1) == 0) {
+                        pair.first
+                    } else {
+                        pair.second
+                    }
+                    coefficient.toFloat().takeIf { it.isFinite() && it >= 0f } ?: 0f
+                }
+            }
     }
 
     // 快门音效播放回调
@@ -5624,6 +5642,91 @@ class Camera2Controller(private val context: Context) {
         return shortIso to shortShutter
     }
 
+    private fun buildMultiFrameLongCaptureRequest(
+        device: CameraDevice,
+        reader: ImageReader,
+        state: CameraState,
+        baseResult: CaptureResult?,
+        baseRequest: CaptureRequest,
+        isRawCapture: Boolean,
+    ): CaptureRequest? {
+        val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            addTarget(reader.surface)
+            applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
+            set(
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
+            )
+            set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+            copyStillFocusSettingsFromPreview(this)
+            applyMultiFrameCaptureConsistency(
+                builder = this,
+                state = state,
+                baseResult = baseResult,
+                lockExposure = true,
+                isRawCapture = isRawCapture,
+            )
+        }
+        if (!applyMultiFrameLongExposure(builder, state, baseResult, baseRequest)) return null
+        builder.setTag(MultiFrameCaptureRole.LONG)
+        return builder.build()
+    }
+
+    private fun applyMultiFrameLongExposure(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        baseResult: CaptureResult?,
+        baseRequest: CaptureRequest,
+    ): Boolean {
+        val baseIso = baseRequest.get(CaptureRequest.SENSOR_SENSITIVITY)
+            ?: baseResult?.get(CaptureResult.SENSOR_SENSITIVITY)
+        val baseShutter = baseRequest.get(CaptureRequest.SENSOR_EXPOSURE_TIME)
+            ?: baseResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+        val canUseManualExposure = isManualSensorSupported &&
+            availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF) &&
+            baseIso != null && baseIso > 0 &&
+            baseShutter != null && baseShutter > 0L
+        if (canUseManualExposure) {
+            val manualBaseIso = checkNotNull(baseIso)
+            val manualBaseShutter = checkNotNull(baseShutter)
+            val isoRange = state.getIsoRange()
+            val shutterRange = state.getShutterSpeedRange()
+            val plan = runCatching {
+                MultiFrameExposurePlanner.planLongExposure(
+                    baseIso = manualBaseIso,
+                    baseExposureTimeNs = manualBaseShutter,
+                    isoLower = isoRange.lower,
+                    isoUpper = isoRange.upper,
+                    exposureTimeLowerNs = shutterRange.lower,
+                    exposureTimeUpperNs = shutterRange.upper,
+                )
+            }.onFailure { error ->
+                PLog.e(TAG, "Unable to plan bounded multi-frame long exposure", error)
+            }.getOrNull()
+            if (plan != null) {
+                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
+                builder.set(CaptureRequest.SENSOR_SENSITIVITY, plan.sensitivityIso)
+                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, plan.exposureTimeNs)
+                PLog.i(
+                    TAG,
+                    "Multi-frame long request: base=ISO$manualBaseIso/${manualBaseShutter}ns " +
+                        "long=ISO${plan.sensitivityIso}/${plan.exposureTimeNs}ns " +
+                        "targetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
+                        "plannedEv=${plan.plannedDeltaEv} isoUpperLimited=${plan.isoUpperLimited} " +
+                        "shutterUpperLimited=${plan.shutterUpperLimited}",
+                )
+                return true
+            }
+        }
+        PLog.w(
+            TAG,
+            "Manual sensor exposure unavailable for bounded multi-frame long request; " +
+                "long slots will remain normal so the 10ms shutter contract is not violated",
+        )
+        return false
+    }
+
     private fun shouldUseDefaultHdrBracketCapture(state: CameraState, isRawCapture: Boolean): Boolean {
         return state.captureMode == CaptureMode.PHOTO &&
                 state.useHdrComposition &&
@@ -5743,6 +5846,7 @@ class Camera2Controller(private val context: Context) {
                 val requestedFrameCount = currentState.multiFrameCount
                 val frameCount = MultiFrameConfig.normalizeFrameCount(requestedFrameCount)
                 val normalFrameCount = MultiFrameConfig.normalFrameCount(frameCount)
+                val longFrameCount = MultiFrameConfig.longFrameCount(frameCount)
                 if (frameCount != requestedFrameCount) {
                     PLog.w(
                         TAG,
@@ -5759,16 +5863,33 @@ class Camera2Controller(private val context: Context) {
                     baseRequest = baseRequest,
                     isRawCapture = isRawCapture,
                 )
+                val longRequest = buildMultiFrameLongCaptureRequest(
+                    device = device,
+                    reader = reader,
+                    state = currentState,
+                    baseResult = baseExposureResult,
+                    baseRequest = baseRequest,
+                    isRawCapture = isRawCapture,
+                )
                 val requests = buildList(MultiFrameConfig.captureFrameCount(frameCount)) {
                     repeat(normalFrameCount) {
                         add(baseRequest)
                     }
                     add(shortRequest)
+                    repeat(longFrameCount) {
+                        add(longRequest ?: baseRequest)
+                    }
                 }
+                val scheduledLongFrameCount = if (longRequest != null) longFrameCount else 0
                 PLog.i(
                     TAG,
                     "Multi-frame burst plan: normalFrames=$normalFrameCount shortFrames=" +
-                        "${MultiFrameConfig.SHORT_FRAME_COUNT} total=${requests.size}",
+                        "${MultiFrameConfig.SHORT_FRAME_COUNT} " +
+                        "longFrames=$scheduledLongFrameCount " +
+                        "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
+                        "longTargetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
+                        "longMaxShutterNs=${MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS} " +
+                        "total=${requests.size}",
                 )
 
                 session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
@@ -6240,6 +6361,8 @@ class Camera2Controller(private val context: Context) {
                     rollingShutterSkewNs = frameResult.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
                     gyroWindow = frozenMetadata?.gyroWindow
                         ?: burstGyroRecorder.exposureWindow(sensorTimestampNs, exposureTimeNs),
+                    channelNoiseProfile = frozenMetadata?.channelNoiseProfile
+                        ?: captureChannelNoiseProfile(frameResult),
                     multiFrameCaptureRole = frozenMetadata?.multiFrameCaptureRole
                         ?: (frameResult.request.tag as? MultiFrameCaptureRole),
                 )

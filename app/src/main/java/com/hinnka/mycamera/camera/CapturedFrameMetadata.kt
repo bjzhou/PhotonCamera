@@ -3,6 +3,7 @@ package com.hinnka.mycamera.camera
 enum class MultiFrameCaptureRole {
     BASE,
     SHORT,
+    LONG,
 }
 
 data class CapturedFrameMetadata(
@@ -15,5 +16,6 @@ data class CapturedFrameMetadata(
     val lensState: Int?,
     val rollingShutterSkewNs: Long?,
     val gyroWindow: GyroExposureWindow?,
+    val channelNoiseProfile: FloatArray? = null,
     val multiFrameCaptureRole: MultiFrameCaptureRole? = null,
 )

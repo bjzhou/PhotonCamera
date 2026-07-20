@@ -9,13 +9,13 @@ internal data class RawRadianceExposurePlan(
     val baseExposureProduct: Double?,
     val normalIndices: IntArray,
     val shortIndex: Int?,
+    val longIndices: IntArray,
     val excludedIndices: IntArray,
 ) {
     val acceptedIndices: IntArray
-        get() = if (shortIndex != null) {
-            intArrayOf(*normalIndices, shortIndex)
-        } else {
-            normalIndices
+        get() {
+            val shortIndices = shortIndex?.let { intArrayOf(it) } ?: IntArray(0)
+            return intArrayOf(*normalIndices, *shortIndices, *longIndices)
         }
 }
 
@@ -34,22 +34,34 @@ internal object RawRadianceExposurePlanner {
             "Exposure products and frame roles must have the same size"
         }
         if (exposureProducts.isEmpty()) {
-            return RawRadianceExposurePlan(null, IntArray(0), null, IntArray(0))
+            return RawRadianceExposurePlan(
+                baseExposureProduct = null,
+                normalIndices = IntArray(0),
+                shortIndex = null,
+                longIndices = IntArray(0),
+                excludedIndices = IntArray(0),
+            )
         }
         val taggedShortIndices = frameRoles.indices.filter { index ->
             frameRoles[index] == RawBurstFrameRole.HIGHLIGHT_SHORT
         }
+        val taggedLongIndices = frameRoles.indices.filter { index ->
+            frameRoles[index] == RawBurstFrameRole.SHADOW_LONG
+        }
         val taggedShortIndex = taggedShortIndices.firstOrNull()
         val validIndices = exposureProducts.indices.filter { index ->
-            index !in taggedShortIndices &&
+            index !in taggedShortIndices && index !in taggedLongIndices &&
                 exposureProducts[index].isFinite() && exposureProducts[index] > 0.0
         }
         if (validIndices.isEmpty()) {
-            val normalIndices = exposureProducts.indices.filterNot(taggedShortIndices::contains)
+            val normalIndices = exposureProducts.indices.filter { index ->
+                index !in taggedShortIndices && index !in taggedLongIndices
+            }
             return RawRadianceExposurePlan(
                 baseExposureProduct = null,
                 normalIndices = normalIndices.toIntArray(),
                 shortIndex = taggedShortIndex,
+                longIndices = taggedLongIndices.toIntArray(),
                 excludedIndices = taggedShortIndices.drop(1).toIntArray(),
             )
         }
@@ -57,7 +69,7 @@ internal object RawRadianceExposurePlanner {
         val sortedExposures = validIndices.map(exposureProducts::get).sorted()
         val baseExposure = sortedExposures[sortedExposures.size / 2]
         val normalIndices = exposureProducts.indices.filter { index ->
-            if (index in taggedShortIndices) return@filter false
+            if (index in taggedShortIndices || index in taggedLongIndices) return@filter false
             val exposure = exposureProducts[index]
             !exposure.isFinite() || exposure <= 0.0 ||
                 exposureDeltaEv(exposure, baseExposure) <= NORMAL_EXPOSURE_TOLERANCE_EV
@@ -73,12 +85,13 @@ internal object RawRadianceExposurePlanner {
             .minByOrNull { (_, targetDeltaEv) -> targetDeltaEv }
             ?.first
         val excludedIndices = exposureProducts.indices.filter { index ->
-            index !in normalIndices && index != shortIndex
+            index !in normalIndices && index != shortIndex && index !in taggedLongIndices
         }
         return RawRadianceExposurePlan(
             baseExposureProduct = baseExposure,
             normalIndices = normalIndices.toIntArray(),
             shortIndex = shortIndex,
+            longIndices = taggedLongIndices.toIntArray(),
             excludedIndices = excludedIndices.toIntArray(),
         )
     }
@@ -99,6 +112,15 @@ internal data class RawRadianceHighlightFrame(
     val baselineExposureEv: Float,
 )
 
+internal data class RawRadianceLongFramePlan(
+    val sourceFrameIndex: Int,
+    val longFrame: RawStackFrame,
+    val anchorFrameIndex: Int,
+    val exposureRatio: Float,
+    val exposureScale: Float,
+    val exposureDeltaEv: Float,
+)
+
 internal fun hasRadianceHighlightAlignmentSupport(
     validTileCount: Int,
     coveredQuadrants: Int,
@@ -109,11 +131,49 @@ internal fun hasRadianceHighlightAlignmentSupport(
         coveredQuadrants >= minimumQuadrants.coerceIn(1, 4)
 }
 
+internal data class RawRadianceLongAdmission(
+    val frameWeight: Float,
+    val eligibleCoverage: Float,
+    val requiredQuadrants: Int,
+)
+
+internal fun planRadianceLongAdmission(
+    validTileCount: Int,
+    coveredQuadrants: Int,
+    eligibleTileCount: Int,
+    eligibleQuadrants: Int,
+    minimumValidTiles: Int,
+    minimumQuadrants: Int,
+    minimumEligibleCoverage: Float,
+): RawRadianceLongAdmission {
+    val eligibleCoverage = if (eligibleTileCount > 0) {
+        validTileCount.toFloat() / eligibleTileCount
+    } else {
+        0f
+    }
+    val normalizedEligibleQuadrants = eligibleQuadrants.coerceIn(0, 4)
+    val requiredQuadrants = minOf(
+        minimumQuadrants.coerceIn(1, 4),
+        normalizedEligibleQuadrants,
+    ).coerceAtLeast(2)
+    val accepted = normalizedEligibleQuadrants >= 2 &&
+        validTileCount >= minimumValidTiles.coerceAtLeast(1) &&
+        coveredQuadrants >= requiredQuadrants &&
+        eligibleCoverage >= minimumEligibleCoverage.coerceIn(0f, 1f)
+    return RawRadianceLongAdmission(
+        frameWeight = if (accepted) 1f else 0f,
+        eligibleCoverage = eligibleCoverage,
+        requiredQuadrants = requiredQuadrants,
+    )
+}
+
 /**
  * Unified same-exposure RAW fusion.
  *
  * One optional one-third-exposure frame is identified and reserved for the dedicated
- * highlight-reconstruction stage. It must not participate in normal MFNR/MFSR accumulation.
+ * highlight-reconstruction stage. Tagged long exposures are also isolated and planned against
+ * the nearest accepted normal anchor. They enter Radiance RGB through an exposure-normalized,
+ * noise-weighted auxiliary path and may not participate in the normal MFNR/MFSR frame cluster.
  *
  * The reconstruction algorithm is independent of output scale: every accepted RAW frame
  * contributes a wide-kernel denoise estimate and a narrow-kernel detail estimate in the
@@ -152,8 +212,10 @@ class GlesRawRadianceFusion(
             frames[index].copy(role = RawBurstFrameRole.NORMAL)
         }
         val shortFrame = exposurePlan.shortIndex?.let(frames::get)
+        val longFrames = exposurePlan.longIndices.map(frames::get)
         if (fusionFrames.isEmpty()) {
             shortFrame?.image?.close()
+            longFrames.forEach { it.image.close() }
             return null
         }
         if (exposurePlan.excludedIndices.isNotEmpty()) {
@@ -190,6 +252,37 @@ class GlesRawRadianceFusion(
             PLog.w(TAG, "Radiance fusion received no valid one-third short frame")
         }
 
+        val longFramePlans = longFrames.mapIndexedNotNull { planIndex, longFrame ->
+            val sourceFrameIndex = exposurePlan.longIndices[planIndex]
+            val longFramePlan = createLongFramePlan(
+                sourceFrameIndex = sourceFrameIndex,
+                normalFrames = fusionFrames,
+                longFrame = longFrame,
+                baseExposureProduct = exposurePlan.baseExposureProduct,
+            )
+            if (longFramePlan != null) {
+                PLog.i(
+                    TAG,
+                    "Radiance long fusion plan index=$sourceFrameIndex " +
+                        "exposure=${longFramePlan.longFrame.exposureProduct} " +
+                        "base=${exposurePlan.baseExposureProduct} " +
+                        "actualRatio=${longFramePlan.exposureRatio} " +
+                        "exposureScale=${longFramePlan.exposureScale} " +
+                        "actualDeltaEv=${longFramePlan.exposureDeltaEv} " +
+                        "anchor=${longFramePlan.anchorFrameIndex}",
+                )
+                longFramePlan
+            } else {
+                PLog.w(
+                    TAG,
+                    "Radiance long frame index=$sourceFrameIndex has no usable actual " +
+                        "exposure ratio; excluded",
+                )
+                longFrame.image.close()
+                null
+            }
+        }
+
         val tuning = RawStackTuningResolver.resolve(
             mode = RawStackMode.MFSR,
             frameCount = exposurePlan.normalIndices.size,
@@ -211,7 +304,11 @@ class GlesRawRadianceFusion(
             debugConfig = debugConfig,
             fusionPipeline = RawFusionPipeline.RADIANCE_RGB,
             radianceFusionTuning = fusionTuning,
-        ).processFrames(fusionFrames, highlightFrame)
+        ).processFrames(
+            frames = fusionFrames,
+            highlightFrame = highlightFrame,
+            longFrames = longFramePlans,
+        )
     }
 
     private fun createHighlightFrame(
@@ -240,6 +337,39 @@ class GlesRawRadianceFusion(
             anchorFrameIndex = anchorIndex,
             exposureRatio = ratio,
             baselineExposureEv = (ln(ratio.toDouble()) / ln(2.0)).toFloat(),
+        )
+    }
+
+    private fun createLongFramePlan(
+        sourceFrameIndex: Int,
+        normalFrames: List<RawStackFrame>,
+        longFrame: RawStackFrame,
+        baseExposureProduct: Double?,
+    ): RawRadianceLongFramePlan? {
+        if (normalFrames.isEmpty()) return null
+        val normalExposure = baseExposureProduct
+            ?.takeIf { it.isFinite() && it > 0.0 }
+            ?: return null
+        val longExposure = longFrame.exposureProduct
+            .takeIf { it.isFinite() && it > 0.0 }
+            ?: return null
+        val exposureRatio = (longExposure / normalExposure).toFloat()
+        if (!exposureRatio.isFinite() ||
+            exposureRatio < fusionTuning.longMinExposureRatio ||
+            exposureRatio > fusionTuning.longMaxExposureRatio
+        ) {
+            return null
+        }
+        val anchorIndex = normalFrames.indices.minByOrNull { index ->
+            timestampDistance(normalFrames[index].sensorTimestampNs, longFrame.sensorTimestampNs)
+        } ?: return null
+        return RawRadianceLongFramePlan(
+            sourceFrameIndex = sourceFrameIndex,
+            longFrame = longFrame.copy(role = RawBurstFrameRole.SHADOW_LONG),
+            anchorFrameIndex = anchorIndex,
+            exposureRatio = exposureRatio,
+            exposureScale = 1f / exposureRatio,
+            exposureDeltaEv = (ln(exposureRatio.toDouble()) / ln(2.0)).toFloat(),
         )
     }
 
@@ -276,6 +406,21 @@ data class RawRadianceFusionTuning(
     val detailChromaStrength: Float = 0.0f,
     val chromaConsistencySigmaStart: Float = 3.0f,
     val chromaConsistencySigmaFull: Float = 6.0f,
+    val longMinExposureRatio: Float = 1.05f,
+    val longMaxExposureRatio: Float = 64.0f,
+    val longClipStart: Float = 0.90f,
+    val longClipFull: Float = 0.985f,
+    val longPrecisionWeightCap: Float = 24.0f,
+    val longDetailWeightScale: Float = 0.25f,
+    val longMergeFactorTarget: Float = 0.70f,
+    val longFlowFbConsistencyStartPx: Float = 0.75f,
+    val longFlowFbConsistencyFullPx: Float = 2.0f,
+    val longFlowMinimumConfidence: Float = 0.01f,
+    val longFlowMinimumValidTiles: Int = 64,
+    val longFlowMinimumQuadrants: Int = 3,
+    val longEligibilityMinimumSupport: Float = 0.02f,
+    val longEligibilityMinimumTilesPerQuadrant: Int = 16,
+    val longFlowMinimumEligibleCoverage: Float = 0.01f,
     val highlightMinExposureRatio: Float = 1.2f,
     val highlightMaxExposureRatio: Float = 8.0f,
     val highlightNormalClipStart: Float = 0.90f,
@@ -313,6 +458,79 @@ internal fun radianceDebugNeutralRgb(calculationWbGains: FloatArray): FloatArray
 }
 
 internal object GlesRawRadianceFusionShaders {
+    val longEligibility: String = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uReferenceProxy;
+        uniform sampler2D uCurrentProxy;
+        uniform sampler2D uComposedFlow;
+        uniform ivec2 uGridSize;
+        uniform ivec2 uPlaneSize;
+        uniform int uTileSize;
+        out vec4 fragColor;
+
+        vec4 proxyAt(sampler2D proxyTexture, vec2 planePosition) {
+            vec2 uv = (clamp(
+                planePosition,
+                vec2(0.0),
+                vec2(uPlaneSize - ivec2(1))
+            ) + vec2(0.5)) / vec2(uPlaneSize);
+            return texture(proxyTexture, uv);
+        }
+
+        bool insidePlane(vec2 planePosition) {
+            return planePosition.x >= 0.0 && planePosition.y >= 0.0 &&
+                planePosition.x <= float(uPlaneSize.x - 1) &&
+                planePosition.y <= float(uPlaneSize.y - 1);
+        }
+
+        void main() {
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            vec2 center = min(
+                vec2(tile * uTileSize + ivec2(uTileSize / 2)),
+                vec2(uPlaneSize - ivec2(1))
+            );
+            vec2 flow = texelFetch(
+                uComposedFlow,
+                clamp(tile, ivec2(0), uGridSize - ivec2(1)),
+                0
+            ).rg;
+            int sampleSpacing = max(uTileSize / 4, 1);
+            float eligibilitySum = 0.0;
+            float validitySum = 0.0;
+            float observabilitySum = 0.0;
+            float insideSum = 0.0;
+            float sampleCount = 0.0;
+            for (int y = -2; y <= 2; ++y) {
+                for (int x = -2; x <= 2; ++x) {
+                    vec2 referencePosition = center +
+                        vec2(x * sampleSpacing, y * sampleSpacing);
+                    vec2 currentPosition = referencePosition + flow;
+                    bool inside = insidePlane(referencePosition) &&
+                        insidePlane(currentPosition);
+                    vec4 referenceSample = proxyAt(uReferenceProxy, referencePosition);
+                    vec4 currentSample = proxyAt(uCurrentProxy, currentPosition);
+                    float validity = inside ?
+                        min(referenceSample.g, currentSample.g) : 0.0;
+                    float observability = inside ?
+                        min(referenceSample.b, currentSample.b) : 0.0;
+                    eligibilitySum += validity * observability;
+                    validitySum += validity;
+                    observabilitySum += observability;
+                    insideSum += inside ? 1.0 : 0.0;
+                    sampleCount += 1.0;
+                }
+            }
+            fragColor = vec4(
+                eligibilitySum,
+                validitySum,
+                observabilitySum,
+                insideSum
+            ) / max(sampleCount, 1.0);
+        }
+    """.trimIndent()
+
     val validateHighlightFlow: String = """
         #version 300 es
         precision highp float;
@@ -520,7 +738,10 @@ internal object GlesRawRadianceFusionShaders {
         }
     """.trimIndent()
 
-    fun clearAccumulator(trackRejections: Boolean): String {
+    fun clearAccumulator(
+        trackRejections: Boolean,
+        trackLongParticipation: Boolean = false,
+    ): String {
         val rejectionDeclaration = if (trackRejections) {
             "layout(rgba16f, binding = 6) writeonly uniform highp image2D uFusionRejections;"
         } else {
@@ -528,6 +749,16 @@ internal object GlesRawRadianceFusionShaders {
         }
         val rejectionClear = if (trackRejections) {
             "imageStore(uFusionRejections, p, vec4(0.0));"
+        } else {
+            ""
+        }
+        val longParticipationDeclaration = if (trackLongParticipation) {
+            "layout(r32ui, binding = 7) writeonly uniform highp uimage2D uLongParticipation;"
+        } else {
+            ""
+        }
+        val longParticipationClear = if (trackLongParticipation) {
+            "imageStore(uLongParticipation, p, uvec4(0u));"
         } else {
             ""
         }
@@ -543,6 +774,7 @@ internal object GlesRawRadianceFusionShaders {
         layout(r32ui, binding = 4) writeonly uniform highp uimage2D uDetailSumBw;
         layout(r32ui, binding = 5) writeonly uniform highp uimage2D uDetailWeightRg;
         $rejectionDeclaration
+        $longParticipationDeclaration
         uniform ivec2 uImageSize;
 
         void main() {
@@ -555,6 +787,7 @@ internal object GlesRawRadianceFusionShaders {
             imageStore(uDetailSumBw, p, uvec4(0u));
             imageStore(uDetailWeightRg, p, uvec4(0u));
             $rejectionClear
+            $longParticipationClear
         }
         """.trimIndent()
     }
@@ -563,6 +796,7 @@ internal object GlesRawRadianceFusionShaders {
         rawCommon: String,
         trackRejections: Boolean = false,
         trackParticipation: Boolean = false,
+        trackLongParticipation: Boolean = false,
     ): String {
         val rejectionDeclaration = if (trackRejections) {
             """
@@ -637,6 +871,11 @@ internal object GlesRawRadianceFusionShaders {
         } else {
             ""
         }
+        val longParticipationDeclaration = if (trackLongParticipation) {
+            "layout(r32ui, binding = 7) writeonly uniform highp uimage2D uLongParticipation;"
+        } else {
+            ""
+        }
         val participationDeclaration = if (trackParticipation) {
             """
             layout(std430, binding = 0) buffer RadianceFusionParticipationStats {
@@ -678,14 +917,14 @@ internal object GlesRawRadianceFusionShaders {
                 }
                 atomicAdd(
                     uFusionParticipationStats[offset + 2],
-                    uint(floor(clamp(meanNrWeight, 0.0, 1.0) * FUSION_WEIGHT_QUANTIZATION + 0.5))
+                    uint(floor(clamp(meanNrWeight, 0.0, 32.0) * FUSION_WEIGHT_QUANTIZATION + 0.5))
                 );
                 if (meanDetailWeight > 1e-7) {
                     atomicAdd(uFusionParticipationStats[offset + 3], 1u);
                 }
                 atomicAdd(
                     uFusionParticipationStats[offset + 4],
-                    uint(floor(clamp(meanDetailWeight, 0.0, 1.0) * FUSION_WEIGHT_QUANTIZATION + 0.5))
+                    uint(floor(clamp(meanDetailWeight, 0.0, 32.0) * FUSION_WEIGHT_QUANTIZATION + 0.5))
                 );
             }
             """.trimIndent()
@@ -747,6 +986,13 @@ internal object GlesRawRadianceFusionShaders {
                 65.0,
                 1.0 - min(channelConsistency.r, channelConsistency.b)
             );
+            // reason 13: a long-exposure RAW sample is saturated before radiometric scaling.
+            considerFusionRejection(
+                fusionRejection,
+                13.0,
+                115.0,
+                uIsLongFrame != 0 ? 1.0 - longClipConfidence : 0.0
+            );
             """.trimIndent()
         } else {
             ""
@@ -767,6 +1013,15 @@ internal object GlesRawRadianceFusionShaders {
         } else {
             ""
         }
+        val longParticipationStore = if (trackLongParticipation) {
+            """
+            if (uIsLongFrame != 0 && any(greaterThan(nrWeight, vec3(1e-7)))) {
+                imageStore(uLongParticipation, accumulatorP, uvec4(1u));
+            }
+            """.trimIndent()
+        } else {
+            ""
+        }
         return """
         #version 310 es
         $rawCommon
@@ -778,6 +1033,7 @@ internal object GlesRawRadianceFusionShaders {
         uniform sampler2D uKernel;
         uniform sampler2D uLensShadingMap;
         uniform sampler2D uReferenceBase;
+        uniform highp usampler2D uRawRegion;
         layout(r32ui, binding = 0) uniform highp uimage2D uNrSumRg;
         layout(r32ui, binding = 1) uniform highp uimage2D uNrSumBw;
         layout(r32ui, binding = 2) uniform highp uimage2D uNrWeightRg;
@@ -785,6 +1041,7 @@ internal object GlesRawRadianceFusionShaders {
         layout(r32ui, binding = 4) uniform highp uimage2D uDetailSumBw;
         layout(r32ui, binding = 5) uniform highp uimage2D uDetailWeightRg;
         $rejectionDeclaration
+        $longParticipationDeclaration
         $participationDeclaration
         uniform ivec2 uImageSize;
         uniform ivec2 uSourceSize;
@@ -794,15 +1051,25 @@ internal object GlesRawRadianceFusionShaders {
         uniform ivec2 uGridSize;
         uniform int uTileSize;
         uniform int uIsReference;
+        uniform int uIsLongFrame;
         uniform int uSemanticEncoding;
         uniform int uCfaPattern;
         uniform float uBlackLevel[4];
         uniform float uWhiteLevel;
         uniform float uNoiseAlphaByChannel[4];
         uniform float uNoiseBetaByChannel[4];
+        uniform float uReferenceNoiseAlpha[4];
+        uniform float uReferenceNoiseBeta[4];
+        uniform float uCurrentNoiseAlpha[4];
+        uniform float uCurrentNoiseBeta[4];
         uniform float uFrameWeight;
+        uniform float uExposureScale;
         uniform float uRegistrationNrWeight;
         uniform float uRegistrationDetailWeight;
+        uniform float uLongClipStart;
+        uniform float uLongClipFull;
+        uniform float uLongPrecisionWeightCap;
+        uniform float uLongDetailWeightScale;
         uniform float uDenoiseSigmaRawPx;
         uniform float uDenoiseSteeringStrength;
         uniform float uRobustnessSpatialMix;
@@ -950,22 +1217,59 @@ internal object GlesRawRadianceFusionShaders {
             return DualRgb(detail, denoiseSum / max(denoiseWeightSum, 1e-6));
         }
 
-        float noiseVariance(float signal, int bayerIndex, float lscGainForNoise) {
-            float alpha = uNoiseAlphaByChannel[bayerIndex];
-            float beta = uNoiseBetaByChannel[bayerIndex];
+        float noiseVariance(
+            float signal,
+            int bayerIndex,
+            float lscGainForNoise,
+            bool referenceModel
+        ) {
+            float alpha = referenceModel ?
+                uReferenceNoiseAlpha[bayerIndex] : uCurrentNoiseAlpha[bayerIndex];
+            float beta = referenceModel ?
+                uReferenceNoiseBeta[bayerIndex] : uCurrentNoiseBeta[bayerIndex];
             if (alpha <= 0.0 && beta <= 0.0) return 1e-10;
             float gain = clamp(lscGainForNoise, 1e-3, max(uLscNoiseGainMax, 1.0));
             return max(alpha * clamp(signal, 0.0, 1.0) * gain + beta * gain * gain, 1e-10);
         }
 
-        vec3 cameraNoiseVariance(vec3 signal, vec4 lsc) {
+        vec3 cameraNoiseVariance(vec3 signal, vec4 lsc, bool referenceModel) {
             return vec3(
-                noiseVariance(signal.r, 0, lsc.r),
+                noiseVariance(signal.r, 0, lsc.r, referenceModel),
                 0.5 * (
-                    noiseVariance(signal.g, 1, lsc.g) +
-                    noiseVariance(signal.g, 2, lsc.b)
+                    noiseVariance(signal.g, 1, lsc.g, referenceModel) +
+                    noiseVariance(signal.g, 2, lsc.b, referenceModel)
                 ),
-                noiseVariance(signal.b, 3, lsc.a)
+                noiseVariance(signal.b, 3, lsc.a, referenceModel)
+            );
+        }
+
+        float rawSensorNormAt(ivec2 globalSample) {
+            globalSample = clamp(globalSample, ivec2(0), uImageSize - ivec2(1));
+            ivec2 localSample = clamp(
+                globalSample - uSourceOrigin,
+                ivec2(0),
+                uSourceSize - ivec2(1)
+            );
+            int bayerIndex = bayerIndexAt(uCfaPattern, globalSample);
+            float raw = float(texelFetch(uRawRegion, localSample, 0).r);
+            float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
+            return clamp(max(raw - uBlackLevel[bayerIndex], 0.0) / range, 0.0, 1.0);
+        }
+
+        float longHeadroomConfidence(vec2 sourceRaw) {
+            if (uIsLongFrame == 0) return 1.0;
+            ivec2 center = ivec2(round(sourceRaw));
+            ivec2 phaseOrigin = center - ivec2(center.x & 1, center.y & 1);
+            float rawPeak = 0.0;
+            for (int y = 0; y <= 1; ++y) {
+                for (int x = 0; x <= 1; ++x) {
+                    rawPeak = max(rawPeak, rawSensorNormAt(phaseOrigin + ivec2(x, y)));
+                }
+            }
+            return 1.0 - smoothstep(
+                min(uLongClipStart, uLongClipFull),
+                max(uLongClipStart, uLongClipFull),
+                rawPeak
             );
         }
 
@@ -1048,7 +1352,13 @@ internal object GlesRawRadianceFusionShaders {
             vec2 kernelUv = (clamp(planePos, vec2(0.0), vec2(uPlaneSize - ivec2(1))) +
                 vec2(0.5)) / vec2(uPlaneSize);
             vec4 steeringKernel = texture(uKernel, kernelUv);
-            DualRgb rgb = reconstructRgb(sourceRaw, steeringKernel);
+            DualRgb sourceRgb = reconstructRgb(sourceRaw, steeringKernel);
+            float longClipConfidence = longHeadroomConfidence(sourceRaw);
+            float radiometricScale = max(uExposureScale, 1e-4);
+            DualRgb rgb = DualRgb(
+                clamp(sourceRgb.detail * radiometricScale, 0.0, 1.0),
+                clamp(sourceRgb.denoise * radiometricScale, 0.0, 1.0)
+            );
             float signal = dot(rgb.denoise, vec3(0.2126, 0.7152, 0.0722));
             ivec2 nearestSource = clamp(ivec2(round(sourceRaw)), ivec2(0), uImageSize - ivec2(1));
             vec4 lsc = lscAt(nearestSource);
@@ -1077,14 +1387,29 @@ internal object GlesRawRadianceFusionShaders {
                     uImageSize - ivec2(1)
                 );
                 vec4 referenceLsc = lscAt(nearestReference);
-                vec3 referenceVariance = cameraNoiseVariance(referenceRgb, referenceLsc);
+                vec3 referenceVariance = cameraNoiseVariance(
+                    referenceRgb,
+                    referenceLsc,
+                    true
+                );
                 // Both estimates use the reference signal so shot-noise weighting cannot be
                 // biased by the current frame's random positive/negative noise excursion.
-                vec3 currentExpectedVariance = cameraNoiseVariance(referenceRgb, lsc);
+                vec3 currentExpectedSignal = clamp(
+                    referenceRgb / max(radiometricScale, 1e-4),
+                    0.0,
+                    1.0
+                );
+                vec3 currentExpectedVariance = cameraNoiseVariance(
+                    currentExpectedSignal,
+                    lsc,
+                    false
+                ) * radiometricScale * radiometricScale;
+                float precisionUpper = uIsLongFrame != 0 ?
+                    max(uLongPrecisionWeightCap, 1.0) : 4.0;
                 channelPrecision = clamp(
                     referenceVariance / max(currentExpectedVariance, vec3(1e-10)),
                     vec3(0.25),
-                    vec3(4.0)
+                    vec3(precisionUpper)
                 );
                 vec2 chromaConfidence = opponentChromaConfidence(
                     referenceRgb,
@@ -1103,25 +1428,29 @@ internal object GlesRawRadianceFusionShaders {
                 );
                 float sharedConsistency = min(chromaConfidence.x, chromaConfidence.y);
                 float sharedHighlight = min(min(highlight.r, highlight.g), highlight.b);
+                float longNrRoleWeight = uIsLongFrame != 0 ? longClipConfidence : 1.0;
+                float longDetailRoleWeight = uIsLongFrame != 0 ?
+                    longClipConfidence * clamp(uLongDetailWeightScale, 0.0, 1.0) : 1.0;
                 float nrCoverage = clamp(tileConfidence.r * robust, 0.0, 1.0) *
                     clamp(uRegistrationNrWeight, 0.0, 1.0);
                 float detailCoverage = clamp(tileConfidence.g * robust, 0.0, 1.0);
                 $rejectionAssignment
                 float staticConfidence = denoiseStaticConfidence(tileConfidence.r, robust);
                 float sharedNrWeight = uFrameWeight * sharedPrecision * sharedConsistency *
-                    nrCoverage * sharedHighlight * mix(
+                    nrCoverage * sharedHighlight * longNrRoleWeight * mix(
                     1.0,
                     max(uDenoiseNonReferenceWeightBoost, 1.0),
                     shadow * staticConfidence
                 );
                 float sharedDetailWeight = uFrameWeight * sharedPrecision * sharedConsistency *
                     detailCoverage * sharedHighlight *
-                    clamp(uRegistrationDetailWeight, 0.0, 1.0);
+                    clamp(uRegistrationDetailWeight, 0.0, 1.0) * longDetailRoleWeight;
                 nrWeight = vec3(sharedNrWeight);
                 detailWeight = vec3(sharedDetailWeight);
             }
             $rejectionStore
             $participationStore
+            $longParticipationStore
 
             if (any(greaterThan(nrWeight, vec3(1e-7)))) {
                 vec2 nrRg = unpackHalf2x16(imageLoad(uNrSumRg, accumulatorP).r);
@@ -1210,6 +1539,7 @@ internal object GlesRawRadianceFusionShaders {
         showSrDetail: Boolean = false,
         reconstructHighlights: Boolean = false,
         showHighlightReconstruction: Boolean = false,
+        showLongParticipation: Boolean = false,
     ): String {
         val rejectionUniforms = if (showRejections) {
             """
@@ -1222,6 +1552,11 @@ internal object GlesRawRadianceFusionShaders {
         }
         val debugColorUniform = if (showRejections || showSrDetail) {
             "uniform vec3 uDebugNeutralRgb;"
+        } else {
+            ""
+        }
+        val longParticipationUniform = if (showLongParticipation) {
+            "uniform highp usampler2D uLongParticipation;"
         } else {
             ""
         }
@@ -1469,6 +1804,8 @@ internal object GlesRawRadianceFusionShaders {
                     displayColor = vec3(0.45, 1.0, 0.0);      // highlight suppression: lime
                 } else if (reasonId < 12.5) {
                     displayColor = vec3(1.0, 0.0, 1.0);       // opponent chroma: magenta
+                } else if (reasonId < 13.5) {
+                    displayColor = vec3(1.0, 0.55, 0.0);      // saturated long RAW: amber
                 }
                 if (reasonId > 0.0 && displayStrength > 0.0) {
                     rgb = mix(
@@ -1492,6 +1829,15 @@ internal object GlesRawRadianceFusionShaders {
         } else {
             ""
         }
+        val longParticipationOverlay = if (showLongParticipation) {
+            """
+            if (texelFetch(uLongParticipation, p, 0).r != 0u) {
+                rgb = vec3(0.0, 1.0, 0.0);
+            }
+            """.trimIndent()
+        } else {
+            ""
+        }
         return """
         #version 300 es
         precision highp float;
@@ -1507,6 +1853,7 @@ internal object GlesRawRadianceFusionShaders {
         uniform highp usampler2D uDetailWeightRg;
         uniform sampler2D uReferenceBase;
         $rejectionUniforms
+        $longParticipationUniform
         $debugColorUniform
         $highlightDeclarations
         uniform float uNoiseAlphaByChannel[4];
@@ -1787,6 +2134,7 @@ internal object GlesRawRadianceFusionShaders {
             $highlightComposition
             $srDetailOverlay
             $rejectionOverlay
+            $longParticipationOverlay
             fragColor = uvec4(
                 uvec3(floor(rgb * 65535.0 + vec3(0.5))),
                 65535u
