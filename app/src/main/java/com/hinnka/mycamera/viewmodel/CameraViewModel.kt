@@ -45,8 +45,10 @@ import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawAlignmentProxyConfig
+import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.RawBurstGyroSelector
 import com.hinnka.mycamera.processor.RawBurstReferencePlanner
+import com.hinnka.mycamera.processor.RawRadianceExposurePlanner
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
@@ -95,6 +97,7 @@ data class MultipleExposureFrame(
 
 private data class PendingRawStackFrame(
     val frame: RawStackFrame,
+    val captureInfo: CaptureInfo,
     val captureResult: CaptureResult?,
 )
 
@@ -1424,11 +1427,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     handleMultipleExposureFrameCaptured(image, captureInfo)
                 }
             } else if (state.value.useMFNR || state.value.useMFSR) {
-                val count = state.value.multiFrameCount
+                val count = MultiFrameConfig.captureFrameCount(state.value.multiFrameCount)
                 PLog.d(TAG, "Burst frame received: ${pendingRawStackFrames.size + 1}/$count")
                 pendingRawStackFrames.add(
                     PendingRawStackFrame(
                         frame = rawStackFrame(image, captureResult, frameMetadata),
+                        captureInfo = captureInfo,
                         captureResult = captureResult,
                     )
                 )
@@ -1437,14 +1441,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
                     viewModelScope.launch {
+                        val exposurePlan = RawRadianceExposurePlanner.plan(
+                            exposureProducts = chronologicalFrames.map { it.frame.exposureProduct },
+                            frameRoles = chronologicalFrames.map { it.frame.role },
+                        )
+                        val normalFrames = exposurePlan.normalIndices.map(chronologicalFrames::get)
+                        val auxiliaryFrames = chronologicalFrames.indices
+                            .filterNot(exposurePlan.normalIndices.toSet()::contains)
+                            .map(chronologicalFrames::get)
                         val gyroSelection = withContext(Dispatchers.Default) {
-                            RawBurstGyroSelector.select(chronologicalFrames.map { it.frame })
+                            RawBurstGyroSelector.select(normalFrames.map { it.frame })
                         }
                         gyroSelection.rejectedIndices.forEach { rejectedIndex ->
-                            chronologicalFrames[rejectedIndex].frame.image.close()
+                            normalFrames[rejectedIndex].frame.image.close()
                         }
                         val gyroOrderedFrames = gyroSelection.orderedAcceptedIndices.map { index ->
-                            chronologicalFrames[index]
+                            normalFrames[index]
                         }
                         val proxyConfig = rawAlignmentProxyConfig(
                             characteristics = characteristics,
@@ -1464,7 +1476,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         } else {
                             null
                         }
-                        val orderedFrames = referencePlan?.orderedIndices?.map { index ->
+                        val orderedNormalFrames = referencePlan?.orderedIndices?.map { index ->
                             val pending = gyroOrderedFrames[index]
                             pending.copy(
                                 frame = pending.frame.copy(
@@ -1472,21 +1484,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 ),
                             )
                         } ?: gyroOrderedFrames
+                        val orderedFrames = orderedNormalFrames + auxiliaryFrames
                         if (gyroSelection.rejectedIndices.isNotEmpty() || referencePlan != null) {
                             PLog.i(
                                 TAG,
                                 "RAW burst plan: gyroReference=${gyroSelection.referenceOriginalIndex}, " +
                                     "reference=${referencePlan?.referenceOriginalIndex ?: 0}, " +
                                     "accepted=${orderedFrames.size}, " +
+                                    "normal=${orderedNormalFrames.size}, " +
+                                    "short=${if (exposurePlan.shortIndex != null) 1 else 0}, " +
                                     "rejected=${gyroSelection.rejectedIndices.joinToString()}, " +
                                     "cost=${referencePlan?.referenceCost}",
                             )
                         }
-                        val framesToProcess = orderedFrames.map { it.frame }
-                        val referenceCaptureResult = orderedFrames.firstOrNull()?.captureResult ?: captureResult
+                        val isRawStack = orderedNormalFrames.firstOrNull()?.frame?.image?.format
+                            ?.let(::isRawCaptureFormat) == true
+                        val processingFrames = if (isRawStack) {
+                            orderedFrames
+                        } else {
+                            auxiliaryFrames.forEach { it.frame.image.close() }
+                            if (auxiliaryFrames.isNotEmpty()) {
+                                PLog.i(
+                                    TAG,
+                                    "Excluded ${auxiliaryFrames.size} short/auxiliary frames from " +
+                                        "non-RAW MFNR/MFSR accumulation",
+                                )
+                            }
+                            orderedNormalFrames
+                        }
+                        val framesToProcess = processingFrames.map { it.frame }
+                        val referenceCaptureInfo = orderedNormalFrames.firstOrNull()?.captureInfo
+                            ?: captureInfo
+                        val referenceCaptureResult = orderedNormalFrames.firstOrNull()?.captureResult
+                            ?: captureResult
                         processStacking(
                             frames = framesToProcess,
-                            captureInfo = captureInfo,
+                            captureInfo = referenceCaptureInfo,
                             characteristics = characteristics,
                             captureResult = referenceCaptureResult,
                         )
@@ -5094,6 +5127,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rollingShutterSkewNs = metadata?.rollingShutterSkewNs
                 ?: captureResult?.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
             gyroWindow = metadata?.gyroWindow,
+            role = when (
+                metadata?.multiFrameCaptureRole
+                    ?: (captureResult?.request?.tag as? MultiFrameCaptureRole)
+            ) {
+                MultiFrameCaptureRole.SHORT -> RawBurstFrameRole.HIGHLIGHT_SHORT
+                else -> RawBurstFrameRole.NORMAL
+            },
         )
     }
 

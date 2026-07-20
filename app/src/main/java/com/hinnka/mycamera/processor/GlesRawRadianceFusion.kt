@@ -1,11 +1,119 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
 import kotlin.math.ln
 
+internal data class RawRadianceExposurePlan(
+    val baseExposureProduct: Double?,
+    val normalIndices: IntArray,
+    val shortIndex: Int?,
+    val excludedIndices: IntArray,
+) {
+    val acceptedIndices: IntArray
+        get() = if (shortIndex != null) {
+            intArrayOf(*normalIndices, shortIndex)
+        } else {
+            normalIndices
+        }
+}
+
+internal object RawRadianceExposurePlanner {
+    private val LN_2 = ln(2.0)
+    private const val NORMAL_EXPOSURE_TOLERANCE_EV = 0.12
+    private const val SHORT_EXPOSURE_TOLERANCE_EV = 0.35
+
+    fun plan(
+        exposureProducts: List<Double>,
+        frameRoles: List<RawBurstFrameRole> = List(exposureProducts.size) {
+            RawBurstFrameRole.NORMAL
+        },
+    ): RawRadianceExposurePlan {
+        require(frameRoles.size == exposureProducts.size) {
+            "Exposure products and frame roles must have the same size"
+        }
+        if (exposureProducts.isEmpty()) {
+            return RawRadianceExposurePlan(null, IntArray(0), null, IntArray(0))
+        }
+        val taggedShortIndices = frameRoles.indices.filter { index ->
+            frameRoles[index] == RawBurstFrameRole.HIGHLIGHT_SHORT
+        }
+        val taggedShortIndex = taggedShortIndices.firstOrNull()
+        val validIndices = exposureProducts.indices.filter { index ->
+            index !in taggedShortIndices &&
+                exposureProducts[index].isFinite() && exposureProducts[index] > 0.0
+        }
+        if (validIndices.isEmpty()) {
+            val normalIndices = exposureProducts.indices.filterNot(taggedShortIndices::contains)
+            return RawRadianceExposurePlan(
+                baseExposureProduct = null,
+                normalIndices = normalIndices.toIntArray(),
+                shortIndex = taggedShortIndex,
+                excludedIndices = taggedShortIndices.drop(1).toIntArray(),
+            )
+        }
+
+        val sortedExposures = validIndices.map(exposureProducts::get).sorted()
+        val baseExposure = sortedExposures[sortedExposures.size / 2]
+        val normalIndices = exposureProducts.indices.filter { index ->
+            if (index in taggedShortIndices) return@filter false
+            val exposure = exposureProducts[index]
+            !exposure.isFinite() || exposure <= 0.0 ||
+                exposureDeltaEv(exposure, baseExposure) <= NORMAL_EXPOSURE_TOLERANCE_EV
+        }
+        val targetShortEv = -ln(MultiFrameConfig.SHORT_FRAME_EXPOSURE_DIVISOR) / LN_2
+        val shortIndex = taggedShortIndex ?: validIndices
+            .asSequence()
+            .filterNot(normalIndices::contains)
+            .map { index ->
+                index to abs(signedExposureDeltaEv(exposureProducts[index], baseExposure) - targetShortEv)
+            }
+            .filter { (_, targetDeltaEv) -> targetDeltaEv <= SHORT_EXPOSURE_TOLERANCE_EV }
+            .minByOrNull { (_, targetDeltaEv) -> targetDeltaEv }
+            ?.first
+        val excludedIndices = exposureProducts.indices.filter { index ->
+            index !in normalIndices && index != shortIndex
+        }
+        return RawRadianceExposurePlan(
+            baseExposureProduct = baseExposure,
+            normalIndices = normalIndices.toIntArray(),
+            shortIndex = shortIndex,
+            excludedIndices = excludedIndices.toIntArray(),
+        )
+    }
+
+    private fun exposureDeltaEv(exposure: Double, reference: Double): Double {
+        return abs(signedExposureDeltaEv(exposure, reference))
+    }
+
+    private fun signedExposureDeltaEv(exposure: Double, reference: Double): Double {
+        return ln(exposure / reference) / LN_2
+    }
+}
+
+internal data class RawRadianceHighlightFrame(
+    val shortFrame: RawStackFrame,
+    val anchorFrameIndex: Int,
+    val exposureRatio: Float,
+    val baselineExposureEv: Float,
+)
+
+internal fun hasRadianceHighlightAlignmentSupport(
+    validTileCount: Int,
+    coveredQuadrants: Int,
+    minimumValidTiles: Int,
+    minimumQuadrants: Int,
+): Boolean {
+    return validTileCount >= minimumValidTiles.coerceAtLeast(1) &&
+        coveredQuadrants >= minimumQuadrants.coerceIn(1, 4)
+}
+
 /**
  * Unified same-exposure RAW fusion.
+ *
+ * One optional one-third-exposure frame is identified and reserved for the dedicated
+ * highlight-reconstruction stage. It must not participate in normal MFNR/MFSR accumulation.
  *
  * The reconstruction algorithm is independent of output scale: every accepted RAW frame
  * contributes a wide-kernel denoise estimate and a narrow-kernel detail estimate in the
@@ -33,18 +141,58 @@ class GlesRawRadianceFusion(
 
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
         if (frames.isEmpty()) return null
-        val sameExposureFrames = selectSameExposureFrames(frames)
-        if (sameExposureFrames.size != frames.size) {
+        val exposurePlan = RawRadianceExposurePlanner.plan(
+            exposureProducts = frames.map { it.exposureProduct },
+            frameRoles = frames.map { it.role },
+        )
+        exposurePlan.excludedIndices.forEach { index ->
+            frames[index].image.close()
+        }
+        val fusionFrames = exposurePlan.normalIndices.map { index ->
+            frames[index].copy(role = RawBurstFrameRole.NORMAL)
+        }
+        val shortFrame = exposurePlan.shortIndex?.let(frames::get)
+        if (fusionFrames.isEmpty()) {
+            shortFrame?.image?.close()
+            return null
+        }
+        if (exposurePlan.excludedIndices.isNotEmpty()) {
             PLog.w(
                 TAG,
-                "Radiance fusion excluded ${frames.size - sameExposureFrames.size} exposure-mismatched " +
-                    "frames; reference exposure=${frames.first().exposureProduct}",
+                "Radiance fusion excluded ${exposurePlan.excludedIndices.size} unsupported-exposure " +
+                    "frames; baseExposure=${exposurePlan.baseExposureProduct}",
             )
+        }
+        val highlightFrame = shortFrame?.let { short ->
+            createHighlightFrame(
+                normalFrames = fusionFrames,
+                shortFrame = short,
+                baseExposureProduct = exposurePlan.baseExposureProduct,
+            )
+        }
+        if (highlightFrame != null) {
+            PLog.i(
+                TAG,
+                "Radiance highlight frame index=${exposurePlan.shortIndex} " +
+                    "exposure=${highlightFrame.shortFrame.exposureProduct} " +
+                    "base=${exposurePlan.baseExposureProduct} " +
+                    "ratio=${highlightFrame.exposureRatio} " +
+                    "anchor=${highlightFrame.anchorFrameIndex} " +
+                    "normalFrames=${exposurePlan.normalIndices.size}; normal fusion excluded",
+            )
+        } else if (shortFrame != null) {
+            PLog.w(
+                TAG,
+                "Radiance short frame has no usable exposure ratio; highlight reconstruction disabled",
+            )
+            shortFrame.image.close()
+        } else {
+            PLog.w(TAG, "Radiance fusion received no valid one-third short frame")
         }
 
         val tuning = RawStackTuningResolver.resolve(
             mode = RawStackMode.MFSR,
-            frameCount = sameExposureFrames.size,
+            frameCount = exposurePlan.normalIndices.size,
             superResolutionScale = outputScale,
         )
         return GlesRawStacker(
@@ -63,35 +211,45 @@ class GlesRawRadianceFusion(
             debugConfig = debugConfig,
             fusionPipeline = RawFusionPipeline.RADIANCE_RGB,
             radianceFusionTuning = fusionTuning,
-        ).processFrames(sameExposureFrames)
+        ).processFrames(fusionFrames, highlightFrame)
     }
 
-    private fun selectSameExposureFrames(frames: List<RawStackFrame>): List<RawStackFrame> {
-        val reference = frames.first().exposureProduct
+    private fun createHighlightFrame(
+        normalFrames: List<RawStackFrame>,
+        shortFrame: RawStackFrame,
+        baseExposureProduct: Double?,
+    ): RawRadianceHighlightFrame? {
+        if (normalFrames.isEmpty()) return null
+        val normalExposure = baseExposureProduct
+            ?.takeIf { it.isFinite() && it > 0.0 }
+            ?: return null
+        val shortExposure = shortFrame.exposureProduct
             .takeIf { it.isFinite() && it > 0.0 }
-            ?: return frames
-        val accepted = ArrayList<RawStackFrame>(frames.size)
-        accepted += frames.first()
-        for (frame in frames.drop(1)) {
-            val exposure = frame.exposureProduct.takeIf { it.isFinite() && it > 0.0 }
-            if (exposure == null) {
-                accepted += frame
-                continue
-            }
-            val deltaEv = abs(ln(exposure / reference) / LN_2).toFloat()
-            if (deltaEv <= SAME_EXPOSURE_TOLERANCE_EV) {
-                accepted += frame
-            } else {
-                frame.image.close()
-            }
+            ?: return null
+        val ratio = (normalExposure / shortExposure).toFloat()
+        if (!ratio.isFinite() || ratio < fusionTuning.highlightMinExposureRatio ||
+            ratio > fusionTuning.highlightMaxExposureRatio
+        ) {
+            return null
         }
-        return accepted
+        val anchorIndex = normalFrames.indices.minByOrNull { index ->
+            timestampDistance(normalFrames[index].sensorTimestampNs, shortFrame.sensorTimestampNs)
+        } ?: return null
+        return RawRadianceHighlightFrame(
+            shortFrame = shortFrame.copy(role = RawBurstFrameRole.HIGHLIGHT_SHORT),
+            anchorFrameIndex = anchorIndex,
+            exposureRatio = ratio,
+            baselineExposureEv = (ln(ratio.toDouble()) / ln(2.0)).toFloat(),
+        )
+    }
+
+    private fun timestampDistance(first: Long, second: Long): Long {
+        if (first <= 0L || second <= 0L) return Long.MAX_VALUE
+        return if (first >= second) first - second else second - first
     }
 
     companion object {
         private const val TAG = "GlesRawRadianceFusion"
-        private const val SAME_EXPOSURE_TOLERANCE_EV = 0.08f
-        private val LN_2 = ln(2.0)
     }
 }
 
@@ -118,6 +276,24 @@ data class RawRadianceFusionTuning(
     val detailChromaStrength: Float = 0.0f,
     val chromaConsistencySigmaStart: Float = 3.0f,
     val chromaConsistencySigmaFull: Float = 6.0f,
+    val highlightMinExposureRatio: Float = 1.2f,
+    val highlightMaxExposureRatio: Float = 8.0f,
+    val highlightNormalClipStart: Float = 0.90f,
+    val highlightNormalClipFull: Float = 0.985f,
+    val highlightShortClipStart: Float = 0.94f,
+    val highlightShortClipFull: Float = 0.99f,
+    val highlightShortSignalStart: Float = 0.01f,
+    val highlightShortSignalFull: Float = 0.04f,
+    val highlightFlowFbConsistencyStartPx: Float = 0.75f,
+    val highlightFlowFbConsistencyFullPx: Float = 2.0f,
+    val highlightFlowPropagationPasses: Int = 48,
+    val highlightFlowPropagationDecay: Float = 0.96f,
+    val highlightFlowGuideEdgeSigma: Float = 0.08f,
+    val highlightFlowSeedConfidence: Float = 0.05f,
+    val highlightFlowMinimumConfidence: Float = 0.005f,
+    val highlightFlowFullConfidence: Float = 0.05f,
+    val highlightFlowMinimumValidTiles: Int = 16,
+    val highlightFlowMinimumQuadrants: Int = 2,
 )
 
 /** Returns a sensor-linear RGB value that becomes neutral after the capture WB is applied. */
@@ -137,6 +313,213 @@ internal fun radianceDebugNeutralRgb(calculationWbGains: FloatArray): FloatArray
 }
 
 internal object GlesRawRadianceFusionShaders {
+    val validateHighlightFlow: String = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uForwardFlow;
+        uniform sampler2D uReverseFlow;
+        uniform ivec2 uGridSize;
+        uniform ivec2 uPlaneSize;
+        uniform int uTileSize;
+        uniform float uFbConsistencyStart;
+        uniform float uFbConsistencyFull;
+        out vec4 fragColor;
+
+        vec4 flowAt(sampler2D flowTexture, vec2 planePosition) {
+            vec2 grid = planePosition / float(uTileSize) - vec2(0.5);
+            vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
+            return texture(flowTexture, clamp(uv, vec2(0.0), vec2(1.0)));
+        }
+
+        void main() {
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            vec2 referencePosition = min(
+                vec2(tile * uTileSize + ivec2(uTileSize / 2)),
+                vec2(uPlaneSize - ivec2(1))
+            );
+            vec4 forward = texelFetch(uForwardFlow, tile, 0);
+            vec2 currentPosition = referencePosition + forward.rg;
+            bool inside = currentPosition.x >= 0.0 && currentPosition.y >= 0.0 &&
+                currentPosition.x <= float(uPlaneSize.x - 1) &&
+                currentPosition.y <= float(uPlaneSize.y - 1);
+            vec4 reverse = inside ? flowAt(uReverseFlow, currentPosition) : vec4(0.0);
+            float error = length(forward.rg + reverse.rg);
+            float consistency = 1.0 - smoothstep(
+                min(uFbConsistencyStart, uFbConsistencyFull),
+                max(uFbConsistencyStart, uFbConsistencyFull),
+                error
+            );
+            float confidence = min(forward.a, reverse.a) * consistency * (inside ? 1.0 : 0.0);
+            fragColor = vec4(forward.rg, max(forward.b, error), clamp(confidence, 0.0, 1.0));
+        }
+    """.trimIndent()
+
+    val propagateHighlightFlow: String = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uInputFlow;
+        uniform sampler2D uGuideProxy;
+        uniform ivec2 uGridSize;
+        uniform ivec2 uPlaneSize;
+        uniform int uTileSize;
+        uniform float uConfidenceDecay;
+        uniform float uDirectConfidence;
+        uniform float uMinimumConfidence;
+        uniform float uFlowConsistencySigma;
+        uniform float uGuideEdgeSigma;
+        out vec4 fragColor;
+
+        vec4 readFlow(ivec2 position) {
+            return texelFetch(
+                uInputFlow,
+                clamp(position, ivec2(0), uGridSize - ivec2(1)),
+                0
+            );
+        }
+
+        vec4 guideAt(ivec2 tilePosition) {
+            ivec2 planePosition = min(
+                tilePosition * uTileSize + ivec2(uTileSize / 2),
+                uPlaneSize - ivec2(1)
+            );
+            return texelFetch(
+                uGuideProxy,
+                clamp(planePosition, ivec2(0), uPlaneSize - ivec2(1)),
+                0
+            );
+        }
+
+        void main() {
+            ivec2 position = ivec2(gl_FragCoord.xy);
+            vec4 center = readFlow(position);
+            vec4 centerGuide = guideAt(position);
+            float minimumConfidence = clamp(uMinimumConfidence, 0.0, 1.0);
+            float directConfidence = max(
+                clamp(uDirectConfidence, 0.0, 1.0),
+                minimumConfidence + 1e-4
+            );
+            if (center.a >= directConfidence) {
+                fragColor = center;
+                return;
+            }
+
+            vec2 flowSum = vec2(0.0);
+            float residualSum = 0.0;
+            float weightSum = 0.0;
+            float maxConfidence = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    if (x == 0 && y == 0) continue;
+                    vec4 sampleValue = readFlow(position + ivec2(x, y));
+                    vec4 neighborGuide = guideAt(
+                        clamp(position + ivec2(x, y), ivec2(0), uGridSize - ivec2(1))
+                    );
+                    float spatial = (x == 0 || y == 0) ? 1.0 : 0.70710678;
+                    float guideDelta = neighborGuide.r - centerGuide.r;
+                    float edgeSigma = max(uGuideEdgeSigma, 1e-3);
+                    float edgeWeight = min(centerGuide.g, neighborGuide.g) < 0.5 ?
+                        1.0 : exp(-(guideDelta * guideDelta) / (edgeSigma * edgeSigma));
+                    float support = smoothstep(
+                        minimumConfidence,
+                        directConfidence,
+                        sampleValue.a
+                    );
+                    float weight = sampleValue.a * support * spatial * edgeWeight;
+                    flowSum += sampleValue.rg * weight;
+                    residualSum += sampleValue.b * weight;
+                    weightSum += weight;
+                    maxConfidence = max(maxConfidence, sampleValue.a);
+                }
+            }
+            if (weightSum <= 1e-6) {
+                fragColor = vec4(center.rgb, 0.0);
+                return;
+            }
+
+            vec2 propagatedFlow = flowSum / weightSum;
+            float variance = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    if (x == 0 && y == 0) continue;
+                    vec4 sampleValue = readFlow(position + ivec2(x, y));
+                    vec4 neighborGuide = guideAt(
+                        clamp(position + ivec2(x, y), ivec2(0), uGridSize - ivec2(1))
+                    );
+                    float spatial = (x == 0 || y == 0) ? 1.0 : 0.70710678;
+                    float guideDelta = neighborGuide.r - centerGuide.r;
+                    float edgeSigma = max(uGuideEdgeSigma, 1e-3);
+                    float edgeWeight = min(centerGuide.g, neighborGuide.g) < 0.5 ?
+                        1.0 : exp(-(guideDelta * guideDelta) / (edgeSigma * edgeSigma));
+                    float support = smoothstep(
+                        minimumConfidence,
+                        directConfidence,
+                        sampleValue.a
+                    );
+                    float weight = sampleValue.a * support * spatial * edgeWeight;
+                    vec2 delta = sampleValue.rg - propagatedFlow;
+                    variance += dot(delta, delta) * weight;
+                }
+            }
+            variance /= weightSum;
+            float sigma = max(uFlowConsistencySigma, 0.25);
+            float consistency = exp(-variance / (sigma * sigma));
+            float propagatedConfidence = maxConfidence *
+                clamp(uConfidenceDecay, 0.0, 1.0) * consistency;
+            fragColor = vec4(
+                propagatedFlow,
+                residualSum / weightSum,
+                clamp(propagatedConfidence, 0.0, 1.0)
+            );
+        }
+    """.trimIndent()
+
+    val composeHighlightFlow: String = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        uniform sampler2D uReferenceToAnchorFlow;
+        uniform sampler2D uAnchorToShortFlow;
+        uniform ivec2 uGridSize;
+        uniform ivec2 uPlaneSize;
+        uniform int uTileSize;
+        uniform int uAnchorIsReference;
+        out vec4 fragColor;
+
+        vec4 flowAt(sampler2D flowTexture, vec2 planePosition) {
+            vec2 grid = planePosition / float(uTileSize) - vec2(0.5);
+            vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
+            return texture(flowTexture, clamp(uv, vec2(0.0), vec2(1.0)));
+        }
+
+        void main() {
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            vec2 referencePosition = min(
+                vec2(tile * uTileSize + ivec2(uTileSize / 2)),
+                vec2(uPlaneSize - ivec2(1))
+            );
+            vec4 referenceToAnchorFlow = uAnchorIsReference != 0 ?
+                vec4(0.0, 0.0, 0.0, 1.0) :
+                texelFetch(uReferenceToAnchorFlow, tile, 0);
+            vec2 anchorPosition = referencePosition + referenceToAnchorFlow.rg;
+            bool inside = anchorPosition.x >= 0.0 && anchorPosition.y >= 0.0 &&
+                anchorPosition.x <= float(uPlaneSize.x - 1) &&
+                anchorPosition.y <= float(uPlaneSize.y - 1);
+            vec4 anchorToShortFlow = inside ?
+                flowAt(uAnchorToShortFlow, anchorPosition) : vec4(0.0);
+            fragColor = vec4(
+                referenceToAnchorFlow.rg + anchorToShortFlow.rg,
+                max(referenceToAnchorFlow.b, anchorToShortFlow.b),
+                clamp(
+                    referenceToAnchorFlow.a * anchorToShortFlow.a * (inside ? 1.0 : 0.0),
+                    0.0,
+                    1.0
+                )
+            );
+        }
+    """.trimIndent()
+
     fun clearAccumulator(trackRejections: Boolean): String {
         val rejectionDeclaration = if (trackRejections) {
             "layout(rgba16f, binding = 6) writeonly uniform highp image2D uFusionRejections;"
@@ -825,6 +1208,8 @@ internal object GlesRawRadianceFusionShaders {
     fun normalize(
         showRejections: Boolean,
         showSrDetail: Boolean = false,
+        reconstructHighlights: Boolean = false,
+        showHighlightReconstruction: Boolean = false,
     ): String {
         val rejectionUniforms = if (showRejections) {
             """
@@ -837,6 +1222,207 @@ internal object GlesRawRadianceFusionShaders {
         }
         val debugColorUniform = if (showRejections || showSrDetail) {
             "uniform vec3 uDebugNeutralRgb;"
+        } else {
+            ""
+        }
+        val highlightDeclarations = if (reconstructHighlights) {
+            """
+            uniform sampler2D uHighlightRgb;
+            uniform highp usampler2D uHighlightRaw;
+            uniform highp usampler2D uReferenceRaw;
+            uniform sampler2D uHighlightFlow;
+            uniform ivec2 uHighlightSourceOrigin;
+            uniform ivec2 uHighlightSourceSize;
+            uniform ivec2 uHighlightFlowGridSize;
+            uniform ivec2 uInputSize;
+            uniform ivec2 uOutputSize;
+            uniform int uHighlightFlowTileSize;
+            uniform int uCfaPattern;
+            uniform float uBlackLevel[4];
+            uniform float uWhiteLevel;
+            uniform float uHighlightExposureRatio;
+            uniform float uHighlightNormalClipStart;
+            uniform float uHighlightNormalClipFull;
+            uniform float uHighlightShortClipStart;
+            uniform float uHighlightShortClipFull;
+            uniform float uHighlightShortSignalStart;
+            uniform float uHighlightShortSignalFull;
+            uniform float uHighlightFlowMinimumConfidence;
+            uniform float uHighlightFlowFullConfidence;
+            """.trimIndent()
+        } else {
+            ""
+        }
+        val highlightHelpers = if (reconstructHighlights) {
+            """
+            int highlightBaseCfaPattern() {
+                if (uCfaPattern >= 8) return uCfaPattern - 8;
+                if (uCfaPattern >= 4) return uCfaPattern - 4;
+                return uCfaPattern;
+            }
+
+            int highlightCfaBlockSize() {
+                if (uCfaPattern >= 8) return 4;
+                if (uCfaPattern >= 4) return 2;
+                return 1;
+            }
+
+            int highlightBayerIndexForPhase(int pattern, int phase) {
+                if (pattern == 0) return phase;
+                if (pattern == 1) {
+                    if (phase == 0) return 1;
+                    if (phase == 1) return 0;
+                    if (phase == 2) return 3;
+                    return 2;
+                }
+                if (pattern == 2) {
+                    if (phase == 0) return 2;
+                    if (phase == 1) return 3;
+                    if (phase == 2) return 0;
+                    return 1;
+                }
+                if (phase == 0) return 3;
+                if (phase == 1) return 2;
+                if (phase == 2) return 1;
+                return 0;
+            }
+
+            int highlightBayerIndexAt(ivec2 p) {
+                int blockSize = highlightCfaBlockSize();
+                int phase = ((p.y / blockSize) & 1) * 2 + ((p.x / blockSize) & 1);
+                return highlightBayerIndexForPhase(highlightBaseCfaPattern(), phase);
+            }
+
+            vec4 highlightFlowAt(vec2 planePosition) {
+                vec2 grid = planePosition / float(uHighlightFlowTileSize) - vec2(0.5);
+                vec2 uv = (grid + vec2(0.5)) / vec2(uHighlightFlowGridSize);
+                return texture(uHighlightFlow, clamp(uv, vec2(0.0), vec2(1.0)));
+            }
+
+            vec3 highlightRgbAt(vec2 localRawPosition) {
+                vec2 maximum = vec2(max(uHighlightSourceSize - ivec2(1), ivec2(0)));
+                vec2 storageSize = vec2(textureSize(uHighlightRgb, 0));
+                vec2 uv = (clamp(localRawPosition, vec2(0.0), maximum) + vec2(0.5)) /
+                    storageSize;
+                return clamp(texture(uHighlightRgb, uv).rgb, 0.0, 1.0);
+            }
+
+            float highlightRawNormAt(ivec2 localPosition) {
+                localPosition = clamp(
+                    localPosition,
+                    ivec2(0),
+                    uHighlightSourceSize - ivec2(1)
+                );
+                ivec2 globalPosition = localPosition + uHighlightSourceOrigin;
+                int bayerIndex = highlightBayerIndexAt(globalPosition);
+                float raw = float(texelFetch(uHighlightRaw, localPosition, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
+                return clamp((raw - uBlackLevel[bayerIndex]) / range, 0.0, 1.0);
+            }
+
+            float referenceRawNormAt(ivec2 globalPosition) {
+                globalPosition = clamp(globalPosition, ivec2(0), uInputSize - ivec2(1));
+                int bayerIndex = highlightBayerIndexAt(globalPosition);
+                float raw = float(texelFetch(uReferenceRaw, globalPosition, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
+                return clamp((raw - uBlackLevel[bayerIndex]) / range, 0.0, 1.0);
+            }
+
+            vec2 highlightRawSignalAndPeak(vec2 localRawPosition) {
+                ivec2 center = ivec2(round(localRawPosition));
+                ivec2 block = (center / 2) * 2;
+                float signal = 0.0;
+                float peak = 0.0;
+                for (int y = 0; y <= 1; ++y) {
+                    for (int x = 0; x <= 1; ++x) {
+                        float sampleValue = highlightRawNormAt(block + ivec2(x, y));
+                        signal += sampleValue;
+                        peak = max(peak, sampleValue);
+                    }
+                }
+                return vec2(signal * 0.25, peak);
+            }
+
+            float referenceRawPeak(vec2 globalRawPosition) {
+                ivec2 center = ivec2(round(globalRawPosition));
+                ivec2 block = (center / 2) * 2;
+                float peak = 0.0;
+                for (int y = 0; y <= 1; ++y) {
+                    for (int x = 0; x <= 1; ++x) {
+                        peak = max(peak, referenceRawNormAt(block + ivec2(x, y)));
+                    }
+                }
+                return peak;
+            }
+            """.trimIndent()
+        } else {
+            ""
+        }
+        val highlightComposition = if (reconstructHighlights) {
+            val highlightDebugOverlay = if (showHighlightReconstruction) {
+                """
+                if (highlightWeight > 1e-4) {
+                    rgb = vec3(0.0, 1.0, 0.0);
+                }
+                """.trimIndent()
+            } else {
+                ""
+            }
+            """
+            vec2 referenceRawPosition = (vec2(outputP) + vec2(0.5)) *
+                vec2(uInputSize) / vec2(uOutputSize) - vec2(0.5);
+            vec4 highlightFlow = highlightFlowAt(referenceRawPosition * 0.5);
+            vec2 highlightGlobalPosition = referenceRawPosition + 2.0 * highlightFlow.rg;
+            vec2 highlightLocalPosition = highlightGlobalPosition - vec2(uHighlightSourceOrigin);
+            float highlightInside = highlightLocalPosition.x >= 0.0 &&
+                highlightLocalPosition.y >= 0.0 &&
+                highlightLocalPosition.x <= float(uHighlightSourceSize.x - 1) &&
+                highlightLocalPosition.y <= float(uHighlightSourceSize.y - 1) ? 1.0 : 0.0;
+            vec3 highlightRgb = highlightRgbAt(highlightLocalPosition);
+            vec2 highlightRawStats = highlightRawSignalAndPeak(highlightLocalPosition);
+            float normalPeak = referenceRawPeak(referenceRawPosition);
+            float normalClipped = smoothstep(
+                min(uHighlightNormalClipStart, uHighlightNormalClipFull),
+                max(uHighlightNormalClipStart, uHighlightNormalClipFull),
+                normalPeak
+            );
+            float shortNotClipped = 1.0 - smoothstep(
+                min(uHighlightShortClipStart, uHighlightShortClipFull),
+                max(uHighlightShortClipStart, uHighlightShortClipFull),
+                highlightRawStats.y
+            );
+            float shortHasSignal = smoothstep(
+                min(uHighlightShortSignalStart, uHighlightShortSignalFull),
+                max(uHighlightShortSignalStart, uHighlightShortSignalFull),
+                highlightRawStats.x
+            );
+            float highlightFlowConfidence = smoothstep(
+                uHighlightFlowMinimumConfidence,
+                max(
+                    uHighlightFlowMinimumConfidence + 1e-4,
+                    uHighlightFlowFullConfidence
+                ),
+                highlightFlow.a
+            );
+            float shortReliability = clamp(
+                shortNotClipped * shortHasSignal * highlightFlowConfidence * highlightInside,
+                0.0,
+                1.0
+            );
+            // A confirmed RAW-clipped normal sample contains no radiance information. In that
+            // core region choose one source: a sufficiently reliable short sample replaces it
+            // completely; otherwise retain the normal fallback. Never average the two, because
+            // the clipped normal value biases recovered highlights toward dirty gray.
+            float saturatedCore = step(uHighlightNormalClipFull, normalPeak);
+            float coreShortSelection = saturatedCore * step(0.5, shortReliability);
+            // The soft shoulder lies below confirmed sensor clipping, where the normal sample is
+            // still physically meaningful and can safely hide exposure-boundary seams.
+            float shoulderBlend = (1.0 - saturatedCore) * normalClipped * shortReliability;
+            float highlightWeight = max(coreShortSelection, shoulderBlend);
+            vec3 normalInShortDomain = rgb / max(uHighlightExposureRatio, 1.0);
+            rgb = clamp(mix(normalInShortDomain, highlightRgb, highlightWeight), 0.0, 1.0);
+            $highlightDebugOverlay
+            """.trimIndent()
         } else {
             ""
         }
@@ -922,6 +1508,7 @@ internal object GlesRawRadianceFusionShaders {
         uniform sampler2D uReferenceBase;
         $rejectionUniforms
         $debugColorUniform
+        $highlightDeclarations
         uniform float uNoiseAlphaByChannel[4];
         uniform float uNoiseBetaByChannel[4];
         uniform float uNrConfidenceStart;
@@ -940,6 +1527,8 @@ internal object GlesRawRadianceFusionShaders {
         uniform ivec2 uAccumulatorOrigin;
         uniform ivec2 uAccumulatorSize;
         uniform ivec2 uOutputOrigin;
+
+        $highlightHelpers
 
         struct NrState {
             vec3 base;
@@ -1195,6 +1784,7 @@ internal object GlesRawRadianceFusionShaders {
                 0.0,
                 1.0
             );
+            $highlightComposition
             $srDetailOverlay
             $rejectionOverlay
             fragColor = uvec4(

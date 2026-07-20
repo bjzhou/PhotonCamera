@@ -30,6 +30,7 @@ data class RawStackResult(
     val bufferLayout: RawStackBufferLayout = RawStackBufferLayout.CFA,
     val inputRowStepSamples: Int? = null,
     val inputColStepSamples: Int? = null,
+    val baselineExposureEv: Float? = null,
 )
 
 data class RawHdrStackFrame(

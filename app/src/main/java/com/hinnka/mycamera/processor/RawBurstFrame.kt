@@ -5,6 +5,7 @@ import com.hinnka.mycamera.model.SafeImage
 
 enum class RawBurstFrameRole {
     NORMAL,
+    HIGHLIGHT_SHORT,
     HDR_SHORT,
     HDR_LONG,
 }

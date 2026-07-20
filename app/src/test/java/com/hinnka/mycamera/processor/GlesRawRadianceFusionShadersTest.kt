@@ -7,6 +7,64 @@ import org.junit.Test
 
 class GlesRawRadianceFusionShadersTest {
     @Test
+    fun highlightFlowRejectsForwardBackwardInconsistencyBeforePropagation() {
+        val validation = GlesRawRadianceFusionShaders.validateHighlightFlow
+        val propagation = GlesRawRadianceFusionShaders.propagateHighlightFlow
+        val composition = GlesRawRadianceFusionShaders.composeHighlightFlow
+
+        assertTrue(validation.contains("forward.rg + reverse.rg"))
+        assertTrue(validation.contains("min(forward.a, reverse.a) * consistency"))
+        assertTrue(propagation.contains("uConfidenceDecay"))
+        assertTrue(propagation.contains("uMinimumConfidence"))
+        assertTrue(propagation.contains("smoothstep("))
+        assertTrue(propagation.contains("sampleValue.a * support"))
+        assertTrue(propagation.contains("variance"))
+        assertTrue(propagation.contains("uGuideProxy"))
+        assertTrue(propagation.contains("min(centerGuide.g, neighborGuide.g) < 0.5"))
+        assertTrue(
+            composition.contains("referenceToAnchorFlow.rg + anchorToShortFlow.rg"),
+        )
+        assertTrue(
+            composition.contains("referenceToAnchorFlow.a * anchorToShortFlow.a"),
+        )
+    }
+
+    @Test
+    fun highlightCompositionUsesOneSharedMaskAndShortExposureOutputDomain() {
+        val shader = GlesRawRadianceFusionShaders.normalize(
+            showRejections = false,
+            reconstructHighlights = true,
+        )
+
+        assertTrue(shader.contains("shortNotClipped * shortHasSignal * highlightFlowConfidence"))
+        assertTrue(shader.contains("uniform highp usampler2D uReferenceRaw"))
+        assertTrue(shader.contains("float normalPeak = referenceRawPeak(referenceRawPosition)"))
+        assertTrue(shader.contains("float coreShortSelection = saturatedCore * step(0.5, shortReliability)"))
+        assertTrue(shader.contains("float shoulderBlend = (1.0 - saturatedCore)"))
+        assertTrue(shader.contains("uHighlightFlowFullConfidence"))
+        assertTrue(shader.contains("vec3 normalInShortDomain = rgb /"))
+        assertTrue(shader.contains("mix(normalInShortDomain, highlightRgb, highlightWeight)"))
+        assertFalse(shader.contains("vec3 highlightWeight"))
+    }
+
+    @Test
+    fun highlightReconstructionDebugColorsOnlyParticipatingPixelsGreen() {
+        val debugShader = GlesRawRadianceFusionShaders.normalize(
+            showRejections = false,
+            reconstructHighlights = true,
+            showHighlightReconstruction = true,
+        )
+        val productionShader = GlesRawRadianceFusionShaders.normalize(
+            showRejections = false,
+            reconstructHighlights = true,
+        )
+
+        assertTrue(debugShader.contains("if (highlightWeight > 1e-4)"))
+        assertTrue(debugShader.contains("rgb = vec3(0.0, 1.0, 0.0)"))
+        assertFalse(productionShader.contains("rgb = vec3(0.0, 1.0, 0.0)"))
+    }
+
+    @Test
     fun debugNeutralIsInverseWbNormalizedToSensorCeiling() {
         val neutral = radianceDebugNeutralRgb(floatArrayOf(2f, 1f, 1f, 4f))
 

@@ -2782,6 +2782,7 @@ object GalleryManager {
                     compression = finalStackResult.bufferLayout.toDngCompression(),
                     inputRowStepSamples = finalStackResult.inputRowStepSamples,
                     inputColStepSamples = finalStackResult.inputColStepSamples,
+                    baselineExposureEv = finalStackResult.baselineExposureEv,
                 )
             } finally {
                 finalStackResult.fusedBayerBuffer = null
