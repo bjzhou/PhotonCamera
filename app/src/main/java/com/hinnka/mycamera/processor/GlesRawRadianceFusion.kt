@@ -131,39 +131,104 @@ internal fun hasRadianceHighlightAlignmentSupport(
         coveredQuadrants >= minimumQuadrants.coerceIn(1, 4)
 }
 
+internal enum class RawRadianceLongAdmissionMode {
+    REJECTED,
+    VALIDATED_FLOW,
+}
+
+internal data class RawRadianceLongAdmissionEvidence(
+    val validTileCount: Int,
+    val coveredQuadrants: Int,
+    val eligibleTileCount: Int,
+    val eligibleQuadrants: Int,
+    val referenceObservableTileCount: Int,
+    val currentObservableTileCount: Int,
+)
+
+internal data class RawRadianceLongAdmissionRequirements(
+    val minimumValidTiles: Int,
+    val minimumQuadrants: Int,
+    val minimumEligibleCoverage: Float,
+    val validatedPrecisionWeightCap: Float,
+)
+
+internal enum class RawRadianceLongRejectionReason {
+    REFERENCE_PROXY_UNOBSERVABLE,
+    LONG_PROXY_UNOBSERVABLE,
+    MUTUAL_OBSERVABILITY_INSUFFICIENT,
+    VALID_FLOW_INSUFFICIENT,
+    SPATIAL_COVERAGE_INSUFFICIENT,
+    ELIGIBLE_COVERAGE_INSUFFICIENT,
+}
+
 internal data class RawRadianceLongAdmission(
+    val mode: RawRadianceLongAdmissionMode,
     val frameWeight: Float,
+    val precisionWeightCap: Float,
     val eligibleCoverage: Float,
     val requiredQuadrants: Int,
+    val rejectionReasons: List<RawRadianceLongRejectionReason>,
 )
 
 internal fun planRadianceLongAdmission(
-    validTileCount: Int,
-    coveredQuadrants: Int,
-    eligibleTileCount: Int,
-    eligibleQuadrants: Int,
-    minimumValidTiles: Int,
-    minimumQuadrants: Int,
-    minimumEligibleCoverage: Float,
+    evidence: RawRadianceLongAdmissionEvidence,
+    requirements: RawRadianceLongAdmissionRequirements,
 ): RawRadianceLongAdmission {
-    val eligibleCoverage = if (eligibleTileCount > 0) {
-        validTileCount.toFloat() / eligibleTileCount
+    val eligibleCoverage = if (evidence.eligibleTileCount > 0) {
+        evidence.validTileCount.toFloat() / evidence.eligibleTileCount
     } else {
         0f
     }
-    val normalizedEligibleQuadrants = eligibleQuadrants.coerceIn(0, 4)
+    val normalizedEligibleQuadrants = evidence.eligibleQuadrants.coerceIn(0, 4)
     val requiredQuadrants = minOf(
-        minimumQuadrants.coerceIn(1, 4),
+        requirements.minimumQuadrants.coerceIn(1, 4),
         normalizedEligibleQuadrants,
     ).coerceAtLeast(2)
-    val accepted = normalizedEligibleQuadrants >= 2 &&
-        validTileCount >= minimumValidTiles.coerceAtLeast(1) &&
-        coveredQuadrants >= requiredQuadrants &&
-        eligibleCoverage >= minimumEligibleCoverage.coerceIn(0f, 1f)
+    val validatedFlowAccepted = normalizedEligibleQuadrants >= 2 &&
+        evidence.validTileCount >= requirements.minimumValidTiles.coerceAtLeast(1) &&
+        evidence.coveredQuadrants >= requiredQuadrants &&
+        eligibleCoverage >= requirements.minimumEligibleCoverage.coerceIn(0f, 1f)
+    val minimumValidTiles = requirements.minimumValidTiles.coerceAtLeast(1)
+    val rejectionReasons = if (validatedFlowAccepted) {
+        emptyList()
+    } else {
+        buildList {
+            if (evidence.referenceObservableTileCount < minimumValidTiles) {
+                add(RawRadianceLongRejectionReason.REFERENCE_PROXY_UNOBSERVABLE)
+            }
+            if (evidence.currentObservableTileCount < minimumValidTiles) {
+                add(RawRadianceLongRejectionReason.LONG_PROXY_UNOBSERVABLE)
+            }
+            if (evidence.eligibleTileCount < minimumValidTiles) {
+                add(RawRadianceLongRejectionReason.MUTUAL_OBSERVABILITY_INSUFFICIENT)
+            }
+            if (evidence.validTileCount < minimumValidTiles) {
+                add(RawRadianceLongRejectionReason.VALID_FLOW_INSUFFICIENT)
+            }
+            if (normalizedEligibleQuadrants < 2 || evidence.coveredQuadrants < requiredQuadrants) {
+                add(RawRadianceLongRejectionReason.SPATIAL_COVERAGE_INSUFFICIENT)
+            }
+            if (eligibleCoverage < requirements.minimumEligibleCoverage.coerceIn(0f, 1f)) {
+                add(RawRadianceLongRejectionReason.ELIGIBLE_COVERAGE_INSUFFICIENT)
+            }
+        }
+    }
+    val mode = if (validatedFlowAccepted) {
+        RawRadianceLongAdmissionMode.VALIDATED_FLOW
+    } else {
+        RawRadianceLongAdmissionMode.REJECTED
+    }
     return RawRadianceLongAdmission(
-        frameWeight = if (accepted) 1f else 0f,
+        mode = mode,
+        frameWeight = if (validatedFlowAccepted) 1f else 0f,
+        precisionWeightCap = if (validatedFlowAccepted) {
+            requirements.validatedPrecisionWeightCap.coerceAtLeast(1f)
+        } else {
+            0f
+        },
         eligibleCoverage = eligibleCoverage,
         requiredQuadrants = requiredQuadrants,
+        rejectionReasons = rejectionReasons,
     )
 }
 
@@ -394,6 +459,7 @@ enum class RawFusionPipeline {
  */
 data class RawRadianceFusionTuning(
     val tileCoreSizeRawPx: Int = 1024,
+    val vgnChromaPostprocessEnabled: Boolean = true,
     val denoiseSigmaRawPx: Float = 1.10f,
     val denoiseSteeringStrength: Float = 0.48f,
     val robustnessSpatialMix: Float = 0.68f,
@@ -402,7 +468,6 @@ data class RawRadianceFusionTuning(
     val detailConfidenceStart: Float = 0.18f,
     val detailConfidenceFull: Float = 1.45f,
     val referenceDetailFloor: Float = 0.18f,
-    val bilateralNoiseScale: Float = 8.0f,
     val detailChromaStrength: Float = 0.0f,
     val chromaConsistencySigmaStart: Float = 3.0f,
     val chromaConsistencySigmaFull: Float = 6.0f,
@@ -416,11 +481,16 @@ data class RawRadianceFusionTuning(
     val longFlowFbConsistencyStartPx: Float = 0.75f,
     val longFlowFbConsistencyFullPx: Float = 2.0f,
     val longFlowMinimumConfidence: Float = 0.01f,
+    val longFlowFullConfidence: Float = 0.05f,
     val longFlowMinimumValidTiles: Int = 64,
     val longFlowMinimumQuadrants: Int = 3,
     val longEligibilityMinimumSupport: Float = 0.02f,
     val longEligibilityMinimumTilesPerQuadrant: Int = 16,
     val longFlowMinimumEligibleCoverage: Float = 0.01f,
+    val longRegionalStructureSnrStart: Float = 1.0f,
+    val longRegionalStructureSnrFull: Float = 2.0f,
+    val longFineRefinementConfidenceStart: Float = 0.01f,
+    val longFineRefinementConfidenceFull: Float = 0.05f,
     val highlightMinExposureRatio: Float = 1.2f,
     val highlightMaxExposureRatio: Float = 8.0f,
     val highlightNormalClipStart: Float = 0.90f,
@@ -499,8 +569,8 @@ internal object GlesRawRadianceFusionShaders {
             int sampleSpacing = max(uTileSize / 4, 1);
             float eligibilitySum = 0.0;
             float validitySum = 0.0;
-            float observabilitySum = 0.0;
-            float insideSum = 0.0;
+            float referenceObservabilitySum = 0.0;
+            float currentObservabilitySum = 0.0;
             float sampleCount = 0.0;
             for (int y = -2; y <= 2; ++y) {
                 for (int x = -2; x <= 2; ++x) {
@@ -513,20 +583,24 @@ internal object GlesRawRadianceFusionShaders {
                     vec4 currentSample = proxyAt(uCurrentProxy, currentPosition);
                     float validity = inside ?
                         min(referenceSample.g, currentSample.g) : 0.0;
-                    float observability = inside ?
-                        min(referenceSample.b, currentSample.b) : 0.0;
+                    float referenceObservability = inside ? referenceSample.b : 0.0;
+                    float currentObservability = inside ? currentSample.b : 0.0;
+                    float observability = min(
+                        referenceObservability,
+                        currentObservability
+                    );
                     eligibilitySum += validity * observability;
                     validitySum += validity;
-                    observabilitySum += observability;
-                    insideSum += inside ? 1.0 : 0.0;
+                    referenceObservabilitySum += referenceObservability;
+                    currentObservabilitySum += currentObservability;
                     sampleCount += 1.0;
                 }
             }
             fragColor = vec4(
                 eligibilitySum,
                 validitySum,
-                observabilitySum,
-                insideSum
+                referenceObservabilitySum,
+                currentObservabilitySum
             ) / max(sampleCount, 1.0);
         }
     """.trimIndent()
@@ -703,12 +777,23 @@ internal object GlesRawRadianceFusionShaders {
         uniform ivec2 uPlaneSize;
         uniform int uTileSize;
         uniform int uAnchorIsReference;
+        uniform int uUseBottleneckConfidence;
+        uniform float uConfidenceStart;
+        uniform float uConfidenceFull;
         out vec4 fragColor;
 
         vec4 flowAt(sampler2D flowTexture, vec2 planePosition) {
             vec2 grid = planePosition / float(uTileSize) - vec2(0.5);
             vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
             return texture(flowTexture, clamp(uv, vec2(0.0), vec2(1.0)));
+        }
+
+        float normalizedEdgeConfidence(float confidence) {
+            return smoothstep(
+                min(uConfidenceStart, uConfidenceFull),
+                max(uConfidenceStart, uConfidenceFull),
+                confidence
+            );
         }
 
         void main() {
@@ -726,11 +811,19 @@ internal object GlesRawRadianceFusionShaders {
                 anchorPosition.y <= float(uPlaneSize.y - 1);
             vec4 anchorToShortFlow = inside ?
                 flowAt(uAnchorToShortFlow, anchorPosition) : vec4(0.0);
+            float multipliedConfidence = referenceToAnchorFlow.a * anchorToShortFlow.a;
+            float bottleneckConfidence = min(
+                uAnchorIsReference != 0 ? 1.0 :
+                    normalizedEdgeConfidence(referenceToAnchorFlow.a),
+                normalizedEdgeConfidence(anchorToShortFlow.a)
+            );
+            float pathConfidence = uUseBottleneckConfidence != 0 ?
+                bottleneckConfidence : multipliedConfidence;
             fragColor = vec4(
                 referenceToAnchorFlow.rg + anchorToShortFlow.rg,
                 max(referenceToAnchorFlow.b, anchorToShortFlow.b),
                 clamp(
-                    referenceToAnchorFlow.a * anchorToShortFlow.a * (inside ? 1.0 : 0.0),
+                    pathConfidence * (inside ? 1.0 : 0.0),
                     0.0,
                     1.0
                 )
@@ -1054,6 +1147,7 @@ internal object GlesRawRadianceFusionShaders {
         uniform int uIsLongFrame;
         uniform int uSemanticEncoding;
         uniform int uCfaPattern;
+        uniform vec3 uCalculationGains;
         uniform float uBlackLevel[4];
         uniform float uWhiteLevel;
         uniform float uNoiseAlphaByChannel[4];
@@ -1104,10 +1198,10 @@ internal object GlesRawRadianceFusionShaders {
                 vec2(uOutputSize) - vec2(0.5);
         }
 
-        vec2 flowAt(vec2 planePos) {
+        vec4 flowEvidenceAt(vec2 planePos) {
             vec2 grid = planePos / float(uTileSize) - vec2(0.5);
             vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
-            return texture(uFlowGrid, clamp(uv, vec2(0.0), vec2(1.0))).rg;
+            return texture(uFlowGrid, clamp(uv, vec2(0.0), vec2(1.0)));
         }
 
         float mapAt(sampler2D tex, vec2 planePos, ivec2 size) {
@@ -1162,12 +1256,27 @@ internal object GlesRawRadianceFusionShaders {
                 storageSize;
             vec3 encoded = texture(uRcdRgbTile, uv).rgb;
             if (uIsReference != 0 || uSemanticEncoding == 0) {
-                return clamp(encoded, 0.0, 1.0);
+                // The reconstruction texture is FP16 and intentionally carries linear
+                // overrange. A long exposure can exceed the normal-frame output domain after
+                // LSC while every sensor sample is still below white level. Clamping here would
+                // clip the channels independently before exposure normalization and permanently
+                // turn a neutral bright sample magenta/green.
+                return max(encoded, vec3(0.0));
             }
-            // Non-reference tiles encode (G, R-G, B-G). Decoding only after the semantic
-            // planes have been warped/interpolated keeps CFA phase out of the fusion domain.
-            return clamp(vec3(encoded.r + encoded.g, encoded.r, encoded.r + encoded.b),
-                0.0, 1.0);
+            // Non-reference tiles encode calculation-WB (G, R-G, B-G). Keep that semantic
+            // representation through texture interpolation and flow warping, then decode and
+            // return to the same un-white-balanced camera-RGB contract as the VGN reference.
+            vec3 calculationRgb = vec3(
+                encoded.r + encoded.g,
+                encoded.r,
+                encoded.r + encoded.b
+            );
+            // Preserve the semantic proxy's overrange for the same reason. The caller applies
+            // uExposureScale to both detail and denoise estimates before the only [0, 1] clamp.
+            return max(
+                calculationRgb / max(uCalculationGains, vec3(1e-6)),
+                vec3(0.0)
+            );
         }
 
         vec3 kernelMatrix(vec4 params) {
@@ -1336,9 +1445,11 @@ internal object GlesRawRadianceFusionShaders {
             vec2 planePos = refRaw * 0.5;
             vec2 sourceRaw = refRaw;
             vec4 tileConfidence = vec4(1.0, 1.0, 0.0, 0.0);
+            vec4 flowEvidence = vec4(0.0, 0.0, 0.0, 1.0);
             float robust = 1.0;
             if (uIsReference == 0) {
-                sourceRaw += flowAt(planePos) * 2.0;
+                flowEvidence = flowEvidenceAt(planePos);
+                sourceRaw += flowEvidence.rg * 2.0;
                 if (sourceRaw.x < -0.5 || sourceRaw.y < -0.5 ||
                     sourceRaw.x > float(uImageSize.x) - 0.5 ||
                     sourceRaw.y > float(uImageSize.y) - 0.5) {
@@ -1431,9 +1542,17 @@ internal object GlesRawRadianceFusionShaders {
                 float longNrRoleWeight = uIsLongFrame != 0 ? longClipConfidence : 1.0;
                 float longDetailRoleWeight = uIsLongFrame != 0 ?
                     longClipConfidence * clamp(uLongDetailWeightScale, 0.0, 1.0) : 1.0;
+                // Long frames may be reached through reference -> normal anchor -> long. Their
+                // composed confidence is normalized per validated edge and represents whether
+                // the complete geometric path is locally supported. Applying it after final
+                // reference-domain refinement prevents a high precision weight from reviving a
+                // weak hand-shake alignment at static high-contrast edges.
+                float longPathConfidence = uIsLongFrame != 0 ?
+                    clamp(flowEvidence.a, 0.0, 1.0) : 1.0;
                 float nrCoverage = clamp(tileConfidence.r * robust, 0.0, 1.0) *
-                    clamp(uRegistrationNrWeight, 0.0, 1.0);
-                float detailCoverage = clamp(tileConfidence.g * robust, 0.0, 1.0);
+                    clamp(uRegistrationNrWeight, 0.0, 1.0) * longPathConfidence;
+                float detailCoverage = clamp(tileConfidence.g * robust, 0.0, 1.0) *
+                    longPathConfidence;
                 $rejectionAssignment
                 float staticConfidence = denoiseStaticConfidence(tileConfidence.r, robust);
                 float sharedNrWeight = uFrameWeight * sharedPrecision * sharedConsistency *
@@ -1864,12 +1983,6 @@ internal object GlesRawRadianceFusionShaders {
         uniform float uDetailConfidenceFull;
         uniform float uReferenceDetailFloor;
         uniform float uDetailChromaStrength;
-        uniform float uBilateralNoiseScale;
-        uniform float uFinalSmoothStrength;
-        uniform float uLowLightSignalLow;
-        uniform float uLowLightSignalHigh;
-        uniform float uLowLightSmoothBoost;
-        uniform float uMaxSmoothStrength;
         uniform vec3 uCalculationGains;
         uniform ivec2 uAccumulatorOrigin;
         uniform ivec2 uAccumulatorSize;
@@ -1895,6 +2008,14 @@ internal object GlesRawRadianceFusionShaders {
 
         ivec2 clampAccumulatorPos(ivec2 p) {
             return clamp(p, ivec2(0), uAccumulatorSize - ivec2(1));
+        }
+
+        vec3 referenceBaseAt(ivec2 p) {
+            return clamp(
+                texelFetch(uReferenceBase, clampAccumulatorPos(p), 0).rgb,
+                0.0,
+                1.0
+            );
         }
 
         vec3 sensorNoise(vec3 rgb) {
@@ -1933,7 +2054,7 @@ internal object GlesRawRadianceFusionShaders {
 
         NrState nrStateAt(ivec2 p) {
             p = clampAccumulatorPos(p);
-            vec3 base = clamp(texelFetch(uReferenceBase, p, 0).rgb, 0.0, 1.0);
+            vec3 base = referenceBaseAt(p);
             WeightedRgb sampleValue = packedRgbWeightAt(
                 uNrSumRg,
                 uNrSumBw,
@@ -1990,40 +2111,14 @@ internal object GlesRawRadianceFusionShaders {
             ivec2 outputP = ivec2(gl_FragCoord.xy) + uOutputOrigin;
             ivec2 p = outputP - uAccumulatorOrigin;
             NrState center = nrStateAt(p);
+            // Keep normalization point-local. Post-fusion spatial denoise is owned exclusively by
+            // GlesRadianceVgnChromaPostprocessor; neighboring reference samples below only classify
+            // structure for detail confidence and never contribute color to this output pixel.
             vec3 safeCenter = mix(center.base, center.nr, center.confidence);
-            float rangeVariance = max(
-                dot(center.noise / center.effectiveSupport, vec3(0.3333333)) *
-                    max(uBilateralNoiseScale, 1.0),
-                1e-7
-            );
-            vec3 bilateralSum = vec3(0.0);
-            float bilateralWeight = 0.0;
-            vec3 baseLeft = center.base;
-            vec3 baseRight = center.base;
-            vec3 baseUp = center.base;
-            vec3 baseDown = center.base;
-            for (int y = -1; y <= 1; ++y) {
-                for (int x = -1; x <= 1; ++x) {
-                    ivec2 q = p + ivec2(x, y);
-                    NrState neighbor = nrStateAt(q);
-                    if (x == -1 && y == 0) baseLeft = neighbor.base;
-                    if (x == 1 && y == 0) baseRight = neighbor.base;
-                    if (x == 0 && y == -1) baseDown = neighbor.base;
-                    if (x == 0 && y == 1) baseUp = neighbor.base;
-                    vec3 guideDelta = neighbor.base - center.base;
-                    float spatial = (x == 0 && y == 0) ? 4.0 :
-                        ((x == 0 || y == 0) ? 2.0 : 1.0);
-                    float range = exp(-dot(guideDelta, guideDelta) / rangeVariance);
-                    float weight = spatial * range;
-                    bilateralSum += mix(
-                        neighbor.base,
-                        neighbor.nr,
-                        neighbor.confidence
-                    ) * weight;
-                    bilateralWeight += weight;
-                }
-            }
-            vec3 bilateral = bilateralSum / max(bilateralWeight, 1e-6);
+            vec3 baseLeft = referenceBaseAt(p + ivec2(-1, 0));
+            vec3 baseRight = referenceBaseAt(p + ivec2(1, 0));
+            vec3 baseUp = referenceBaseAt(p + ivec2(0, 1));
+            vec3 baseDown = referenceBaseAt(p + ivec2(0, -1));
             vec3 gradientX = 0.5 * (baseRight - baseLeft);
             vec3 gradientY = 0.5 * (baseUp - baseDown);
             float gradient = sqrt(
@@ -2038,18 +2133,6 @@ internal object GlesRawRadianceFusionShaders {
                 6.0 * finalNoiseStd + 1e-5,
                 gradient
             );
-            float luma = dot(safeCenter, vec3(0.2126, 0.7152, 0.0722));
-            float shadow = 1.0 - smoothstep(
-                min(uLowLightSignalLow, uLowLightSignalHigh),
-                max(uLowLightSignalLow, uLowLightSignalHigh),
-                luma
-            );
-            float spatialSmooth = uFinalSmoothStrength *
-                (0.35 + uLowLightSmoothBoost * shadow) *
-                (1.0 - 0.82 * structure) *
-                (1.0 + 0.35 * (1.0 - center.lumaConfidence));
-            spatialSmooth = clamp(spatialSmooth, 0.0, uMaxSmoothStrength);
-            vec3 nrSpatial = mix(safeCenter, bilateral, spatialSmooth);
 
             WeightedRgb detailSample = packedRgbWeightAt(
                 uDetailSumRg,
@@ -2081,7 +2164,7 @@ internal object GlesRawRadianceFusionShaders {
                 detailLumaSupport * centerLumaConsistency
             );
             vec3 calculationGains = max(uCalculationGains, vec3(1e-6));
-            vec3 nrCalculation = nrSpatial * calculationGains;
+            vec3 nrCalculation = safeCenter * calculationGains;
             vec3 detailCalculation = detail * calculationGains;
             float detailLumaDelta = abs(dot(
                 detailCalculation - nrCalculation,
@@ -2122,7 +2205,7 @@ internal object GlesRawRadianceFusionShaders {
             );
             vec3 lumaDetail =
                 (nrCalculation + vec3(signedLumaDetail)) / calculationGains;
-            vec3 fullRgbDetail = nrSpatial + detailConfidence * (detail - nrSpatial);
+            vec3 fullRgbDetail = safeCenter + detailConfidence * (detail - safeCenter);
             float chromaConfidence = clamp(uDetailChromaStrength, 0.0, 1.0) *
                 min(min(detailSupport.r, detailSupport.g), detailSupport.b) *
                 min(min(center.consistency.r, center.consistency.g), center.consistency.b);

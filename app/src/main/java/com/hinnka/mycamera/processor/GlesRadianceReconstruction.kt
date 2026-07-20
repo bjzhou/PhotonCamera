@@ -48,33 +48,19 @@ internal data class RadianceVgnGeometry(
  * Radiance-only reconstruction adapters.
  *
  * The reference path adapts a RAW tile to the canonical VGN work domain and converts Pass 3
- * YCCD directly to un-white-balanced camera RGB. The non-reference path never interpolates CFA
- * samples across phases: it first creates dense G plus native R-G/B-G samples, then resolves
- * each opponent plane exclusively on its own global two-pixel lattice.
+ * YCCD directly to un-white-balanced camera RGB. The non-reference path uses the exact same
+ * black-level, LSC, and calculation-WB conditioning before it creates dense G plus native R-G/B-G
+ * samples. Each opponent plane is resolved exclusively on its own global two-pixel lattice and
+ * remains in the calculation-WB domain until the post-warp fusion decoder returns it to camera RGB.
  */
 internal object GlesRadianceReconstructionShaders {
-    val vgnPrepareRegion: String = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        precision highp image2D;
-
-        layout(local_size_x = 16, local_size_y = 16) in;
-        layout(binding = 0) uniform highp usampler2D uRawRegion;
-        layout(binding = 1) uniform highp sampler2D uLensShadingMap;
-        layout(rgba16f, binding = 0) writeonly uniform image2D uPackedRaw;
-
-        uniform ivec2 uRegionSize;
-        uniform ivec2 uFullImageSize;
-        uniform ivec2 uGlobalOrigin;
-        uniform ivec2 uPackedSize;
-        uniform ivec2 uSourceOffset;
-        uniform int uCfaPattern;
-        uniform vec4 uBlackLevel;
-        uniform float uWhiteLevel;
-        uniform vec4 uCalculationGains;
-        uniform int uReconstructHighlights;
-
+    /**
+     * Shared standard-Bayer RAW conditioning for every Radiance reconstruction backend.
+     *
+     * Keep this as one shader fragment: reference/non-reference differences start at demosaic,
+     * never at black level, LSC channel selection, or calculation white balance.
+     */
+    private val standardBayerCalculationHelpers: String = """
         int bayerIndexAt(int pattern, ivec2 p) {
             int phase = (p.x & 1) + ((p.y & 1) << 1);
             if (pattern == 0) return phase;
@@ -144,6 +130,31 @@ internal object GlesRadianceReconstructionShaders {
                 8.0
             );
         }
+    """.trimIndent()
+
+    val vgnPrepareRegion: String = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        precision highp image2D;
+
+        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(binding = 0) uniform highp usampler2D uRawRegion;
+        layout(binding = 1) uniform highp sampler2D uLensShadingMap;
+        layout(rgba16f, binding = 0) writeonly uniform image2D uPackedRaw;
+
+        uniform ivec2 uRegionSize;
+        uniform ivec2 uFullImageSize;
+        uniform ivec2 uGlobalOrigin;
+        uniform ivec2 uPackedSize;
+        uniform ivec2 uSourceOffset;
+        uniform int uCfaPattern;
+        uniform vec4 uBlackLevel;
+        uniform float uWhiteLevel;
+        uniform vec4 uCalculationGains;
+        uniform int uReconstructHighlights;
+
+        $standardBayerCalculationHelpers
 
         float opposedEstimate(ivec2 local, int ownColor, float fallback) {
             vec3 sum = vec3(0.0);
@@ -247,76 +258,25 @@ internal object GlesRadianceReconstructionShaders {
         uniform int uCfaPattern;
         uniform vec4 uBlackLevel;
         uniform float uWhiteLevel;
+        uniform vec4 uCalculationGains;
 
-        int bayerIndexAt(int pattern, ivec2 p) {
-            int phase = (p.x & 1) + ((p.y & 1) << 1);
-            if (pattern == 0) return phase;
-            if (pattern == 1) {
-                if (phase == 0) return 1;
-                if (phase == 1) return 0;
-                if (phase == 2) return 3;
-                return 2;
-            }
-            if (pattern == 2) {
-                if (phase == 0) return 2;
-                if (phase == 1) return 3;
-                if (phase == 2) return 0;
-                return 1;
-            }
-            if (phase == 0) return 3;
-            if (phase == 1) return 2;
-            if (phase == 2) return 1;
-            return 0;
-        }
-
-        int lensChannelAt(ivec2 global) {
-            int channel = bayerIndexAt(uCfaPattern, global);
-            if (channel == 0 || channel == 3) return channel;
-            return (global.y & 1) == 0 ? 1 : 2;
-        }
-
-        int mirrorIndex(int value, int size) {
-            if (size <= 1) return 0;
-            int period = 2 * (size - 1);
-            int wrapped = value % period;
-            if (wrapped < 0) wrapped += period;
-            return wrapped < size ? wrapped : period - wrapped;
-        }
-
-        ivec2 clampLocal(ivec2 p) {
-            return ivec2(
-                mirrorIndex(p.x, uRegionSize.x),
-                mirrorIndex(p.y, uRegionSize.y)
-            );
-        }
-
-        float cameraAt(ivec2 local) {
-            local = clampLocal(local);
-            ivec2 global = local + uGlobalOrigin;
-            int channel = bayerIndexAt(uCfaPattern, global);
-            float raw = float(texelFetch(uRawRegion, local, 0).r);
-            float sensor = max(raw - uBlackLevel[channel], 0.0) /
-                max(uWhiteLevel - uBlackLevel[channel], 1.0);
-            vec2 uv = (vec2(global) + vec2(0.5)) / vec2(uFullImageSize);
-            vec4 lsc = texture(uLensShadingMap, clamp(uv, vec2(0.0), vec2(1.0)));
-            return max(sensor * max(lsc[lensChannelAt(global)], 0.0), 0.0);
-        }
+        $standardBayerCalculationHelpers
 
         float denseGreenAt(ivec2 p) {
             p = clampLocal(p);
             ivec2 global = p + uGlobalOrigin;
             int channel = bayerIndexAt(uCfaPattern, global);
-            float center = cameraAt(p);
+            float center = calculationAt(p);
             if (channel == 1 || channel == 2) return center;
 
-            float gL = cameraAt(p + ivec2(-1, 0));
-            float gR = cameraAt(p + ivec2(1, 0));
-            float gU = cameraAt(p + ivec2(0, -1));
-            float gD = cameraAt(p + ivec2(0, 1));
-            float cL2 = cameraAt(p + ivec2(-2, 0));
-            float cR2 = cameraAt(p + ivec2(2, 0));
-            float cU2 = cameraAt(p + ivec2(0, -2));
-            float cD2 = cameraAt(p + ivec2(0, 2));
+            float gL = calculationAt(p + ivec2(-1, 0));
+            float gR = calculationAt(p + ivec2(1, 0));
+            float gU = calculationAt(p + ivec2(0, -1));
+            float gD = calculationAt(p + ivec2(0, 1));
+            float cL2 = calculationAt(p + ivec2(-2, 0));
+            float cR2 = calculationAt(p + ivec2(2, 0));
+            float cU2 = calculationAt(p + ivec2(0, -2));
+            float cD2 = calculationAt(p + ivec2(0, 2));
             float horizontalLinear = 0.5 * (gL + gR);
             float verticalLinear = 0.5 * (gU + gD);
             float horizontalCorrection = 0.25 * (2.0 * center - cL2 - cR2);
@@ -352,9 +312,9 @@ internal object GlesRadianceReconstructionShaders {
             ivec2 global = local + uGlobalOrigin;
             int channel = bayerIndexAt(uCfaPattern, global);
             float green = denseGreenAt(local);
-            float native = cameraAt(local);
-            float redGreen = channel == 0 ? native - green : 0.0;
-            float blueGreen = channel == 3 ? native - green : 0.0;
+            float nativeCalculation = calculationAt(local);
+            float redGreen = channel == 0 ? nativeCalculation - green : 0.0;
+            float blueGreen = channel == 3 ? nativeCalculation - green : 0.0;
             imageStore(uSemanticSeed, local, vec4(green, redGreen, blueGreen, 1.0));
         }
     """.trimIndent()

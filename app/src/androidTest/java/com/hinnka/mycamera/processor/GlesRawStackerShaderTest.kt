@@ -1,7 +1,10 @@
 package com.hinnka.mycamera.processor
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -137,6 +140,21 @@ class GlesRawStackerShaderTest {
                 true,
             )
             invokePrivate(stacker, "normalizeRadianceTile", tile, 1, 1)
+            val chromaPostprocessor = readPrivateAny(stacker, "radianceVgnChromaPostprocessor")
+            assertNotNull("Radiance must initialize its VGN chroma postprocessor", chromaPostprocessor)
+            val postprocessor = checkNotNull(chromaPostprocessor)
+            invokePrivate(
+                postprocessor,
+                "capture",
+                readPrivateInt(stacker, "outputTexture"),
+                tile,
+            )
+            val chromaOutput = ByteBuffer.allocateDirect(96 * 96 * 3 * 2)
+                .order(ByteOrder.nativeOrder())
+            assertNotNull(
+                invokePrivate(postprocessor, "processAndReadback", chromaOutput),
+            )
+            assertEquals(0, chromaOutput.position())
         } finally {
             invokePrivate(stacker, "release")
         }
@@ -255,6 +273,13 @@ class GlesRawStackerShaderTest {
         return target.javaClass.getDeclaredField(fieldName).run {
             isAccessible = true
             getInt(target)
+        }
+    }
+
+    private fun readPrivateAny(target: Any, fieldName: String): Any? {
+        return target.javaClass.getDeclaredField(fieldName).run {
+            isAccessible = true
+            get(target)
         }
     }
 

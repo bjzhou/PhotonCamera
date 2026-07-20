@@ -107,10 +107,26 @@ Q6 平均 RGB 权重和、Detail 非零权重数、Detail Q6 平均 RGB 权重�
 GCam 的 merge frame count、block rejection percentage 和 average merge factor 对照。
 
 Radiance 对标准 2x2 Bayer 使用非对称重建：参考帧在每个分片内运行完整 VGN 基础解马赛克
-（Prepare 到 Pass 3），随后直接从 YCCD 转回未白平衡 camera RGB；不调度 VGN 色度降噪和
-IIR。非参考帧只生成 Dense G、原生 R-G 和原生 B-G，再分别沿全局 R/B 相位格点补全两个
+（Prepare 到 Pass 3），随后直接从 YCCD 转回未白平衡 camera RGB；每帧重建阶段不调度 VGN
+色度降噪和 IIR。非参考帧只生成 Dense G、原生 R-G 和原生 B-G，再分别沿全局 R/B 相位格点补全两个
 色差平面。warp 和融合阶段不再读取或判断 CFA 相位，因而不会把跨相位位移解释成绿色像素。
 Quad/Nona 等非标准 CFA 继续使用区域 RCD 兼容后端。
+
+标准 Bayer 的 Radiance 在所有帧完成融合后运行独立的 VGN chroma postprocessor。融合输出
+先从未白平衡 camera RGB 乘 calculation WB 进入 YCCD，运行 color-noise 1/2/3、三组四向
+IIR 和 error/filter，再除以同一组 calculation WB 返回 camera RGB。LSC 已在逐帧 RAW 重建时
+应用，postprocessor 不得再次采样、应用或反应用 LSC。
+
+postprocessor 使用 `RGBA16UI texture2DArray` 保存分页图像。Radiance tile 只决定 array layer
+的存储位置，所有邻域访问都先用全局输出坐标映射到 layer；IIR invocation 必须扫描完整输出行
+或完整输出列，不能在 layer 边界重置递归状态。输出倍率大于 1 时，IIR 数字截止频率需要按
+输出倍率换算，以保持 RAW 像素空间的滤波尺度；方向 mask 也必须在融合输出分辨率重新计算，
+不能插值参考帧 Pass 3 的整数 bit mask。
+
+`RGBA16UI` 工作纹理继续遵守显式只读/只写约束。每个 pass 分别绑定 readonly source 和
+writeonly destination，并在四个 IIR 方向之间 ping-pong；禁止把同一 image 声明成 read/write，
+也禁止以两个 image unit 别名绑定同一纹理来模拟原位处理。新增 array image 路径必须在
+PMA110 上验证 array layer bind、全局跨 layer 读取、完整行列 IIR dispatch 和 layer readback。
 
 重建结果通过 `writeonly image2D` 写入、在 accumulator pass 中只作为普通线性过滤
 `sampler2D` 读取，不作为 read/write image。参考帧纹理编码为 camera RGB；非参考帧纹理
@@ -136,6 +152,8 @@ RGB 中增加 `vec3(detail)`，否则后续 WB 会把边缘的正负高频变成
 - MFNR 与 MFSR 两种模式
 - Radiance VGN reference、semantic seed/resolve、clear、accumulate、reference-base capture 与
   normalize pass
+- Radiance VGN chroma array capture、YCCD seed、color-noise 1/2/3、三组四向 IIR、error/filter、
+  inverse-WB camera RGB 与逐 layer readback
 
 Radiance 的噪声与色差一致性必须继续按传感器通道以及 `R-G`、`B-G` 两条色差轴分别
 估算，但最终帧采纳权重和参考帧回退置信度必须对完整 RGB 三元组共用同一个保守值。

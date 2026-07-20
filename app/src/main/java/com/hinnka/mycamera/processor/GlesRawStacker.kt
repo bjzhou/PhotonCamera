@@ -86,6 +86,7 @@ class GlesRawStacker(
         val tileMaskTexture: Int,
         val registrationWeight: Float,
         val detailWeight: Float,
+        val precisionWeightCap: Float,
         val minFlowXPlanePx: Float,
         val maxFlowXPlanePx: Float,
         val minFlowYPlanePx: Float,
@@ -108,11 +109,34 @@ class GlesRawStacker(
         val eligibleQuadrants: Int,
         val eligibleCoverage: Float,
         val requiredQuadrants: Int,
+        val admissionMode: RawRadianceLongAdmissionMode,
         val frameWeight: Float,
+        val precisionWeightCap: Float,
         val minFlowXPlanePx: Float,
         val maxFlowXPlanePx: Float,
         val minFlowYPlanePx: Float,
         val maxFlowYPlanePx: Float,
+    )
+    private data class RadianceLongObservabilitySummary(
+        val meanSignal: Float,
+        val meanDetail: Float,
+        val meanNoiseSigma: Float,
+        val meanDetailSnr: Float,
+        val meanAlignmentObservability: Float,
+        val observableTileCount: Int,
+        val totalTileCount: Int,
+    )
+    private data class RadianceLongTrackingSeedResources(
+        val anchorTrackingTexture: Int,
+        val longTrackingTexture: Int,
+        val forwardSeedTexture: Int,
+        val reverseSeedTexture: Int,
+        val trackingWidth: Int,
+        val trackingHeight: Int,
+        val trackingScale: Int,
+        val seedGridWidth: Int,
+        val seedGridHeight: Int,
+        val seedTileSpacing: Int,
     )
     private data class ReadOutputTiming(
         val elapsedMs: Long,
@@ -238,6 +262,8 @@ class GlesRawStacker(
     private val registrationSummary = registrationSetup.toSummary()
     private val radianceFusionEnabled = fusionPipeline == RawFusionPipeline.RADIANCE_RGB
     private val radianceUsesVgnSemanticBackend = radianceFusionEnabled && cfaPattern in 0..3
+    private val radianceVgnChromaPostprocessEnabled =
+        radianceUsesVgnSemanticBackend && radianceFusionTuning.vgnChromaPostprocessEnabled
     private val visualizeRadianceFusionRejections =
         radianceFusionEnabled && hwmfDebug.visualizeRadianceFusionRejections
     private val visualizeRadianceSrDetail =
@@ -340,6 +366,7 @@ class GlesRawStacker(
     private var radianceHighlightPropagateFlowProgram = 0
     private var radianceHighlightComposeFlowProgram = 0
     private var radianceLongEligibilityProgram = 0
+    private var radianceLongObservabilityDiagnosticProgram = 0
     private var radianceReferenceBaseProgram = 0
     private val radianceVgnPrograms = IntArray(VgnShaders.PROGRAM_3 + 1)
     private var radianceVgnFinalProgram = 0
@@ -409,6 +436,7 @@ class GlesRawStacker(
     private var radianceVgnFull1Texture = 0
     private var radianceVgnUbo = 0
     private var radianceVgnCapacityGeometry: RadianceVgnGeometry? = null
+    private var radianceVgnChromaPostprocessor: GlesRadianceVgnChromaPostprocessor? = null
     private var rcdRawRegionTexture = 0
     private var rcdRegionCapacityWidth = 0
     private var rcdRegionCapacityHeight = 0
@@ -1095,9 +1123,19 @@ class GlesRawStacker(
                         GlesRawRadianceFusionShaders.longEligibility,
                         "raw_radiance_long_eligibility",
                     )
+                    radianceLongObservabilityDiagnosticProgram = linkGraphicsProgram(
+                        FULLSCREEN_VERTEX_SHADER,
+                        RAW_LONG_OBSERVABILITY_DIAGNOSTIC_FRAGMENT_SHADER,
+                        "raw_radiance_long_observability_diagnostic",
+                    )
                 }
                 if (radianceUsesVgnSemanticBackend) {
                     initRadianceReconstructionPrograms()
+                    if (radianceVgnChromaPostprocessEnabled) {
+                        radianceVgnChromaPostprocessor = createRadianceVgnChromaPostprocessor().also {
+                            it.initPrograms()
+                        }
+                    }
                 } else {
                     // VGN is defined only for the four standard 2x2 Bayer layouts. Preserve
                     // Quad/Nona CFA support through the phase-aware region RCD backend.
@@ -1241,6 +1279,31 @@ class GlesRawStacker(
 
                 override fun checkGlError(label: String) {
                     this@GlesRawStacker.checkGlError(label)
+                }
+            },
+        )
+    }
+
+    private fun createRadianceVgnChromaPostprocessor(): GlesRadianceVgnChromaPostprocessor {
+        return GlesRadianceVgnChromaPostprocessor(
+            imageWidth = outputWidth,
+            imageHeight = outputHeight,
+            tiles = radianceTiles,
+            calculationWbGains = demosaicCalculationWbGains,
+            outputScale = superResolutionScale,
+            backend = object : GlesRadianceVgnChromaPostprocessor.Backend {
+                override fun linkComputeProgram(source: String, name: String): Int =
+                    this@GlesRawStacker.linkComputeProgram(source, name)
+
+                override fun uniformLocation(program: Int, name: String): Int =
+                    this@GlesRawStacker.uniformLocation(program, name)
+
+                override fun checkGlError(label: String) {
+                    this@GlesRawStacker.checkGlError(label)
+                }
+
+                override fun yieldToUiRenderer() {
+                    GlesGpuScheduler.yieldToUiRenderer()
                 }
             },
         )
@@ -1439,6 +1502,7 @@ class GlesRawStacker(
         lensShadingTexture = createLensShadingTexture()
         renderFbo = createFramebuffer()
         readbackFbo = createFramebuffer()
+        radianceVgnChromaPostprocessor?.initStorage()
         initDiagnosticResources()
     }
 
@@ -1681,7 +1745,8 @@ class GlesRawStacker(
             "Radiance reconstruction=VGN-reference/semantic-nonreference " +
                 "region=${rcdRegionCapacityWidth}x$rcdRegionCapacityHeight " +
                 "vgnWork=${geometry.workWidth}x${geometry.workHeight} " +
-                "colorDenoise=false iir=false"
+                "perFrameColorDenoise=false postFusionChromaIir=" +
+                radianceVgnChromaPostprocessEnabled
         }
     }
 
@@ -1900,6 +1965,7 @@ class GlesRawStacker(
         label: String,
         exposureScale: Float = 1.0f,
         noiseModel: RawNoiseModel = rawNoiseModel,
+        useRegionalObservability: Boolean = false,
     ) {
         GLES31.glUseProgram(proxyProgram)
         bindTexture(proxyProgram, "uRaw", 0, rawTexture)
@@ -1919,6 +1985,20 @@ class GlesRawStacker(
         )
         GLES31.glUniform2i(GLES31.glGetUniformLocation(proxyProgram, "uProxySize"), planeWidth, planeHeight)
         GLES31.glUniform1f(GLES31.glGetUniformLocation(proxyProgram, "uExposureScale"), exposureScale)
+        GLES31.glUniform1i(
+            uniformLocation(proxyProgram, "uUseRegionalObservability"),
+            if (useRegionalObservability) 1 else 0,
+        )
+        GLES31.glUniform1f(
+            uniformLocation(proxyProgram, "uRegionalStructureSnrStart"),
+            radianceFusionTuning.longRegionalStructureSnrStart.coerceAtLeast(0f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(proxyProgram, "uRegionalStructureSnrFull"),
+            radianceFusionTuning.longRegionalStructureSnrFull.coerceAtLeast(
+                radianceFusionTuning.longRegionalStructureSnrStart + 1e-3f,
+            ),
+        )
         GLES31.glDispatchCompute(groupCount(planeWidth), groupCount(planeHeight), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
         checkGlError("buildProxy $label")
@@ -1938,6 +2018,10 @@ class GlesRawStacker(
                 output.texture,
                 0,
             )
+            // buildPyramid bypasses bindFramebufferOutput, so it must keep the attachment cache
+            // coherent. Otherwise the next pass may skip reattaching its requested texture and
+            // render into the last pyramid level while reading stale diagnostics.
+            renderFboTargetTexture = output.texture
             GLES30.glDrawBuffers(1, intArrayOf(GLES30.GL_COLOR_ATTACHMENT0), 0)
             checkFramebuffer("buildPyramid level $index")
             GLES30.glViewport(0, 0, output.width, output.height)
@@ -1984,6 +2068,138 @@ class GlesRawStacker(
         GLES31.glDispatchCompute(groupCount(outputWidth), groupCount(outputHeight), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
         checkGlError("buildTrackingProxy $label")
+    }
+
+    private fun createRadianceLongTrackingSeedResources(): RadianceLongTrackingSeedResources {
+        val trackingScale = temporalTrackingLevelScale(2)
+        val trackingWidth = scaledTrackingDimension(planeWidth, trackingScale)
+        val trackingHeight = scaledTrackingDimension(planeHeight, trackingScale)
+        val configuredSpacing = max(
+            hwmfPrefilter.temporalGraphTileSpacing,
+            flowGridSpacing * MIN_TEMPORAL_GRAPH_SPACING_MULTIPLIER,
+        )
+        val budgetSpacing = kotlin.math.ceil(
+            kotlin.math.sqrt(
+                planeWidth.toDouble() * planeHeight.toDouble() / MAX_TEMPORAL_GRAPH_TILES,
+            ),
+        ).toInt()
+        val seedTileSpacing = roundUpToMultiple(
+            max(configuredSpacing, budgetSpacing),
+            flowGridSpacing,
+        )
+        val seedGridWidth = (planeWidth + seedTileSpacing - 1) / seedTileSpacing
+        val seedGridHeight = (planeHeight + seedTileSpacing - 1) / seedTileSpacing
+        return RadianceLongTrackingSeedResources(
+            anchorTrackingTexture = createTexture2D(
+                trackingWidth,
+                trackingHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_LINEAR,
+            ),
+            longTrackingTexture = createTexture2D(
+                trackingWidth,
+                trackingHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_LINEAR,
+            ),
+            forwardSeedTexture = createTexture2D(
+                seedGridWidth,
+                seedGridHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_LINEAR,
+            ),
+            reverseSeedTexture = createTexture2D(
+                seedGridWidth,
+                seedGridHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_LINEAR,
+            ),
+            trackingWidth = trackingWidth,
+            trackingHeight = trackingHeight,
+            trackingScale = trackingScale,
+            seedGridWidth = seedGridWidth,
+            seedGridHeight = seedGridHeight,
+            seedTileSpacing = seedTileSpacing,
+        )
+    }
+
+    private fun buildRadianceLongTrackingSeeds(
+        frameIndex: Int,
+        anchor: RawStackFrame,
+        longFrame: RawStackFrame,
+        resources: RadianceLongTrackingSeedResources,
+    ) {
+        val trackingLevel = TextureLevel(
+            resources.anchorTrackingTexture,
+            resources.trackingWidth,
+            resources.trackingHeight,
+        )
+        val longTrackingLevel = TextureLevel(
+            resources.longTrackingTexture,
+            resources.trackingWidth,
+            resources.trackingHeight,
+        )
+        val trackingWindow = max(
+            hwmfPrefilter.alignWindowSize,
+            resources.trackingScale * MIN_TEMPORAL_WINDOW_LEVEL_PIXELS,
+        )
+        drawAlignment(
+            reference = trackingLevel,
+            current = longTrackingLevel,
+            levelScale = resources.trackingScale,
+            outputTexture = resources.forwardSeedTexture,
+            outputGridWidth = resources.seedGridWidth,
+            outputGridHeight = resources.seedGridHeight,
+            outputTileSpacing = resources.seedTileSpacing,
+            preAlignment = relativePreAlignment(anchor, longFrame),
+            alignWindowSize = trackingWindow,
+            label = "Radiance long tracking anchor-to-source $frameIndex",
+        )
+        drawAlignment(
+            reference = longTrackingLevel,
+            current = trackingLevel,
+            levelScale = resources.trackingScale,
+            outputTexture = resources.reverseSeedTexture,
+            outputGridWidth = resources.seedGridWidth,
+            outputGridHeight = resources.seedGridHeight,
+            outputTileSpacing = resources.seedTileSpacing,
+            preAlignment = relativePreAlignment(longFrame, anchor),
+            alignWindowSize = trackingWindow,
+            label = "Radiance long tracking source-to-anchor $frameIndex",
+        )
+        val (forward, reverse) = readFlowTextures(
+            textures = listOf(resources.forwardSeedTexture, resources.reverseSeedTexture),
+            textureWidth = resources.seedGridWidth,
+            textureHeight = resources.seedGridHeight,
+            label = "Radiance long tracking seeds $frameIndex",
+        )
+        val confidenceThreshold = hwmfPrefilter.temporalGraphMinimumSeedConfidence
+            .coerceIn(0f, 1f)
+        fun supported(values: FloatArray): Int {
+            var count = 0
+            var offset = 3
+            while (offset < values.size) {
+                if (values[offset].isFinite() && values[offset] >= confidenceThreshold) count++
+                offset += 4
+            }
+            return count
+        }
+        PLog.i(
+            TAG,
+            "Radiance long tracking seed frame=$frameIndex " +
+                "scale=${resources.trackingScale} grid=${resources.seedGridWidth}x" +
+                "${resources.seedGridHeight} supported=${supported(forward)}/${supported(reverse)} " +
+                "requiredConfidence=$confidenceThreshold",
+        )
+    }
+
+    private fun releaseRadianceLongTrackingSeedResources(
+        resources: RadianceLongTrackingSeedResources,
+    ) {
+        deleteTexture(resources.anchorTrackingTexture)
+        deleteTexture(resources.longTrackingTexture)
+        deleteTexture(resources.forwardSeedTexture)
+        deleteTexture(resources.reverseSeedTexture)
     }
 
     private fun buildTemporalGraphSeeds(
@@ -2167,6 +2383,22 @@ class GlesRawStacker(
             translationYPlanePx = to.translationYPlanePx - from.translationYPlanePx,
             rotationDegrees = to.rotationDegrees - from.rotationDegrees,
             confidence = minOf(from.confidence, to.confidence),
+        )
+    }
+
+    private fun relativePreAlignment(
+        from: RawStackFrame,
+        to: RawStackFrame,
+    ): RawFramePreAlignment? {
+        val fromAlignment = from.preAlignmentToReference ?: return null
+        val toAlignment = to.preAlignmentToReference ?: return null
+        return RawFramePreAlignment(
+            translationXPlanePx =
+                toAlignment.translationXPlanePx - fromAlignment.translationXPlanePx,
+            translationYPlanePx =
+                toAlignment.translationYPlanePx - fromAlignment.translationYPlanePx,
+            rotationDegrees = toAlignment.rotationDegrees - fromAlignment.rotationDegrees,
+            confidence = minOf(fromAlignment.confidence, toAlignment.confidence),
         )
     }
 
@@ -2371,6 +2603,10 @@ class GlesRawStacker(
             graphSeedGridWidth = temporalGraphSeeds?.gridWidth ?: 1,
             graphSeedGridHeight = temporalGraphSeeds?.gridHeight ?: 1,
             graphSeedTileSpacing = temporalGraphSeeds?.tileSpacing ?: 1,
+            // Frame admission is based on the graph-consistent seed summary. Preserve the same
+            // evidence in the cached fine flow: a noisy high-resolution patch may be unable to
+            // refine a valid graph displacement, which must not erase its path confidence.
+            retainGraphSeedEvidence = graphSeedTexture != null,
             label = "alignCurrentToReference",
         )
     }
@@ -2388,6 +2624,7 @@ class GlesRawStacker(
         graphSeedGridWidth: Int = 1,
         graphSeedGridHeight: Int = 1,
         graphSeedTileSpacing: Int = 1,
+        retainGraphSeedEvidence: Boolean = false,
         alignWindowSize: Int = hwmfPrefilter.alignWindowSize,
         label: String,
     ) {
@@ -2446,6 +2683,20 @@ class GlesRawStacker(
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(alignProgram, "uGraphSeedConfidenceMin"),
             hwmfPrefilter.temporalGraphMinimumSeedConfidence,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(alignProgram, "uRetainGraphSeedEvidence"),
+            if (retainGraphSeedEvidence) 1 else 0,
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(alignProgram, "uSeedRefinementConfidenceStart"),
+            radianceFusionTuning.longFineRefinementConfidenceStart.coerceAtLeast(0f),
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(alignProgram, "uSeedRefinementConfidenceFull"),
+            radianceFusionTuning.longFineRefinementConfidenceFull.coerceAtLeast(
+                radianceFusionTuning.longFineRefinementConfidenceStart + 1e-3f,
+            ),
         )
         GLES31.glUniform1i(
             GLES31.glGetUniformLocation(alignProgram, "uGraphRefineSearchRadius"),
@@ -2791,51 +3042,152 @@ class GlesRawStacker(
             }
             runCatching {
                 val anchor = frames[anchorFrameIndex]
+                val photonExposureRatio = if (
+                    anchor.exposureTimeNs > 0L && plan.longFrame.exposureTimeNs > 0L
+                ) {
+                    plan.longFrame.exposureTimeNs.toFloat() / anchor.exposureTimeNs.toFloat()
+                } else {
+                    Float.NaN
+                }
+                val anchorNoiseModel = frameNoiseModel(anchor)
+                val longNoiseModel = frameNoiseModel(plan.longFrame)
+                val trackingSeeds = createRadianceLongTrackingSeedResources()
                 uploadRawTexture(anchor.image, curRaw, "Radiance long anchor")
-                buildProxy(curRaw, refProxy, "Radiance long anchor")
+                val anchorObservability = summarizeRadianceLongObservabilityInput(
+                    frameIndex = plan.sourceFrameIndex,
+                    side = "anchor",
+                    rawTexture = curRaw,
+                    exposureScale = 1f,
+                    noiseModel = anchorNoiseModel,
+                    exposureTimeNs = anchor.exposureTimeNs,
+                    sensitivityIso = anchor.sensitivityIso,
+                )
+                buildTrackingProxy(
+                    rawTexture = curRaw,
+                    outputTexture = trackingSeeds.anchorTrackingTexture,
+                    outputWidth = trackingSeeds.trackingWidth,
+                    outputHeight = trackingSeeds.trackingHeight,
+                    levelScale = trackingSeeds.trackingScale,
+                    exposureScale = 1f,
+                    label = "Radiance long anchor ${plan.sourceFrameIndex}",
+                )
+                buildProxy(
+                    curRaw,
+                    refProxy,
+                    "Radiance long anchor",
+                    noiseModel = anchorNoiseModel,
+                    useRegionalObservability = true,
+                )
                 buildPyramid(referencePyramid)
 
                 uploadRawTexture(plan.longFrame.image, curRaw, "Radiance long source")
+                val longObservability = summarizeRadianceLongObservabilityInput(
+                    frameIndex = plan.sourceFrameIndex,
+                    side = "long",
+                    rawTexture = curRaw,
+                    exposureScale = plan.exposureScale,
+                    noiseModel = longNoiseModel,
+                    exposureTimeNs = plan.longFrame.exposureTimeNs,
+                    sensitivityIso = plan.longFrame.sensitivityIso,
+                )
+                buildTrackingProxy(
+                    rawTexture = curRaw,
+                    outputTexture = trackingSeeds.longTrackingTexture,
+                    outputWidth = trackingSeeds.trackingWidth,
+                    outputHeight = trackingSeeds.trackingHeight,
+                    levelScale = trackingSeeds.trackingScale,
+                    exposureScale = plan.exposureScale,
+                    label = "Radiance long source ${plan.sourceFrameIndex}",
+                )
+                val limitingSide = when {
+                    anchorObservability.observableTileCount <
+                        longObservability.observableTileCount -> "ANCHOR"
+                    longObservability.observableTileCount <
+                        anchorObservability.observableTileCount -> "LONG"
+                    else -> "BALANCED"
+                }
+                PLog.i(
+                    TAG,
+                    "Radiance long observability comparison frame=${plan.sourceFrameIndex} " +
+                        "limitingSide=$limitingSide " +
+                        "observableTiles=${anchorObservability.observableTileCount}/" +
+                        "${anchorObservability.totalTileCount}:" +
+                        "${longObservability.observableTileCount}/" +
+                        "${longObservability.totalTileCount} " +
+                        "meanSignal=${anchorObservability.meanSignal}/" +
+                        "${longObservability.meanSignal} " +
+                        "meanDetail=${anchorObservability.meanDetail}/" +
+                        "${longObservability.meanDetail} " +
+                        "meanNoiseSigma=${anchorObservability.meanNoiseSigma}/" +
+                        "${longObservability.meanNoiseSigma} " +
+                        "meanDetailSnr=${anchorObservability.meanDetailSnr}/" +
+                        "${longObservability.meanDetailSnr} " +
+                        "meanAlignmentObservability=" +
+                        "${anchorObservability.meanAlignmentObservability}/" +
+                        "${longObservability.meanAlignmentObservability} " +
+                        "photonRatio=$photonExposureRatio",
+                )
                 buildProxy(
                     curRaw,
                     curProxy,
                     "Radiance long exposure-normalized",
                     exposureScale = plan.exposureScale,
-                    noiseModel = frameNoiseModel(plan.longFrame),
+                    noiseModel = longNoiseModel,
+                    useRegionalObservability = true,
                 )
                 buildPyramid(currentPyramid)
+                buildRadianceLongTrackingSeeds(
+                    frameIndex = plan.sourceFrameIndex,
+                    anchor = anchor,
+                    longFrame = plan.longFrame,
+                    resources = trackingSeeds,
+                )
 
                 val longAlignLevel = alignLevel.coerceAtMost(referencePyramid.lastIndex)
-                drawAlignment(
-                    reference = referencePyramid[longAlignLevel],
-                    current = currentPyramid[longAlignLevel],
-                    levelScale = 1 shl longAlignLevel,
-                    outputTexture = flowTexture,
-                    outputGridWidth = gridWidth,
-                    outputGridHeight = gridHeight,
-                    outputTileSpacing = flowGridSpacing,
-                    preAlignment = null,
-                    label = "Radiance long anchor-to-source",
-                )
-                refineFlow(
-                    referenceProxyTexture = refProxy,
-                    currentProxyTexture = curProxy,
-                    targetFlowTexture = flowTexture,
-                    scratchFlowTexture = flowScratchTexture,
-                )
-                smoothFlow(flowTexture, flowScratchTexture)
+                try {
+                    drawAlignment(
+                        reference = referencePyramid[longAlignLevel],
+                        current = currentPyramid[longAlignLevel],
+                        levelScale = 1 shl longAlignLevel,
+                        outputTexture = flowTexture,
+                        outputGridWidth = gridWidth,
+                        outputGridHeight = gridHeight,
+                        outputTileSpacing = flowGridSpacing,
+                        preAlignment = null,
+                        graphSeedTexture = trackingSeeds.forwardSeedTexture,
+                        graphSeedGridWidth = trackingSeeds.seedGridWidth,
+                        graphSeedGridHeight = trackingSeeds.seedGridHeight,
+                        graphSeedTileSpacing = trackingSeeds.seedTileSpacing,
+                        retainGraphSeedEvidence = true,
+                        label = "Radiance long anchor-to-source",
+                    )
+                    refineFlow(
+                        referenceProxyTexture = refProxy,
+                        currentProxyTexture = curProxy,
+                        targetFlowTexture = flowTexture,
+                        scratchFlowTexture = flowScratchTexture,
+                    )
+                    smoothFlow(flowTexture, flowScratchTexture)
 
-                drawAlignment(
-                    reference = currentPyramid[longAlignLevel],
-                    current = referencePyramid[longAlignLevel],
-                    levelScale = 1 shl longAlignLevel,
-                    outputTexture = radianceHighlightReverseFlowTexture,
-                    outputGridWidth = gridWidth,
-                    outputGridHeight = gridHeight,
-                    outputTileSpacing = flowGridSpacing,
-                    preAlignment = null,
-                    label = "Radiance long source-to-anchor",
-                )
+                    drawAlignment(
+                        reference = currentPyramid[longAlignLevel],
+                        current = referencePyramid[longAlignLevel],
+                        levelScale = 1 shl longAlignLevel,
+                        outputTexture = radianceHighlightReverseFlowTexture,
+                        outputGridWidth = gridWidth,
+                        outputGridHeight = gridHeight,
+                        outputTileSpacing = flowGridSpacing,
+                        preAlignment = null,
+                        graphSeedTexture = trackingSeeds.reverseSeedTexture,
+                        graphSeedGridWidth = trackingSeeds.seedGridWidth,
+                        graphSeedGridHeight = trackingSeeds.seedGridHeight,
+                        graphSeedTileSpacing = trackingSeeds.seedTileSpacing,
+                        retainGraphSeedEvidence = true,
+                        label = "Radiance long source-to-anchor",
+                    )
+                } finally {
+                    releaseRadianceLongTrackingSeedResources(trackingSeeds)
+                }
                 refineFlow(
                     referenceProxyTexture = curProxy,
                     currentProxyTexture = refProxy,
@@ -2843,6 +3195,7 @@ class GlesRawStacker(
                     scratchFlowTexture = flowScratchTexture,
                 )
                 smoothFlow(radianceHighlightReverseFlowTexture, flowScratchTexture)
+                logRadianceLongFineFlowEvidence(plan.sourceFrameIndex)
                 validateRadianceHighlightFlow(
                     consistencyStartPx = radianceFusionTuning.longFlowFbConsistencyStartPx,
                     consistencyFullPx = radianceFusionTuning.longFlowFbConsistencyFullPx,
@@ -2869,6 +3222,7 @@ class GlesRawStacker(
                     sourceFlowTexture = flowTexture,
                     stage = "direct",
                     enforceAdmission = true,
+                    photonExposureRatio = photonExposureRatio,
                 ) ?: return@runCatching null
 
                 if (!anchorIsReference) {
@@ -2880,35 +3234,61 @@ class GlesRawStacker(
                         "Radiance long anchor flow copy",
                     )
                     uploadRawTexture(frames.first().image, curRaw, "Radiance long reference guide")
-                    buildProxy(curRaw, refProxy, "Radiance long reference guide")
+                    buildProxy(
+                        curRaw,
+                        refProxy,
+                        "Radiance long reference guide",
+                        noiseModel = frameNoiseModel(frames.first()),
+                        useRegionalObservability = true,
+                    )
                     propagateRadianceHighlightFlow(
                         targetTexture = radianceHighlightAnchorFlowTexture,
                         guideProxyTexture = refProxy,
                         label = "long-reference-to-anchor",
                     )
                 }
-                composeRadianceHighlightFlow(anchorIsReference)
-                computeRadianceLongEligibility(
+                logRadianceLongCompositionConfidence(
                     frameIndex = plan.sourceFrameIndex,
-                    sourceFlowTexture = radianceHighlightComposedFlowTexture,
-                    stage = "composed",
+                    anchorIsReference = anchorIsReference,
                 )
-                val composedSupport = checkNotNull(
-                    summarizeRadianceLongFlow(
-                        plan = plan,
-                        anchorFrameIndex = anchorFrameIndex,
-                        sourceFlowTexture = radianceHighlightComposedFlowTexture,
-                        stage = "composed",
-                        enforceAdmission = false,
-                    ),
+                composeRadianceHighlightFlow(
+                    anchorIsReference = anchorIsReference,
+                    useBottleneckConfidence = true,
+                    confidenceStart = radianceFusionTuning.longFlowMinimumConfidence,
+                    confidenceFull = radianceFusionTuning.longFlowFullConfidence,
                 )
-
                 copyRgbaTexture(
                     radianceHighlightComposedFlowTexture,
                     flowTexture,
                     gridWidth,
                     gridHeight,
-                    "Radiance long composed flow copy",
+                    "Radiance long composed flow refinement seed",
+                )
+                // The temporal graph keeps the hand-shake displacement small by composing
+                // through the nearest normal anchor. Refine that composed result once more in
+                // the actual output reference domain so the cached warp does not retain the
+                // residual error of two independently estimated edges.
+                refineFlow(
+                    referenceProxyTexture = refProxy,
+                    currentProxyTexture = curProxy,
+                    targetFlowTexture = flowTexture,
+                    scratchFlowTexture = flowScratchTexture,
+                )
+                smoothFlow(flowTexture, flowScratchTexture)
+                computeRadianceLongEligibility(
+                    frameIndex = plan.sourceFrameIndex,
+                    sourceFlowTexture = flowTexture,
+                    stage = "composed-refined",
+                )
+                val composedSupport = checkNotNull(
+                    summarizeRadianceLongFlow(
+                        plan = plan,
+                        anchorFrameIndex = anchorFrameIndex,
+                        sourceFlowTexture = flowTexture,
+                        stage = "composed-refined",
+                        enforceAdmission = false,
+                        photonExposureRatio = photonExposureRatio,
+                    ),
                 )
                 computeRobustness()
                 computeTileMask()
@@ -2958,13 +3338,12 @@ class GlesRawStacker(
                     flowTexture = cachedFlow,
                     robustnessTexture = cachedRobustness,
                     tileMaskTexture = cachedTileMask,
-                    // The validated seed coverage is an admission gate, not a merge-weight
-                    // multiplier. Once a bracket frame has enough spatially distributed
-                    // correspondences, propagated flow, robustness and the tile mask own local
-                    // rejection. Attenuating the whole frame again made accepted long frames
-                    // enter with effectively zero weight.
+                    // Admission is categorical and requires validated flow. Once admitted,
+                    // robustness and the tile mask own local rejection; sparse seed coverage
+                    // must not attenuate the whole frame a second time.
                     registrationWeight = directSupport.frameWeight,
                     detailWeight = directSupport.frameWeight,
+                    precisionWeightCap = directSupport.precisionWeightCap,
                     minFlowXPlanePx = composedSupport.minFlowXPlanePx,
                     maxFlowXPlanePx = composedSupport.maxFlowXPlanePx,
                     minFlowYPlanePx = composedSupport.minFlowYPlanePx,
@@ -2982,12 +3361,200 @@ class GlesRawStacker(
         }
     }
 
+    private fun logRadianceLongFineFlowEvidence(frameIndex: Int) {
+        val (forwardValues, reverseValues) = readFlowTextures(
+            textures = listOf(flowTexture, radianceHighlightReverseFlowTexture),
+            textureWidth = gridWidth,
+            textureHeight = gridHeight,
+            label = "Radiance long fine flow evidence $frameIndex",
+        )
+        val confidenceThreshold = radianceFusionTuning.longFlowMinimumConfidence
+            .coerceIn(0f, 1f)
+        fun summarize(values: FloatArray): String {
+            val confidenceValues = FloatArray(values.size / 4)
+            var confidenceCount = 0
+            var confidentTiles = 0
+            var confidenceSum = 0f
+            var offset = 3
+            while (offset < values.size) {
+                val confidence = values[offset]
+                if (confidence.isFinite()) {
+                    confidenceValues[confidenceCount++] = confidence
+                    confidenceSum += confidence
+                    if (confidence >= confidenceThreshold) confidentTiles++
+                }
+                offset += 4
+            }
+            val sorted = confidenceValues.copyOf(confidenceCount).apply { sort() }
+            fun percentile(fraction: Float): Float {
+                if (sorted.isEmpty()) return 0f
+                val index = (sorted.lastIndex * fraction.coerceIn(0f, 1f)).toInt()
+                return sorted[index]
+            }
+            return "$confidentTiles/$confidenceCount," +
+                "mean=${confidenceSum / confidenceCount.coerceAtLeast(1)}," +
+                "p50=${percentile(0.50f)},p90=${percentile(0.90f)}"
+        }
+        PLog.i(
+            TAG,
+            "Radiance long fine flow evidence frame=$frameIndex " +
+                "forward=${summarize(forwardValues)} reverse=${summarize(reverseValues)} " +
+                "requiredConfidence=$confidenceThreshold",
+        )
+    }
+
+    /**
+     * Diagnoses the confidence carried by each edge before reference -> anchor -> long
+     * composition. The composed path samples the second edge at the warped anchor position, so
+     * independent confidence histograms cannot reveal whether the two supported regions overlap.
+     * This mirrors that sampling on the CPU and reports the actual bottleneck presented to the
+     * composition shader without changing admission or fusion behavior.
+     */
+    private fun logRadianceLongCompositionConfidence(
+        frameIndex: Int,
+        anchorIsReference: Boolean,
+    ) {
+        val (referenceToAnchorValues, anchorToLongValues) = readFlowTextures(
+            textures = listOf(
+                radianceHighlightAnchorFlowTexture,
+                flowTexture,
+            ),
+            textureWidth = gridWidth,
+            textureHeight = gridHeight,
+            label = "Radiance long composition confidence $frameIndex",
+        )
+        val confidenceStart = radianceFusionTuning.longFlowMinimumConfidence
+            .coerceIn(0f, 0.999f)
+        val confidenceFull = radianceFusionTuning.longFlowFullConfidence.coerceIn(
+            confidenceStart + 1e-3f,
+            1f,
+        )
+        val pathThreshold = radianceFusionTuning.longFlowMinimumConfidence
+            .coerceIn(0f, 1f)
+        val totalTiles = (gridWidth * gridHeight).coerceAtLeast(1)
+        val referenceEdgeConfidences = FloatArray(totalTiles)
+        val longEdgeConfidences = FloatArray(totalTiles)
+        val pathConfidences = FloatArray(totalTiles)
+        var insideTiles = 0
+        var referenceEdgeSupported = 0
+        var longEdgeSupported = 0
+        var rawOverlapSupported = 0
+        var normalizedPathSupported = 0
+
+        fun alphaAt(values: FloatArray, planeX: Float, planeY: Float): Float {
+            val gridX = (planeX / flowGridSpacing.toFloat() - 0.5f)
+                .coerceIn(0f, (gridWidth - 1).coerceAtLeast(0).toFloat())
+            val gridY = (planeY / flowGridSpacing.toFloat() - 0.5f)
+                .coerceIn(0f, (gridHeight - 1).coerceAtLeast(0).toFloat())
+            val x0 = gridX.toInt()
+            val y0 = gridY.toInt()
+            val x1 = (x0 + 1).coerceAtMost(gridWidth - 1)
+            val y1 = (y0 + 1).coerceAtMost(gridHeight - 1)
+            val tx = gridX - x0
+            val ty = gridY - y0
+            fun alpha(x: Int, y: Int): Float {
+                return values[(y * gridWidth + x) * 4 + 3].takeIf { it.isFinite() } ?: 0f
+            }
+            val top = alpha(x0, y0) * (1f - tx) + alpha(x1, y0) * tx
+            val bottom = alpha(x0, y1) * (1f - tx) + alpha(x1, y1) * tx
+            return top * (1f - ty) + bottom * ty
+        }
+
+        for (tileIndex in 0 until totalTiles) {
+            val tileX = tileIndex % gridWidth
+            val tileY = tileIndex / gridWidth
+            val offset = tileIndex * 4
+            val referenceEdgeConfidence = if (anchorIsReference) {
+                1f
+            } else {
+                referenceToAnchorValues[offset + 3].takeIf { it.isFinite() } ?: 0f
+            }
+            val referenceFlowX = if (anchorIsReference) {
+                0f
+            } else {
+                referenceToAnchorValues[offset].takeIf { it.isFinite() } ?: 0f
+            }
+            val referenceFlowY = if (anchorIsReference) {
+                0f
+            } else {
+                referenceToAnchorValues[offset + 1].takeIf { it.isFinite() } ?: 0f
+            }
+            val referenceX = minOf(
+                tileX * flowGridSpacing + flowGridSpacing / 2,
+                planeWidth - 1,
+            ).toFloat()
+            val referenceY = minOf(
+                tileY * flowGridSpacing + flowGridSpacing / 2,
+                planeHeight - 1,
+            ).toFloat()
+            val anchorX = referenceX + referenceFlowX
+            val anchorY = referenceY + referenceFlowY
+            val inside = anchorX >= 0f && anchorY >= 0f &&
+                anchorX <= (planeWidth - 1).toFloat() &&
+                anchorY <= (planeHeight - 1).toFloat()
+            val longEdgeConfidence = if (inside) {
+                alphaAt(anchorToLongValues, anchorX, anchorY)
+            } else {
+                0f
+            }
+            val normalizedReferenceConfidence = if (anchorIsReference) {
+                1f
+            } else {
+                smoothStep(confidenceStart, confidenceFull, referenceEdgeConfidence)
+            }
+            val normalizedLongConfidence = smoothStep(
+                confidenceStart,
+                confidenceFull,
+                longEdgeConfidence,
+            )
+            val pathConfidence = if (inside) {
+                minOf(normalizedReferenceConfidence, normalizedLongConfidence)
+            } else {
+                0f
+            }
+            referenceEdgeConfidences[tileIndex] = referenceEdgeConfidence
+            longEdgeConfidences[tileIndex] = longEdgeConfidence
+            pathConfidences[tileIndex] = pathConfidence
+            if (inside) insideTiles++
+            if (referenceEdgeConfidence >= confidenceStart) referenceEdgeSupported++
+            if (longEdgeConfidence >= confidenceStart) longEdgeSupported++
+            if (referenceEdgeConfidence >= confidenceStart &&
+                longEdgeConfidence >= confidenceStart
+            ) {
+                rawOverlapSupported++
+            }
+            if (pathConfidence >= pathThreshold) normalizedPathSupported++
+        }
+
+        fun summarize(values: FloatArray): String {
+            val positive = values.filter { it.isFinite() && it > 0f }.sorted()
+            fun percentile(fraction: Float): Float {
+                if (positive.isEmpty()) return 0f
+                return positive[(positive.lastIndex * fraction.coerceIn(0f, 1f)).toInt()]
+            }
+            return "positive=${positive.size}/${values.size}," +
+                "p50=${percentile(0.50f)},p90=${percentile(0.90f)}," +
+                "max=${positive.lastOrNull() ?: 0f}"
+        }
+        PLog.i(
+            TAG,
+            "Radiance long composition confidence frame=$frameIndex " +
+                "anchorIsReference=$anchorIsReference inside=$insideTiles/$totalTiles " +
+                "referenceEdge=$referenceEdgeSupported/${summarize(referenceEdgeConfidences)} " +
+                "longEdge=$longEdgeSupported/${summarize(longEdgeConfidences)} " +
+                "rawOverlap=$rawOverlapSupported path=$normalizedPathSupported/" +
+                summarize(pathConfidences) + " confidenceRange=$confidenceStart:$confidenceFull " +
+                "requiredPath=$pathThreshold",
+        )
+    }
+
     private fun summarizeRadianceLongFlow(
         plan: RawRadianceLongFramePlan,
         anchorFrameIndex: Int,
         sourceFlowTexture: Int,
         stage: String,
         enforceAdmission: Boolean,
+        photonExposureRatio: Float,
     ): RadianceFlowSupport? {
         val (values, eligibilityValues) = readFlowTextures(
             textures = listOf(
@@ -3004,6 +3571,8 @@ class GlesRawStacker(
             .coerceIn(0f, 1f)
         var validTiles = 0
         var eligibleTiles = 0
+        var referenceObservableTiles = 0
+        var currentObservableTiles = 0
         var minX = 0f
         var maxX = 0f
         var minY = 0f
@@ -3011,8 +3580,8 @@ class GlesRawStacker(
         val quadrants = BooleanArray(4)
         val eligibleTilesByQuadrant = IntArray(4)
         var meanValiditySum = 0f
-        var meanObservabilitySum = 0f
-        var insideFractionSum = 0f
+        var meanReferenceObservabilitySum = 0f
+        var meanCurrentObservabilitySum = 0f
         var diagnosticTileCount = 0
         var offset = 0
         while (offset + 3 < values.size) {
@@ -3022,12 +3591,14 @@ class GlesRawStacker(
             val confidence = values[offset + 3]
             val eligibility = eligibilityValues[offset]
             val validity = eligibilityValues[offset + 1]
-            val observability = eligibilityValues[offset + 2]
-            val insideFraction = eligibilityValues[offset + 3]
-            if (validity.isFinite() && observability.isFinite() && insideFraction.isFinite()) {
+            val referenceObservability = eligibilityValues[offset + 2]
+            val currentObservability = eligibilityValues[offset + 3]
+            if (validity.isFinite() && referenceObservability.isFinite() &&
+                currentObservability.isFinite()
+            ) {
                 meanValiditySum += validity
-                meanObservabilitySum += observability
-                insideFractionSum += insideFraction
+                meanReferenceObservabilitySum += referenceObservability
+                meanCurrentObservabilitySum += currentObservability
                 diagnosticTileCount++
             }
             val tileX = tileIndex % gridWidth
@@ -3035,13 +3606,21 @@ class GlesRawStacker(
             val quadrant = (if (tileY >= gridHeight / 2) 2 else 0) +
                 if (tileX >= gridWidth / 2) 1 else 0
             val eligible = eligibility.isFinite() && eligibility >= eligibilityThreshold
+            if (referenceObservability.isFinite() &&
+                referenceObservability >= eligibilityThreshold
+            ) {
+                referenceObservableTiles++
+            }
+            if (currentObservability.isFinite() &&
+                currentObservability >= eligibilityThreshold
+            ) {
+                currentObservableTiles++
+            }
             if (eligible) {
                 eligibleTiles++
                 eligibleTilesByQuadrant[quadrant]++
-                // Source-region bounds must cover every potentially usable warped sample. Flow
-                // confidence is intentionally not part of this bound: after direct admission,
-                // composed confidence remains a soft, pixel-local signal rather than a second
-                // hard frame gate.
+                // Bounds cover every potentially usable warped sample. Confidence is not part
+                // of the bound because it remains a soft, pixel-local rejection after admission.
                 if (flowX.isFinite() && flowY.isFinite()) {
                     minX = minOf(minX, flowX)
                     maxX = maxOf(maxX, flowX)
@@ -3061,8 +3640,8 @@ class GlesRawStacker(
         val validFraction = validTiles.toFloat() / totalTiles
         val diagnosticDenominator = diagnosticTileCount.coerceAtLeast(1).toFloat()
         val meanValidity = meanValiditySum / diagnosticDenominator
-        val meanObservability = meanObservabilitySum / diagnosticDenominator
-        val meanInsideFraction = insideFractionSum / diagnosticDenominator
+        val meanReferenceObservability = meanReferenceObservabilitySum / diagnosticDenominator
+        val meanCurrentObservability = meanCurrentObservabilitySum / diagnosticDenominator
         val coveredQuadrants = quadrants.count { it }
         val minimumEligibleTilesPerQuadrant =
             radianceFusionTuning.longEligibilityMinimumTilesPerQuadrant.coerceAtLeast(1)
@@ -3070,13 +3649,20 @@ class GlesRawStacker(
             tileCount >= minimumEligibleTilesPerQuadrant
         }
         val admission = planRadianceLongAdmission(
-            validTileCount = validTiles,
-            coveredQuadrants = coveredQuadrants,
-            eligibleTileCount = eligibleTiles,
-            eligibleQuadrants = eligibleQuadrants,
-            minimumValidTiles = radianceFusionTuning.longFlowMinimumValidTiles,
-            minimumQuadrants = radianceFusionTuning.longFlowMinimumQuadrants,
-            minimumEligibleCoverage = radianceFusionTuning.longFlowMinimumEligibleCoverage,
+            evidence = RawRadianceLongAdmissionEvidence(
+                validTileCount = validTiles,
+                coveredQuadrants = coveredQuadrants,
+                eligibleTileCount = eligibleTiles,
+                eligibleQuadrants = eligibleQuadrants,
+                referenceObservableTileCount = referenceObservableTiles,
+                currentObservableTileCount = currentObservableTiles,
+            ),
+            requirements = RawRadianceLongAdmissionRequirements(
+                minimumValidTiles = radianceFusionTuning.longFlowMinimumValidTiles,
+                minimumQuadrants = radianceFusionTuning.longFlowMinimumQuadrants,
+                minimumEligibleCoverage = radianceFusionTuning.longFlowMinimumEligibleCoverage,
+                validatedPrecisionWeightCap = radianceFusionTuning.longPrecisionWeightCap,
+            ),
         )
         if (enforceAdmission && admission.frameWeight <= 0f) {
             PLog.w(
@@ -3084,10 +3670,13 @@ class GlesRawStacker(
                 "Radiance long $stage alignment rejected frame=${plan.sourceFrameIndex} " +
                     "coverage=$validFraction validTiles=$validTiles/$totalTiles " +
                     "eligibleTiles=$eligibleTiles eligibleCoverage=${admission.eligibleCoverage} " +
-                    "meanValidity=$meanValidity meanObservability=$meanObservability " +
-                    "meanInside=$meanInsideFraction " +
+                    "observableTiles=$referenceObservableTiles/$currentObservableTiles " +
+                    "meanValidity=$meanValidity " +
+                    "meanObservability=$meanReferenceObservability/$meanCurrentObservability " +
                     "quadrants=$coveredQuadrants/$eligibleQuadrants " +
                     "requiredQuadrants=${admission.requiredQuadrants} " +
+                    "photonRatio=$photonExposureRatio admissionMode=${admission.mode} " +
+                    "rejectionReasons=${admission.rejectionReasons} " +
                     "anchor=$anchorFrameIndex",
             )
             return null
@@ -3102,11 +3691,15 @@ class GlesRawStacker(
                 "actualEv=${plan.exposureDeltaEv} scale=${plan.exposureScale} " +
                 "coverage=$validFraction validTiles=$validTiles/$totalTiles " +
                 "eligibleTiles=$eligibleTiles eligibleCoverage=${admission.eligibleCoverage} " +
-                "meanValidity=$meanValidity meanObservability=$meanObservability " +
-                "meanInside=$meanInsideFraction " +
+                "observableTiles=$referenceObservableTiles/$currentObservableTiles " +
+                "meanValidity=$meanValidity " +
+                "meanObservability=$meanReferenceObservability/$meanCurrentObservability " +
                 "quadrants=$coveredQuadrants/$eligibleQuadrants " +
                 "requiredQuadrants=${admission.requiredQuadrants} " +
                 "anchor=$anchorFrameIndex gateWeight=${admission.frameWeight} " +
+                "photonRatio=$photonExposureRatio admissionMode=${admission.mode} " +
+                "rejectionReasons=${admission.rejectionReasons} " +
+                "precisionCap=${admission.precisionWeightCap} " +
                 "admissionDomain=${if (enforceAdmission) stage else "direct"} " +
                 "flow=[$minX,$maxX]x[$minY,$maxY]",
         )
@@ -3118,12 +3711,147 @@ class GlesRawStacker(
             eligibleQuadrants = eligibleQuadrants,
             eligibleCoverage = admission.eligibleCoverage,
             requiredQuadrants = admission.requiredQuadrants,
+            admissionMode = admission.mode,
             frameWeight = admission.frameWeight,
+            precisionWeightCap = admission.precisionWeightCap,
             minFlowXPlanePx = minX,
             maxFlowXPlanePx = maxX,
             minFlowYPlanePx = minY,
             maxFlowYPlanePx = maxY,
         )
+    }
+
+    private fun summarizeRadianceLongObservabilityInput(
+        frameIndex: Int,
+        side: String,
+        rawTexture: Int,
+        exposureScale: Float,
+        noiseModel: RawNoiseModel,
+        exposureTimeNs: Long,
+        sensitivityIso: Int,
+    ): RadianceLongObservabilitySummary {
+        val program = radianceLongObservabilityDiagnosticProgram
+        check(program != 0)
+        bindFramebufferOutput(
+            flowScratchTexture,
+            "Radiance long $side observability diagnostic $frameIndex",
+        )
+        GLES30.glViewport(0, 0, gridWidth, gridHeight)
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uRaw", 0, rawTexture)
+        setCommonUniforms(program)
+        val shotNoise = noiseModel.normalizedShotNoiseForShader(cfaPattern)
+        val readNoise = noiseModel.normalizedReadNoiseForShader(cfaPattern)
+        GLES31.glUniform1fv(
+            uniformLocation(program, "uNoiseAlphaByChannel[0]"),
+            4,
+            shotNoise,
+            0,
+        )
+        GLES31.glUniform1fv(
+            uniformLocation(program, "uNoiseBetaByChannel[0]"),
+            4,
+            readNoise,
+            0,
+        )
+        GLES31.glUniform2i(uniformLocation(program, "uGridSize"), gridWidth, gridHeight)
+        GLES31.glUniform2i(uniformLocation(program, "uPlaneSize"), planeWidth, planeHeight)
+        GLES31.glUniform1i(uniformLocation(program, "uTileSize"), flowGridSpacing)
+        GLES31.glUniform1f(uniformLocation(program, "uExposureScale"), exposureScale)
+        GLES31.glUniform1f(
+            uniformLocation(program, "uRegionalStructureSnrStart"),
+            radianceFusionTuning.longRegionalStructureSnrStart.coerceAtLeast(0f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uRegionalStructureSnrFull"),
+            radianceFusionTuning.longRegionalStructureSnrFull.coerceAtLeast(
+                radianceFusionTuning.longRegionalStructureSnrStart + 1e-3f,
+            ),
+        )
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("Radiance long $side observability diagnostic $frameIndex")
+
+        val values = readFlowTexture(
+            texture = flowScratchTexture,
+            textureWidth = gridWidth,
+            textureHeight = gridHeight,
+            label = "Radiance long $side observability diagnostic $frameIndex",
+        )
+        var signalSum = 0f
+        var detailSum = 0f
+        var noiseSigmaSum = 0f
+        var alignmentObservabilitySum = 0f
+        var lowSignalTiles = 0
+        var observableTiles = 0
+        var stronglyObservableTiles = 0
+        var validTiles = 0
+        val alignmentObservabilityValues = FloatArray(values.size / 4)
+        var alignmentObservabilityCount = 0
+        val observabilityThreshold = radianceFusionTuning.longEligibilityMinimumSupport
+            .coerceIn(0f, 1f)
+        var offset = 0
+        while (offset + 3 < values.size) {
+            val signal = values[offset]
+            val detail = values[offset + 1]
+            val noiseSigma = values[offset + 2]
+            val alignmentObservability = values[offset + 3]
+            if (signal.isFinite() && detail.isFinite() && noiseSigma.isFinite() &&
+                alignmentObservability.isFinite()
+            ) {
+                signalSum += signal
+                detailSum += detail
+                noiseSigmaSum += noiseSigma
+                alignmentObservabilitySum += alignmentObservability
+                if (signal < 0.004f) lowSignalTiles++
+                if (alignmentObservability >= observabilityThreshold) observableTiles++
+                if (alignmentObservability >= 0.5f) stronglyObservableTiles++
+                alignmentObservabilityValues[alignmentObservabilityCount++] =
+                    alignmentObservability
+                validTiles++
+            }
+            offset += 4
+        }
+        val denominator = validTiles.coerceAtLeast(1).toFloat()
+        val meanDetail = detailSum / denominator
+        val meanNoiseSigma = noiseSigmaSum / denominator
+        val sortedObservability = alignmentObservabilityValues
+            .copyOf(alignmentObservabilityCount)
+            .apply { sort() }
+        fun percentile(fraction: Float): Float {
+            if (sortedObservability.isEmpty()) return 0f
+            val index = ((sortedObservability.lastIndex) * fraction.coerceIn(0f, 1f)).toInt()
+            return sortedObservability[index]
+        }
+        val summary = RadianceLongObservabilitySummary(
+            meanSignal = signalSum / denominator,
+            meanDetail = meanDetail,
+            meanNoiseSigma = meanNoiseSigma,
+            meanDetailSnr = meanDetail / meanNoiseSigma.coerceAtLeast(1e-10f),
+            meanAlignmentObservability = alignmentObservabilitySum / denominator,
+            observableTileCount = observableTiles,
+            totalTileCount = validTiles,
+        )
+        PLog.i(
+            TAG,
+            "Radiance long observability input frame=$frameIndex side=$side " +
+                "iso=$sensitivityIso exposureNs=$exposureTimeNs " +
+                "exposureScale=$exposureScale noiseSource=" +
+                "${if (noiseModel.hasValidCamera2Profile) "CAMERA2" else "FALLBACK"} " +
+                "meanSignal=${summary.meanSignal} " +
+                "meanDetail=${summary.meanDetail} " +
+                "meanNoiseSigma=${summary.meanNoiseSigma} " +
+                "meanDetailSnr=${summary.meanDetailSnr} " +
+                "meanAlignmentObservability=${summary.meanAlignmentObservability} " +
+                "observabilityP50=${percentile(0.50f)} " +
+                "observabilityP90=${percentile(0.90f)} " +
+                "lowSignalTiles=$lowSignalTiles/$validTiles " +
+                "observableTiles=$observableTiles/$validTiles " +
+                "observabilityThreshold=$observabilityThreshold " +
+                "stronglyObservableTiles=$stronglyObservableTiles/$validTiles " +
+                "noiseAlpha=${shotNoise.contentToString()} " +
+                "noiseBeta=${readNoise.contentToString()}",
+        )
+        return summary
     }
 
     private fun computeRadianceLongEligibility(
@@ -3241,9 +3969,19 @@ class GlesRawStacker(
         }
     }
 
-    private fun composeRadianceHighlightFlow(anchorIsReference: Boolean) {
+    private fun composeRadianceHighlightFlow(
+        anchorIsReference: Boolean,
+        useBottleneckConfidence: Boolean = false,
+        confidenceStart: Float = 0f,
+        confidenceFull: Float = 1f,
+    ) {
         val program = radianceHighlightComposeFlowProgram
         check(program != 0)
+        val safeConfidenceStart = confidenceStart.coerceIn(0f, 0.999f)
+        val safeConfidenceFull = confidenceFull.coerceIn(
+            safeConfidenceStart + 1e-3f,
+            1f,
+        )
         bindFramebufferOutput(
             radianceHighlightComposedFlowTexture,
             "Radiance highlight compose flow",
@@ -3258,6 +3996,18 @@ class GlesRawStacker(
         GLES31.glUniform1i(
             uniformLocation(program, "uAnchorIsReference"),
             if (anchorIsReference) 1 else 0,
+        )
+        GLES31.glUniform1i(
+            uniformLocation(program, "uUseBottleneckConfidence"),
+            if (useBottleneckConfidence) 1 else 0,
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uConfidenceStart"),
+            safeConfidenceStart,
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uConfidenceFull"),
+            safeConfidenceFull,
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         finishFramebufferPass("Radiance highlight compose flow")
@@ -4684,6 +5434,7 @@ class GlesRawStacker(
         detailWeight: Float,
         exposureScale: Float,
         isLongFrame: Boolean,
+        longPrecisionWeightCap: Float,
         referenceNoiseModel: RawNoiseModel,
         frameNoiseModel: RawNoiseModel,
         fusionStatsBuffer: Int,
@@ -4877,6 +5628,12 @@ class GlesRawStacker(
             uniformLocation(accumulateSuperResolutionProgram, "uSemanticEncoding"),
             if (radianceUsesVgnSemanticBackend) 1 else 0,
         )
+        GLES31.glUniform3f(
+            uniformLocation(accumulateSuperResolutionProgram, "uCalculationGains"),
+            demosaicCalculationWbGains[0],
+            1f,
+            demosaicCalculationWbGains[3],
+        )
         GLES31.glUniform1f(
             uniformLocation(accumulateSuperResolutionProgram, "uFrameWeight"),
             if (isReference) 1f else hwmfBlend.nonReferenceFrameWeight,
@@ -4904,11 +5661,11 @@ class GlesRawStacker(
                     !frameNoiseModel.hasValidCamera2Profile)
             ) {
                 minOf(
-                    radianceFusionTuning.longPrecisionWeightCap.coerceAtLeast(1f),
+                    longPrecisionWeightCap.coerceAtLeast(1f),
                     (1f / exposureScale.coerceAtLeast(1e-4f)).coerceAtLeast(1f),
                 )
             } else {
-                radianceFusionTuning.longPrecisionWeightCap.coerceAtLeast(1f)
+                longPrecisionWeightCap.coerceAtLeast(1f)
             },
         )
         GLES31.glUniform1f(
@@ -5558,13 +6315,20 @@ class GlesRawStacker(
             }
         }
         ensureRadianceTileResources(requiredRcdWidth, requiredRcdHeight)
+        val chromaPostprocessor = radianceVgnChromaPostprocessor
         val readbackAllocStart = System.currentTimeMillis()
-        val scratchBytes = radianceOutputTileWidth.toLong() * radianceOutputTileHeight.toLong() * 8L
-        val readbackScratch = LargeDirectBuffer.allocate(scratchBytes, "Radiance RGBA16 tile readback")
-            ?.order(ByteOrder.nativeOrder())
-            ?: throw IllegalStateException("Failed to allocate Radiance tile readback")
-        val readbackAllocMs = System.currentTimeMillis() - readbackAllocStart
-        val output = outputBuffer.apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
+        val readbackScratch = if (chromaPostprocessor == null) {
+            val scratchBytes = radianceOutputTileWidth.toLong() * radianceOutputTileHeight.toLong() * 8L
+            LargeDirectBuffer.allocate(scratchBytes, "Radiance RGBA16 tile readback")
+                ?.order(ByteOrder.nativeOrder())
+                ?: throw IllegalStateException("Failed to allocate Radiance tile readback")
+        } else {
+            null
+        }
+        var readbackAllocMs = System.currentTimeMillis() - readbackAllocStart
+        val output = readbackScratch?.let {
+            outputBuffer.apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
+        }
         val fusionStatsFrameLabels = buildList {
             add("normal:0")
             acceptedFrames.forEach { frame -> add("normal:${frame.frameIndex}") }
@@ -5604,6 +6368,7 @@ class GlesRawStacker(
                 "srDetailOverlay=$visualizeRadianceSrDetail " +
                 "highlightOverlay=$visualizeRadianceHighlightReconstruction " +
                 "longParticipationOverlay=$visualizeRadianceLongParticipation " +
+                "vgnChromaPostprocess=${chromaPostprocessor != null} " +
                 "candidates=$candidateFrameCount acceptedNormal=${acceptedFrames.size} " +
                 "acceptedLong=${longAlignments.size}"
         }
@@ -5632,6 +6397,7 @@ class GlesRawStacker(
                     detailWeight = 1f,
                     exposureScale = 1f,
                     isLongFrame = false,
+                    longPrecisionWeightCap = radianceFusionTuning.longPrecisionWeightCap,
                     referenceNoiseModel = referenceFrameNoiseModel,
                     frameNoiseModel = referenceFrameNoiseModel,
                     fusionStatsBuffer = fusionStatsBuffer,
@@ -5659,6 +6425,7 @@ class GlesRawStacker(
                         detailWeight = frame.detailWeight,
                         exposureScale = 1f,
                         isLongFrame = false,
+                        longPrecisionWeightCap = radianceFusionTuning.longPrecisionWeightCap,
                         referenceNoiseModel = referenceFrameNoiseModel,
                         frameNoiseModel = frameNoiseModel(frames[frame.frameIndex]),
                         fusionStatsBuffer = fusionStatsBuffer,
@@ -5687,6 +6454,7 @@ class GlesRawStacker(
                         detailWeight = alignment.detailWeight,
                         exposureScale = alignment.plan.exposureScale,
                         isLongFrame = true,
+                        longPrecisionWeightCap = alignment.precisionWeightCap,
                         referenceNoiseModel = referenceFrameNoiseModel,
                         frameNoiseModel = frameNoiseModel(alignment.plan.longFrame),
                         fusionStatsBuffer = fusionStatsBuffer,
@@ -5714,9 +6482,17 @@ class GlesRawStacker(
                     highlightAlignment = highlightAlignment,
                     highlightSourceRegion = highlightSourceRegion,
                 )
-                val timing = readRadianceOutputTile(readbackScratch, output, tile.outputCore)
-                totalGlReadMs += timing.glReadMs
-                totalCopyMs += timing.copyMs
+                if (chromaPostprocessor != null) {
+                    chromaPostprocessor.capture(outputTexture, tile)
+                } else {
+                    val timing = readRadianceOutputTile(
+                        checkNotNull(readbackScratch),
+                        checkNotNull(output),
+                        tile.outputCore,
+                    )
+                    totalGlReadMs += timing.glReadMs
+                    totalCopyMs += timing.copyMs
+                }
                 GlesGpuScheduler.yieldToUiRenderer()
             }
             if (logRadianceFusionParticipation) {
@@ -5725,6 +6501,11 @@ class GlesRawStacker(
                     frameLabels = fusionStatsFrameLabels,
                     candidateFrameCount = candidateFrameCount,
                 )
+            }
+            chromaPostprocessor?.processAndReadback(outputBuffer)?.let { timing ->
+                readbackAllocMs += timing.allocMs
+                totalGlReadMs += timing.glReadMs
+                totalCopyMs += timing.copyMs
             }
         } finally {
             LargeDirectBuffer.free(readbackScratch)
@@ -5736,7 +6517,11 @@ class GlesRawStacker(
             copyMs = totalCopyMs,
             allocMs = readbackAllocMs,
             mode = if (radianceUsesVgnSemanticBackend) {
-                if (highlightAlignment != null) {
+                if (chromaPostprocessor != null && highlightAlignment != null) {
+                    "radiance-vgn-semantic-highlight-chroma-iir-rgb16-tiled"
+                } else if (chromaPostprocessor != null) {
+                    "radiance-vgn-semantic-chroma-iir-rgb16-tiled"
+                } else if (highlightAlignment != null) {
                     "radiance-vgn-semantic-highlight-rgb16-tiled"
                 } else {
                     "radiance-vgn-semantic-rgb16-tiled"
@@ -6235,6 +7020,12 @@ class GlesRawStacker(
         GLES31.glUniform1i(uniformLocation(seed, "uCfaPattern"), cfaPattern)
         GLES31.glUniform4fv(uniformLocation(seed, "uBlackLevel"), 1, normalizedBlackLevel, 0)
         GLES31.glUniform1f(uniformLocation(seed, "uWhiteLevel"), normalizedWhiteLevel)
+        GLES31.glUniform4fv(
+            uniformLocation(seed, "uCalculationGains"),
+            1,
+            demosaicCalculationWbGains,
+            0,
+        )
         bindImage(
             0,
             radianceSemanticSeedTexture,
@@ -6381,7 +7172,6 @@ class GlesRawStacker(
             setRadianceHighlightUniforms(program, highlightAlignment.frame.exposureRatio)
         }
         setRadianceNormalizeUniforms(program)
-        setPostfilterUniforms(program)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         finishFramebufferPass("normalizeRadianceTile ${tile.index}")
     }
@@ -6416,10 +7206,6 @@ class GlesRawStacker(
             demosaicCalculationWbGains[0],
             1f,
             demosaicCalculationWbGains[3],
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uBilateralNoiseScale"),
-            radianceFusionTuning.bilateralNoiseScale.coerceAtLeast(1f),
         )
     }
 
@@ -7972,6 +8758,8 @@ class GlesRawStacker(
 
     private fun release() {
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            radianceVgnChromaPostprocessor?.release()
+            radianceVgnChromaPostprocessor = null
             if (programs.isNotEmpty()) {
                 for (program in programs) {
                     GLES30.glDeleteProgram(program)
@@ -8204,6 +8992,9 @@ class GlesRawStacker(
             uniform float uNoiseAlphaByChannel[4];
             uniform float uNoiseBetaByChannel[4];
             uniform float uExposureScale;
+            uniform int uUseRegionalObservability;
+            uniform float uRegionalStructureSnrStart;
+            uniform float uRegionalStructureSnrFull;
 
             float rawNormAt(ivec2 p) {
                 p = clamp(p, ivec2(0), uProxySize * 2 - ivec2(1));
@@ -8271,12 +9062,15 @@ class GlesRawStacker(
                 float centerRaw = centerStats.x;
                 float center = clamp(centerRaw * uExposureScale, 0.0, 1.0);
                 float sum = 0.0;
+                float sumSquared = 0.0;
                 float varianceSum = 0.0;
                 for (int y = -1; y <= 1; ++y) {
                     for (int x = -1; x <= 1; ++x) {
                         ivec2 q = clamp(p + ivec2(x, y), ivec2(0), uProxySize - ivec2(1));
                         vec2 stats = greenBlockStats(q);
-                        sum += clamp(stats.x * uExposureScale, 0.0, 1.0);
+                        float scaledSignal = clamp(stats.x * uExposureScale, 0.0, 1.0);
+                        sum += scaledSignal;
+                        sumSquared += scaledSignal * scaledSignal;
                         varianceSum += stats.y;
                     }
                 }
@@ -8297,9 +9091,30 @@ class GlesRawStacker(
                 // valid NR observation. B is alignment observability and may fall to zero when
                 // the patch does not carry enough signal to estimate a new local displacement.
                 float detailSnr = abs(center - mean) / sqrt(max(detailVariance, 1e-10));
-                float alignmentObservability = centerStats.y > 1e-9 ?
+                float pointObservability = centerStats.y > 1e-9 ?
                     smoothstep(1.5, 4.0, detailSnr) :
                     smoothstep(0.004, 0.035, centerRaw);
+                float spatialVariance = max(sumSquared / 9.0 - mean * mean, 0.0);
+                float meanNoiseVariance = uExposureScale * uExposureScale * varianceSum / 9.0;
+                // For nine independent noisy samples, noise alone contributes 8/9 of the
+                // average sample variance around their estimated mean. Subtracting that term
+                // makes the regional response measure coherent structure rather than high-ISO
+                // grain. The long-alignment mode uses this larger spatial support in addition
+                // to the original one-pixel high-pass response.
+                float excessStructureVariance = max(
+                    spatialVariance - (8.0 / 9.0) * meanNoiseVariance,
+                    0.0
+                );
+                float regionalStructureSnr = sqrt(
+                    excessStructureVariance / max(meanNoiseVariance, 1e-10)
+                );
+                float regionalObservability = smoothstep(
+                    min(uRegionalStructureSnrStart, uRegionalStructureSnrFull),
+                    max(uRegionalStructureSnrStart, uRegionalStructureSnrFull),
+                    regionalStructureSnr
+                );
+                float alignmentObservability = uUseRegionalObservability != 0 ?
+                    max(pointObservability, regionalObservability) : pointObservability;
                 float clipValid = 1.0 - smoothstep(0.90, 0.995, tileMaxRaw(p));
                 float sampleValidity = clamp(clipValid, 0.0, 1.0);
                 imageStore(
@@ -8312,6 +9127,150 @@ class GlesRawStacker(
                         max(proxyVariance, 1e-10)
                     )
                 );
+            }
+        """.trimIndent()
+
+        /**
+         * Recomputes the RAW proxy's observability inputs on the flow grid. Unlike the proxy's
+         * single B channel, this preserves signal, structural response and predicted noise as
+         * separate values so a rejected long frame has an attributable cause.
+         */
+        private val RAW_LONG_OBSERVABILITY_DIAGNOSTIC_FRAGMENT_SHADER = """
+            #version 300 es
+            $RAW_COMMON
+            uniform highp usampler2D uRaw;
+            uniform ivec2 uGridSize;
+            uniform ivec2 uPlaneSize;
+            uniform int uTileSize;
+            uniform int uCfaPattern;
+            uniform float uBlackLevel[4];
+            uniform float uWhiteLevel;
+            uniform float uNoiseAlphaByChannel[4];
+            uniform float uNoiseBetaByChannel[4];
+            uniform float uExposureScale;
+            uniform float uRegionalStructureSnrStart;
+            uniform float uRegionalStructureSnrFull;
+            out vec4 fragColor;
+
+            float rawNormAt(ivec2 p) {
+                p = clamp(p, ivec2(0), uPlaneSize * 2 - ivec2(1));
+                int b = bayerIndexAt(uCfaPattern, p);
+                float raw = float(texelFetch(uRaw, p, 0).r);
+                float range = max(uWhiteLevel - uBlackLevel[b], 1.0);
+                return clamp((raw - uBlackLevel[b]) / range, 0.0, 1.0);
+            }
+
+            float noiseVariance(float signal, int bayerIndex) {
+                return max(
+                    uNoiseAlphaByChannel[bayerIndex] * clamp(signal, 0.0, 1.0) +
+                        uNoiseBetaByChannel[bayerIndex],
+                    0.0
+                );
+            }
+
+            vec2 rawSignalAndVariance(ivec2 p) {
+                int bayerIndex = bayerIndexAt(uCfaPattern, p);
+                float signal = rawNormAt(p);
+                return vec2(signal, noiseVariance(signal, bayerIndex));
+            }
+
+            vec2 greenBlockStats(ivec2 planeCoord) {
+                ivec2 s = clamp(planeCoord * 2, ivec2(0), uPlaneSize * 2 - ivec2(2));
+                if (uCfaPattern >= 4) {
+                    vec2 sum = vec2(0.0);
+                    for (int y = 0; y <= 1; ++y) {
+                        for (int x = 0; x <= 1; ++x) {
+                            sum += rawSignalAndVariance(s + ivec2(x, y));
+                        }
+                    }
+                    return vec2(0.25 * sum.x, 0.0625 * sum.y);
+                }
+                ivec2 g1Pos;
+                ivec2 g2Pos;
+                if (uCfaPattern == 0 || uCfaPattern == 3) {
+                    g1Pos = s + ivec2(1, 0);
+                    g2Pos = s + ivec2(0, 1);
+                } else {
+                    g1Pos = s;
+                    g2Pos = s + ivec2(1, 1);
+                }
+                vec2 g1 = rawSignalAndVariance(g1Pos);
+                vec2 g2 = rawSignalAndVariance(g2Pos);
+                return vec2(0.5 * (g1.x + g2.x), 0.25 * (g1.y + g2.y));
+            }
+
+            vec4 observabilityInputs(ivec2 p) {
+                vec2 centerStats = greenBlockStats(p);
+                float centerRaw = centerStats.x;
+                float center = clamp(centerRaw * uExposureScale, 0.0, 1.0);
+                float sum = 0.0;
+                float sumSquared = 0.0;
+                float varianceSum = 0.0;
+                for (int y = -1; y <= 1; ++y) {
+                    for (int x = -1; x <= 1; ++x) {
+                        ivec2 q = clamp(p + ivec2(x, y), ivec2(0), uPlaneSize - ivec2(1));
+                        vec2 stats = greenBlockStats(q);
+                        float scaledSignal = clamp(stats.x * uExposureScale, 0.0, 1.0);
+                        sum += scaledSignal;
+                        sumSquared += scaledSignal * scaledSignal;
+                        varianceSum += stats.y;
+                    }
+                }
+                float mean = sum / 9.0;
+                float detailVariance = uExposureScale * uExposureScale * (
+                    (64.0 / 81.0) * centerStats.y +
+                    (1.0 / 81.0) * max(varianceSum - centerStats.y, 0.0)
+                );
+                float detail = abs(center - mean);
+                float noiseSigma = sqrt(max(detailVariance, 1e-10));
+                float detailSnr = detail / noiseSigma;
+                float meanNoiseVariance = uExposureScale * uExposureScale * varianceSum / 9.0;
+                float spatialVariance = max(sumSquared / 9.0 - mean * mean, 0.0);
+                float excessStructureVariance = max(
+                    spatialVariance - (8.0 / 9.0) * meanNoiseVariance,
+                    0.0
+                );
+                float regionalStructureSnr = sqrt(
+                    excessStructureVariance / max(meanNoiseVariance, 1e-10)
+                );
+                float pointObservability = centerStats.y > 1e-9 ?
+                    smoothstep(1.5, 4.0, detailSnr) :
+                    smoothstep(0.004, 0.035, centerRaw);
+                float regionalObservability = smoothstep(
+                    min(uRegionalStructureSnrStart, uRegionalStructureSnrFull),
+                    max(uRegionalStructureSnrStart, uRegionalStructureSnrFull),
+                    regionalStructureSnr
+                );
+                return vec4(
+                    center,
+                    detail,
+                    noiseSigma,
+                    max(pointObservability, regionalObservability)
+                );
+            }
+
+            void main() {
+                ivec2 tile = ivec2(gl_FragCoord.xy);
+                if (tile.x >= uGridSize.x || tile.y >= uGridSize.y) discard;
+                ivec2 center = min(
+                    tile * uTileSize + ivec2(uTileSize / 2),
+                    uPlaneSize - ivec2(1)
+                );
+                int sampleSpacing = max(uTileSize / 4, 1);
+                vec4 sum = vec4(0.0);
+                float sampleCount = 0.0;
+                for (int y = -2; y <= 2; ++y) {
+                    for (int x = -2; x <= 2; ++x) {
+                        ivec2 p = clamp(
+                            center + ivec2(x * sampleSpacing, y * sampleSpacing),
+                            ivec2(0),
+                            uPlaneSize - ivec2(1)
+                        );
+                        sum += observabilityInputs(p);
+                        sampleCount += 1.0;
+                    }
+                }
+                fragColor = sum / max(sampleCount, 1.0);
             }
         """.trimIndent()
 
@@ -8433,6 +9392,9 @@ class GlesRawStacker(
             uniform ivec2 uGraphGridSize;
             uniform int uGraphTileSize;
             uniform float uGraphSeedConfidenceMin;
+            uniform int uRetainGraphSeedEvidence;
+            uniform float uSeedRefinementConfidenceStart;
+            uniform float uSeedRefinementConfidenceFull;
             uniform int uGraphRefineSearchRadius;
             out vec4 fragColor;
 
@@ -8465,10 +9427,12 @@ class GlesRawStacker(
                     sinTheta * centered.x + cosTheta * centered.y
                 );
                 vec2 initialFlowFull = rotated - centered + uInitialTranslation;
+                vec4 selectedGraphSeed = vec4(0.0);
                 bool hasGraphSeed = false;
                 if (uUseGraphSeed != 0) {
                     vec4 graphSeed = graphSeedAt(vec2(fullCenter));
                     if (graphSeed.a >= uGraphSeedConfidenceMin) {
+                        selectedGraphSeed = graphSeed;
                         initialFlowFull = graphSeed.rg;
                         hasGraphSeed = true;
                     }
@@ -8520,10 +9484,37 @@ class GlesRawStacker(
                     1.0
                 );
                 float patchConfidence = clamp(bestCoverage, 0.0, 1.0) * relativeMargin;
+                vec2 fineFlowFull =
+                    vec2(initialShift + bestShift) * float(uLevelScale);
+                float outputConfidence = patchConfidence;
+                if (uRetainGraphSeedEvidence != 0 && hasGraphSeed) {
+                    // The coarse bilateral proxy has already measured this displacement. A
+                    // noisy high-resolution anchor may not contain enough evidence to improve
+                    // it, which is different from evidence that the seed is wrong. Only let the
+                    // fine search move away from the seed in proportion to its own confidence;
+                    // forward/backward validation still rejects inconsistent seed pairs later.
+                    float refinementTrust = smoothstep(
+                        min(
+                            uSeedRefinementConfidenceStart,
+                            uSeedRefinementConfidenceFull
+                        ),
+                        max(
+                            uSeedRefinementConfidenceStart,
+                            uSeedRefinementConfidenceFull
+                        ),
+                        patchConfidence
+                    );
+                    fineFlowFull = mix(
+                        selectedGraphSeed.rg,
+                        fineFlowFull,
+                        refinementTrust
+                    );
+                    outputConfidence = max(selectedGraphSeed.a, patchConfidence);
+                }
                 fragColor = vec4(
-                    vec2(initialShift + bestShift) * float(uLevelScale),
+                    fineFlowFull,
                     bestSad,
-                    patchConfidence
+                    outputConfidence
                 );
             }
         """.trimIndent()

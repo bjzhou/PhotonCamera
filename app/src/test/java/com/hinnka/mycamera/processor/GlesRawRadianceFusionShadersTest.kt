@@ -28,8 +28,11 @@ class GlesRawRadianceFusionShadersTest {
             composition.contains("referenceToAnchorFlow.rg + anchorToShortFlow.rg"),
         )
         assertTrue(
-            composition.contains("referenceToAnchorFlow.a * anchorToShortFlow.a"),
+            composition.contains("float multipliedConfidence = referenceToAnchorFlow.a * anchorToShortFlow.a"),
         )
+        assertTrue(composition.contains("uUseBottleneckConfidence"))
+        assertTrue(composition.contains("normalizedEdgeConfidence"))
+        assertTrue(composition.contains("float bottleneckConfidence = min("))
     }
 
     @Test
@@ -174,6 +177,21 @@ class GlesRawRadianceFusionShadersTest {
     }
 
     @Test
+    fun semanticProxyStaysWhiteBalancedThroughWarpThenReturnsToCameraRgb() {
+        val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
+
+        assertTrue(shader.contains("uniform vec3 uCalculationGains"))
+        assertTrue(shader.contains("if (uIsReference != 0 || uSemanticEncoding == 0)"))
+        assertTrue(shader.contains("vec3 calculationRgb = vec3("))
+        assertTrue(shader.contains("calculationRgb / max(uCalculationGains, vec3(1e-6))"))
+        assertFalse(
+            shader.contains(
+                "return clamp(vec3(encoded.r + encoded.g, encoded.r, encoded.r + encoded.b)",
+            ),
+        )
+    }
+
+    @Test
     fun longFramesNormalizeRadianceAndNoiseFromActualExposure() {
         val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
 
@@ -185,6 +203,41 @@ class GlesRawRadianceFusionShadersTest {
         assertTrue(shader.contains("referenceRgb / max(radiometricScale, 1e-4)"))
         assertTrue(shader.contains("radiometricScale * radiometricScale"))
         assertTrue(shader.contains("uLongPrecisionWeightCap"))
+        assertTrue(shader.contains("max(uLongPrecisionWeightCap, 1.0)"))
+    }
+
+    @Test
+    fun longFramesRequireFinalComposedPathConfidencePerPixel() {
+        val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
+
+        assertTrue(shader.contains("vec4 flowEvidence = vec4(0.0, 0.0, 0.0, 1.0)"))
+        assertTrue(shader.contains("flowEvidence = flowEvidenceAt(planePos)"))
+        assertTrue(shader.contains("float longPathConfidence = uIsLongFrame != 0"))
+        assertTrue(
+            shader.contains(
+                "clamp(uRegistrationNrWeight, 0.0, 1.0) * longPathConfidence",
+            ),
+        )
+        assertTrue(shader.contains("detailCoverage = clamp(tileConfidence.g * robust"))
+        assertTrue(shader.contains("longPathConfidence;"))
+    }
+
+    @Test
+    fun longExposureNormalizationPreservesReconstructionOverrangeUntilScale() {
+        val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
+
+        assertTrue(shader.contains("return max(encoded, vec3(0.0))"))
+        assertTrue(
+            Regex("""return max\(\s*calculationRgb / max\(uCalculationGains""")
+                .containsMatchIn(shader),
+        )
+        assertFalse(shader.contains("return clamp(encoded, 0.0, 1.0)"))
+        assertFalse(
+            Regex("""return clamp\(\s*calculationRgb / max\(uCalculationGains""")
+                .containsMatchIn(shader),
+        )
+        assertTrue(shader.contains("clamp(sourceRgb.detail * radiometricScale, 0.0, 1.0)"))
+        assertTrue(shader.contains("clamp(sourceRgb.denoise * radiometricScale, 0.0, 1.0)"))
     }
 
     @Test
@@ -208,12 +261,16 @@ class GlesRawRadianceFusionShadersTest {
         assertTrue(shader.contains("uniform sampler2D uCurrentProxy"))
         assertTrue(shader.contains("uniform sampler2D uComposedFlow"))
         assertTrue(shader.contains("min(referenceSample.g, currentSample.g)"))
-        assertTrue(shader.contains("min(referenceSample.b, currentSample.b)"))
+        assertTrue(shader.contains("float observability = min("))
         assertTrue(shader.contains("eligibilitySum += validity * observability"))
+        assertTrue(shader.contains("eligibilitySum,"))
+        assertTrue(shader.contains("validitySum,"))
+        assertTrue(shader.contains("referenceObservabilitySum,"))
+        assertTrue(shader.contains("currentObservabilitySum"))
     }
 
     @Test
-    fun generatedLongFusionShadersPassAvailableNdkValidator() {
+    fun generatedRadianceFusionShadersPassAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val validator = sdkRoot?.let(::File)
             ?.resolve("ndk")
@@ -237,6 +294,7 @@ class GlesRawRadianceFusionShadersTest {
                 trackLongParticipation = true,
             ),
             "fragment" to GlesRawRadianceFusionShaders.longEligibility,
+            "fragment" to GlesRawRadianceFusionShaders.normalize(showRejections = false),
         )
         sources.forEach { (stage, source) ->
             val sourceFile = File.createTempFile("radiance-long-", ".$stage")
@@ -276,11 +334,10 @@ class GlesRawRadianceFusionShadersTest {
 
         assertTrue(shader.contains("uniform int uSemanticEncoding"))
         assertTrue(shader.contains("uIsReference != 0 || uSemanticEncoding == 0"))
-        assertTrue(
-            shader.contains(
-                "vec3(encoded.r + encoded.g, encoded.r, encoded.r + encoded.b)",
-            ),
-        )
+        assertTrue(shader.contains("vec3 calculationRgb = vec3("))
+        assertTrue(shader.contains("encoded.r + encoded.g"))
+        assertTrue(shader.contains("encoded.r + encoded.b"))
+        assertTrue(shader.contains("calculationRgb / max(uCalculationGains"))
         assertFalse(shader.contains("bayerIndexAt(uCfaPattern, outputP)"))
     }
 
@@ -347,7 +404,7 @@ class GlesRawRadianceFusionShadersTest {
         val shader = GlesRawRadianceFusionShaders.normalize(showRejections = false)
 
         assertTrue(shader.contains("uniform vec3 uCalculationGains"))
-        assertTrue(shader.contains("vec3 nrCalculation = nrSpatial * calculationGains"))
+        assertTrue(shader.contains("vec3 nrCalculation = safeCenter * calculationGains"))
         assertTrue(shader.contains("vec3 detailCalculation = detail * calculationGains"))
         assertTrue(shader.contains("detailCalculation - nrCalculation"))
         assertTrue(
@@ -355,7 +412,25 @@ class GlesRawRadianceFusionShadersTest {
                 "(nrCalculation + vec3(signedLumaDetail)) / calculationGains",
             ),
         )
-        assertFalse(shader.contains("nrSpatial + vec3(signedLumaDetail)"))
+        assertFalse(shader.contains("safeCenter + vec3(signedLumaDetail)"))
+    }
+
+    @Test
+    fun normalizeDoesNotApplyLegacySpatialPostfilter() {
+        val shader = GlesRawRadianceFusionShaders.normalize(showRejections = false)
+
+        assertTrue(shader.contains("vec3 safeCenter = mix(center.base, center.nr, center.confidence)"))
+        assertTrue(shader.contains("vec3 nrCalculation = safeCenter * calculationGains"))
+        assertTrue(
+            shader.contains(
+                "vec3 fullRgbDetail = safeCenter + detailConfidence * (detail - safeCenter)",
+            ),
+        )
+        assertFalse(shader.contains("uBilateralNoiseScale"))
+        assertFalse(shader.contains("uFinalSmoothStrength"))
+        assertFalse(shader.contains("bilateralSum"))
+        assertFalse(shader.contains("spatialSmooth"))
+        assertFalse(shader.contains("nrSpatial"))
     }
 
     @Test
