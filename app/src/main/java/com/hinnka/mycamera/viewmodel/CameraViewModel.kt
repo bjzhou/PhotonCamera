@@ -44,10 +44,8 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
-import com.hinnka.mycamera.processor.RawAlignmentProxyConfig
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.RawBurstGyroSelector
-import com.hinnka.mycamera.processor.RawBurstReferencePlanner
 import com.hinnka.mycamera.processor.RawRadianceExposurePlanner
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
@@ -1437,6 +1435,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 )
                 if (pendingRawStackFrames.size >= count) {
+                    val burstPlanningStartedAtMs = SystemClock.elapsedRealtime()
                     val chronologicalFrames = pendingRawStackFrames
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
@@ -1458,46 +1457,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         val gyroOrderedFrames = gyroSelection.orderedAcceptedIndices.map { index ->
                             normalFrames[index]
                         }
-                        val proxyConfig = rawAlignmentProxyConfig(
-                            characteristics = characteristics,
-                            captureResult = gyroOrderedFrames.firstOrNull()?.captureResult ?: captureResult,
-                        )
-                        val referencePlan = if (proxyConfig != null && gyroOrderedFrames.size >= 2) {
-                            runCatching {
-                                withContext(Dispatchers.Default) {
-                                    RawBurstReferencePlanner.plan(
-                                        frames = gyroOrderedFrames.map { it.frame },
-                                        proxyConfig = proxyConfig,
-                                    )
-                                }
-                            }.onFailure { error ->
-                                PLog.w(TAG, "RAW reference planning failed; keeping Gyro order", error)
-                            }.getOrNull()
-                        } else {
-                            null
-                        }
-                        val orderedNormalFrames = referencePlan?.orderedIndices?.map { index ->
-                            val pending = gyroOrderedFrames[index]
-                            pending.copy(
-                                frame = pending.frame.copy(
-                                    preAlignmentToReference = referencePlan.preAlignmentsToReference[index],
-                                ),
-                            )
-                        } ?: gyroOrderedFrames
+                        // Geometry is planned by GlesRawStacker's coarse temporal-flow graph.
+                        // Running a second exhaustive RAW proxy registration here blocks the
+                        // post-capture path on CPU and duplicates the GLES registration work.
+                        val orderedNormalFrames = gyroOrderedFrames
                         val orderedFrames = orderedNormalFrames + auxiliaryFrames
-                        if (gyroSelection.rejectedIndices.isNotEmpty() || referencePlan != null) {
-                            PLog.i(
-                                TAG,
-                                "RAW burst plan: gyroReference=${gyroSelection.referenceOriginalIndex}, " +
-                                    "reference=${referencePlan?.referenceOriginalIndex ?: 0}, " +
-                                    "accepted=${orderedFrames.size}, " +
-                                    "normal=${orderedNormalFrames.size}, " +
-                                    "short=${if (exposurePlan.shortIndex != null) 1 else 0}, " +
-                                    "long=${exposurePlan.longIndices.size}, " +
-                                    "rejected=${gyroSelection.rejectedIndices.joinToString()}, " +
-                                    "cost=${referencePlan?.referenceCost}",
-                            )
-                        }
+                        PLog.i(
+                            TAG,
+                            "RAW burst plan: referenceSource=gyro, " +
+                                "reference=${gyroSelection.referenceOriginalIndex}, " +
+                                "accepted=${orderedFrames.size}, " +
+                                "normal=${orderedNormalFrames.size}, " +
+                                "short=${if (exposurePlan.shortIndex != null) 1 else 0}, " +
+                                "long=${exposurePlan.longIndices.size}, " +
+                                "rejected=${gyroSelection.rejectedIndices.joinToString()}, " +
+                                "geometry=GLES_TEMPORAL_GRAPH, " +
+                                "costMs=${SystemClock.elapsedRealtime() - burstPlanningStartedAtMs}",
+                        )
                         val isRawStack = orderedNormalFrames.firstOrNull()?.frame?.image?.format
                             ?.let(::isRawCaptureFormat) == true
                         val processingFrames = if (isRawStack) {
@@ -5137,63 +5113,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 MultiFrameCaptureRole.LONG -> RawBurstFrameRole.SHADOW_LONG
                 else -> RawBurstFrameRole.NORMAL
             },
-        )
-    }
-
-    private fun rawAlignmentProxyConfig(
-        characteristics: CameraCharacteristics?,
-        captureResult: CaptureResult?,
-    ): RawAlignmentProxyConfig? {
-        characteristics ?: return null
-        var cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
-            ?: CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
-        val activeArray = characteristics.get(
-            CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE
-        )
-        if (((activeArray?.left ?: 0) and 1) != 0) {
-            cfa = when (cfa) {
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG
-                else -> cfa
-            }
-        }
-        if (((activeArray?.top ?: 0) and 1) != 0) {
-            cfa = when (cfa) {
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
-                CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR ->
-                    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG
-                else -> cfa
-            }
-        }
-        val dynamicBlack = captureResult?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
-        val staticBlack = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
-        val blackByPosition = when {
-            dynamicBlack != null && dynamicBlack.size >= 4 -> dynamicBlack.copyOf(4)
-            staticBlack != null -> floatArrayOf(
-                staticBlack.getOffsetForIndex(0, 0).toFloat(),
-                staticBlack.getOffsetForIndex(1, 0).toFloat(),
-                staticBlack.getOffsetForIndex(0, 1).toFloat(),
-                staticBlack.getOffsetForIndex(1, 1).toFloat(),
-            )
-            else -> FloatArray(4)
-        }
-        return RawAlignmentProxyConfig(
-            cfaArrangement = cfa,
-            blackLevelByPosition = blackByPosition,
-            whiteLevel = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
-                ?.toFloat()
-                ?: 1023f,
         )
     }
 

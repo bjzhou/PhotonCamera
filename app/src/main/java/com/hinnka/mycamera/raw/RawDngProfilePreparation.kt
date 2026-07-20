@@ -29,7 +29,7 @@ data class RawDngCaptureProfileResult(
 )
 
 /** BaselineExposure and optional PGTM prepared before the DNG writer starts. */
-internal data class RawDngProfilePreparation(
+data class RawDngProfilePreparation(
     val baselineExposureEv: Float,
     val profileGainTableMap: DngProfileGainTableMap?,
 )

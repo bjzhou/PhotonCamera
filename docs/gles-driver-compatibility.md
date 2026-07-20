@@ -128,6 +128,13 @@ writeonly destination，并在四个 IIR 方向之间 ping-pong；禁止把同�
 也禁止以两个 image unit 别名绑定同一纹理来模拟原位处理。新增 array image 路径必须在
 PMA110 上验证 array layer bind、全局跨 layer 读取、完整行列 IIR dispatch 和 layer readback。
 
+VGN chroma 的 layer readback 固定使用 `GL_RGBA_INTEGER + GL_UNSIGNED_SHORT`。不能假定移动端
+驱动支持从 `RGBA16UI` attachment 直接以三通道格式回读。最终 DNG 需要连续 RGB16，因此先把
+RGBA16 tile 回读到 native direct scratch，再由 arm64 NEON 批量执行 RGBA16 → RGB16 和目标
+tile 行跨度写入。禁止在 Kotlin 中通过 `ShortBuffer.get/put` 逐像素去掉 Alpha；12 MP 图像会
+产生约 7500 万次带边界检查的 direct-buffer 访问，并把一次回读放大到数秒。该 native pack
+只改变内存布局，不改变通道数值、tile 边界或 RGB16 DNG 语义。
+
 重建结果通过 `writeonly image2D` 写入、在 accumulator pass 中只作为普通线性过滤
 `sampler2D` 读取，不作为 read/write image。参考帧纹理编码为 camera RGB；非参考帧纹理
 编码为 `(G, R-G, B-G)`，仅在采样后解码为 RGB。分片原点必须按 CFA 周期对齐，VGN 工作域
@@ -153,7 +160,7 @@ RGB 中增加 `vec3(detail)`，否则后续 WB 会把边缘的正负高频变成
 - Radiance VGN reference、semantic seed/resolve、clear、accumulate、reference-base capture 与
   normalize pass
 - Radiance VGN chroma array capture、YCCD seed、color-noise 1/2/3、三组四向 IIR、error/filter、
-  inverse-WB camera RGB 与逐 layer readback
+  inverse-WB camera RGB、逐 layer readback 与 native RGBA16 → RGB16 tile pack
 
 Radiance 的噪声与色差一致性必须继续按传感器通道以及 `R-G`、`B-G` 两条色差轴分别
 估算，但最终帧采纳权重和参考帧回退置信度必须对完整 RGB 三元组共用同一个保守值。

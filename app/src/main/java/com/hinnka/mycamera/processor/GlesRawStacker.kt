@@ -686,6 +686,7 @@ class GlesRawStacker(
                 GlesGpuScheduler.yieldToUiRenderer()
             }
 
+            val longAlignmentStartMs = System.currentTimeMillis()
             val longAlignments = prepareRadianceLongAlignments(
                 longFrames = activeRadianceLongFrames,
                 frames = frames,
@@ -693,8 +694,10 @@ class GlesRawStacker(
                 referencePyramid = refPyramid,
                 currentPyramid = curPyramid,
             )
+            val longAlignmentElapsedMs = System.currentTimeMillis() - longAlignmentStartMs
             // Highlight is prepared last because its composed flow currently occupies the shared
             // auxiliary-flow texture. Long flows have already been copied into dedicated caches.
+            val highlightAlignmentStartMs = System.currentTimeMillis()
             val highlightAlignment = activeRadianceHighlightFrame?.let { highlight ->
                 prepareRadianceHighlightAlignment(
                     highlight = highlight,
@@ -703,6 +706,15 @@ class GlesRawStacker(
                     referencePyramid = refPyramid,
                     currentPyramid = curPyramid,
                 )
+            }
+            val highlightAlignmentElapsedMs = System.currentTimeMillis() - highlightAlignmentStartMs
+            RawStackRuntimeDebug.i(TAG) {
+                "Radiance long/highlight alignment completed " +
+                    "long=${longAlignmentElapsedMs}ms " +
+                    "highlight=${highlightAlignmentElapsedMs}ms " +
+                    "requestedLong=${activeRadianceLongFrames.size} " +
+                    "acceptedLong=${longAlignments.size} " +
+                    "highlightAccepted=${highlightAlignment != null}"
             }
             val superResolutionDecision = if (superResolutionEnabled) {
                 decideSuperResolutionOutput(alignedFrameCount)
@@ -2167,30 +2179,32 @@ class GlesRawStacker(
             alignWindowSize = trackingWindow,
             label = "Radiance long tracking source-to-anchor $frameIndex",
         )
-        val (forward, reverse) = readFlowTextures(
-            textures = listOf(resources.forwardSeedTexture, resources.reverseSeedTexture),
-            textureWidth = resources.seedGridWidth,
-            textureHeight = resources.seedGridHeight,
-            label = "Radiance long tracking seeds $frameIndex",
-        )
-        val confidenceThreshold = hwmfPrefilter.temporalGraphMinimumSeedConfidence
-            .coerceIn(0f, 1f)
-        fun supported(values: FloatArray): Int {
-            var count = 0
-            var offset = 3
-            while (offset < values.size) {
-                if (values[offset].isFinite() && values[offset] >= confidenceThreshold) count++
-                offset += 4
+        if (hwmfDebug.collectMetrics) {
+            val (forward, reverse) = readFlowTextures(
+                textures = listOf(resources.forwardSeedTexture, resources.reverseSeedTexture),
+                textureWidth = resources.seedGridWidth,
+                textureHeight = resources.seedGridHeight,
+                label = "Radiance long tracking seeds $frameIndex",
+            )
+            val confidenceThreshold = hwmfPrefilter.temporalGraphMinimumSeedConfidence
+                .coerceIn(0f, 1f)
+            fun supported(values: FloatArray): Int {
+                var count = 0
+                var offset = 3
+                while (offset < values.size) {
+                    if (values[offset].isFinite() && values[offset] >= confidenceThreshold) count++
+                    offset += 4
+                }
+                return count
             }
-            return count
+            PLog.i(
+                TAG,
+                "Radiance long tracking seed frame=$frameIndex " +
+                    "scale=${resources.trackingScale} grid=${resources.seedGridWidth}x" +
+                    "${resources.seedGridHeight} supported=${supported(forward)}/" +
+                    "${supported(reverse)} requiredConfidence=$confidenceThreshold",
+            )
         }
-        PLog.i(
-            TAG,
-            "Radiance long tracking seed frame=$frameIndex " +
-                "scale=${resources.trackingScale} grid=${resources.seedGridWidth}x" +
-                "${resources.seedGridHeight} supported=${supported(forward)}/${supported(reverse)} " +
-                "requiredConfidence=$confidenceThreshold",
-        )
     }
 
     private fun releaseRadianceLongTrackingSeedResources(
@@ -2999,8 +3013,7 @@ class GlesRawStacker(
                     gridHeight,
                     "Radiance highlight anchor flow copy",
                 )
-                uploadRawTexture(frames.first().image, curRaw, "Radiance highlight reference guide")
-                buildProxy(curRaw, refProxy, "Radiance highlight reference guide")
+                buildProxy(refRaw, refProxy, "Radiance highlight reference guide")
                 propagateRadianceHighlightFlow(
                     targetTexture = radianceHighlightAnchorFlowTexture,
                     guideProxyTexture = refProxy,
@@ -3026,125 +3039,178 @@ class GlesRawStacker(
             add(0)
             acceptedFrames.forEach { frame -> add(frame.frameIndex) }
         }.distinct()
-        return longFrames.mapNotNull { plan ->
-            val anchorFrameIndex = acceptedNormalIndices.minByOrNull { frameIndex ->
-                timestampDistance(
-                    frames[frameIndex].sensorTimestampNs,
-                    plan.longFrame.sensorTimestampNs,
-                )
-            } ?: return@mapNotNull null
-            val anchorIsReference = anchorFrameIndex == 0
-            val anchorAlignment = if (anchorIsReference) {
-                null
-            } else {
-                acceptedFrames.firstOrNull { it.frameIndex == anchorFrameIndex }
-                    ?: return@mapNotNull null
-            }
-            runCatching {
-                val anchor = frames[anchorFrameIndex]
-                val photonExposureRatio = if (
-                    anchor.exposureTimeNs > 0L && plan.longFrame.exposureTimeNs > 0L
-                ) {
-                    plan.longFrame.exposureTimeNs.toFloat() / anchor.exposureTimeNs.toFloat()
+        val trackingSeeds = createRadianceLongTrackingSeedResources()
+        var referenceGuideProxyTexture = 0
+        var activeAnchorFrameIndex = -1
+        var activeAnchorObservability: RadianceLongObservabilitySummary? = null
+        var anchorBuildCount = 0
+        var anchorReuseCount = 0
+        val alignmentStartMs = System.currentTimeMillis()
+        return try {
+            // Keep the output-reference proxy resident while refProxy/current referencePyramid
+            // hold the temporal anchor. This removes the per-long reference upload/rebuild and
+            // lets consecutive long frames reuse the exact same anchor pyramid.
+            referenceGuideProxyTexture = createTexture2D(
+                planeWidth,
+                planeHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_LINEAR,
+            )
+            buildProxy(
+                refRaw,
+                referenceGuideProxyTexture,
+                "Radiance long output reference guide",
+                noiseModel = frameNoiseModel(frames.first()),
+                useRegionalObservability = true,
+            )
+            val alignments = longFrames.mapNotNull { plan ->
+                val anchorFrameIndex = acceptedNormalIndices.minByOrNull { frameIndex ->
+                    timestampDistance(
+                        frames[frameIndex].sensorTimestampNs,
+                        plan.longFrame.sensorTimestampNs,
+                    )
+                } ?: return@mapNotNull null
+                val anchorIsReference = anchorFrameIndex == 0
+                val anchorAlignment = if (anchorIsReference) {
+                    null
                 } else {
-                    Float.NaN
+                    acceptedFrames.firstOrNull { it.frameIndex == anchorFrameIndex }
+                        ?: return@mapNotNull null
                 }
-                val anchorNoiseModel = frameNoiseModel(anchor)
-                val longNoiseModel = frameNoiseModel(plan.longFrame)
-                val trackingSeeds = createRadianceLongTrackingSeedResources()
-                uploadRawTexture(anchor.image, curRaw, "Radiance long anchor")
-                val anchorObservability = summarizeRadianceLongObservabilityInput(
-                    frameIndex = plan.sourceFrameIndex,
-                    side = "anchor",
-                    rawTexture = curRaw,
-                    exposureScale = 1f,
-                    noiseModel = anchorNoiseModel,
-                    exposureTimeNs = anchor.exposureTimeNs,
-                    sensitivityIso = anchor.sensitivityIso,
-                )
-                buildTrackingProxy(
-                    rawTexture = curRaw,
-                    outputTexture = trackingSeeds.anchorTrackingTexture,
-                    outputWidth = trackingSeeds.trackingWidth,
-                    outputHeight = trackingSeeds.trackingHeight,
-                    levelScale = trackingSeeds.trackingScale,
-                    exposureScale = 1f,
-                    label = "Radiance long anchor ${plan.sourceFrameIndex}",
-                )
-                buildProxy(
-                    curRaw,
-                    refProxy,
-                    "Radiance long anchor",
-                    noiseModel = anchorNoiseModel,
-                    useRegionalObservability = true,
-                )
-                buildPyramid(referencePyramid)
+                runCatching {
+                    val anchor = frames[anchorFrameIndex]
+                    val photonExposureRatio = if (
+                        anchor.exposureTimeNs > 0L && plan.longFrame.exposureTimeNs > 0L
+                    ) {
+                        plan.longFrame.exposureTimeNs.toFloat() / anchor.exposureTimeNs.toFloat()
+                    } else {
+                        Float.NaN
+                    }
+                    val longNoiseModel = frameNoiseModel(plan.longFrame)
+                    if (activeAnchorFrameIndex != anchorFrameIndex) {
+                        val anchorNoiseModel = frameNoiseModel(anchor)
+                        uploadRawTexture(anchor.image, curRaw, "Radiance long anchor")
+                        activeAnchorObservability = if (hwmfDebug.collectMetrics) {
+                            summarizeRadianceLongObservabilityInput(
+                                frameIndex = plan.sourceFrameIndex,
+                                side = "anchor",
+                                rawTexture = curRaw,
+                                exposureScale = 1f,
+                                noiseModel = anchorNoiseModel,
+                                exposureTimeNs = anchor.exposureTimeNs,
+                                sensitivityIso = anchor.sensitivityIso,
+                            )
+                        } else {
+                            null
+                        }
+                        buildTrackingProxy(
+                            rawTexture = curRaw,
+                            outputTexture = trackingSeeds.anchorTrackingTexture,
+                            outputWidth = trackingSeeds.trackingWidth,
+                            outputHeight = trackingSeeds.trackingHeight,
+                            levelScale = trackingSeeds.trackingScale,
+                            exposureScale = 1f,
+                            label = "Radiance long anchor ${plan.sourceFrameIndex}",
+                        )
+                        buildProxy(
+                            curRaw,
+                            refProxy,
+                            "Radiance long anchor",
+                            noiseModel = anchorNoiseModel,
+                            useRegionalObservability = true,
+                        )
+                        buildPyramid(referencePyramid)
+                        if (!anchorIsReference) {
+                            copyRgbaTexture(
+                                checkNotNull(anchorAlignment).flowTexture,
+                                radianceHighlightAnchorFlowTexture,
+                                gridWidth,
+                                gridHeight,
+                                "Radiance long anchor flow cache",
+                            )
+                            propagateRadianceHighlightFlow(
+                                targetTexture = radianceHighlightAnchorFlowTexture,
+                                guideProxyTexture = referenceGuideProxyTexture,
+                                label = "long-reference-to-anchor",
+                            )
+                        }
+                        activeAnchorFrameIndex = anchorFrameIndex
+                        anchorBuildCount++
+                    } else {
+                        anchorReuseCount++
+                    }
 
-                uploadRawTexture(plan.longFrame.image, curRaw, "Radiance long source")
-                val longObservability = summarizeRadianceLongObservabilityInput(
-                    frameIndex = plan.sourceFrameIndex,
-                    side = "long",
-                    rawTexture = curRaw,
-                    exposureScale = plan.exposureScale,
-                    noiseModel = longNoiseModel,
-                    exposureTimeNs = plan.longFrame.exposureTimeNs,
-                    sensitivityIso = plan.longFrame.sensitivityIso,
-                )
-                buildTrackingProxy(
-                    rawTexture = curRaw,
-                    outputTexture = trackingSeeds.longTrackingTexture,
-                    outputWidth = trackingSeeds.trackingWidth,
-                    outputHeight = trackingSeeds.trackingHeight,
-                    levelScale = trackingSeeds.trackingScale,
-                    exposureScale = plan.exposureScale,
-                    label = "Radiance long source ${plan.sourceFrameIndex}",
-                )
-                val limitingSide = when {
-                    anchorObservability.observableTileCount <
-                        longObservability.observableTileCount -> "ANCHOR"
-                    longObservability.observableTileCount <
-                        anchorObservability.observableTileCount -> "LONG"
-                    else -> "BALANCED"
-                }
-                PLog.i(
-                    TAG,
-                    "Radiance long observability comparison frame=${plan.sourceFrameIndex} " +
-                        "limitingSide=$limitingSide " +
-                        "observableTiles=${anchorObservability.observableTileCount}/" +
-                        "${anchorObservability.totalTileCount}:" +
-                        "${longObservability.observableTileCount}/" +
-                        "${longObservability.totalTileCount} " +
-                        "meanSignal=${anchorObservability.meanSignal}/" +
-                        "${longObservability.meanSignal} " +
-                        "meanDetail=${anchorObservability.meanDetail}/" +
-                        "${longObservability.meanDetail} " +
-                        "meanNoiseSigma=${anchorObservability.meanNoiseSigma}/" +
-                        "${longObservability.meanNoiseSigma} " +
-                        "meanDetailSnr=${anchorObservability.meanDetailSnr}/" +
-                        "${longObservability.meanDetailSnr} " +
-                        "meanAlignmentObservability=" +
-                        "${anchorObservability.meanAlignmentObservability}/" +
-                        "${longObservability.meanAlignmentObservability} " +
-                        "photonRatio=$photonExposureRatio",
-                )
-                buildProxy(
-                    curRaw,
-                    curProxy,
-                    "Radiance long exposure-normalized",
-                    exposureScale = plan.exposureScale,
-                    noiseModel = longNoiseModel,
-                    useRegionalObservability = true,
-                )
-                buildPyramid(currentPyramid)
-                buildRadianceLongTrackingSeeds(
-                    frameIndex = plan.sourceFrameIndex,
-                    anchor = anchor,
-                    longFrame = plan.longFrame,
-                    resources = trackingSeeds,
-                )
+                    uploadRawTexture(plan.longFrame.image, curRaw, "Radiance long source")
+                    val longObservability = if (hwmfDebug.collectMetrics) {
+                        summarizeRadianceLongObservabilityInput(
+                            frameIndex = plan.sourceFrameIndex,
+                            side = "long",
+                            rawTexture = curRaw,
+                            exposureScale = plan.exposureScale,
+                            noiseModel = longNoiseModel,
+                            exposureTimeNs = plan.longFrame.exposureTimeNs,
+                            sensitivityIso = plan.longFrame.sensitivityIso,
+                        )
+                    } else {
+                        null
+                    }
+                    buildTrackingProxy(
+                        rawTexture = curRaw,
+                        outputTexture = trackingSeeds.longTrackingTexture,
+                        outputWidth = trackingSeeds.trackingWidth,
+                        outputHeight = trackingSeeds.trackingHeight,
+                        levelScale = trackingSeeds.trackingScale,
+                        exposureScale = plan.exposureScale,
+                        label = "Radiance long source ${plan.sourceFrameIndex}",
+                    )
+                    val anchorObservability = activeAnchorObservability
+                    if (anchorObservability != null && longObservability != null) {
+                        val limitingSide = when {
+                            anchorObservability.observableTileCount <
+                                longObservability.observableTileCount -> "ANCHOR"
+                            longObservability.observableTileCount <
+                                anchorObservability.observableTileCount -> "LONG"
+                            else -> "BALANCED"
+                        }
+                        PLog.i(
+                            TAG,
+                            "Radiance long observability comparison " +
+                                "frame=${plan.sourceFrameIndex} limitingSide=$limitingSide " +
+                                "observableTiles=${anchorObservability.observableTileCount}/" +
+                                "${anchorObservability.totalTileCount}:" +
+                                "${longObservability.observableTileCount}/" +
+                                "${longObservability.totalTileCount} " +
+                                "meanSignal=${anchorObservability.meanSignal}/" +
+                                "${longObservability.meanSignal} " +
+                                "meanDetail=${anchorObservability.meanDetail}/" +
+                                "${longObservability.meanDetail} " +
+                                "meanNoiseSigma=${anchorObservability.meanNoiseSigma}/" +
+                                "${longObservability.meanNoiseSigma} " +
+                                "meanDetailSnr=${anchorObservability.meanDetailSnr}/" +
+                                "${longObservability.meanDetailSnr} " +
+                                "meanAlignmentObservability=" +
+                                "${anchorObservability.meanAlignmentObservability}/" +
+                                "${longObservability.meanAlignmentObservability} " +
+                                "photonRatio=$photonExposureRatio",
+                        )
+                    }
+                    buildProxy(
+                        curRaw,
+                        curProxy,
+                        "Radiance long exposure-normalized",
+                        exposureScale = plan.exposureScale,
+                        noiseModel = longNoiseModel,
+                        useRegionalObservability = true,
+                    )
+                    buildPyramid(currentPyramid)
+                    buildRadianceLongTrackingSeeds(
+                        frameIndex = plan.sourceFrameIndex,
+                        anchor = anchor,
+                        longFrame = plan.longFrame,
+                        resources = trackingSeeds,
+                    )
 
-                val longAlignLevel = alignLevel.coerceAtMost(referencePyramid.lastIndex)
-                try {
+                    val longAlignLevel = alignLevel.coerceAtMost(referencePyramid.lastIndex)
                     drawAlignment(
                         reference = referencePyramid[longAlignLevel],
                         current = currentPyramid[longAlignLevel],
@@ -3185,179 +3251,171 @@ class GlesRawStacker(
                         retainGraphSeedEvidence = true,
                         label = "Radiance long source-to-anchor",
                     )
-                } finally {
-                    releaseRadianceLongTrackingSeedResources(trackingSeeds)
-                }
-                refineFlow(
-                    referenceProxyTexture = curProxy,
-                    currentProxyTexture = refProxy,
-                    targetFlowTexture = radianceHighlightReverseFlowTexture,
-                    scratchFlowTexture = flowScratchTexture,
-                )
-                smoothFlow(radianceHighlightReverseFlowTexture, flowScratchTexture)
-                logRadianceLongFineFlowEvidence(plan.sourceFrameIndex)
-                validateRadianceHighlightFlow(
-                    consistencyStartPx = radianceFusionTuning.longFlowFbConsistencyStartPx,
-                    consistencyFullPx = radianceFusionTuning.longFlowFbConsistencyFullPx,
-                    label = "long",
-                )
-                propagateRadianceHighlightFlow(
-                    targetTexture = flowTexture,
-                    guideProxyTexture = refProxy,
-                    label = "long-anchor-to-source",
-                )
-
-                // Admit the long frame on the direct anchor -> long edge. The normal anchor has
-                // already passed its own frame admission, so multiplying its reference -> anchor
-                // confidence into this global gate would test the same edge twice and makes the
-                // result depend on which normal frame happened to become the burst reference.
-                computeRadianceLongEligibility(
-                    frameIndex = plan.sourceFrameIndex,
-                    sourceFlowTexture = flowTexture,
-                    stage = "direct",
-                )
-                val directSupport = summarizeRadianceLongFlow(
-                    plan = plan,
-                    anchorFrameIndex = anchorFrameIndex,
-                    sourceFlowTexture = flowTexture,
-                    stage = "direct",
-                    enforceAdmission = true,
-                    photonExposureRatio = photonExposureRatio,
-                ) ?: return@runCatching null
-
-                if (!anchorIsReference) {
-                    copyRgbaTexture(
-                        checkNotNull(anchorAlignment).flowTexture,
-                        radianceHighlightAnchorFlowTexture,
-                        gridWidth,
-                        gridHeight,
-                        "Radiance long anchor flow copy",
+                    refineFlow(
+                        referenceProxyTexture = curProxy,
+                        currentProxyTexture = refProxy,
+                        targetFlowTexture = radianceHighlightReverseFlowTexture,
+                        scratchFlowTexture = flowScratchTexture,
                     )
-                    uploadRawTexture(frames.first().image, curRaw, "Radiance long reference guide")
-                    buildProxy(
-                        curRaw,
-                        refProxy,
-                        "Radiance long reference guide",
-                        noiseModel = frameNoiseModel(frames.first()),
-                        useRegionalObservability = true,
+                    smoothFlow(radianceHighlightReverseFlowTexture, flowScratchTexture)
+                    if (hwmfDebug.collectMetrics) {
+                        logRadianceLongFineFlowEvidence(plan.sourceFrameIndex)
+                    }
+                    validateRadianceHighlightFlow(
+                        consistencyStartPx = radianceFusionTuning.longFlowFbConsistencyStartPx,
+                        consistencyFullPx = radianceFusionTuning.longFlowFbConsistencyFullPx,
+                        label = "long",
                     )
                     propagateRadianceHighlightFlow(
-                        targetTexture = radianceHighlightAnchorFlowTexture,
+                        targetTexture = flowTexture,
                         guideProxyTexture = refProxy,
-                        label = "long-reference-to-anchor",
+                        label = "long-anchor-to-source",
                     )
-                }
-                logRadianceLongCompositionConfidence(
-                    frameIndex = plan.sourceFrameIndex,
-                    anchorIsReference = anchorIsReference,
-                )
-                composeRadianceHighlightFlow(
-                    anchorIsReference = anchorIsReference,
-                    useBottleneckConfidence = true,
-                    confidenceStart = radianceFusionTuning.longFlowMinimumConfidence,
-                    confidenceFull = radianceFusionTuning.longFlowFullConfidence,
-                )
-                copyRgbaTexture(
-                    radianceHighlightComposedFlowTexture,
-                    flowTexture,
-                    gridWidth,
-                    gridHeight,
-                    "Radiance long composed flow refinement seed",
-                )
-                // The temporal graph keeps the hand-shake displacement small by composing
-                // through the nearest normal anchor. Refine that composed result once more in
-                // the actual output reference domain so the cached warp does not retain the
-                // residual error of two independently estimated edges.
-                refineFlow(
-                    referenceProxyTexture = refProxy,
-                    currentProxyTexture = curProxy,
-                    targetFlowTexture = flowTexture,
-                    scratchFlowTexture = flowScratchTexture,
-                )
-                smoothFlow(flowTexture, flowScratchTexture)
-                computeRadianceLongEligibility(
-                    frameIndex = plan.sourceFrameIndex,
-                    sourceFlowTexture = flowTexture,
-                    stage = "composed-refined",
-                )
-                val composedSupport = checkNotNull(
-                    summarizeRadianceLongFlow(
+
+                    // Admit the long frame on the direct anchor -> long edge. The normal anchor has
+                    // already passed its own frame admission, so multiplying its reference -> anchor
+                    // confidence into this global gate would test the same edge twice and makes the
+                    // result depend on which normal frame happened to become the burst reference.
+                    computeRadianceLongEligibility(
+                        frameIndex = plan.sourceFrameIndex,
+                        sourceFlowTexture = flowTexture,
+                        stage = "direct",
+                    )
+                    val directSupport = summarizeRadianceLongFlow(
                         plan = plan,
                         anchorFrameIndex = anchorFrameIndex,
                         sourceFlowTexture = flowTexture,
-                        stage = "composed-refined",
-                        enforceAdmission = false,
+                        stage = "direct",
+                        enforceAdmission = true,
                         photonExposureRatio = photonExposureRatio,
-                    ),
-                )
-                computeRobustness()
-                computeTileMask()
+                    ) ?: return@runCatching null
 
-                val cachedFlow = createTexture2D(
-                    gridWidth,
-                    gridHeight,
-                    GLES30.GL_RGBA16F,
-                    GLES30.GL_LINEAR,
-                )
-                val cachedRobustness = createTexture2D(
-                    planeWidth,
-                    planeHeight,
-                    GLES30.GL_R16F,
-                    GLES30.GL_NEAREST,
-                )
-                val cachedTileMask = createTexture2D(
-                    gridWidth,
-                    gridHeight,
-                    GLES30.GL_RGBA16F,
-                    GLES30.GL_LINEAR,
-                )
-                copyRgbaTexture(
-                    flowTexture,
-                    cachedFlow,
-                    gridWidth,
-                    gridHeight,
-                    "Radiance long cached flow ${plan.sourceFrameIndex}",
-                )
-                copyScalarTexture(
-                    robustnessTexture,
-                    cachedRobustness,
-                    planeWidth,
-                    planeHeight,
-                    "Radiance long cached robustness ${plan.sourceFrameIndex}",
-                )
-                copyRgbaTexture(
-                    tileMaskTexture,
-                    cachedTileMask,
-                    gridWidth,
-                    gridHeight,
-                    "Radiance long cached tile mask ${plan.sourceFrameIndex}",
-                )
-                RadianceLongAlignment(
-                    plan = plan,
-                    anchorFrameIndex = anchorFrameIndex,
-                    flowTexture = cachedFlow,
-                    robustnessTexture = cachedRobustness,
-                    tileMaskTexture = cachedTileMask,
-                    // Admission is categorical and requires validated flow. Once admitted,
-                    // robustness and the tile mask own local rejection; sparse seed coverage
-                    // must not attenuate the whole frame a second time.
-                    registrationWeight = directSupport.frameWeight,
-                    detailWeight = directSupport.frameWeight,
-                    precisionWeightCap = directSupport.precisionWeightCap,
-                    minFlowXPlanePx = composedSupport.minFlowXPlanePx,
-                    maxFlowXPlanePx = composedSupport.maxFlowXPlanePx,
-                    minFlowYPlanePx = composedSupport.minFlowYPlanePx,
-                    maxFlowYPlanePx = composedSupport.maxFlowYPlanePx,
-                    validTileFraction = directSupport.validTileFraction,
-                    coveredQuadrants = directSupport.coveredQuadrants,
-                )
-            }.onFailure { error ->
-                PLog.w(
-                    TAG,
-                    "Radiance long alignment failed frame=${plan.sourceFrameIndex}; excluded",
-                    error,
-                )
-            }.getOrNull()
+                    if (hwmfDebug.collectMetrics) {
+                        logRadianceLongCompositionConfidence(
+                            frameIndex = plan.sourceFrameIndex,
+                            anchorIsReference = anchorIsReference,
+                        )
+                    }
+                    composeRadianceHighlightFlow(
+                        anchorIsReference = anchorIsReference,
+                        useBottleneckConfidence = true,
+                        confidenceStart = radianceFusionTuning.longFlowMinimumConfidence,
+                        confidenceFull = radianceFusionTuning.longFlowFullConfidence,
+                    )
+                    copyRgbaTexture(
+                        radianceHighlightComposedFlowTexture,
+                        flowTexture,
+                        gridWidth,
+                        gridHeight,
+                        "Radiance long composed flow refinement seed",
+                    )
+                    // The temporal graph keeps the hand-shake displacement small by composing
+                    // through the nearest normal anchor. Refine that composed result once more in
+                    // the actual output reference domain so the cached warp does not retain the
+                    // residual error of two independently estimated edges.
+                    refineFlow(
+                        referenceProxyTexture = referenceGuideProxyTexture,
+                        currentProxyTexture = curProxy,
+                        targetFlowTexture = flowTexture,
+                        scratchFlowTexture = flowScratchTexture,
+                    )
+                    smoothFlow(flowTexture, flowScratchTexture)
+                    computeRadianceLongEligibility(
+                        frameIndex = plan.sourceFrameIndex,
+                        sourceFlowTexture = flowTexture,
+                        stage = "composed-refined",
+                        referenceProxyTexture = referenceGuideProxyTexture,
+                    )
+                    val composedSupport = checkNotNull(
+                        summarizeRadianceLongFlow(
+                            plan = plan,
+                            anchorFrameIndex = anchorFrameIndex,
+                            sourceFlowTexture = flowTexture,
+                            stage = "composed-refined",
+                            enforceAdmission = false,
+                            photonExposureRatio = photonExposureRatio,
+                        ),
+                    )
+                    computeRobustness(referenceProxyTexture = referenceGuideProxyTexture)
+                    computeTileMask(referenceProxyTexture = referenceGuideProxyTexture)
+
+                    val cachedFlow = createTexture2D(
+                        gridWidth,
+                        gridHeight,
+                        GLES30.GL_RGBA16F,
+                        GLES30.GL_LINEAR,
+                    )
+                    val cachedRobustness = createTexture2D(
+                        planeWidth,
+                        planeHeight,
+                        GLES30.GL_R16F,
+                        GLES30.GL_NEAREST,
+                    )
+                    val cachedTileMask = createTexture2D(
+                        gridWidth,
+                        gridHeight,
+                        GLES30.GL_RGBA16F,
+                        GLES30.GL_LINEAR,
+                    )
+                    copyRgbaTexture(
+                        flowTexture,
+                        cachedFlow,
+                        gridWidth,
+                        gridHeight,
+                        "Radiance long cached flow ${plan.sourceFrameIndex}",
+                    )
+                    copyScalarTexture(
+                        robustnessTexture,
+                        cachedRobustness,
+                        planeWidth,
+                        planeHeight,
+                        "Radiance long cached robustness ${plan.sourceFrameIndex}",
+                    )
+                    copyRgbaTexture(
+                        tileMaskTexture,
+                        cachedTileMask,
+                        gridWidth,
+                        gridHeight,
+                        "Radiance long cached tile mask ${plan.sourceFrameIndex}",
+                    )
+                    RadianceLongAlignment(
+                        plan = plan,
+                        anchorFrameIndex = anchorFrameIndex,
+                        flowTexture = cachedFlow,
+                        robustnessTexture = cachedRobustness,
+                        tileMaskTexture = cachedTileMask,
+                        // Admission is categorical and requires validated flow. Once admitted,
+                        // robustness and the tile mask own local rejection; sparse seed coverage
+                        // must not attenuate the whole frame a second time.
+                        registrationWeight = directSupport.frameWeight,
+                        detailWeight = directSupport.frameWeight,
+                        precisionWeightCap = directSupport.precisionWeightCap,
+                        minFlowXPlanePx = composedSupport.minFlowXPlanePx,
+                        maxFlowXPlanePx = composedSupport.maxFlowXPlanePx,
+                        minFlowYPlanePx = composedSupport.minFlowYPlanePx,
+                        maxFlowYPlanePx = composedSupport.maxFlowYPlanePx,
+                        validTileFraction = directSupport.validTileFraction,
+                        coveredQuadrants = directSupport.coveredQuadrants,
+                    )
+                }.onFailure { error ->
+                    PLog.w(
+                        TAG,
+                        "Radiance long alignment failed frame=${plan.sourceFrameIndex}; excluded",
+                        error,
+                    )
+                }.getOrNull()
+            }
+            RawStackRuntimeDebug.i(TAG) {
+                "Radiance long alignment cache completed " +
+                    "elapsed=${System.currentTimeMillis() - alignmentStartMs}ms " +
+                    "requested=${longFrames.size} accepted=${alignments.size} " +
+                    "anchorBuilds=$anchorBuildCount anchorReuses=$anchorReuseCount " +
+                    "diagnosticReadback=${hwmfDebug.collectMetrics}"
+            }
+            alignments
+        } finally {
+            releaseRadianceLongTrackingSeedResources(trackingSeeds)
+            deleteTexture(referenceGuideProxyTexture)
         }
     }
 
@@ -3858,14 +3916,16 @@ class GlesRawStacker(
         frameIndex: Int,
         sourceFlowTexture: Int,
         stage: String,
+        referenceProxyTexture: Int = refProxy,
+        currentProxyTexture: Int = curProxy,
     ) {
         val program = radianceLongEligibilityProgram
         check(program != 0)
         bindFramebufferOutput(flowScratchTexture, "Radiance long $stage eligibility $frameIndex")
         GLES30.glViewport(0, 0, gridWidth, gridHeight)
         GLES30.glUseProgram(program)
-        bindTexture(program, "uReferenceProxy", 0, refProxy)
-        bindTexture(program, "uCurrentProxy", 1, curProxy)
+        bindTexture(program, "uReferenceProxy", 0, referenceProxyTexture)
+        bindTexture(program, "uCurrentProxy", 1, currentProxyTexture)
         bindTexture(program, "uComposedFlow", 2, sourceFlowTexture)
         GLES31.glUniform2i(uniformLocation(program, "uGridSize"), gridWidth, gridHeight)
         GLES31.glUniform2i(uniformLocation(program, "uPlaneSize"), planeWidth, planeHeight)
@@ -4093,10 +4153,13 @@ class GlesRawStacker(
         )
     }
 
-    private fun computeRobustness() {
+    private fun computeRobustness(
+        referenceProxyTexture: Int = refProxy,
+        currentProxyTexture: Int = curProxy,
+    ) {
         GLES31.glUseProgram(robustnessProgram)
-        bindTexture(robustnessProgram, "uReference", 0, refProxy)
-        bindTexture(robustnessProgram, "uCurrent", 1, curProxy)
+        bindTexture(robustnessProgram, "uReference", 0, referenceProxyTexture)
+        bindTexture(robustnessProgram, "uCurrent", 1, currentProxyTexture)
         bindTexture(robustnessProgram, "uFlowGrid", 2, flowTexture)
         bindImage(3, robustnessTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F)
         setCommonUniforms(robustnessProgram)
@@ -4109,18 +4172,21 @@ class GlesRawStacker(
         checkGlError("computeRobustness")
     }
 
-    private fun computeTileMask() {
+    private fun computeTileMask(
+        referenceProxyTexture: Int = refProxy,
+        currentProxyTexture: Int = curProxy,
+    ) {
         bindFramebufferOutput(tileMaskTexture, "computeTileMask")
         GLES30.glViewport(0, 0, gridWidth, gridHeight)
         GLES30.glUseProgram(tileMaskProgram)
-        bindTexture(tileMaskProgram, "uReference", 0, refProxy)
+        bindTexture(tileMaskProgram, "uReference", 0, referenceProxyTexture)
         bindTexture(tileMaskProgram, "uRobustness", 1, robustnessTexture)
         if (dualTileConfidence) {
             bindTexture(tileMaskProgram, "uFlowGrid", 3, flowTexture)
             setDetailConfidenceUniforms(tileMaskProgram)
         }
         if (visualizeRadianceFusionRejections) {
-            bindTexture(tileMaskProgram, "uCurrent", 2, curProxy)
+            bindTexture(tileMaskProgram, "uCurrent", 2, currentProxyTexture)
         }
         GLES31.glUniform2i(GLES31.glGetUniformLocation(tileMaskProgram, "uPlaneSize"), planeWidth, planeHeight)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(tileMaskProgram, "uGridSize"), gridWidth, gridHeight)
@@ -5669,6 +5735,10 @@ class GlesRawStacker(
             },
         )
         GLES31.glUniform1f(
+            uniformLocation(accumulateSuperResolutionProgram, "uLongNrWeightScale"),
+            radianceFusionTuning.longNrWeightScale.coerceAtLeast(1f),
+        )
+        GLES31.glUniform1f(
             uniformLocation(accumulateSuperResolutionProgram, "uLongDetailWeightScale"),
             radianceFusionTuning.longDetailWeightScale.coerceIn(0f, 1f),
         )
@@ -6370,7 +6440,9 @@ class GlesRawStacker(
                 "longParticipationOverlay=$visualizeRadianceLongParticipation " +
                 "vgnChromaPostprocess=${chromaPostprocessor != null} " +
                 "candidates=$candidateFrameCount acceptedNormal=${acceptedFrames.size} " +
-                "acceptedLong=${longAlignments.size}"
+                "acceptedLong=${longAlignments.size} " +
+                "longNrScale=${radianceFusionTuning.longNrWeightScale} " +
+                "longPrecisionCap=${radianceFusionTuning.longPrecisionWeightCap}"
         }
         try {
             radianceTiles.forEach { tile ->

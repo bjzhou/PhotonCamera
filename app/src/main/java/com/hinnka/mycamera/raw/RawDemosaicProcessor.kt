@@ -992,6 +992,136 @@ class RawDemosaicProcessor {
     }
 
     /**
+     * Renders the original LinearRaw RGB buffer with the same prepared metadata/profile passed
+     * to the DNG writer. This keeps the established DNG rendering contract while avoiding
+     * lossless-JPEG decompression and the native pixel-buffer copy performed by [processDngNative].
+     *
+     * BaselineExposure, PGTM and the embedded color/tone plan are prepared once and shared by
+     * both consumers; the only permitted difference is numeric quantization during TIFF write.
+     */
+    suspend fun processLinearDngBufferForHdrSources(
+        context: Context,
+        rawData: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        samplesPerPixel: Int,
+        metadata: RawMetadata,
+        aspectRatio: AspectRatio?,
+        cropRegion: Rect?,
+        rotation: Int,
+        exposureBias: Float = 0f,
+        rawExposureCompensation: Float = 0f,
+        rawHighlightsAdjustment: Float = 0f,
+        rawShadowsAdjustment: Float = 0f,
+        rawBlackPointCorrection: Float = 0f,
+        rawWhitePointCorrection: Float = 0f,
+        rawAutoWhiteBalanceEstimate: Boolean = false,
+        applyLensShadingCorrection: Boolean = true,
+        rawBlackLevelMode: String? = null,
+        rawCustomBlackLevel: Float? = null,
+        rawWhiteLevelMode: String? = null,
+        rawCustomWhiteLevel: Float? = null,
+        sharpeningValue: Float = 0f,
+        denoiseValue: Float? = null,
+        chromaDenoiseValue: Float? = null,
+        rawDcpId: String? = null,
+        dcpRenderPlan: DcpRenderPlan? = null,
+        embeddedDngRenderPlan: DcpRenderPlan,
+        spectralFilmStock: String? = null,
+        spectralFilmPrint: String? = null,
+        spectralFilmTuning: SpectralFilmTuning = SpectralFilmTuning.DEFAULT,
+        rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+        rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+        rawCfaCorrectionMode: String? = null,
+        rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
+        onMetadata: ((RawMetadata) -> Unit)? = null,
+    ): RawHdrRenderResult? = withContext(glDispatcher) {
+        if (samplesPerPixel !in 3..4 || width <= 0 || height <= 0 || rowStride <= 0) {
+            PLog.e(
+                TAG,
+                "Invalid in-memory LinearRaw DNG source: ${width}x$height " +
+                    "samplesPerPixel=$samplesPerPixel rowStride=$rowStride"
+            )
+            return@withContext null
+        }
+        val renderMetadata = applyDngMetadataOverrides(
+            metadata = metadata,
+            rawBlackLevelMode = rawBlackLevelMode,
+            rawCustomBlackLevel = rawCustomBlackLevel,
+            rawWhiteLevelMode = rawWhiteLevelMode,
+            rawCustomWhiteLevel = rawCustomWhiteLevel,
+            rawCfaCorrectionMode = rawCfaCorrectionMode,
+        ).copy(
+            colorCorrectionMatrix = embeddedDngRenderPlan.colorCorrectionMatrix.copyOf(),
+            cameraWhite = embeddedDngRenderPlan.cameraWhite.copyOf(),
+            exposureBias = exposureBias,
+        )
+        onMetadata?.invoke(renderMetadata)
+        PLog.i(
+            TAG,
+            "RAW_LINEAR_DNG_BYPASS source=IN_MEMORY_RGB16 metadata=SHARED_DNG_PARAMS " +
+                "size=${width}x$height samplesPerPixel=$samplesPerPixel rowStride=$rowStride " +
+                "baselineExposure=${renderMetadata.baselineExposure} " +
+                "defaultCrop=${renderMetadata.defaultCrop} " +
+                "black=${renderMetadata.blackLevel.contentToString()} white=${renderMetadata.whiteLevel} " +
+                "wb=${renderMetadata.whiteBalanceGains.contentToString()} " +
+                "cameraWhite=${renderMetadata.cameraWhite.contentToString()} " +
+                "ccm=${renderMetadata.colorCorrectionMatrix.contentToString()} " +
+                "noise=${renderMetadata.channelNoiseProfile.contentToString()} " +
+                "pgtm=${renderMetadata.profileGainTableMap?.let {
+                    "${it.mapPointsH}x${it.mapPointsV}x${it.mapPointsN}:tag=${it.sourceTag}"
+                } ?: "none"} profile=${embeddedDngRenderPlan.profileName} " +
+                "rawAwbIgnoredForLinear=$rawAutoWhiteBalanceEstimate"
+        )
+
+        try {
+            processInternal(
+                context = context,
+                rawData = rawData.duplicate().order(ByteOrder.nativeOrder()),
+                width = width,
+                height = height,
+                rowStride = rowStride,
+                samplesPerPixel = samplesPerPixel,
+                metadata = renderMetadata,
+                aspectRatio = aspectRatio,
+                cropRegion = cropRegion,
+                rotation = rotation,
+                exposureBias = exposureBias,
+                rawExposureCompensation = rawExposureCompensation,
+                rawHighlightsAdjustment = rawHighlightsAdjustment,
+                rawShadowsAdjustment = rawShadowsAdjustment,
+                rawBlackPointCorrection = rawBlackPointCorrection,
+                rawWhitePointCorrection = rawWhitePointCorrection,
+                rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
+                applyLensShadingCorrection = applyLensShadingCorrection,
+                rawBlackLevelMode = rawBlackLevelMode,
+                rawCustomBlackLevel = rawCustomBlackLevel,
+                rawWhiteLevelMode = rawWhiteLevelMode,
+                rawCustomWhiteLevel = rawCustomWhiteLevel,
+                sharpeningValue = sharpeningValue,
+                denoiseValue = denoiseValue,
+                chromaDenoiseValue = chromaDenoiseValue,
+                rawDcpId = rawDcpId,
+                dcpRenderPlan = dcpRenderPlan,
+                spectralFilmStock = spectralFilmStock,
+                spectralFilmPrint = spectralFilmPrint,
+                spectralFilmTuning = spectralFilmTuning,
+                rawRenderingEngine = rawRenderingEngine,
+                rawToneMappingParameters = rawToneMappingParameters,
+                rawCfaCorrectionMode = rawCfaCorrectionMode,
+                rawBlackBorderCrop = rawBlackBorderCrop,
+                includeHdrReference = true,
+                sourceDngRenderPlan = embeddedDngRenderPlan,
+                defaultCropIsAuthoritative = true,
+            )
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to process in-memory LinearRaw DNG source", e)
+            null
+        }
+    }
+
+    /**
      * 内部处理方法（共享的核心处理逻辑）
      */
     private suspend fun processInternal(
@@ -1036,6 +1166,8 @@ class RawDemosaicProcessor {
         captureProfileToneMapMode: RawProfileToneMapMode? = null,
         captureProfileStatsBounds: Rect? = null,
         onCaptureProfilePrepared: ((RawDngCaptureProfileResult?) -> Unit)? = null,
+        sourceDngRenderPlan: DcpRenderPlan? = null,
+        defaultCropIsAuthoritative: Boolean = false,
     ): RawHdrRenderResult? = withContext(glDispatcher) {
         var actualRawData = rawData
         var actualWidth = width
@@ -1050,7 +1182,7 @@ class RawDemosaicProcessor {
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
         val profileWorkingColorSpace = ColorSpace.ProPhoto
-        var embeddedDngRenderPlan: DcpRenderPlan? = null
+        var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
 
         if (dngFile != null) {
             val hasClassicTiffHeader = DngProfileGainTableMap.hasClassicTiffHeader(dngFile)
@@ -1189,7 +1321,9 @@ class RawDemosaicProcessor {
             metadataDefaultCrop = actualMetadata.defaultCrop
         )
         val effectiveDefaultCrop = rawBlackBorderDefaultCrop ?: actualMetadata.defaultCrop
-        val renderCropRegion = if (dngFile != null && effectiveDefaultCrop != null) {
+        val renderCropRegion = if (
+            (dngFile != null || defaultCropIsAuthoritative) && effectiveDefaultCrop != null
+        ) {
             if (cropRegion != null) {
                 PLog.d(TAG, "DNG DefaultCrop is authoritative; ignoring legacy Camera2 crop=$cropRegion")
             }

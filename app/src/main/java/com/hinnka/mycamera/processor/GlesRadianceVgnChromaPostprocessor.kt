@@ -2,9 +2,9 @@ package com.hinnka.mycamera.processor
 
 import android.opengl.GLES30
 import android.opengl.GLES31
+import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.math.acos
 import kotlin.math.ceil
 import kotlin.math.cos
@@ -518,7 +518,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         val scratch = LargeDirectBuffer.allocate(scratchBytes, "Radiance VGN chroma tile readback")
             ?: throw IllegalStateException("Unable to allocate Radiance VGN chroma readback scratch")
         val allocationMs = System.currentTimeMillis() - allocationStart
-        val output = outputBuffer.apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
+        outputBuffer.clear()
         var glReadMs = 0L
         var copyMs = 0L
         GLES31.glMemoryBarrier(
@@ -555,18 +555,19 @@ internal class GlesRadianceVgnChromaPostprocessor(
                 backend.checkGlError("Radiance VGN chroma read tile ${tile.index}")
 
                 val copyStart = System.currentTimeMillis()
-                val rgba = scratch.order(ByteOrder.nativeOrder()).asShortBuffer()
-                for (localY in 0 until tile.outputCore.height) {
-                    for (localX in 0 until tile.outputCore.width) {
-                        val sourceIndex = (localY * tile.outputCore.width + localX) * 4
-                        val targetIndex = (
-                            (tile.outputCore.top + localY) * imageWidth +
-                                tile.outputCore.left + localX
-                            ) * 3
-                        output.put(targetIndex, rgba.get(sourceIndex))
-                        output.put(targetIndex + 1, rgba.get(sourceIndex + 1))
-                        output.put(targetIndex + 2, rgba.get(sourceIndex + 2))
-                    }
+                check(
+                    DirectBufferPixelPacker.unpackRgba16TileToRgb16(
+                        source = scratch,
+                        sourceWidth = tile.outputCore.width,
+                        sourceHeight = tile.outputCore.height,
+                        destination = outputBuffer,
+                        destinationWidth = imageWidth,
+                        destinationHeight = imageHeight,
+                        destinationLeft = tile.outputCore.left,
+                        destinationTop = tile.outputCore.top,
+                    )
+                ) {
+                    "Unable to pack Radiance VGN chroma tile ${tile.index} into RGB16 output"
                 }
                 copyMs += System.currentTimeMillis() - copyStart
                 backend.yieldToUiRenderer()

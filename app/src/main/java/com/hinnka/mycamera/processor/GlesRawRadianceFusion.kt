@@ -476,6 +476,7 @@ data class RawRadianceFusionTuning(
     val longClipStart: Float = 0.90f,
     val longClipFull: Float = 0.985f,
     val longPrecisionWeightCap: Float = 24.0f,
+    val longNrWeightScale: Float = 3.0f,
     val longDetailWeightScale: Float = 0.25f,
     val longMergeFactorTarget: Float = 0.70f,
     val longFlowFbConsistencyStartPx: Float = 0.75f,
@@ -1163,6 +1164,7 @@ internal object GlesRawRadianceFusionShaders {
         uniform float uLongClipStart;
         uniform float uLongClipFull;
         uniform float uLongPrecisionWeightCap;
+        uniform float uLongNrWeightScale;
         uniform float uLongDetailWeightScale;
         uniform float uDenoiseSigmaRawPx;
         uniform float uDenoiseSteeringStrength;
@@ -1537,6 +1539,15 @@ internal object GlesRawRadianceFusionShaders {
                     min(channelPrecision.r, channelPrecision.g),
                     channelPrecision.b
                 );
+                // Long brackets are deliberately allowed to carry more denoise precision than
+                // a normal non-reference frame. Keep this role boost inside the validated
+                // precision cap; all geometric, chroma, clipping, and robustness gates remain
+                // downstream and can still reduce the final weight to zero.
+                float nrPrecision = uIsLongFrame != 0 ?
+                    min(
+                        sharedPrecision * max(uLongNrWeightScale, 1.0),
+                        precisionUpper
+                    ) : sharedPrecision;
                 float sharedConsistency = min(chromaConfidence.x, chromaConfidence.y);
                 float sharedHighlight = min(min(highlight.r, highlight.g), highlight.b);
                 float longNrRoleWeight = uIsLongFrame != 0 ? longClipConfidence : 1.0;
@@ -1555,7 +1566,7 @@ internal object GlesRawRadianceFusionShaders {
                     longPathConfidence;
                 $rejectionAssignment
                 float staticConfidence = denoiseStaticConfidence(tileConfidence.r, robust);
-                float sharedNrWeight = uFrameWeight * sharedPrecision * sharedConsistency *
+                float sharedNrWeight = uFrameWeight * nrPrecision * sharedConsistency *
                     nrCoverage * sharedHighlight * longNrRoleWeight * mix(
                     1.0,
                     max(uDenoiseNonReferenceWeightBoost, 1.0),

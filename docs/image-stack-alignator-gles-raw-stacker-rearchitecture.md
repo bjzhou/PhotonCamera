@@ -171,7 +171,7 @@ Gyro 评分只反映相机运动，不反映主体运动和纯平移，因此不
 
 ### 4.3 低成本图像质量评分
 
-ImageReader 收齐帧后，在 GPU 主合成前为每张 RAW 生成小尺寸绿色代理图。参考帧规划使用最大长边 128 的直接抽样代理；后续局部 tracking 可独立生成更高分辨率 proxy：
+ImageReader 收齐帧后，由 GLES 流水线为每张 RAW 生成小尺寸绿色代理图。禁止在拍照回调后的 JVM/CPU 热路径逐张扫描 RAW plane；质量统计必须复用 GLES proxy 或 temporal graph 已有结果：
 
 - CFA-aware 绿色采样。
 - 黑白电平归一化。
@@ -201,11 +201,7 @@ frameQuality =
 
 ### 4.5 参考帧选择
 
-参考帧不在拍摄端立即固定。流程为：
-
-1. 从质量排名前若干帧中选择候选。
-2. 对候选执行低分辨率全局预对齐。
-3. 为候选计算：
+拍摄端只根据 Gyro 曝光窗口选择稳定 normal 帧作为 GPU 初始 reference，不执行图像几何配准。图像域参考帧评估必须在 GLES proxy/temporal graph 内完成，并复用同一组 GPU 配准结果计算：
 
 ```text
 referenceCost =
@@ -218,7 +214,7 @@ referenceCost =
   + exposureRolePenalty
 ```
 
-4. 选择 cost 最低的 normal 帧作为 reference。
+最终选择 cost 最低的 normal 帧作为 reference。GPU 参考帧重选不可通过新增 JVM proxy planner 实现；若设备档位不执行 GPU 重选，则保持 Gyro reference，由 temporal graph 负责后续全部位移估计。
 
 这同时吸收 ImageStackAlignator 的几何中心参考帧和 eszdmanPhoton 的稳定帧优先策略。
 
@@ -236,7 +232,7 @@ Accumulator 使用加权和，因此处理顺序原则上不应改变最终数�
 
 ```mermaid
 flowchart TD
-    A["RawBurstPlan"] --> B["CFA-aware proxy"]
+    A["Gyro reference + RawBurstPlan"] --> B["CFA-aware GLES proxy"]
     B --> C["Low-pass + high-pass proxy pyramid"]
     C --> D["Global translation/rotation pre-alignment"]
     D --> E["Reference selection finalized"]
@@ -285,7 +281,7 @@ proxy = log(1 + k * linearSignal) / log(1 + k)
 cost = normalizedL2(proxyLow) + hpWeight * normalizedL2(proxyBand)
 ```
 
-不在 GLES 中实现通用 FFT 高通；DoG 是移动端等价实现，内存和执行时间可控。
+不在 GLES 中实现通用 FFT 高通；DoG 是移动端等价实现，内存和执行时间可控。JVM 层不得保留一套重复的 proxy、旋转/平移穷举或 temporal graph 配准。
 
 ## 7. 全局预对齐
 
@@ -300,7 +296,7 @@ cost = normalizedL2(proxyLow) + hpWeight * normalizedL2(proxyBand)
 
 ### 7.2 移动端搜索方式
 
-不实现全图 cuFFT。采用 DS16/DS32 proxy 上的 coarse-to-fine compute search：
+不实现全图 cuFFT，也不在 CPU 上遍历候选位移。采用 DS16/DS32 GLES proxy 上的 coarse-to-fine compute search：
 
 1. Gyro integrated roll 给出 `theta` 搜索中心。
 2. 在小角度集合上评估全局 normalized L2/correlation。
@@ -719,8 +715,8 @@ MFNR 在高分辨率设备、MFSR 在所有设备上支持 output tile：
 
 建议目标，以 12 MP、6～8 帧为基准：
 
-- 帧质量 proxy：100 ms 内。
-- 全局预对齐与 reference selection：150 ms 内。
+- CPU burst plan（曝光角色、Gyro 筛选、排序）：20 ms 内。
+- GPU 帧质量 proxy、全局预对齐与 reference selection：150 ms 内。
 - 时间图 patch tracking：400 ms 内。
 - graph solve + LK：250 ms 内。
 - MFNR accumulate + normalize：700 ms 内。
@@ -761,7 +757,6 @@ Debug 构建通过单一 `RawStackDebugCapture` 开关支持一次只抓取一�
 - `processor/RawBurstFrame.kt`
 - `processor/RawBurstPlanner.kt`
 - `processor/RawFrameQualityAnalyzer.kt`
-- `processor/RawGlobalPreAligner.kt`
 - `processor/RawTemporalGraph.kt`
 - `processor/RawTemporalGraphSolver.kt`
 - `processor/RawStackPerformanceTier.kt`
@@ -826,8 +821,8 @@ Debug 构建通过单一 `RawStackDebugCapture` 开关支持一次只抓取一�
 
 ### 里程碑 B：全局预对齐与参考帧选择
 
-- 实现小尺寸 proxy 和 DoG band。
-- 实现平移/旋转 coarse-to-fine search。
+- 在 GLES 中实现小尺寸 proxy 和 DoG band。
+- 在 GLES 中实现平移/旋转 coarse-to-fine search，禁止新增 CPU 镜像路径。
 - `RawBurstPlanner` 输出 reference 与处理顺序。
 - 现有 stack 可先使用新 reference 验证收益。
 
@@ -920,7 +915,7 @@ Debug 构建通过单一 `RawStackDebugCapture` 开关支持一次只抓取一�
 
 - Gyro 窗口切片和积分。
 - timestamp 边界插值。
-- 参考帧 cost 选择。
+- GPU 参考帧 cost 选择。
 - temporal graph 矩阵构建。
 - 合成位移数据的 IRLS 求解和异常边剔除。
 - CFA phase 映射。

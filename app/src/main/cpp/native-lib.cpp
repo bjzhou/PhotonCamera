@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <android/bitmap.h>
 #include <array>
+#include <arm_neon.h>
 #include <cmath>
 #include <chrono>
 #include <cstring>
@@ -3933,6 +3934,70 @@ Java_com_hinnka_mycamera_utils_DirectBufferAllocator_allocateNative(
     return nullptr;
   }
   return env->NewDirectByteBuffer(ptr, capacity);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_utils_DirectBufferPixelPacker_unpackRgba16TileToRgb16(
+    JNIEnv *env, jobject, jobject sourceBuffer, jint sourceWidth,
+    jint sourceHeight, jobject destinationBuffer, jint destinationWidth,
+    jint destinationHeight, jint destinationLeft, jint destinationTop) {
+  if (!sourceBuffer || !destinationBuffer || sourceWidth <= 0 ||
+      sourceHeight <= 0 || destinationWidth <= 0 || destinationHeight <= 0 ||
+      destinationLeft < 0 || destinationTop < 0 ||
+      static_cast<int64_t>(destinationLeft) + sourceWidth > destinationWidth ||
+      static_cast<int64_t>(destinationTop) + sourceHeight > destinationHeight) {
+    LOGE("unpackRgba16TileToRgb16: invalid geometry src=%dx%d dst=%dx%d at %d,%d",
+         sourceWidth, sourceHeight, destinationWidth, destinationHeight,
+         destinationLeft, destinationTop);
+    return JNI_FALSE;
+  }
+
+  auto *source = static_cast<const uint16_t *>(
+      env->GetDirectBufferAddress(sourceBuffer));
+  auto *destination = static_cast<uint16_t *>(
+      env->GetDirectBufferAddress(destinationBuffer));
+  const int64_t sourceRequiredBytes =
+      static_cast<int64_t>(sourceWidth) * sourceHeight * 4 * sizeof(uint16_t);
+  const int64_t destinationRequiredBytes =
+      static_cast<int64_t>(destinationWidth) * destinationHeight * 3 *
+      sizeof(uint16_t);
+  const jlong sourceCapacity = env->GetDirectBufferCapacity(sourceBuffer);
+  const jlong destinationCapacity =
+      env->GetDirectBufferCapacity(destinationBuffer);
+  if (!source || !destination || sourceCapacity < sourceRequiredBytes ||
+      destinationCapacity < destinationRequiredBytes) {
+    LOGE("unpackRgba16TileToRgb16: invalid buffers src=%p %lld/%lld dst=%p %lld/%lld",
+         source, static_cast<long long>(sourceCapacity),
+         static_cast<long long>(sourceRequiredBytes), destination,
+         static_cast<long long>(destinationCapacity),
+         static_cast<long long>(destinationRequiredBytes));
+    return JNI_FALSE;
+  }
+
+  for (int y = 0; y < sourceHeight; ++y) {
+    const uint16_t *sourceRow =
+        source + static_cast<size_t>(y) * sourceWidth * 4;
+    uint16_t *destinationRow =
+        destination +
+        (static_cast<size_t>(destinationTop + y) * destinationWidth +
+         destinationLeft) *
+            3;
+    int x = 0;
+    for (; x + 8 <= sourceWidth; x += 8) {
+      const uint16x8x4_t rgba = vld4q_u16(sourceRow + x * 4);
+      uint16x8x3_t rgb;
+      rgb.val[0] = rgba.val[0];
+      rgb.val[1] = rgba.val[1];
+      rgb.val[2] = rgba.val[2];
+      vst3q_u16(destinationRow + x * 3, rgb);
+    }
+    for (; x < sourceWidth; ++x) {
+      destinationRow[x * 3] = sourceRow[x * 4];
+      destinationRow[x * 3 + 1] = sourceRow[x * 4 + 1];
+      destinationRow[x * 3 + 2] = sourceRow[x * 4 + 2];
+    }
+  }
+  return JNI_TRUE;
 }
 
 JNIEXPORT jbyteArray JNICALL

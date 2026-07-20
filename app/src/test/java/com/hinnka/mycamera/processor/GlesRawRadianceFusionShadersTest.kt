@@ -207,6 +207,32 @@ class GlesRawRadianceFusionShadersTest {
     }
 
     @Test
+    fun longNrPrecisionBoostIsCappedWithoutBoostingDetail() {
+        val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
+
+        assertEquals(3f, RawRadianceFusionTuning().longNrWeightScale, 0f)
+        assertTrue(shader.contains("uniform float uLongNrWeightScale"))
+        assertTrue(
+            Regex(
+                """float nrPrecision = uIsLongFrame != 0 \?\s*min\(\s*""" +
+                    """sharedPrecision \* max\(uLongNrWeightScale, 1\.0\),\s*""" +
+                    """precisionUpper\s*\) : sharedPrecision;""",
+            ).containsMatchIn(shader),
+        )
+        assertTrue(
+            shader.contains(
+                "float sharedNrWeight = uFrameWeight * nrPrecision * sharedConsistency",
+            ),
+        )
+        assertTrue(
+            shader.contains(
+                "float sharedDetailWeight = uFrameWeight * sharedPrecision * sharedConsistency",
+            ),
+        )
+        assertFalse(shader.contains("sharedDetailWeight = uFrameWeight * nrPrecision"))
+    }
+
+    @Test
     fun longFramesRequireFinalComposedPathConfidencePerPixel() {
         val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
 

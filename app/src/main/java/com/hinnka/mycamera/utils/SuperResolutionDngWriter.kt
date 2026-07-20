@@ -12,6 +12,12 @@ import android.os.SystemClock
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.DngCameraRawProfileXmp
+import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.DcpDefaultBlackRender
+import com.hinnka.mycamera.raw.DcpProfile
+import com.hinnka.mycamera.raw.DcpProfileParser
+import com.hinnka.mycamera.raw.DcpRenderPlan
+import com.hinnka.mycamera.raw.DcpToneCurve
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -44,6 +50,73 @@ object SuperResolutionDngWriter {
     enum class Compression(val tagValue: Int) {
         UNCOMPRESSED(1),
         JPEG_LOSSLESS(7),
+    }
+
+    /** Builds the same embedded color/tone plan that [write] serializes into the DNG IFD. */
+    fun resolveEmbeddedRenderPlan(
+        characteristics: CameraCharacteristics,
+        metadata: RawMetadata,
+        imageLayout: ImageLayout,
+        profileGainTableMap: DngProfileGainTableMap?,
+        profileToneCurve: FloatArray?,
+    ): DcpRenderPlan? {
+        val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
+            ?.let(::colorTransformToDngMatrix)
+            ?.map(Double::toFloat)
+            ?.toFloatArray()
+        val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+            ?.let(::colorTransformToDngMatrix)
+            ?.map(Double::toFloat)
+            ?.toFloatArray()
+        val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)
+            ?.toInt()
+            ?.takeIf { colorMatrix2 != null }
+            ?: 0
+        val calibration1 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)
+            ?.let(::colorTransformToExactDngMatrix)
+            ?.map(Double::toFloat)
+            ?.toFloatArray()
+        val calibration2 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
+            ?.takeIf { illuminant2 != 0 }
+            ?.let(::colorTransformToExactDngMatrix)
+            ?.map(Double::toFloat)
+            ?.toFloatArray()
+        val toneCurve = profileToneCurve
+            ?.takeIf { profileGainTableMap != null && it.size >= 4 }
+            ?.let(::DcpToneCurve)
+            ?.takeIf { it.isValid }
+        val profile = DcpProfile(
+            profileName = "Embedded",
+            calibrationIlluminant1 = characteristics.get(
+                CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1
+            ) ?: 21,
+            calibrationIlluminant2 = illuminant2,
+            baselineExposureOffset = 0f,
+            defaultBlackRender = if (
+                profileGainTableMap != null || imageLayout == ImageLayout.LINEAR_RAW_RGB
+            ) {
+                DcpDefaultBlackRender.None
+            } else {
+                DcpDefaultBlackRender.Auto
+            },
+            supportsOverrange = false,
+            colorMatrix1 = colorMatrix1,
+            colorMatrix2 = colorMatrix2,
+            forwardMatrix1 = null,
+            forwardMatrix2 = null,
+            hueSatDeltas1 = null,
+            hueSatDeltas2 = null,
+            lookTable = null,
+            toneCurve = toneCurve,
+            analogBalance = floatArrayOf(1f, 1f, 1f),
+            cameraCalibration1 = calibration1,
+            cameraCalibration2 = calibration2,
+        )
+        return DcpProfileParser.resolveRenderPlan(
+            profile = profile,
+            metadata = metadata,
+            workingColorSpace = ColorSpace.ProPhoto,
+        )
     }
 
     private const val TYPE_BYTE = 1
