@@ -4079,7 +4079,9 @@ class RawDemosaicProcessor {
             TAG,
             "DenoiseProfile NLM: strength=${params.strength} a=${params.a} b=${params.b} " +
                     "shadows=${params.shadows} bias=${params.bias} patch=${params.patchRadius} " +
-                    "search=${params.searchRadius} norm=${params.norm} center=${params.centralPixelWeight} " +
+                    "search=${params.searchRadius} fineNoise=${params.expectedFineDistance} " +
+                    "guideNoise=${params.expectedGuideDistance} bandwidth=${params.inverseBandwidth} " +
+                    "guideWeight=${params.coarseGuideWeight} center=${params.centralPixelWeight} " +
                     "greenNoise=true adaptiveWb=${params.adaptiveWb.contentToString()} " +
                     "signalScale=${params.signalScale.contentToString()}"
         )
@@ -4098,7 +4100,10 @@ class RawDemosaicProcessor {
         val scale: Float,
         val patchRadius: Int,
         val searchRadius: Int,
-        val norm: Float,
+        val expectedFineDistance: Float,
+        val expectedGuideDistance: Float,
+        val inverseBandwidth: Float,
+        val coarseGuideWeight: Float,
         val centralPixelWeight: Float,
         val p: FloatArray,
         val adaptiveWb: FloatArray,
@@ -4139,14 +4144,12 @@ class RawDemosaicProcessor {
         val compensateP = 0.05f / 0.05f.pow(shadows)
         val patchRadius = DenoiseProfileShaders.PATCH_RADIUS
         val searchRadius = DenoiseProfileShaders.SEARCH_RADIUS
-        val patchWidth = 2 * patchRadius + 1
-        val norm = 0.045f / (patchWidth * patchWidth).toFloat()
+        val weightTuning = DenoiseProfileNlmConfig.weightTuning(patchRadius)
         val centralPixelWeight = 0.1f * scale
-        val nlmStrength = strength.coerceAtLeast(1e-6f)
         val signalScale = floatArrayOf(
-            nlmStrength * scale,
-            nlmStrength * scale,
-            nlmStrength * scale,
+            scale,
+            scale,
+            scale,
             1.0f
         )
         val aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f)
@@ -4161,7 +4164,10 @@ class RawDemosaicProcessor {
             scale = scale,
             patchRadius = patchRadius,
             searchRadius = searchRadius,
-            norm = norm,
+            expectedFineDistance = weightTuning.expectedFineDistance,
+            expectedGuideDistance = weightTuning.expectedGuideDistance,
+            inverseBandwidth = weightTuning.inverseBandwidth,
+            coarseGuideWeight = weightTuning.coarseGuideWeight,
             centralPixelWeight = centralPixelWeight,
             p = p,
             adaptiveWb = adaptiveWb,
@@ -4215,18 +4221,16 @@ class RawDemosaicProcessor {
         for (stripe in stripes) {
             dispatchDenoiseNlmInit(width, height, stripe)
 
-            for (qy in -params.searchRadius..0) {
-                for (qx in -params.searchRadius..params.searchRadius) {
-                    dispatchDenoiseNlmFusedAccumulate(
-                        preconditionedTextureId,
-                        width,
-                        height,
-                        stripe,
-                        qx,
-                        qy,
-                        params
-                    )
-                }
+            for (offset in DenoiseProfileNlmConfig.searchOffsets) {
+                dispatchDenoiseNlmFusedAccumulate(
+                    preconditionedTextureId,
+                    width,
+                    height,
+                    stripe,
+                    offset.x,
+                    offset.y,
+                    params
+                )
             }
 
             dispatchDenoiseNlmFinish(
@@ -4276,7 +4280,22 @@ class RawDemosaicProcessor {
         GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uImageSize"), width, height)
         setDenoiseStripeUniforms(denoiseNlmFusedAccuProgram, stripe)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uQ"), qx, qy)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uNorm"), params.norm)
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uExpectedFineDistance"),
+            params.expectedFineDistance
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uExpectedGuideDistance"),
+            params.expectedGuideDistance
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uInverseBandwidth"),
+            params.inverseBandwidth
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uCoarseGuideWeight"),
+            params.coarseGuideWeight
+        )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(denoiseNlmFusedAccuProgram, "uCentralPixelWeight"),
             params.centralPixelWeight
@@ -4315,6 +4334,10 @@ class RawDemosaicProcessor {
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(program, "uBias"),
             params.bias - 0.5f * ln(params.scale)
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(program, "uDenoiseMix"),
+            params.strength.coerceIn(0f, 1f)
         )
         dispatchDenoiseImage(
             width,

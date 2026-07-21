@@ -5,7 +5,8 @@ package com.hinnka.mycamera.raw
  *
  * Input and output stay in un-white-balanced camera RGB. The host keeps darktable's
  * white-balance-adaptive exponent, but removes WB from the reversible signal scale.
- * The pipeline mirrors darktable process_nlmeans_cl with a mobile fused accumulator:
+ * The pipeline mirrors darktable process_nlmeans_cl with a mobile fused accumulator and a
+ * low-frequency green guide used to keep low-contrast structure out of the noise estimate:
  * precondition_v2 -> init -> repeated local-tile accu -> finish_v2.
  */
 object DenoiseProfileShaders {
@@ -62,18 +63,43 @@ object DenoiseProfileShaders {
         uniform vec4 uB;
         uniform vec4 uSignalScale;
 
-        void main() {
-            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
-
-            vec4 pixel = readPixel(uInput, coord, uImageSize);
-            float alpha = pixel.a;
-            vec4 t = max(
+        vec4 preconditionSignal(vec4 pixel) {
+            return max(
                 2.0 * dtPow(max(vec4(0.0), pixel / uSignalScale + uB), 1.0 - uP / 2.0) /
                 ((-uP + 2.0) * sqrt(uA)),
                 vec4(0.0)
             );
-            t.a = alpha;
+        }
+
+        float preconditionGreen(float signal) {
+            return max(
+                2.0 * pow(max(0.0, signal / uSignalScale.g + uB.g), 1.0 - uP.g / 2.0) /
+                ((-uP.g + 2.0) * sqrt(uA.g)),
+                0.0
+            );
+        }
+
+        void main() {
+            ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+            if (coord.x >= uImageSize.x || coord.y >= uImageSize.y) return;
+
+            vec4 t = preconditionSignal(readPixel(uInput, coord, uImageSize));
+
+            // Alpha is scratch space after preconditioning: FUSED_ACCU replaces it with the
+            // accumulated weight and FINISH_V2 restores alpha from the original input. A 3x3
+            // Gaussian green guide expands the effective structural support of the 3x3 RGB
+            // patch without another full-resolution intermediate texture.
+            float guide =
+                preconditionGreen(readPixel(uInput, coord + ivec2(-1, -1), uImageSize).g) +
+                2.0 * preconditionGreen(readPixel(uInput, coord + ivec2(0, -1), uImageSize).g) +
+                preconditionGreen(readPixel(uInput, coord + ivec2(1, -1), uImageSize).g) +
+                2.0 * preconditionGreen(readPixel(uInput, coord + ivec2(-1, 0), uImageSize).g) +
+                4.0 * t.g +
+                2.0 * preconditionGreen(readPixel(uInput, coord + ivec2(1, 0), uImageSize).g) +
+                preconditionGreen(readPixel(uInput, coord + ivec2(-1, 1), uImageSize).g) +
+                2.0 * preconditionGreen(readPixel(uInput, coord + ivec2(0, 1), uImageSize).g) +
+                preconditionGreen(readPixel(uInput, coord + ivec2(1, 1), uImageSize).g);
+            t.a = guide * (1.0 / 16.0);
             imageStore(uOutput, coord, t);
         }
     """.trimIndent()
@@ -102,34 +128,37 @@ object DenoiseProfileShaders {
         layout(binding = 0) uniform highp sampler2D uInput;
         layout(std430, binding = 0) buffer AccuBuffer { vec4 u2[]; };
 
-        shared float sDistance[$FUSED_TILE_X * $FUSED_TILE_Y];
+        shared vec2 sDistance[$FUSED_TILE_X * $FUSED_TILE_Y];
 
         uniform ivec2 uImageSize;
         uniform int uStripeRowOffset;
         uniform int uStripeRowCount;
         uniform ivec2 uQ;
-        uniform float uNorm;
+        uniform float uExpectedFineDistance;
+        uniform float uExpectedGuideDistance;
+        uniform float uInverseBandwidth;
+        uniform float uCoarseGuideWeight;
         uniform float uCentralPixelWeight;
 
-        float pixelDistance(ivec2 coord, ivec2 q) {
+        vec2 pixelDistance(ivec2 coord, ivec2 q) {
             ivec2 shifted = coord + q;
             bool inBounds = shifted.x >= 0 && shifted.x < uImageSize.x &&
                 shifted.y >= 0 && shifted.y < uImageSize.y;
-            if (!inBounds) return 0.0;
+            if (!inBounds) return vec2(0.0);
 
             vec4 p1 = readPixel(uInput, coord, uImageSize);
             vec4 p2 = readPixel(uInput, shifted, uImageSize);
             vec4 tmp = (p1 - p2) * (p1 - p2);
-            return tmp.x + tmp.y + tmp.z;
+            return vec2(tmp.x + tmp.y + tmp.z, tmp.a);
         }
 
-        float tileDistance(ivec2 imageCoord, ivec2 groupOrigin, ivec2 tileMin, int tileWidth) {
+        vec2 tileDistance(ivec2 imageCoord, ivec2 groupOrigin, ivec2 tileMin, int tileWidth) {
             ivec2 tileCoord = imageCoord - groupOrigin - tileMin;
             return sDistance[tileCoord.y * tileWidth + tileCoord.x];
         }
 
         float patchWeight(ivec2 center, ivec2 groupOrigin, ivec2 tileMin, int tileWidth) {
-            float distacc = 0.0;
+            vec2 distacc = vec2(0.0);
             for (int pj = -$PATCH_RADIUS; pj <= $PATCH_RADIUS; pj++) {
                 for (int pi = -$PATCH_RADIUS; pi <= $PATCH_RADIUS; pi++) {
                     ivec2 patchCoord = clamp(
@@ -145,7 +174,12 @@ object DenoiseProfileShaders {
             distacc += tileDistance(center, groupOrigin, tileMin, tileWidth) *
                 patchPixels * uCentralPixelWeight;
             distacc /= 1.0 + uCentralPixelWeight;
-            return fastMexp2(max(0.0, distacc * uNorm - 2.0));
+
+            float unexplainedFine = max(distacc.x - uExpectedFineDistance, 0.0);
+            float unexplainedGuide = max(distacc.y - uExpectedGuideDistance, 0.0);
+            float unexplainedDistance =
+                unexplainedFine + uCoarseGuideWeight * unexplainedGuide;
+            return fastMexp2(unexplainedDistance * uInverseBandwidth);
         }
 
         void main() {
@@ -214,6 +248,7 @@ object DenoiseProfileShaders {
         uniform vec4 uP;
         uniform vec4 uB;
         uniform float uBias;
+        uniform float uDenoiseMix;
         uniform vec4 uSignalScale;
 
         void main() {
@@ -223,7 +258,7 @@ object DenoiseProfileShaders {
 
             int idx = stripeCoord.y * uImageSize.x + stripeCoord.x;
             vec4 accu = u2[idx];
-            float alpha = readPixel(uInput, coord, uImageSize).a;
+            vec4 original = readPixel(uInput, coord, uImageSize);
             vec4 px = accu.a > 0.0 ? accu / accu.a : vec4(0.0);
 
             vec4 delta = px * px + vec4(uBias);
@@ -231,7 +266,8 @@ object DenoiseProfileShaders {
             vec4 z1 = (px + sqrt(max(vec4(0.0), delta))) / denominator;
             px = max(dtPow(z1, 1.0 / (1.0 - uP / 2.0)) - uB, vec4(0.0));
             px *= uSignalScale;
-            px.a = alpha;
+            px.rgb = mix(original.rgb, px.rgb, clamp(uDenoiseMix, 0.0, 1.0));
+            px.a = original.a;
             imageStore(uOutput, coord, px);
         }
     """.trimIndent()

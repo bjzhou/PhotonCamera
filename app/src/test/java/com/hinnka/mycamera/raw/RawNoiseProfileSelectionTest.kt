@@ -106,6 +106,50 @@ class RawNoiseProfileSelectionTest {
     }
 
     @Test
+    fun nlmSearchOffsetsCoverSymmetricWindowExactlyOnce() {
+        val radius = DenoiseProfileShaders.SEARCH_RADIUS
+        val candidates = buildList {
+            DenoiseProfileNlmConfig.buildSearchOffsets(radius).forEach { q ->
+                add(q.x to q.y)
+                if (q.x != 0 || q.y != 0) {
+                    add(-q.x to -q.y)
+                }
+            }
+        }
+
+        val windowWidth = 2 * radius + 1
+        assertEquals(windowWidth * windowWidth, candidates.size)
+        assertEquals(candidates.size, candidates.toSet().size)
+        assertTrue(candidates.all { (x, y) -> x in -radius..radius && y in -radius..radius })
+    }
+
+    @Test
+    fun nlmWeightTuningSubtractsVarianceStabilizedNoiseFloor() {
+        val tuning = DenoiseProfileNlmConfig.weightTuning(
+            DenoiseProfileShaders.PATCH_RADIUS
+        )
+
+        assertEquals(54f, tuning.expectedFineDistance, 0f)
+        assertEquals(2.53125f, tuning.expectedGuideDistance, 1e-6f)
+        assertEquals(1f / 54f, tuning.inverseBandwidth, 1e-7f)
+        assertEquals(8f, tuning.coarseGuideWeight, 0f)
+    }
+
+    @Test
+    fun nlmShaderUsesCoarseGuideAndExplicitNoiseFloor() {
+        val shader = DenoiseProfileShaders.PRECONDITION_V2 +
+            DenoiseProfileShaders.FUSED_ACCU +
+            DenoiseProfileShaders.FINISH_V2
+
+        assertTrue(shader.contains("t.a = guide"))
+        assertTrue(shader.contains("uExpectedFineDistance"))
+        assertTrue(shader.contains("uExpectedGuideDistance"))
+        assertTrue(shader.contains("uCoarseGuideWeight"))
+        assertTrue(shader.contains("uDenoiseMix"))
+        assertFalse(shader.contains("distacc * uNorm - 2.0"))
+    }
+
+    @Test
     fun zeroBiasBacktransformExactlyPreservesAnUnchangedDarkSample() {
         val input = 0.003f
         val signalScale = 0.38f

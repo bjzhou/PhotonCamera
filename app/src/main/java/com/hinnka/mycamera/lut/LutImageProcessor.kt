@@ -12,6 +12,7 @@ import android.opengl.GLES31
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.lut.ChromaDenoiseShaders
+import com.hinnka.mycamera.raw.DenoiseProfileNlmConfig
 import com.hinnka.mycamera.raw.DenoiseProfileShaders
 import com.hinnka.mycamera.raw.RawProfileExposureGl
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -1826,8 +1827,7 @@ class LutImageProcessor {
     ) {
         setupBitmapDenoiseFramebuffers(width, height)
 
-        val force = noiseReduction.coerceIn(0f, 1f)
-        val strength = force
+        val strength = noiseReduction.coerceIn(0f, 1f)
         if (strength <= 0f || width * height < 2) {
             renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
             return
@@ -1842,7 +1842,7 @@ class LutImageProcessor {
         } else {
             bitmapDenoiseTexId[0]
         }
-        val params = buildBitmapDenoiseParams(width, height, strength, force)
+        val params = buildBitmapDenoiseParams(strength)
         dispatchBitmapDenoisePreconditionV2(sourceTextureId, preconditionTextureId, width, height, params)
         dispatchBitmapDenoiseNlm(sourceTextureId, preconditionTextureId, bitmapDenoiseTexId[1], width, height, params)
         checkGlError("renderBitmapDenoiseProfile")
@@ -2156,11 +2156,11 @@ class LutImageProcessor {
 
     private data class BitmapDenoiseParams(
         val strength: Float,
-        val lumaForce: Float,
-        val chromaForce: Float,
         val patchRadius: Int,
-        val searchRadius: Int,
-        val norm: Float,
+        val expectedFineDistance: Float,
+        val expectedGuideDistance: Float,
+        val inverseBandwidth: Float,
+        val coarseGuideWeight: Float,
         val centralPixelWeight: Float,
         val p: FloatArray,
         val signalScale: FloatArray,
@@ -2202,37 +2202,30 @@ class LutImageProcessor {
         bitmapDenoiseNlmBufferPixels = pixelCount
     }
 
-    private fun buildBitmapDenoiseParams(
-        width: Int,
-        height: Int,
-        strengthValue: Float,
-        force: Float
-    ): BitmapDenoiseParams {
+    private fun buildBitmapDenoiseParams(strengthValue: Float): BitmapDenoiseParams {
         val a = BITMAP_DENOISE_A
         val b = BITMAP_DENOISE_B
         val scale = 1.0f
         val shadows = max(0.1f - 0.1f * ln(a), 0.7f).coerceAtMost(1.8f)
         val bias = -max(5f + 0.5f * ln(a), 0.0f)
         val compensateP = 0.05f / 0.05f.pow(shadows)
-        val strength = strengthValue.coerceAtLeast(1e-6f)
+        val strength = strengthValue.coerceIn(0f, 1f)
         val patchRadius = DenoiseProfileShaders.PATCH_RADIUS
-        val searchRadius = DenoiseProfileShaders.SEARCH_RADIUS
-        val patchWidth = 2 * patchRadius + 1
-        val norm = 0.045f / (patchWidth * patchWidth).toFloat()
+        val weightTuning = DenoiseProfileNlmConfig.weightTuning(patchRadius)
         val centralPixelWeight = 0.1f * scale
         return BitmapDenoiseParams(
             strength = strength,
-            lumaForce = force,
-            chromaForce = force,
             patchRadius = patchRadius,
-            searchRadius = searchRadius,
-            norm = norm,
+            expectedFineDistance = weightTuning.expectedFineDistance,
+            expectedGuideDistance = weightTuning.expectedGuideDistance,
+            inverseBandwidth = weightTuning.inverseBandwidth,
+            coarseGuideWeight = weightTuning.coarseGuideWeight,
             centralPixelWeight = centralPixelWeight,
             p = floatArrayOf(shadows, shadows, shadows, 1.0f),
             signalScale = floatArrayOf(
-                strength * scale,
-                strength * scale,
-                strength * scale,
+                scale,
+                scale,
+                scale,
                 1.0f
             ),
             aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f),
@@ -2260,10 +2253,15 @@ class LutImageProcessor {
     ) {
         dispatchBitmapDenoiseNlmInit(width, height)
 
-        for (qy in -params.searchRadius..0) {
-            for (qx in -params.searchRadius..params.searchRadius) {
-                dispatchBitmapDenoiseNlmFusedAccumulate(preconditionedTextureId, width, height, qx, qy, params)
-            }
+        for (offset in DenoiseProfileNlmConfig.searchOffsets) {
+            dispatchBitmapDenoiseNlmFusedAccumulate(
+                preconditionedTextureId,
+                width,
+                height,
+                offset.x,
+                offset.y,
+                params
+            )
         }
 
         dispatchBitmapDenoiseNlmFinish(originalTextureId, outputTextureId, width, height, params)
@@ -2292,7 +2290,22 @@ class LutImageProcessor {
         GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uImageSize"), width, height)
         setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmFusedAccuProgram, height)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uQ"), qx, qy)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uNorm"), params.norm)
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uExpectedFineDistance"),
+            params.expectedFineDistance
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uExpectedGuideDistance"),
+            params.expectedGuideDistance
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uInverseBandwidth"),
+            params.inverseBandwidth
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uCoarseGuideWeight"),
+            params.coarseGuideWeight
+        )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uCentralPixelWeight"),
             params.centralPixelWeight
@@ -2309,6 +2322,10 @@ class LutImageProcessor {
         setBitmapDenoiseCommonUniforms(bitmapDenoiseNlmFinishProgram, width, height, params)
         setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmFinishProgram, height)
         GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFinishProgram, "uBias"), params.bias - 0.5f * ln(params.scale))
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(bitmapDenoiseNlmFinishProgram, "uDenoiseMix"),
+            params.strength
+        )
         dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM finish")
     }
 
