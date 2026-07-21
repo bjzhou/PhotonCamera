@@ -4,6 +4,30 @@
 load/store、纹理格式或 accumulator 架构前必须复查本文，并在目标设备上运行
 `GlesRawRadianceStackerShaderTest`。不能仅凭 GLES 版本号或桌面 GLSL 编译结果判断移动端可用性。
 
+## SSBO binding 点数量
+
+已确认存在只提供 8 个 shader storage buffer binding 点的 GLES 3.1 驱动，合法范围为
+`0..7`。超出范围的 binding 会在 shader 编译阶段直接失败，例如：
+
+```text
+Shader raw_flow_readback compute compilation failed: Compile failed.
+ERROR: 0:8: shader storage block binding gets value 12, out of range [0 - 7]
+```
+
+SSBO binding 点是上下文绑定槽，不是需要跨 program 保持唯一的资源编号。不同 compute
+program 若各自只声明一个 SSBO，必须复用 binding 0，并在每次 dispatch 前通过
+`glBindBufferBase` 绑定当前 buffer。shader 中的 `layout(std430, binding = ...)` 与 CPU 侧
+绑定点必须完全一致。
+
+Radiance 的 flow readback、registration samples、registration global scores、diagnostics 和
+fusion participation stats 都是单 SSBO program，统一使用 binding 0。RCD 是唯一需要同时使用
+多个 SSBO 的路径，固定只使用 `0..7`；第九张工作 buffer 必须换入已有绑定槽，不得使用
+binding 8。SSBO、image 和 UBO 分属不同的绑定命名空间，相同数字不会互相占用。
+
+初始化 Radiance 后端时必须查询 `GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS`：VGN 路径至少需要
+1，RCD 路径至少需要 8。新增 shader 不得通过持续增大 binding 编号来规避不同 program
+之间的名称重复。
+
 ## PMA110
 
 ### `RGBA16F` image 的访问限制

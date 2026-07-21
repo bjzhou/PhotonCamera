@@ -471,7 +471,7 @@ internal class GlesRawRadianceStacker(
 
             initEgl()
             ensureGles31()
-            validateOutputTextureLimits()
+            validateGpuResourceLimits()
             initPrograms()
             initResources()
             applyRawRenderState()
@@ -963,7 +963,7 @@ internal class GlesRawRadianceStacker(
         )
     }
 
-    private fun validateOutputTextureLimits() {
+    private fun validateGpuResourceLimits() {
         val maxTextureSize = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
         val maxSize = maxTextureSize[0].coerceAtLeast(1)
@@ -973,6 +973,24 @@ internal class GlesRawRadianceStacker(
             throw IllegalStateException(
                 "Radiance texture ${requiredTextureWidth}x$requiredTextureHeight " +
                     "exceeds GL_MAX_TEXTURE_SIZE=$maxSize",
+            )
+        }
+
+        val maxSsboBindings = IntArray(1)
+        GLES30.glGetIntegerv(
+            GLES31.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS,
+            maxSsboBindings,
+            0,
+        )
+        val requiredSsboBindings = if (radianceUsesVgnSemanticBackend) {
+            TRANSIENT_SSBO_BINDING_COUNT
+        } else {
+            RCD_SSBO_BINDING_COUNT
+        }
+        if (maxSsboBindings[0] < requiredSsboBindings) {
+            throw IllegalStateException(
+                "Radiance backend requires $requiredSsboBindings shader storage buffer " +
+                    "bindings, got GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS=${maxSsboBindings[0]}",
             )
         }
         if (RawStackRuntimeDebug.enabled) {
@@ -985,6 +1003,7 @@ internal class GlesRawRadianceStacker(
             val outputBytes = outputWidth.toLong() * outputHeight.toLong() * 6L
             RawStackRuntimeDebug.d(TAG) {
                 "Radiance resources out=${outputWidth}x$outputHeight maxTex=$maxSize " +
+                    "maxSsboBindings=${maxSsboBindings[0]} requiredSsboBindings=$requiredSsboBindings " +
                     "srAccumulatorWindow=${superResolutionAccumulatorWidth}x" +
                     "$superResolutionAccumulatorHeight/${accumulatorBytes.mibString()} " +
                     "output=${outputBytes.mibString()}"
@@ -7415,11 +7434,17 @@ internal class GlesRawRadianceStacker(
         private const val MAX_TEMPORAL_TRACKING_BYTES = 32L * 1024L * 1024L
         private const val SUPER_RESOLUTION_SPATIAL_RADIUS = 2
         private const val RADIANCE_RECONSTRUCTION_RADIUS_RAW_PX = 1
-        private const val DIAGNOSTIC_BUFFER_BINDING = 9
-        private const val REGISTRATION_SAMPLE_BUFFER_BINDING = 10
-        private const val REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING = 11
-        private const val FLOW_READBACK_BUFFER_BINDING = 12
-        private const val RADIANCE_FUSION_STATS_BUFFER_BINDING = 0
+        // These programs expose one SSBO each and rebind it immediately before dispatch. Binding
+        // points are context slots, not globally unique resource IDs, so all transient programs
+        // deliberately reuse zero to remain compatible with the GLES 3.1 baseline of 0..7.
+        private const val TRANSIENT_SSBO_BINDING = 0
+        private const val TRANSIENT_SSBO_BINDING_COUNT = 1
+        private const val RCD_SSBO_BINDING_COUNT = 8
+        private const val DIAGNOSTIC_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
+        private const val REGISTRATION_SAMPLE_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
+        private const val REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
+        private const val FLOW_READBACK_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
+        private const val RADIANCE_FUSION_STATS_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
         private const val RADIANCE_FUSION_STATS_STRIDE = 5
         private const val RADIANCE_FUSION_WEIGHT_QUANTIZATION = 63f
         private const val REGISTRATION_GLOBAL_SCORE_STRIDE = 4

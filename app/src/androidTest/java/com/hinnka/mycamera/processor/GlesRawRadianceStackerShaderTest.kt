@@ -34,6 +34,7 @@ class GlesRawRadianceStackerShaderTest {
         try {
             invokePrivate(stacker, "initEgl")
             invokePrivate(stacker, "ensureGles31")
+            invokePrivate(stacker, "validateGpuResourceLimits")
             invokePrivate(stacker, "initPrograms")
             invokePrivate(stacker, "initResources")
             invokePrivate(stacker, "applyRawRenderState")
