@@ -319,35 +319,47 @@ class GlesRawRadianceFusion(
             PLog.w(TAG, "Radiance fusion received no valid one-third short frame")
         }
 
-        val longFramePlans = longFrames.mapIndexedNotNull { planIndex, longFrame ->
-            val sourceFrameIndex = exposurePlan.longIndices[planIndex]
-            val longFramePlan = createLongFramePlan(
-                sourceFrameIndex = sourceFrameIndex,
-                normalFrames = fusionFrames,
-                longFrame = longFrame,
-                baseExposureProduct = exposurePlan.baseExposureProduct,
-            )
-            if (longFramePlan != null) {
+        val longFramePlans = if (PROCESS_LONG_FRAMES) {
+            longFrames.mapIndexedNotNull { planIndex, longFrame ->
+                val sourceFrameIndex = exposurePlan.longIndices[planIndex]
+                val longFramePlan = createLongFramePlan(
+                    sourceFrameIndex = sourceFrameIndex,
+                    normalFrames = fusionFrames,
+                    longFrame = longFrame,
+                    baseExposureProduct = exposurePlan.baseExposureProduct,
+                )
+                if (longFramePlan != null) {
+                    PLog.i(
+                        TAG,
+                        "Radiance long fusion plan index=$sourceFrameIndex " +
+                            "exposure=${longFramePlan.longFrame.exposureProduct} " +
+                            "base=${exposurePlan.baseExposureProduct} " +
+                            "actualRatio=${longFramePlan.exposureRatio} " +
+                            "exposureScale=${longFramePlan.exposureScale} " +
+                            "actualDeltaEv=${longFramePlan.exposureDeltaEv} " +
+                            "anchor=${longFramePlan.anchorFrameIndex}",
+                    )
+                    longFramePlan
+                } else {
+                    PLog.w(
+                        TAG,
+                        "Radiance long frame index=$sourceFrameIndex has no usable actual " +
+                            "exposure ratio; excluded",
+                    )
+                    longFrame.image.close()
+                    null
+                }
+            }
+        } else {
+            if (longFrames.isNotEmpty()) {
                 PLog.i(
                     TAG,
-                    "Radiance long fusion plan index=$sourceFrameIndex " +
-                        "exposure=${longFramePlan.longFrame.exposureProduct} " +
-                        "base=${exposurePlan.baseExposureProduct} " +
-                        "actualRatio=${longFramePlan.exposureRatio} " +
-                        "exposureScale=${longFramePlan.exposureScale} " +
-                        "actualDeltaEv=${longFramePlan.exposureDeltaEv} " +
-                        "anchor=${longFramePlan.anchorFrameIndex}",
+                    "Radiance long-frame processing temporarily disabled; " +
+                        "excluded ${longFrames.size} frame(s)",
                 )
-                longFramePlan
-            } else {
-                PLog.w(
-                    TAG,
-                    "Radiance long frame index=$sourceFrameIndex has no usable actual " +
-                        "exposure ratio; excluded",
-                )
-                longFrame.image.close()
-                null
+                longFrames.forEach { it.image.close() }
             }
+            emptyList()
         }
 
         val tuning = RawStackTuningProfile(
@@ -449,6 +461,7 @@ class GlesRawRadianceFusion(
 
     companion object {
         private const val TAG = "GlesRawRadianceFusion"
+        private const val PROCESS_LONG_FRAMES = true
     }
 }
 
@@ -475,8 +488,8 @@ data class RawRadianceFusionTuning(
     val longClipStart: Float = 0.90f,
     val longClipFull: Float = 0.985f,
     val longPrecisionWeightCap: Float = 24.0f,
-    val longNrWeightScale: Float = 3.0f,
-    val longDetailWeightScale: Float = 0.25f,
+    val longNrWeightScale: Float = 2.0f,
+    val longDetailWeightScale: Float = 0.0f,
     val longMergeFactorTarget: Float = 0.70f,
     val longFlowFbConsistencyStartPx: Float = 0.75f,
     val longFlowFbConsistencyFullPx: Float = 2.0f,
