@@ -33,7 +33,8 @@
 1. `01_raw_sensor`：黑电平、Bayer 中和和高光重建。
 2. `02_demosaic`：按 `pass_0a1 → 0a2 → 0b → 0c → 1 → 2 → 3` 阅读。
 3. `03_denoise`：结合 Demosaic 的 color-noise pass 理解。
-4. `04_color_tone`：Hasselblad Gamma、Film Curve、Gradation 和色彩 LUT。
+4. [`04_color_tone`](./04_color_tone/README.md)：Hasselblad Gamma、Film Curve、Gradation、
+   二维色度 LUT 与输出色彩管理的完整调用链分析。
 5. `07_hdr_ultrahdr`：SDR/HDR 映射以及 UltraHDR Gain Map。
 
 ## 注意

@@ -280,3 +280,20 @@ vec3 rgb =
   `NaN`/`Inf`，不能据最终颜色反推某个 CFA 通道损坏。
 - 每个新增 image format 都需要在代表设备上验证 compile、bind、dispatch 和后续采样。
 - 运行时错误日志必须保留 shader 名称、访问模式、internal format 和驱动错误文本。
+
+## 研究线索：IMG 驱动的 image 尺寸查询
+
+从 Phocus Android `libcrosssdk.so` 静态恢复的 `color_correct` compute shader 没有使用
+`imageSize(uCbCrLut)` 决定二维色度 LUT 的边界，而是在 160 B UBO 中显式传入 `uLutW` 与
+`uLutH`。原 shader 注释明确记录其原因是 IMG 驱动上的 `imageSize` 不可靠。
+
+这只是第三方实现提供的兼容性线索，尚未在 PhotonCamera 的目标 IMG/PowerVR 设备上复现，
+因此当前不据此修改通用纹理抽象。涉及 image texture 尺寸的新增 compute pass 应遵守：
+
+- 若尺寸直接决定颜色 LUT、卷积或 imageStore 边界，接口设计应允许由 CPU 显式传入尺寸；
+- 真机测试同时比较显式尺寸与 `imageSize`，覆盖 mip level、internal format 和只读/只写绑定；
+- 在确认特定驱动异常前，不用硬编码尺寸或事后 clamp 掩盖越界；
+- 一旦在目标设备复现，应记录 GPU/驱动版本、纹理格式、绑定方式、查询值和最小 shader。
+
+研究证据与公式分析见
+[`research/phocus_glsl/04_color_tone/README.md`](../research/phocus_glsl/04_color_tone/README.md)。
