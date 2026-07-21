@@ -117,14 +117,12 @@ fun CameraTopSheet(
     onPresetManageClick: () -> Unit,
     onToolboxClick: () -> Unit,
     onMoreSettingsClick: () -> Unit,
-    useMFNR: Boolean,
-    onMFNRToggle: (Boolean) -> Unit,
-    useMFSR: Boolean,
-    onMFSRToggle: (Boolean) -> Unit,
-    superResolutionScale: Float,
-    onSuperResolutionScaleChange: (Float) -> Unit,
-    useHdrComposition: Boolean,
-    onHdrCompositionToggle: (Boolean) -> Unit,
+    useJpgMax: Boolean,
+    onJpgMaxToggle: (Boolean) -> Unit,
+    useRawMax: Boolean,
+    onRawMaxToggle: (Boolean) -> Unit,
+    rawMaxOutputScale: Float,
+    onRawMaxOutputScaleChange: (Float) -> Unit,
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
@@ -134,10 +132,10 @@ fun CameraTopSheet(
     var showRawSheet by rememberSaveable { mutableStateOf(false) }
     var showNaturalLightWarning by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
-    var superResolutionScaleDraft by remember { mutableFloatStateOf(superResolutionScale) }
+    var rawMaxOutputScaleDraft by remember { mutableFloatStateOf(rawMaxOutputScale) }
 
-    LaunchedEffect(superResolutionScale) {
-        superResolutionScaleDraft = superResolutionScale.coerceIn(1f, 2f)
+    LaunchedEffect(rawMaxOutputScale) {
+        rawMaxOutputScaleDraft = rawMaxOutputScale.coerceIn(1f, 2f)
     }
 
     fun handleContentManagementAction(action: () -> Unit) {
@@ -239,28 +237,23 @@ fun CameraTopSheet(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_multi_frame),
-                        checked = useMFNR,
-                        onCheckedChange = onMFNRToggle,
+                        title = stringResource(R.string.settings_use_jpg_max),
+                        checked = useJpgMax,
+                        onCheckedChange = onJpgMaxToggle,
                         modifier = Modifier.weight(1f)
                     )
 
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_super_resolution),
-                        checked = useMFSR,
-                        onCheckedChange = onMFSRToggle,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    QuickSettingToggle(
-                        title = stringResource(R.string.settings_use_hdr_composition),
-                        checked = useHdrComposition,
-                        onCheckedChange = onHdrCompositionToggle,
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (isRawSupported) {
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_use_raw_max),
+                            checked = useRawMax,
+                            onCheckedChange = onRawMaxToggle,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
 
-                if (useMFSR && useRaw) {
+                if (useRawMax) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -268,22 +261,22 @@ fun CameraTopSheet(
                     ) {
                         Text(
                             text = stringResource(
-                                R.string.settings_super_resolution_scale,
-                                superResolutionScaleDraft,
+                                R.string.settings_raw_max_output_scale,
+                                rawMaxOutputScaleDraft,
                             ),
                             color = Color.White,
                             fontSize = 12.sp,
                             modifier = Modifier.width(112.dp),
                         )
                         CustomSlider(
-                            value = superResolutionScaleDraft,
-                            onValueChange = { superResolutionScaleDraft = it.coerceIn(1f, 2f) },
+                            value = rawMaxOutputScaleDraft,
+                            onValueChange = { rawMaxOutputScaleDraft = it.coerceIn(1f, 2f) },
                             onValueChangeFinished = {
-                                onSuperResolutionScaleChange(superResolutionScaleDraft)
+                                onRawMaxOutputScaleChange(rawMaxOutputScaleDraft)
                             },
                             onDoubleTap = {
-                                superResolutionScaleDraft = 1.5f
-                                onSuperResolutionScaleChange(1.5f)
+                                rawMaxOutputScaleDraft = 1.5f
+                                onRawMaxOutputScaleChange(1.5f)
                             },
                             valueRange = 1f..2f,
                             modifier = Modifier.weight(1f),

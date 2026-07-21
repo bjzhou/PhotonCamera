@@ -30,7 +30,6 @@ import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.QuickShotResolutionPreset
 import com.hinnka.mycamera.video.VideoAspectRatio
@@ -159,19 +158,17 @@ data class UserPreferences(
     val lutSelectorMode: LutSelectorMode = LutSelectorMode.Style,
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val zoomDisplayMode: String = "FOCAL_LENGTH",
-    val useMFNR: Boolean = false, // 是否使用多帧降噪
-    val useHdrComposition: Boolean = false, // 是否使用 HDR 包围曝光合成
-    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // 多帧降噪帧数
+    val useJpgMax: Boolean = false, // JPGmax：YUV 多帧降噪与 HDR 合成
+    val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // Max 管线帧数
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
-    val useMFSR: Boolean = false, // 是否启用 RAW 多帧超分
-    val superResolutionScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAW 多帧超分倍率
+    val useRawMax: Boolean = false, // RAWmax：RAW Radiance 管线
+    val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
-    val useGpuAcceleration: Boolean = DeviceUtil.defaultGpuAcceleration, // 多帧合成是否使用 GPU 加速
     val droMode: String = "OFF", // DRO 模式
     val tonemapMode: String = "SYSTEM_DEFAULT", // 色调映射模式
     val naturalLightEnabled: Boolean = false, // 是否启用自然光影
@@ -261,9 +258,8 @@ data class CameraFeaturePreferencesUpdate(
     val effects: PreferenceUpdateValue<EffectParams>? = null,
     val aspectRatio: PreferenceUpdateValue<String>? = null,
     val useRaw: PreferenceUpdateValue<Boolean>? = null,
-    val useMFNR: PreferenceUpdateValue<Boolean>? = null,
-    val useHdrComposition: PreferenceUpdateValue<Boolean>? = null,
-    val useMFSR: PreferenceUpdateValue<Boolean>? = null,
+    val useJpgMax: PreferenceUpdateValue<Boolean>? = null,
+    val useRawMax: PreferenceUpdateValue<Boolean>? = null,
     val useMultipleExposure: PreferenceUpdateValue<Boolean>? = null,
     val frameId: PreferenceUpdateValue<String?>? = null,
     val rawDcpId: PreferenceUpdateValue<String?>? = null,
@@ -368,19 +364,21 @@ class UserPreferencesRepository(private val context: Context) {
         private val ZOOM_DISPLAY_MODE = stringPreferencesKey("zoom_display_mode")
 
         // 多帧合成 Key
-        private val USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
-        private val USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
+        private val USE_JPG_MAX = booleanPreferencesKey("use_jpg_max")
+        private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
+        private val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
+        private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
         private val MULTI_FRAME_COUNT = intPreferencesKey("multi_frame_count")
         private val USE_MULTIPLE_EXPOSURE = booleanPreferencesKey("use_multiple_exposure")
         private val MULTIPLE_EXPOSURE_COUNT = intPreferencesKey("multiple_exposure_count")
-        private val USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
-        private val RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
+        private val LEGACY_USE_SUPER_RESOLUTION = booleanPreferencesKey("use_super_resolution")
+        private val RAW_MAX_OUTPUT_SCALE = floatPreferencesKey("raw_max_output_scale")
+        private val LEGACY_RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_HEIC_EXPORT = booleanPreferencesKey("use_heic_export")
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val ENABLE_DEVELOP_ANIMATION = booleanPreferencesKey("enable_develop_animation")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
-        private val USE_GPU_ACCELERATION = booleanPreferencesKey("use_gpu_acceleration")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
         private val TONEMAP_MODE = stringPreferencesKey("tonemap_mode")
         private val NATURAL_LIGHT_ENABLED = booleanPreferencesKey("natural_light_enabled")
@@ -455,6 +453,24 @@ class UserPreferencesRepository(private val context: Context) {
             val availableAspectRatios = AspectRatio.entries + customAspectRatios
             val rawBaselineLutConfigured = preferences[RAW_BASELINE_LUT_CONFIGURED_KEY]
                 ?: preferences.contains(RAW_BASELINE_LUT_ID_KEY)
+            val storedUseRaw = preferences[USE_RAW] ?: false
+            val hasCurrentMaxPreferences = preferences.contains(USE_JPG_MAX) ||
+                preferences.contains(USE_RAW_MAX)
+            val legacyMultiFrameEnabled = preferences[LEGACY_USE_MULTI_FRAME] == true ||
+                preferences[LEGACY_USE_SUPER_RESOLUTION] == true
+            val requestedUseJpgMax = if (hasCurrentMaxPreferences) {
+                preferences[USE_JPG_MAX] ?: false
+            } else {
+                !storedUseRaw &&
+                    (legacyMultiFrameEnabled || preferences[LEGACY_USE_HDR_COMPOSITION] == true)
+            }
+            val requestedUseRawMax = if (hasCurrentMaxPreferences) {
+                preferences[USE_RAW_MAX] ?: false
+            } else {
+                storedUseRaw && legacyMultiFrameEnabled
+            }
+            val useRawMax = requestedUseRawMax
+            val useJpgMax = requestedUseJpgMax && !useRawMax
             UserPreferences(
                 captureMode = CaptureMode.valueOf(preferences[CAPTURE_MODE] ?: CaptureMode.PHOTO.name),
                 aspectRatio = preferences[ASPECT_RATIO_KEY] ?: "RATIO_4_3",
@@ -531,7 +547,11 @@ class UserPreferencesRepository(private val context: Context) {
                 vendorCaptureSettingsByLens = VendorCaptureSettingsByLens.deserialize(
                     preferences[VENDOR_CAPTURE_SETTINGS]
                 ),
-                useRaw = preferences[USE_RAW] ?: false,
+                useRaw = when {
+                    useRawMax -> true
+                    useJpgMax -> false
+                    else -> storedUseRaw
+                },
                 meteringMode = MeteringMode.valueOf(
                     preferences[METERING_MODE] ?: MeteringMode.SYSTEM_DEFAULT.name
                 ),
@@ -550,15 +570,15 @@ class UserPreferencesRepository(private val context: Context) {
                 }.getOrDefault(LutSelectorMode.Style),
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 zoomDisplayMode = preferences[ZOOM_DISPLAY_MODE] ?: "FOCAL_LENGTH",
-                useMFNR = preferences[USE_MULTI_FRAME] ?: false,
-                useHdrComposition = preferences[USE_HDR_COMPOSITION] ?: false,
+                useJpgMax = useJpgMax,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT]
                     ?.coerceIn(MultiFrameConfig.MIN_FRAME_COUNT, MultiFrameConfig.MAX_FRAME_COUNT)
                     ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
                 useMultipleExposure = preferences[USE_MULTIPLE_EXPOSURE] ?: false,
                 multipleExposureCount = preferences[MULTIPLE_EXPOSURE_COUNT] ?: 2,
-                useMFSR = preferences[USE_SUPER_RESOLUTION] ?: false,
-                superResolutionScale = preferences[RAW_SUPER_RESOLUTION_SCALE]?.let {
+                useRawMax = useRawMax,
+                rawMaxOutputScale = (preferences[RAW_MAX_OUTPUT_SCALE]
+                    ?: preferences[LEGACY_RAW_SUPER_RESOLUTION_SCALE])?.let {
                     MultiFrameConfig.normalizeOutputScale(
                         outputScale = it,
                         fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
@@ -569,7 +589,6 @@ class UserPreferencesRepository(private val context: Context) {
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
-                useGpuAcceleration = preferences[USE_GPU_ACCELERATION] ?: DeviceUtil.defaultGpuAcceleration,
                 droMode = preferences[DRO_MODE] ?: if (preferences[RAW_DRO_ENABLED_KEY] == true) "DR100" else "OFF",
                 tonemapMode = sanitizeTonemapMode(preferences[TONEMAP_MODE] ?: "SYSTEM_DEFAULT"),
                 naturalLightEnabled = preferences[NATURAL_LIGHT_ENABLED] ?: false,
@@ -1581,15 +1600,6 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     /**
-     * 保存是否使用多帧合成
-     */
-    suspend fun setUseMFNR(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_MULTI_FRAME] = enabled
-        }
-    }
-
-    /**
      * 保存多帧合成帧数
      */
     suspend fun saveMultiFrameCount(count: Int) {
@@ -1619,18 +1629,9 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    /**
-     * 保存是否使用超分辨率
-     */
-    suspend fun saveUseMFSR(enabled: Boolean) {
+    suspend fun saveRawMaxOutputScale(scale: Float) {
         context.dataStore.edit { preferences ->
-            preferences[USE_SUPER_RESOLUTION] = enabled
-        }
-    }
-
-    suspend fun saveSuperResolutionScale(scale: Float) {
-        context.dataStore.edit { preferences ->
-            preferences[RAW_SUPER_RESOLUTION_SCALE] = MultiFrameConfig.normalizeOutputScale(
+            preferences[RAW_MAX_OUTPUT_SCALE] = MultiFrameConfig.normalizeOutputScale(
                 outputScale = scale,
                 fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
             )
@@ -1676,15 +1677,6 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveBackgroundImage(image: String) {
         context.dataStore.edit { preferences ->
             preferences[BACKGROUND_IMAGE] = image
-        }
-    }
-
-    /**
-     * 保存是否启用 GPU 加速
-     */
-    suspend fun saveUseGpuAcceleration(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_GPU_ACCELERATION] = enabled
         }
     }
 
@@ -1885,12 +1877,6 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveUseHdrComposition(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[USE_HDR_COMPOSITION] = enabled
-        }
-    }
-
     /**
      * 保存是否启用幻影模式
      */
@@ -2074,14 +2060,11 @@ class UserPreferencesRepository(private val context: Context) {
             update.useRaw?.let {
                 preferences[USE_RAW] = it.value
             }
-            update.useMFNR?.let {
-                preferences[USE_MULTI_FRAME] = it.value
+            update.useJpgMax?.let {
+                preferences[USE_JPG_MAX] = it.value
             }
-            update.useHdrComposition?.let {
-                preferences[USE_HDR_COMPOSITION] = it.value
-            }
-            update.useMFSR?.let {
-                preferences[USE_SUPER_RESOLUTION] = it.value
+            update.useRawMax?.let {
+                preferences[USE_RAW_MAX] = it.value
             }
             update.useMultipleExposure?.let {
                 preferences[USE_MULTIPLE_EXPOSURE] = it.value

@@ -2211,7 +2211,6 @@ object GalleryManager {
         rotation: Int,
         aspectRatio: AspectRatio,
         shouldMirror: Boolean,
-        useGpuAcceleration: Boolean = true,
         useSuperResolution: Boolean = false,
         colorSpace: ColorSpace = ColorSpace.get(ColorSpace.Named.SRGB),
     ): Bitmap? = withContext(Dispatchers.IO) {
@@ -2225,9 +2224,6 @@ object GalleryManager {
             if (useSuperResolution) {
                 PLog.w(TAG, "HDR bracket Mertens fusion uses 0EV stacking without super resolution")
             }
-            if (!useGpuAcceleration) {
-                PLog.w(TAG, "HDR bracket YUV alignment/denoise uses GLES stacker; ignoring disabled GPU acceleration setting")
-            }
             val frameSelection = buildYuvHdrFrameSelection(
                 captureResults = captureResults,
                 frameCount = images.size,
@@ -2238,7 +2234,6 @@ object GalleryManager {
                 rotation = rotation,
                 aspectRatio = aspectRatio,
                 shouldMirror = shouldMirror,
-                useGpuAcceleration = useGpuAcceleration,
                 colorSpace = colorSpace,
             )
             hdrStackResult
@@ -2331,10 +2326,15 @@ object GalleryManager {
     }
 
     private fun fallbackHdrExposureProduct(index: Int): Float {
-        val sideEv = HdrBracketConfig.YUV_SIDE_EV.toDouble()
         return when {
-            index == HDR_BRACKET_HIGH_INDEX -> Math.pow(2.0, sideEv).toFloat()
-            index == HDR_BRACKET_LOW_INDEX -> Math.pow(2.0, -sideEv).toFloat()
+            index == HDR_BRACKET_HIGH_INDEX -> Math.pow(
+                2.0,
+                HdrBracketConfig.YUV_LONG_EV.toDouble(),
+            ).toFloat()
+            index == HDR_BRACKET_LOW_INDEX -> Math.pow(
+                2.0,
+                HdrBracketConfig.YUV_SHORT_EV.toDouble(),
+            ).toFloat()
             else -> 1f
         }
     }
@@ -2345,7 +2345,6 @@ object GalleryManager {
         rotation: Int,
         aspectRatio: AspectRatio,
         shouldMirror: Boolean,
-        useGpuAcceleration: Boolean,
         colorSpace: ColorSpace,
     ): Bitmap {
         val stackResult = MultiFrameStacker.processHdrBurstYuv(
@@ -2356,7 +2355,6 @@ object GalleryManager {
             fusionExposureProducts = frameSelection.fusionExposureProducts,
             rotation = rotation,
             aspectRatio = aspectRatio,
-            useGpuAcceleration = useGpuAcceleration,
             colorSpace = colorSpace,
         ) ?: throw IllegalStateException("Failed to stack and compose aligned HDR YUV frames")
 
@@ -2515,7 +2513,6 @@ object GalleryManager {
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
-        useGpuAcceleration: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -2523,28 +2520,13 @@ object GalleryManager {
 
             deleteDeprecatedJxlStorage(photoDir)
 
-            var currentUseSuperResolution = useSuperResolution
             var result = MultiFrameStacker.processBurst(
-                images,
-                rotation,
-                aspectRatio,
-                currentUseSuperResolution,
-                useGpuAcceleration,
-                ColorSpace.get(metadata.colorSpace)
+                images = images,
+                rotation = rotation,
+                aspectRatio = aspectRatio,
+                enableSuperResolution = useSuperResolution,
+                colorSpace = ColorSpace.get(metadata.colorSpace),
             )
-
-            if (result == null && currentUseSuperResolution && !useGpuAcceleration) {
-                PLog.w(TAG, "processBurst failed with SR, retrying without SR")
-                currentUseSuperResolution = false
-                result = MultiFrameStacker.processBurst(
-                    images,
-                    rotation,
-                    aspectRatio,
-                    false,
-                    useGpuAcceleration,
-                    ColorSpace.get(metadata.colorSpace)
-                )
-            }
 
             if (result == null) return@withContext
 
@@ -2606,7 +2588,6 @@ object GalleryManager {
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
-        useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
@@ -3434,7 +3415,6 @@ object GalleryManager {
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
-        useGpuAcceleration: Boolean = true,
         exposureBias: Float? = null,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
@@ -3457,8 +3437,7 @@ object GalleryManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     useSuperResolution,
-                    superResolutionScale,
-                    useGpuAcceleration
+                    superResolutionScale
                 )
             }
 
@@ -3479,7 +3458,6 @@ object GalleryManager {
                     photoQuality,
                     useSuperResolution,
                     superResolutionScale,
-                    useGpuAcceleration,
                     exposureBias,
                     exportDngWithRawExport,
                     capturePreviewThumbnail,

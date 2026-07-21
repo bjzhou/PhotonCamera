@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
-import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
@@ -54,14 +53,6 @@ data class YuvHdrStackFrame(
 object MultiFrameStacker {
     private const val TAG = "MultiFrameStacker"
 
-    init {
-        try {
-            System.loadLibrary("my-native-lib")
-        } catch (e: UnsatisfiedLinkError) {
-            PLog.e(TAG, "Failed to load native library", e)
-        }
-    }
-
     /**
      * Process a burst of images and return a stacked Bitmap.
      * 
@@ -74,7 +65,6 @@ object MultiFrameStacker {
         rotation: Int,
         aspectRatio: AspectRatio?,
         enableSuperResolution: Boolean = false,
-        useGpuAcceleration: Boolean = true,
         colorSpace: ColorSpace,
     ): Bitmap? {
         if (images.isEmpty()) return null
@@ -83,22 +73,21 @@ object MultiFrameStacker {
         val height = images[0].height
 
         val scale = if (enableSuperResolution) 2 else 1
-        val startTime = System.currentTimeMillis()
         val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
         val targetW = dimensions.width() * scale
         val targetH = dimensions.height() * scale
 
         val inputFormat = images[0].format
-        if (useGpuAcceleration) {
-            if (!GlesYuvStacker.supportsImageFormat(inputFormat)) {
-                PLog.w(TAG, "GLES streaming stacker does not support image format=$inputFormat; GPU fallback disabled")
-                images.forEach { it.close() }
-                return null
-            }
-            RawStackRuntimeDebug.i(TAG) {
-                "Starting GLES streaming stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
-            }
-            val glesBitmap = GlesYuvStacker(
+        if (!GlesYuvStacker.supportsImageFormat(inputFormat)) {
+            PLog.w(TAG, "GLES streaming stacker does not support image format=$inputFormat")
+            images.forEach { it.close() }
+            return null
+        }
+        RawStackRuntimeDebug.i(TAG) {
+            "Starting GLES streaming stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
+        }
+        return try {
+            GlesYuvStacker(
                 width = width,
                 height = height,
                 outputWidth = targetW,
@@ -107,64 +96,13 @@ object MultiFrameStacker {
                 colorSpace = colorSpace,
                 inputFormat = inputFormat,
                 enableSuperResolution = enableSuperResolution,
-            ).process(images)
-            if (glesBitmap != null) {
-                images.forEach { it.close() }
-                return glesBitmap
-            }
-            PLog.w(TAG, "GLES streaming stacker failed; GPU fallback disabled")
-            images.forEach { it.close() }
-            return null
-        }
-
-        // Fallback or legacy path
-        RawStackRuntimeDebug.i(TAG) {
-            "Starting legacy stacking process for ${images.size} frames ($width x $height). SR=$enableSuperResolution"
-        }
-        val stackerPtr = createStackerNative(width, height, enableSuperResolution)
-        if (stackerPtr == 0L) return null
-
-        try {
-            val stagedIndices = mutableListOf<Int>()
-            for (image in images) {
-                image.use {
-                    val planes = image.planes
-                    stageFrameNative(
-                        stackerPtr,
-                        planes[0].buffer, planes[1].buffer, planes[2].buffer,
-                        planes[0].rowStride, planes[1].rowStride, planes[1].pixelStride,
-                        image.format
-                    )
-                    stagedIndices.add(stagedIndices.size)
+            ).process(images).also { result ->
+                if (result == null) {
+                    PLog.w(TAG, "GLES streaming stacker failed")
                 }
             }
-
-            for (idx in stagedIndices) {
-                processFrameNative(stackerPtr, idx)
-            }
-            clearStagedFramesNative(stackerPtr)
-
-            val previewBitmap = try {
-                createBitmap(targetW, targetH, colorSpace = colorSpace)
-            } catch (e: OutOfMemoryError) {
-                PLog.e(TAG, "OOM creating legacy stack bitmap ($targetW x $targetH)", e)
-                return null
-            }
-
-            processStackNative(
-                stackerPtr,
-                previewBitmap,
-                rotation,
-                aspectRatio?.widthRatio ?: width,
-                aspectRatio?.heightRatio ?: height
-            )
-
-            RawStackRuntimeDebug.i(TAG) {
-                "Legacy stacking completed in ${System.currentTimeMillis() - startTime}ms"
-            }
-            return previewBitmap
         } finally {
-            releaseStackerNative(stackerPtr)
+            images.forEach { it.close() }
         }
     }
 
@@ -174,7 +112,6 @@ object MultiFrameStacker {
         fusionExposureProducts: FloatArray?,
         rotation: Int,
         aspectRatio: AspectRatio?,
-        useGpuAcceleration: Boolean = true,
         colorSpace: ColorSpace,
     ): Bitmap? {
         if (frames.size < 3) return null
@@ -184,9 +121,6 @@ object MultiFrameStacker {
         val dimensions = BitmapUtils.calculateProcessedRect(width, height, aspectRatio, null, rotation)
         val inputFormat = images[0].format
 
-        if (!useGpuAcceleration) {
-            PLog.w(TAG, "YUV HDR denoise stack requires GLES; GPU acceleration setting is ignored")
-        }
         if (!GlesYuvStacker.supportsImageFormat(inputFormat)) {
             PLog.w(TAG, "GLES HDR YUV stacker does not support image format=$inputFormat")
             images.forEach { it.close() }
@@ -280,30 +214,5 @@ object MultiFrameStacker {
         if (!enabled || lensShading == null || width <= 0 || height <= 0) return null
         return lensShading.takeIf { it.size >= width * height * 4 }
     }
-
-    // --- Native Methods ---
-
-    private external fun createStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
-
-    private external fun stageFrameNative(
-        stackerPtr: Long,
-        yBuffer: ByteBuffer, uBuffer: ByteBuffer, vBuffer: ByteBuffer,
-        yRowStride: Int, uvRowStride: Int, uvPixelStride: Int,
-        format: Int
-    )
-
-    private external fun processFrameNative(stackerPtr: Long, index: Int)
-    private external fun clearStagedFramesNative(stackerPtr: Long)
-
-    private external fun processStackNative(
-        stackerPtr: Long,
-        outBitmap: Bitmap?,
-        rotation: Int,
-        targetWR: Int,
-        targetHR: Int
-    )
-
-    private external fun releaseStackerNative(stackerPtr: Long)
-
 
 }

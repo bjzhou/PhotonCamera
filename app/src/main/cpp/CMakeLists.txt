@@ -36,7 +36,6 @@ add_subdirectory(libjpeg-turbo)
 add_library(my-native-lib SHARED 
     native-lib.cpp
     yuv_utils.cpp
-    stacking_utils.cpp
     lut_processor.cpp
     dcp_parser.cpp
     ${LIBRAW_SOURCES}

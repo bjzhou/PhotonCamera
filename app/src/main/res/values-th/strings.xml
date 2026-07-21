@@ -178,23 +178,16 @@
     <string name="settings_ai_focus_sensitivity_description">ความมั่นใจในการตรวจจับขั้นต่ำที่จำเป็นเพื่อกระตุ้นการโฟกัสของ AI</string>
     <string name="settings_grid_lines">เส้นตาราง</string>
     <string name="settings_grid_description">แสดงเส้นตารางสำหรับการจัดองค์ประกอบ</string>
-    <string name="settings_use_multi_frame">การรวมหลายเฟรม</string>
     <string name="settings_use_multiple_exposure">การสัมผัสหลายครั้ง</string>
     <string name="multiple_exposure_finish">เสร็จ</string>
     <string name="multiple_exposure_undo">ยกเลิก</string>
     <string name="multiple_exposure_cancel">ยกเลิกการถ่ายภาพ</string>
     <string name="settings_multiple_exposure_count">จำนวนการสัมผัสหลายครั้ง</string>
     <string name="settings_multiple_exposure_count_description">จำนวนภาพที่ใช้ในการจัดองค์ประกอบภาพขั้นสุดท้าย ค่าเริ่มต้นคือ 2 รูปภาพ ซึ่งใกล้เคียงกับขั้นตอนการทำงานแบบ Double Exposure แบบคลาสสิกมากกว่า</string>
-    <string name="settings_multi_frame_count">จำนวนเฟรมที่รวม</string>
-    <string name="settings_multi_frame_count_description">จำนวนเฟรมสำหรับการรวมหลายเฟรม (เฟรมมาก = คุณภาพดีขึ้นแต่ช้าลง)</string>
-    <string name="settings_use_super_resolution">ความละเอียดสูงพิเศษ (Super Resolution)</string>
-    <string name="settings_super_resolution_scale">อัตราขยายเอาต์พุต: %1$.2f×</string>
     <string name="settings_use_live_photo">ภาพเคลื่อนไหว (Live Photo)</string>
     <string name="settings_use_live_photo_description">บันทึกวิดีโอคลิปสั้นๆ พร้อมกับรูปภาพของคุณเพื่อให้ได้เอฟเฟกต์ภาพเคลื่อนไหวที่สมจริง</string>
     <string name="settings_develop_animation">พัฒนาแอนิเมชั่น</string>
     <string name="settings_develop_animation_description">หลังจากถ่ายภาพ เอฟเฟกต์แอนิเมชั่นการพัฒนาภาพยนตร์จะปรากฏขึ้น</string>
-    <string name="settings_use_gpu_acceleration">การเร่งความเร็วด้วย GPU</string>
-    <string name="settings_use_gpu_acceleration_description">ใช้ GPU (Vulkan) เพื่อเร่งความเร็วในการรวมหลายเฟรม เปิดอยู่เป็นค่าเริ่มต้น</string>
     <string name="settings_section_frame">ลายน้ำกรอบ</string>
     <string name="settings_frame_style">สไตล์กรอบ</string>
     <string name="settings_frame_description">เพิ่มกรอบตกแต่งและลายน้ำให้กับรูปภาพ</string>

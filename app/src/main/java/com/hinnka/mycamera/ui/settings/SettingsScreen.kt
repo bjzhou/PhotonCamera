@@ -259,7 +259,6 @@ fun SettingsScreen(
     val vendorCaptureSettingsByLens by viewModel.vendorCaptureSettingsByLens.collectAsState()
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = true)
-    val useHdrComposition by viewModel.useHdrComposition.collectAsState(initial = false)
     // 软件处理参数
     val sharpening by viewModel.sharpening.collectAsState(initial = 0f)
     val noiseReduction by viewModel.noiseReduction.collectAsState(initial = 0f)
@@ -283,7 +282,6 @@ fun SettingsScreen(
     val settingsTonemapMode = remember(tonemapMode) { sanitizeSettingsTonemapMode(tonemapMode) }
     val fixTonemapPreview by viewModel.fixTonemapPreview.collectAsState()
     val fixTonemapCapture by viewModel.fixTonemapCapture.collectAsState()
-    val useGpuAcceleration by viewModel.useGpuAcceleration.collectAsState()
     val useP010 by viewModel.useP010.collectAsState()
     val useHlg10 by viewModel.useHlg10.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
@@ -1331,18 +1329,6 @@ fun SettingsScreen(
                         )
 
                         SwitchSettingItem(
-                            title = stringResource(R.string.settings_use_gpu_acceleration),
-                            description = stringResource(R.string.settings_use_gpu_acceleration_description),
-                            checked = useGpuAcceleration,
-                            onCheckedChange = { viewModel.setUseGpuAcceleration(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        SwitchSettingItem(
                             title = stringResource(R.string.settings_use_live_photo),
                             description = stringResource(R.string.settings_use_live_photo_description),
                             checked = useLivePhoto,
@@ -1503,20 +1489,9 @@ fun SettingsScreen(
 
                     // 多帧与曝光
                     SettingsSection(title = stringResource(R.string.settings_section_multiframe_exposure)) {
-                        SwitchSettingItem(
-                            title = stringResource(R.string.settings_use_hdr_composition),
-                            checked = useHdrComposition,
-                            onCheckedChange = { viewModel.setUseHdrComposition(it) }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
-
                         SliderSettingItem(
-                            title = stringResource(R.string.settings_multi_frame_count),
-                            description = stringResource(R.string.settings_multi_frame_count_description),
+                            title = stringResource(R.string.settings_max_frame_count),
+                            description = stringResource(R.string.settings_max_frame_count_description),
                             value = multiFrameCountSliderValue,
                             valueRange = MultiFrameConfig.MIN_FRAME_COUNT.toFloat()..MultiFrameConfig.MAX_FRAME_COUNT.toFloat(),
                             onValueChange = { multiFrameCountSliderValue = it.roundToInt().toFloat() },

@@ -35,7 +35,34 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
-    fun fromJson_keepsRawAndMfsrCombination() {
+    fun toJson_writesOnlyNormalizedMaxFields() {
+        val source = CameraPreset(
+            id = "preset_current_raw_max",
+            name = "Current RAWmax",
+            lutId = null,
+            colorRecipe = ColorRecipeParams.DEFAULT,
+            effects = EffectParams.DEFAULT,
+            useRaw = false,
+            useJpgMax = true,
+            useRawMax = true,
+        )
+
+        val json = source.toJson()
+        val preset = CameraPreset.fromJson(json)
+
+        requireNotNull(preset)
+        assertTrue(json.contains("\"useRawMax\""))
+        assertTrue(json.contains("\"useJpgMax\""))
+        assertFalse(json.contains("\"useMFNR\""))
+        assertFalse(json.contains("\"useMFSR\""))
+        assertFalse(json.contains("\"useHdrComposition\""))
+        assertTrue(preset.useRaw)
+        assertTrue(preset.useRawMax)
+        assertFalse(preset.useJpgMax)
+    }
+
+    @Test
+    fun fromJson_migratesLegacyRawMultiFrameToRawMax() {
         val preset = CameraPreset.fromJson(
             """
             {
@@ -53,11 +80,12 @@ class CameraPresetJsonCodecTest {
 
         requireNotNull(preset)
         assertTrue(preset.useRaw)
-        assertTrue(preset.useMFSR)
+        assertTrue(preset.useRawMax)
+        assertFalse(preset.useJpgMax)
     }
 
     @Test
-    fun fromJson_keepsRawMfsrWhenYuvHdrPreferenceIsEnabled() {
+    fun fromJson_ignoresLegacyYuvHdrFlagForRawMaxMigration() {
         val preset = CameraPreset.fromJson(
             """
             {
@@ -75,12 +103,12 @@ class CameraPresetJsonCodecTest {
 
         requireNotNull(preset)
         assertTrue(preset.useRaw)
-        assertTrue(preset.useHdrComposition)
-        assertTrue(preset.useMFSR)
+        assertTrue(preset.useRawMax)
+        assertFalse(preset.useJpgMax)
     }
 
     @Test
-    fun fromJson_stillRejectsYuvMfsrAndHdrCombination() {
+    fun fromJson_migratesLegacyYuvMultiFrameAndHdrToJpgMax() {
         val preset = CameraPreset.fromJson(
             """
             {
@@ -97,8 +125,9 @@ class CameraPresetJsonCodecTest {
         )
 
         requireNotNull(preset)
-        assertTrue(preset.useHdrComposition)
-        assertFalse(preset.useMFSR)
+        assertTrue(preset.useJpgMax)
+        assertFalse(preset.useRawMax)
+        assertFalse(preset.useRaw)
     }
 
     @Test
@@ -130,8 +159,8 @@ class CameraPresetJsonCodecTest {
         assertEquals("Legacy Preset", preset.name)
         assertEquals(RawRenderingEngine.AdobeCurve.name, preset.rawRenderingEngine)
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
-        assertFalse(preset.useHdrComposition)
-        assertFalse(preset.useMFSR)
+        assertFalse(preset.useJpgMax)
+        assertFalse(preset.useRawMax)
         assertEquals(0.25f, preset.colorRecipe.exposure, 0.0001f)
         assertEquals(1f, preset.colorRecipe.contrast, 0.0001f)
         assertEquals(1f, preset.colorRecipe.saturation, 0.0001f)

@@ -36,6 +36,19 @@ internal object CameraPresetJsonCodec {
         val obj = element.asJsonObject
         val id = obj.stringOrNull("id")?.takeIf { it.isNotBlank() } ?: return null
         val name = obj.stringOrNull("name")?.takeIf { it.isNotBlank() } ?: id
+        val useRaw = obj.boolean("useRaw", false)
+        val hasCurrentMaxFields = obj.has("useJpgMax") || obj.has("useRawMax")
+        val legacyMultiFrameEnabled = obj.boolean("useMFNR", false) || obj.boolean("useMFSR", false)
+        val useJpgMax = if (hasCurrentMaxFields) {
+            obj.boolean("useJpgMax", false)
+        } else {
+            !useRaw && (legacyMultiFrameEnabled || obj.boolean("useHdrComposition", false))
+        }
+        val useRawMax = if (hasCurrentMaxFields) {
+            obj.boolean("useRawMax", false)
+        } else {
+            useRaw && legacyMultiFrameEnabled
+        }
 
         return CameraPreset(
             id = id,
@@ -44,10 +57,9 @@ internal object CameraPresetJsonCodec {
             colorRecipe = parseColorRecipe(obj.get("colorRecipe")),
             effects = parseEffects(obj.get("effects")),
             aspectRatio = parseAspectRatio(obj.stringOrNull("aspectRatio")),
-            useRaw = obj.boolean("useRaw", false),
-            useMFNR = obj.boolean("useMFNR", false),
-            useHdrComposition = obj.boolean("useHdrComposition", false),
-            useMFSR = obj.boolean("useMFSR", false),
+            useRaw = useRaw,
+            useJpgMax = useJpgMax,
+            useRawMax = useRawMax,
             frameId = obj.stringOrNull("frameId"),
             rawDcpId = obj.stringOrNull("rawDcpId"),
             rawDcpIdsByLens = parseRawDcpIdsByLens(obj.get("rawDcpIdsByLens")),

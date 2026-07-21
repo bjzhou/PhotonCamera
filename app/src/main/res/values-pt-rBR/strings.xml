@@ -79,15 +79,8 @@
     <string name="settings_level_description">Mostrar indicador de nível horizontal ao fotografar</string>
     <string name="settings_grid_lines">Linhas de Grade</string>
     <string name="settings_grid_description">Mostrar linhas de grade para composição</string>
-    <string name="settings_use_multi_frame">Empilhamento Multi-Frame</string>
-    <string name="settings_multi_frame_count">Contagem de Multi-frame</string>
-    <string name="settings_multi_frame_count_description">Número de quadros para empilhamento multi-frame (mais quadros = melhor qualidade, mas mais lento).</string>
-    <string name="settings_use_super_resolution">Super Resolução</string>
-    <string name="settings_super_resolution_scale">Escala de saída: %1$.2f×</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturar um pequeno clipe de vídeo junto com sua foto para um efeito dinâmico de Live Photo.</string>
-    <string name="settings_use_gpu_acceleration">Aceleração por GPU</string>
-    <string name="settings_use_gpu_acceleration_description">Usar GPU (Vulkan) para acelerar o empilhamento multi-frame. O padrão é ativado.</string>
     <string name="settings_section_frame">Marca d\'água de Moldura</string>
     <string name="settings_frame_style">Estilo de Moldura</string>
     <string name="settings_frame_description">Adicionar moldura decorativa e marca d\'água às fotos</string>

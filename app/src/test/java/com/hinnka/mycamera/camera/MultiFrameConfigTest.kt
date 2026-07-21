@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.camera
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -8,6 +9,37 @@ class MultiFrameConfigTest {
     @Test
     fun cameraStateStartsWithValidMultiFrameCount() {
         assertEquals(MultiFrameConfig.DEFAULT_FRAME_COUNT, CameraState().multiFrameCount)
+    }
+
+    @Test
+    fun cameraStateRoutesMaxModeByCaptureFormat() {
+        val jpgMax = CameraState(
+            multiFrameOutputScale = 1f,
+            useRaw = false,
+        )
+        val rawMax = CameraState(
+            multiFrameOutputScale = 1.5f,
+            useRaw = true,
+            isRawSupported = true,
+        )
+
+        assertTrue(jpgMax.isJpgMaxEnabled)
+        assertFalse(jpgMax.isRawMaxEnabled)
+        assertTrue(rawMax.isRawMaxEnabled)
+        assertFalse(rawMax.isJpgMaxEnabled)
+    }
+
+    @Test
+    fun rawMaxNeverFallsBackToYuvWhenRawIsUnsupported() {
+        val unsupportedRawMax = CameraState(
+            multiFrameOutputScale = 1.5f,
+            useRaw = true,
+            isRawSupported = false,
+        )
+
+        assertFalse(unsupportedRawMax.isMultiFrameEnabled)
+        assertFalse(unsupportedRawMax.isJpgMaxEnabled)
+        assertFalse(unsupportedRawMax.isRawMaxEnabled)
     }
 
     @Test

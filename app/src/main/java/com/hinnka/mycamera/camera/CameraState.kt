@@ -344,7 +344,6 @@ data class CameraState(
 
     val isRawSupported: Boolean = false,
     val multiFrameOutputScale: Float? = null,
-    val useHdrComposition: Boolean = false,
     val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,
@@ -391,7 +390,13 @@ data class CameraState(
         get() = currentDynamicRangeProfile == "HLG10"
 
     val isMultiFrameEnabled: Boolean
-        get() = multiFrameOutputScale != null
+        get() = multiFrameOutputScale != null && (!useRaw || isRawSupported)
+
+    val isJpgMaxEnabled: Boolean
+        get() = isMultiFrameEnabled && !useRaw
+
+    val isRawMaxEnabled: Boolean
+        get() = isMultiFrameEnabled && useRaw
 
     /**
      * 获取当前相机信息

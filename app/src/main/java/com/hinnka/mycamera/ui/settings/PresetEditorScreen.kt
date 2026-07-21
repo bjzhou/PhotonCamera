@@ -93,15 +93,8 @@ fun PresetEditorScreen(
     // 相机参数
     var aspectRatio by remember { mutableStateOf(sourcePreset?.aspectRatio ?: AspectRatio.RATIO_4_3.name) }
     var useRaw by remember { mutableStateOf(sourcePreset?.useRaw ?: false) }
-    var useMFNR by remember { mutableStateOf(sourcePreset?.useMFNR ?: false) }
-    var useHdrComposition by remember { mutableStateOf(sourcePreset?.useHdrComposition ?: true) }
-    var useMFSR by remember {
-        mutableStateOf(
-            sourcePreset?.let {
-                it.useMFSR && !it.useMFNR && (it.useRaw || !it.useHdrComposition)
-            } ?: false
-        )
-    }
+    var useJpgMax by remember { mutableStateOf(sourcePreset?.useJpgMax ?: false) }
+    var useRawMax by remember { mutableStateOf(sourcePreset?.useRawMax ?: false) }
     var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
 
     // Quick RAW 参数
@@ -143,9 +136,8 @@ fun PresetEditorScreen(
             effects = effects,
             aspectRatio = aspectRatio,
             useRaw = useRaw,
-            useMFNR = useMFNR,
-            useHdrComposition = useHdrComposition,
-            useMFSR = useMFSR && !useMFNR && (useRaw || !useHdrComposition),
+            useJpgMax = useJpgMax,
+            useRawMax = useRawMax,
             frameId = frameId,
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
@@ -286,12 +278,13 @@ fun PresetEditorScreen(
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
                 SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_multi_frame),
-                    checked = useMFNR,
+                    title = stringResource(R.string.settings_use_jpg_max),
+                    checked = useJpgMax,
                     onCheckedChange = {
-                        useMFNR = it
+                        useJpgMax = it
                         if (it) {
-                            useMFSR = false
+                            useRaw = false
+                            useRawMax = false
                         }
                     }
                 )
@@ -299,28 +292,13 @@ fun PresetEditorScreen(
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
                 SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_super_resolution),
-                    checked = useMFSR,
+                    title = stringResource(R.string.settings_use_raw_max),
+                    checked = useRawMax,
                     onCheckedChange = {
-                        useMFSR = it
+                        useRawMax = it
                         if (it) {
-                            useMFNR = false
-                            if (!useRaw) {
-                                useHdrComposition = false
-                            }
-                        }
-                    }
-                )
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.settings_use_hdr_composition),
-                    checked = useHdrComposition,
-                    onCheckedChange = {
-                        useHdrComposition = it
-                        if (it && !useRaw) {
-                            useMFSR = false
+                            useRaw = true
+                            useJpgMax = false
                         }
                     }
                 )
@@ -410,8 +388,10 @@ fun PresetEditorScreen(
                     checked = useRaw,
                     onCheckedChange = {
                         useRaw = it
-                        if (!it && useHdrComposition) {
-                            useMFSR = false
+                        if (it) {
+                            useJpgMax = false
+                        } else {
+                            useRawMax = false
                         }
                     }
                 )

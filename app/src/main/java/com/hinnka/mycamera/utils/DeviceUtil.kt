@@ -66,6 +66,4 @@ object DeviceUtil {
     val canShowPhantom: Boolean
         get() = BuildConfig.FLAVOR != "google"
 
-    val defaultGpuAcceleration: Boolean
-        get() = true
 }

@@ -27,7 +27,6 @@
 #include "dng_memory_stream.h"
 #include "libraw/libraw.h"
 #include "math_utils.h"
-#include "stacking_utils.h"
 
 #ifndef LOG_TAG
 #define LOG_TAG "native-lib"
@@ -1843,112 +1842,6 @@ static unsigned char mapCfaPatternToLibRaw(int cfaPattern) {
 }
 
 extern "C" {
-
-/**
- * Multi-Frame Stacking JNI Interface
- */
-JNIEXPORT jlong JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_createStackerNative(
-    JNIEnv *env, jobject /* this */, jint width, jint height,
-    jboolean enableSuperRes) {
-  auto *stacker = new ImageStacker(width, height, enableSuperRes);
-  return reinterpret_cast<jlong>(stacker);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_addToStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject yBuffer,
-    jobject uBuffer, jobject vBuffer, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint format) {
-
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-
-  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
-  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
-  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
-
-  if (yData && uData && vData) {
-    jlong yCap = env->GetDirectBufferCapacity(yBuffer);
-    jlong uCap = env->GetDirectBufferCapacity(uBuffer);
-    jlong vCap = env->GetDirectBufferCapacity(vBuffer);
-
-    // Basic sanity check for capacity. Actual check depends on strides,
-    // but at least check it's not empty.
-    if (yCap <= 0 || uCap <= 0 || vCap <= 0) {
-      LOGE("addToStackNative: Buffer capacity is zero");
-      return;
-    }
-
-    stacker->addFrame(yData, uData, vData, yRowStride, uvRowStride,
-                      uvPixelStride, format);
-  } else {
-    LOGE("addToStackNative: Failed to get buffer addresses");
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_stageFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject yBuffer,
-    jobject uBuffer, jobject vBuffer, jint yRowStride, jint uvRowStride,
-    jint uvPixelStride, jint format) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker)
-    return;
-  auto *yData = static_cast<uint8_t *>(env->GetDirectBufferAddress(yBuffer));
-  auto *uData = static_cast<uint8_t *>(env->GetDirectBufferAddress(uBuffer));
-  auto *vData = static_cast<uint8_t *>(env->GetDirectBufferAddress(vBuffer));
-  if (yData && uData && vData) {
-    stacker->stageFrame(yData, uData, vData, yRowStride, uvRowStride,
-                        uvPixelStride, format);
-  }
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processFrameNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jint index) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (stacker)
-    stacker->processFrame(index);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_clearStagedFramesNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (stacker)
-    stacker->clearStagedFrames();
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_processStackNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr, jobject outBitmap,
-    jint rotation, jint targetWR, jint targetHR) {
-
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  if (!stacker || !outBitmap)
-    return;
-
-  AndroidBitmapInfo info;
-  void *bitmapPixels = nullptr;
-  if (AndroidBitmap_getInfo(env, outBitmap, &info) < 0 ||
-      AndroidBitmap_lockPixels(env, outBitmap, &bitmapPixels) < 0) {
-    return;
-  }
-
-  stacker->writeResult(static_cast<uint32_t *>(bitmapPixels), info.width,
-                       info.height, rotation, targetWR, targetHR);
-
-  AndroidBitmap_unlockPixels(env, outBitmap);
-}
-
-JNIEXPORT void JNICALL
-Java_com_hinnka_mycamera_processor_MultiFrameStacker_releaseStackerNative(
-    JNIEnv *env, jobject /* this */, jlong stackerPtr) {
-  auto *stacker = reinterpret_cast<ImageStacker *>(stackerPtr);
-  delete stacker;
-}
 
 /**
  * 带有保存到本地文件的 JPG 压缩版本的 processToBitmap

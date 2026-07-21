@@ -462,10 +462,9 @@ class Camera2Controller(private val context: Context) {
     private fun resolveImageReaderMaxImages(): Int {
         val currentState = _state.value
         val multiFrameCount = MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
-        val usesYuvHdrBracket = currentState.useHdrComposition &&
-            (!currentState.useRaw || !isRawSupported)
+        val usesJpgMax = currentState.isJpgMaxEnabled
         val requestedImages = when {
-            usesYuvHdrBracket && currentState.isMultiFrameEnabled ->
+            usesJpgMax ->
                 multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT
 
             currentState.isMultiFrameEnabled ->
@@ -2871,13 +2870,6 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun shouldForceDefaultToneMapForHdrComposition(state: CameraState, isCapture: Boolean): Boolean {
-        return isCapture &&
-                state.captureMode == CaptureMode.PHOTO &&
-                state.useHdrComposition &&
-                !state.useRaw
-    }
-
     private fun applyDefaultToneMapSettings(
         builder: CaptureRequest.Builder,
         state: CameraState,
@@ -5034,10 +5026,6 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
-    fun setUseHdrComposition(useHdrComposition: Boolean) {
-        _state.value = _state.value.copy(useHdrComposition = useHdrComposition)
-    }
-
     fun setUseMultipleExposure(useMultipleExposure: Boolean) {
         _state.value = _state.value.copy(useMultipleExposure = useMultipleExposure)
     }
@@ -5254,12 +5242,11 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun buildHdrBracketEvOffsets(zeroEvFrameCount: Int): List<Float> {
-        val sideEv = HdrBracketConfig.YUV_SIDE_EV
         val zeroCount = zeroEvFrameCount.coerceAtLeast(1)
         return buildList {
             add(0f)
-            add(sideEv)
-            add(-sideEv)
+            add(HdrBracketConfig.YUV_LONG_EV)
+            add(HdrBracketConfig.YUV_SHORT_EV)
             repeat((zeroCount - 1).coerceAtLeast(0)) {
                 add(0f)
             }
@@ -5354,20 +5341,15 @@ class Camera2Controller(private val context: Context) {
     ): Pair<Int, Long> {
         val isoRange = state.getIsoRange()
         val shutterRange = state.getShutterSpeedRange()
-        val multiplier = 2.0.pow(evOffset.toDouble())
-        val targetProduct = baseIso.toDouble() * baseShutter.toDouble() * multiplier
-
-        val shutterFirst = (baseShutter.toDouble() * multiplier)
-            .roundToLong()
-            .coerceIn(shutterRange.lower, shutterRange.upper)
-        val isoForShutter = (targetProduct / shutterFirst.toDouble())
-            .roundToInt()
-            .coerceIn(isoRange.lower, isoRange.upper)
-        val shutterForIso = (targetProduct / isoForShutter.toDouble())
-            .roundToLong()
-            .coerceIn(shutterRange.lower, shutterRange.upper)
-
-        return Pair(isoForShutter, shutterForIso)
+        return HdrBracketConfig.planManualExposure(
+            baseIso = baseIso,
+            baseShutterNs = baseShutter,
+            evOffset = evOffset,
+            isoLower = isoRange.lower,
+            isoUpper = isoRange.upper,
+            shutterLowerNs = shutterRange.lower,
+            shutterUpperNs = shutterRange.upper,
+        )
     }
 
     private fun calculateHdrBracketExposureCompensation(state: CameraState, evOffset: Float): Int {
@@ -5657,9 +5639,9 @@ class Camera2Controller(private val context: Context) {
         return false
     }
 
-    private fun shouldUseDefaultHdrBracketCapture(state: CameraState, isRawCapture: Boolean): Boolean {
+    private fun shouldUseJpgMaxCapture(state: CameraState, isRawCapture: Boolean): Boolean {
         return state.captureMode == CaptureMode.PHOTO &&
-                state.useHdrComposition &&
+                state.isJpgMaxEnabled &&
                 !isRawCapture &&
                 !state.burstCapturing &&
                 !state.hdrBracketCapturing &&
@@ -5683,14 +5665,14 @@ class Camera2Controller(private val context: Context) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
             val currentState = _state.value
-            if (shouldUseDefaultHdrBracketCapture(currentState, isRawCapture)) {
+            if (shouldUseJpgMaxCapture(currentState, isRawCapture)) {
                 val session = captureSession ?: run {
-                    PLog.e(TAG, "Failed to capture HDR bracket: capture session unavailable")
+                    PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
                     _state.value = _state.value.copy(isCapturing = false)
                     onHdrBracketCaptureFailed?.invoke()
                     return
                 }
-                PLog.d(TAG, "Default YUV HDR bracket capture")
+                PLog.d(TAG, "JPGmax YUV bracket capture")
                 performHdrBracketCapture(
                     device = device,
                     reader = reader,

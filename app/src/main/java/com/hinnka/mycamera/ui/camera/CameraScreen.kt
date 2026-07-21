@@ -223,11 +223,10 @@ fun CameraScreen(
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
-    val useMFNR by viewModel.useMFNR.collectAsState()
-    val useHdrComposition by viewModel.useHdrComposition.collectAsState()
+    val useJpgMax by viewModel.useJpgMax.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
-    val useMFSR by viewModel.useMFSR.collectAsState()
-    val superResolutionScale by viewModel.superResolutionScale.collectAsState()
+    val useRawMax by viewModel.useRawMax.collectAsState()
+    val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
@@ -531,18 +530,15 @@ fun CameraScreen(
 
     fun presetRequiresPreviewTransition(preset: CameraPreset?): Boolean {
         val targetAspectRatio = presetTargetAspectRatio(preset)
-        var targetUseRaw = preset?.useRaw ?: false
-        var targetUseMFNR = preset?.useMFNR ?: false
-        var targetUseMFSR = preset?.useMFSR ?: false
-
-        if (targetUseMFNR) {
-            targetUseMFSR = false
-        }
+        val targetPreset = preset?.withSupportedCaptureCombination()
+        val targetUseRaw = targetPreset?.useRaw ?: false
+        val targetUseJpgMax = targetPreset?.useJpgMax ?: false
+        val targetUseRawMax = targetPreset?.useRawMax ?: false
 
         return targetAspectRatio != state.aspectRatio ||
             targetUseRaw != useRaw ||
-            targetUseMFNR != useMFNR ||
-            targetUseMFSR != useMFSR
+            targetUseJpgMax != useJpgMax ||
+            targetUseRawMax != useRawMax
     }
 
     LaunchedEffect(previewTransitionToken, state.isPreviewActive, previewTransitionAwaitingResume) {
@@ -1507,20 +1503,16 @@ fun CameraScreen(
                 activePanel = ActivePanel.NONE
                 onSettingsClick()
             },
-            useMFNR = useMFNR,
-            onMFNRToggle = {
-                viewModel.setUseMFNR(it)
+            useJpgMax = useJpgMax,
+            onJpgMaxToggle = {
+                viewModel.setUseJpgMax(it)
             },
-            useMFSR = useMFSR,
-            onMFSRToggle = {
-                viewModel.setUseMFSR(it)
+            useRawMax = useRawMax,
+            onRawMaxToggle = {
+                viewModel.setUseRawMax(it)
             },
-            superResolutionScale = superResolutionScale,
-            onSuperResolutionScaleChange = viewModel::setSuperResolutionScale,
-            useHdrComposition = useHdrComposition,
-            onHdrCompositionToggle = {
-                viewModel.setUseHdrComposition(it)
-            },
+            rawMaxOutputScale = rawMaxOutputScale,
+            onRawMaxOutputScaleChange = viewModel::setRawMaxOutputScale,
             useMultipleExposure = useMultipleExposure,
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding

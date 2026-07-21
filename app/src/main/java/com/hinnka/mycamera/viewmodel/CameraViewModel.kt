@@ -157,9 +157,8 @@ private data class PresetMatchSnapshot(
     val effects: EffectParams,
     val aspectRatio: String,
     val useRaw: Boolean,
-    val useMFNR: Boolean,
-    val useHdrComposition: Boolean,
-    val useMFSR: Boolean,
+    val useJpgMax: Boolean,
+    val useRawMax: Boolean,
     val frameId: String?,
     val rawDcpId: String?,
     val rawDcpIdsByLens: Map<String, String?>,
@@ -182,9 +181,8 @@ private data class PresetMatchSnapshot(
             effects == preset.effects &&
             aspectRatio == preset.aspectRatio &&
             useRaw == preset.useRaw &&
-            useMFNR == preset.useMFNR &&
-            useHdrComposition == preset.useHdrComposition &&
-            useMFSR == preset.useMFSR &&
+            useJpgMax == preset.useJpgMax &&
+            useRawMax == preset.useRawMax &&
             frameId == preset.frameId &&
             rawDcpId == preset.rawDcpId &&
             rawDcpIdsByLens == preset.rawDcpIdsByLens &&
@@ -208,11 +206,8 @@ private data class PresetMatchSnapshot(
             if (effects != preset.effects) add("effects current=$effects preset=${preset.effects}")
             if (aspectRatio != preset.aspectRatio) add("aspectRatio current=$aspectRatio preset=${preset.aspectRatio}")
             if (useRaw != preset.useRaw) add("useRaw current=$useRaw preset=${preset.useRaw}")
-            if (useMFNR != preset.useMFNR) add("useMFNR current=$useMFNR preset=${preset.useMFNR}")
-            if (useHdrComposition != preset.useHdrComposition) {
-                add("useHdrComposition current=$useHdrComposition preset=${preset.useHdrComposition}")
-            }
-            if (useMFSR != preset.useMFSR) add("useMFSR current=$useMFSR preset=${preset.useMFSR}")
+            if (useJpgMax != preset.useJpgMax) add("useJpgMax current=$useJpgMax preset=${preset.useJpgMax}")
+            if (useRawMax != preset.useRawMax) add("useRawMax current=$useRawMax preset=${preset.useRawMax}")
             if (frameId != preset.frameId) add("frameId current=$frameId preset=${preset.frameId}")
             if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
             if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
@@ -272,15 +267,15 @@ private data class ActivePresetMatchState(
 private data class SettingValue<T>(val value: T)
 
 internal fun resolveMultiFrameOutputScale(
-    useMfnr: Boolean,
-    useMfsr: Boolean,
-    superResolutionScale: Float,
+    useJpgMax: Boolean,
+    useRawMax: Boolean,
+    rawMaxOutputScale: Float,
 ): Float? = when {
-    useMfsr -> MultiFrameConfig.normalizeOutputScale(
-        outputScale = superResolutionScale,
+    useRawMax -> MultiFrameConfig.normalizeOutputScale(
+        outputScale = rawMaxOutputScale,
         fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
     )
-    useMfnr -> 1f
+    useJpgMax -> 1f
     else -> null
 }
 
@@ -290,9 +285,8 @@ private data class CameraFeatureUpdate(
     val effects: SettingValue<EffectParams>? = null,
     val aspectRatio: SettingValue<AspectRatio>? = null,
     val useRaw: SettingValue<Boolean>? = null,
-    val useMFNR: SettingValue<Boolean>? = null,
-    val useHdrComposition: SettingValue<Boolean>? = null,
-    val useMFSR: SettingValue<Boolean>? = null,
+    val useJpgMax: SettingValue<Boolean>? = null,
+    val useRawMax: SettingValue<Boolean>? = null,
     val frameId: SettingValue<String?>? = null,
     val rawDcpId: SettingValue<String?>? = null,
     val rawDcpIdsByLens: SettingValue<Map<String, String?>>? = null,
@@ -415,9 +409,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             effects = saved.effects,
                             aspectRatio = saved.aspectRatio,
                             useRaw = saved.useRaw,
-                            useMFNR = saved.useMFNR,
-                            useHdrComposition = saved.useHdrComposition,
-                            useMFSR = saved.useMFSR,
+                            useJpgMax = saved.useJpgMax,
+                            useRawMax = saved.useRawMax,
                             frameId = saved.frameId,
                             rawDcpId = saved.rawDcpId,
                             rawDcpIdsByLens = saved.rawDcpIdsByLens,
@@ -479,9 +472,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             effects = currentEffectParams.value,
             aspectRatio = state.value.aspectRatio.name,
             useRaw = useRaw.value,
-            useMFNR = useMFNR.value,
-            useHdrComposition = useHdrComposition.value,
-            useMFSR = useMFSR.value,
+            useJpgMax = useJpgMax.value,
+            useRawMax = useRawMax.value,
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
             rawDcpIdsByLens = userPreferences.value.rawDcpIdsByLens,
@@ -554,9 +546,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
             aspectRatio = SettingValue(ratio),
             useRaw = SettingValue(this?.useRaw ?: false),
-            useMFNR = SettingValue(this?.useMFNR ?: false),
-            useHdrComposition = SettingValue(this?.useHdrComposition ?: false),
-            useMFSR = SettingValue(this?.useMFSR ?: false),
+            useJpgMax = SettingValue(this?.useJpgMax ?: false),
+            useRawMax = SettingValue(this?.useRawMax ?: false),
             frameId = SettingValue(this?.frameId),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
@@ -579,60 +570,53 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         val prefs = userPreferencesRepository.userPreferences.first()
         var desiredUseRaw = prefs.useRaw
-        var desiredUseMFNR = prefs.useMFNR
-        var desiredUseHdrComposition = prefs.useHdrComposition
-        var desiredUseMFSR = prefs.useMFSR
+        var desiredUseJpgMax = prefs.useJpgMax
+        var desiredUseRawMax = prefs.useRawMax
         var desiredUseMultipleExposure = prefs.useMultipleExposure
         var desiredRawRenderingEngine = prefs.rawRenderingEngine
 
         update.useRaw?.let { desiredUseRaw = it.value }
-        update.useMFNR?.let { desiredUseMFNR = it.value }
-        update.useHdrComposition?.let { desiredUseHdrComposition = it.value }
-        update.useMFSR?.let { desiredUseMFSR = it.value }
+        update.useJpgMax?.let { desiredUseJpgMax = it.value }
+        update.useRawMax?.let { desiredUseRawMax = it.value }
         update.useMultipleExposure?.let { desiredUseMultipleExposure = it.value }
         update.rawRenderingEngine?.let { desiredRawRenderingEngine = it.value }
 
         if (update.useRaw?.value == true) {
             desiredUseMultipleExposure = false
+            desiredUseJpgMax = false
+        } else if (update.useRaw?.value == false) {
+            desiredUseRawMax = false
         }
-        if (update.useMFNR?.value == true) {
+        if (update.useJpgMax?.value == true) {
+            desiredUseRaw = false
             desiredUseMultipleExposure = false
-            desiredUseMFSR = false
+            desiredUseRawMax = false
         }
-        if (update.useMFSR?.value == true) {
+        if (update.useRawMax?.value == true) {
+            desiredUseRaw = true
             desiredUseMultipleExposure = false
-            desiredUseMFNR = false
-        }
-        if (update.useHdrComposition?.value == true && !desiredUseRaw) {
-            desiredUseMFSR = false
-        }
-        if (!desiredUseRaw && desiredUseMFSR && desiredUseHdrComposition) {
-            if (update.useMFSR?.value == true && update.useHdrComposition?.value != true) {
-                desiredUseHdrComposition = false
-            } else {
-                desiredUseMFSR = false
-            }
+            desiredUseJpgMax = false
         }
         if (update.useMultipleExposure?.value == true) {
             desiredUseRaw = false
-            desiredUseMFNR = false
-            desiredUseMFSR = false
+            desiredUseJpgMax = false
+            desiredUseRawMax = false
+        }
+        if (desiredUseJpgMax && prefs.useLivePhoto) {
+            cameraController.setUseLivePhoto(false)
+            userPreferencesRepository.saveUseLivePhoto(false)
         }
         val desiredMultiFrameOutputScale = resolveMultiFrameOutputScale(
-            useMfnr = desiredUseMFNR,
-            useMfsr = desiredUseMFSR,
-            superResolutionScale = prefs.superResolutionScale,
+            useJpgMax = desiredUseJpgMax,
+            useRawMax = desiredUseRawMax,
+            rawMaxOutputScale = prefs.rawMaxOutputScale,
         )
         val currentState = state.value
         val targetAspectRatio = update.aspectRatio?.value
-        val hdrCompositionRequiresReopen =
-            desiredUseHdrComposition != currentState.useHdrComposition &&
-                !(desiredUseRaw && currentState.isRawSupported)
         val needsCameraReopen =
             targetAspectRatio != null && targetAspectRatio != currentState.aspectRatio ||
                 desiredUseRaw != prefs.useRaw ||
-                desiredMultiFrameOutputScale != currentState.multiFrameOutputScale ||
-                hdrCompositionRequiresReopen
+                desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
 
         update.colorRecipe?.let {
             val recipeLutId = if (update.lutId != null) {
@@ -664,10 +648,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (update.useRaw != null || desiredUseRaw != prefs.useRaw) {
             cameraController.setUseRaw(desiredUseRaw)
         }
-        if (update.useHdrComposition != null || desiredUseHdrComposition != prefs.useHdrComposition) {
-            cameraController.setUseHdrComposition(desiredUseHdrComposition)
-        }
-        if (update.useMFNR != null || update.useMFSR != null ||
+        if (update.useJpgMax != null || update.useRawMax != null ||
             desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
         ) {
             cameraController.setMultiFrameOutputScale(desiredMultiFrameOutputScale)
@@ -715,20 +696,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     null
                 },
-                useMFNR = if (update.useMFNR != null || desiredUseMFNR != prefs.useMFNR) {
-                    PreferenceUpdateValue(desiredUseMFNR)
+                useJpgMax = if (update.useJpgMax != null || desiredUseJpgMax != prefs.useJpgMax) {
+                    PreferenceUpdateValue(desiredUseJpgMax)
                 } else {
                     null
                 },
-                useHdrComposition = if (update.useHdrComposition != null ||
-                    desiredUseHdrComposition != prefs.useHdrComposition
-                ) {
-                    PreferenceUpdateValue(desiredUseHdrComposition)
-                } else {
-                    null
-                },
-                useMFSR = if (update.useMFSR != null || desiredUseMFSR != prefs.useMFSR) {
-                    PreferenceUpdateValue(desiredUseMFSR)
+                useRawMax = if (update.useRawMax != null || desiredUseRawMax != prefs.useRawMax) {
+                    PreferenceUpdateValue(desiredUseRawMax)
                 } else {
                     null
                 },
@@ -770,12 +744,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun isRawEnabledForNaturalLightHdrGuard(prefs: UserPreferences): Boolean {
-        return prefs.useRaw
-    }
-
-    private fun shouldDisableNaturalLightForHdrComposition(prefs: UserPreferences): Boolean {
-        return prefs.useHdrComposition && !isRawEnabledForNaturalLightHdrGuard(prefs)
+    private fun shouldDisableNaturalLightForJpgMax(prefs: UserPreferences): Boolean {
+        return prefs.useJpgMax
     }
 
     private fun resolveCaptureRawRenderingEngine(userPrefs: UserPreferences?): RawRenderingEngine {
@@ -940,9 +910,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             effects = currentEffectParams.value,
             aspectRatio = state.value.aspectRatio.name,
             useRaw = useRaw.value,
-            useMFNR = useMFNR.value,
-            useHdrComposition = useHdrComposition.value,
-            useMFSR = useMFSR.value,
+            useJpgMax = useJpgMax.value,
+            useRawMax = useRawMax.value,
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
             rawDcpIdsByLens = rawDcpIdsByLens.value,
@@ -966,9 +935,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             effects = effects,
             aspectRatio = aspectRatio,
             useRaw = prefs.useRaw,
-            useMFNR = prefs.useMFNR,
-            useHdrComposition = prefs.useHdrComposition,
-            useMFSR = prefs.useMFSR,
+            useJpgMax = prefs.useJpgMax,
+            useRawMax = prefs.useRawMax,
             frameId = prefs.frameId,
             rawDcpId = prefs.rawDcpId,
             rawDcpIdsByLens = prefs.rawDcpIdsByLens,
@@ -1204,11 +1172,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     var availableDcps: List<DcpInfo> by mutableStateOf(emptyList())
         private set
-    val useMFNR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useMFNR }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val useHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useHdrComposition }
+    val useJpgMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useJpgMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultipleExposure }
@@ -1219,13 +1184,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val multiFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.multiFrameCount }
         .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.DEFAULT_FRAME_COUNT)
-    val useMFSR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useMFSR }
+    val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useRawMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val superResolutionScale: StateFlow<Float> = userPreferencesRepository.userPreferences
+    val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
-                outputScale = it.superResolutionScale,
+                outputScale = it.rawMaxOutputScale,
                 fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
             )
         }
@@ -1243,9 +1208,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.backgroundImage }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
-    val useGpuAcceleration: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useGpuAcceleration }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUtil.defaultGpuAcceleration)
     val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.droMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
@@ -1590,12 +1552,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // 同步 RAW 设置到相机控制器
                 val multipleExposureEnabled = it.useMultipleExposure
                 val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
-                val effectiveUseMFNR = it.useMFNR && !multipleExposureEnabled
-                val effectiveUseMFSR = it.useMFSR && !multipleExposureEnabled
+                val effectiveUseJpgMax = it.useJpgMax && !multipleExposureEnabled
+                val effectiveUseRawMax = it.useRawMax && !multipleExposureEnabled
                 val effectiveMultiFrameOutputScale = resolveMultiFrameOutputScale(
-                    useMfnr = effectiveUseMFNR,
-                    useMfsr = effectiveUseMFSR,
-                    superResolutionScale = it.superResolutionScale,
+                    useJpgMax = effectiveUseJpgMax,
+                    useRawMax = effectiveUseRawMax,
+                    rawMaxOutputScale = it.rawMaxOutputScale,
                 )
                 val effectiveRawRenderingEngine = resolveCaptureRawRenderingEngine(it)
                 if (effectiveRawRenderingEngine != it.rawRenderingEngine) {
@@ -1604,7 +1566,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
                 if (it.naturalLightEnabled &&
-                    (multipleExposureEnabled || shouldDisableNaturalLightForHdrComposition(it))
+                    (multipleExposureEnabled || shouldDisableNaturalLightForJpgMax(it))
                 ) {
                     viewModelScope.launch {
                         disableNaturalLightIfNeeded(
@@ -1612,9 +1574,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             prefs = it
                         )
                     }
-                }
-                if (currentCameraState.useHdrComposition != it.useHdrComposition) {
-                    cameraController.setUseHdrComposition(it.useHdrComposition)
                 }
                 if (currentCameraState.useMultipleExposure != multipleExposureEnabled) {
                     cameraController.setUseMultipleExposure(multipleExposureEnabled)
@@ -1625,15 +1584,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentCameraState.multiFrameOutputScale != effectiveMultiFrameOutputScale) {
                     cameraController.setMultiFrameOutputScale(effectiveMultiFrameOutputScale)
                 }
-                if (multipleExposureEnabled && (it.useRaw || it.useMFNR || it.useMFSR)) {
+                if (multipleExposureEnabled && (it.useRaw || it.useJpgMax || it.useRawMax)) {
                     viewModelScope.launch {
                         userPreferencesRepository.saveCameraFeaturePreferences(
                             CameraFeaturePreferencesUpdate(
                                 useRaw = PreferenceUpdateValue(false),
-                                useMFNR = PreferenceUpdateValue(false),
-                                useMFSR = PreferenceUpdateValue(false)
+                                useJpgMax = PreferenceUpdateValue(false),
+                                useRawMax = PreferenceUpdateValue(false)
                             )
                         )
+                    }
+                }
+                if (it.useLivePhoto && effectiveUseJpgMax) {
+                    viewModelScope.launch {
+                        userPreferencesRepository.saveUseLivePhoto(false)
                     }
                 }
                 if (currentCameraState.rawMinShutterSpeedNs != it.rawMinShutterSpeedNs) {
@@ -1665,7 +1629,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     targetCount = it.multipleExposureCount
                 )
                 // 同步 Live Photo 设置到相机控制器
-                cameraController.setUseLivePhoto(it.useLivePhoto && it.captureMode == CaptureMode.PHOTO)
+                cameraController.setUseLivePhoto(
+                    it.useLivePhoto && !effectiveUseJpgMax && it.captureMode == CaptureMode.PHOTO
+                )
                 // 同步 Ultra HDR 设置到相机控制器
                 cameraController.setApplyUltraHDR(it.applyUltraHDR)
                 // 同步 P010 设置到相机控制器
@@ -1813,16 +1779,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setShowGrid(prefs.showGrid)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
-                cameraController.setUseHdrComposition(prefs.useHdrComposition)
                 cameraController.setMultiFrameOutputScale(
                     resolveMultiFrameOutputScale(
-                        useMfnr = prefs.useMFNR && !prefs.useMultipleExposure,
-                        useMfsr = prefs.useMFSR && !prefs.useMultipleExposure,
-                        superResolutionScale = prefs.superResolutionScale,
+                        useJpgMax = prefs.useJpgMax && !prefs.useMultipleExposure,
+                        useRawMax = prefs.useRawMax && !prefs.useMultipleExposure,
+                        rawMaxOutputScale = prefs.rawMaxOutputScale,
                     )
                 )
                 cameraController.setMultiFrameCount(prefs.multiFrameCount)
-                cameraController.setUseLivePhoto(prefs.useLivePhoto && prefs.captureMode == CaptureMode.PHOTO)
+                cameraController.setUseLivePhoto(
+                    prefs.useLivePhoto && !prefs.useJpgMax && prefs.captureMode == CaptureMode.PHOTO
+                )
                 cameraController.setTonemapMode(effectiveCameraTonemapMode(prefs))
                 cameraController.setFixTonemapPreview(prefs.fixTonemapPreview)
                 cameraController.setFixTonemapCapture(prefs.fixTonemapCapture)
@@ -3742,13 +3709,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // ==================== 延时拍摄和网格线相关方法 ====================
 
-    /**
-     * 设置是否使用多帧降噪
-     */
-    fun setUseMFNR(enabled: Boolean) {
+    /** JPGmax：YUV 多帧降噪与 HDR 合成。 */
+    fun setUseJpgMax(enabled: Boolean) {
         viewModelScope.launch {
+            if (enabled) {
+                val prefs = userPreferencesRepository.userPreferences.first()
+                disableNaturalLightIfNeeded(
+                    reason = "JPGmax enabled",
+                    prefs = prefs,
+                )
+            }
             applyCameraFeatureUpdate(
-                CameraFeatureUpdate(useMFNR = SettingValue(enabled))
+                CameraFeatureUpdate(useJpgMax = SettingValue(enabled))
             )
         }
     }
@@ -3776,47 +3748,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 设置是否使用超分辨率
-     */
-    fun setUseMFSR(enabled: Boolean) {
+    /** RAWmax：RAW Radiance 多帧管线。 */
+    fun setUseRawMax(enabled: Boolean) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
-                CameraFeatureUpdate(useMFSR = SettingValue(enabled))
+                CameraFeatureUpdate(useRawMax = SettingValue(enabled))
             )
         }
     }
 
-    fun setUseHdrComposition(enabled: Boolean) {
-        viewModelScope.launch {
-            val prefs = userPreferencesRepository.userPreferences.first()
-            if (enabled) {
-                if (shouldDisableNaturalLightForHdrComposition(prefs.copy(useHdrComposition = true))) {
-                    disableNaturalLightIfNeeded(
-                        reason = "HDR composition enabled while RAW is off",
-                        prefs = prefs
-                    )
-                }
-            }
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(useHdrComposition = SettingValue(enabled))
-            )
-        }
-    }
-
-    fun setSuperResolutionScale(scale: Float) {
+    fun setRawMaxOutputScale(scale: Float) {
         viewModelScope.launch {
             val normalizedScale = MultiFrameConfig.normalizeOutputScale(
                 outputScale = scale,
                 fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
             )
-            userPreferencesRepository.saveSuperResolutionScale(normalizedScale)
+            userPreferencesRepository.saveRawMaxOutputScale(normalizedScale)
             val prefs = userPreferencesRepository.userPreferences.first()
             cameraController.setMultiFrameOutputScale(
                 resolveMultiFrameOutputScale(
-                    useMfnr = prefs.useMFNR && !prefs.useMultipleExposure,
-                    useMfsr = prefs.useMFSR && !prefs.useMultipleExposure,
-                    superResolutionScale = normalizedScale,
+                    useJpgMax = prefs.useJpgMax && !prefs.useMultipleExposure,
+                    useRawMax = prefs.useRawMax && !prefs.useMultipleExposure,
+                    rawMaxOutputScale = normalizedScale,
                 )
             )
         }
@@ -3826,11 +3779,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置是否启用 Live Photo
      */
     fun setUseLivePhoto(enabled: Boolean) {
-        if (enabled) {
-            setUseMultipleExposure(false)
-        }
-        cameraController.setUseLivePhoto(enabled)
         viewModelScope.launch {
+            if (enabled) {
+                applyCameraFeatureUpdate(
+                    CameraFeatureUpdate(
+                        useJpgMax = SettingValue(false),
+                        useMultipleExposure = SettingValue(false),
+                    )
+                )
+            }
+            cameraController.setUseLivePhoto(enabled)
             userPreferencesRepository.saveUseLivePhoto(enabled)
         }
     }
@@ -3883,15 +3841,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setUseRaw(useRaw: Boolean) {
         viewModelScope.launch {
-            if (!useRaw) {
-                val prefs = userPreferencesRepository.userPreferences.first()
-                if (prefs.useHdrComposition) {
-                    disableNaturalLightIfNeeded(
-                        reason = "RAW disabled while HDR composition is active",
-                        prefs = prefs
-                    )
-                }
-            }
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(useRaw = SettingValue(useRaw))
             )
@@ -5198,7 +5147,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // 应用方向偏移
             val rotation = (baseRotation + orientationOffset) % 360
 
-            val useSuperRes = useMFSR.value
+            val useSuperRes = useRawMax.value
             val superResScale = when {
                 !useSuperRes -> 1f
                 isRawStack -> state.value.multiFrameOutputScale
@@ -5339,7 +5288,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoQualityValue,
                     useSuperResolution = useSuperRes,
                     superResolutionScale = superResScale,
-                    useGpuAcceleration = useGpuAcceleration.value,
                     exposureBias = state.value.exposureBias,
                     exportDngWithRawExport = exportDngWithRawExport.value,
                     capturePreviewThumbnail = previewThumbnail,
@@ -5427,12 +5375,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val baseImage = orderedImages[HDR_BRACKET_ZERO_INDEX]
-            if (useMFSR.value) {
-                PLog.w(TAG, "YUV HDR bracket uses Mertens fusion without super resolution")
-            }
             val useSuperRes = false
             val superResScale = 1.0f
-            val captureMode = if (zeroEvFrameCount > 1) "hdr_mfnr" else "hdr_bracket"
+            val captureMode = "jpg_max"
             val metadataCaptureInfo = rebuildHdrMetadataCaptureInfo(
                 fallback = captureInfo,
                 captureResult = orderedCaptureResults.getOrNull(HDR_BRACKET_ZERO_INDEX),
@@ -5469,7 +5414,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ) ?: return
 
             val aspectRatio = metadata.ratio ?: state.value.aspectRatio
-            val useGpuAccelerationValue = useGpuAcceleration.firstOrNull() ?: DeviceUtil.defaultGpuAcceleration
             val colorSpace = android.graphics.ColorSpace.get(metadataCaptureInfo.colorSpace)
             imagesHandedToGallery = true
             viewModelScope.launch(Dispatchers.IO) {
@@ -5482,7 +5426,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         rotation = metadata.rotation,
                         aspectRatio = aspectRatio,
                         shouldMirror = metadata.isMirrored,
-                        useGpuAcceleration = useGpuAccelerationValue,
                         useSuperResolution = useSuperRes,
                         colorSpace = colorSpace
                     )
@@ -5816,15 +5759,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置多帧合成是否使用 GPU 加速
-     */
-    fun setUseGpuAcceleration(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseGpuAcceleration(enabled)
-        }
-    }
-
-    /**
      * 保存从外部选择的背景图
      */
     fun saveCustomBackgroundImage(uri: Uri) {
@@ -5913,9 +5847,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (enabled) {
                 val prefs = userPreferencesRepository.userPreferences.first()
                 val shouldDisableMultipleExposure = prefs.useMultipleExposure
-                val shouldDisableHdrComposition = shouldDisableNaturalLightForHdrComposition(prefs)
+                val shouldDisableJpgMax = shouldDisableNaturalLightForJpgMax(prefs)
 
-                if (shouldDisableMultipleExposure || shouldDisableHdrComposition) {
+                if (shouldDisableMultipleExposure || shouldDisableJpgMax) {
                     applyCameraFeatureUpdate(
                         CameraFeatureUpdate(
                             useMultipleExposure = if (shouldDisableMultipleExposure) {
@@ -5923,7 +5857,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             } else {
                                 null
                             },
-                            useHdrComposition = if (shouldDisableHdrComposition) {
+                            useJpgMax = if (shouldDisableJpgMax) {
                                 SettingValue(false)
                             } else {
                                 null

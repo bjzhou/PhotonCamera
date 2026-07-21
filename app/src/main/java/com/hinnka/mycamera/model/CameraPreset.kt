@@ -17,9 +17,8 @@ data class CameraPreset(
     val effects: EffectParams,          // 独立物理效果
     val aspectRatio: String = AspectRatio.RATIO_4_3.name,
     val useRaw: Boolean = false,
-    val useMFNR: Boolean = false,
-    val useHdrComposition: Boolean = false,
-    val useMFSR: Boolean = false,
+    val useJpgMax: Boolean = false,
+    val useRawMax: Boolean = false,
     val frameId: String? = null,
     // Quick RAW 功能
     val rawDcpId: String? = null,
@@ -48,11 +47,25 @@ data class CameraPreset(
     }
 
     fun withSupportedCaptureCombination(): CameraPreset {
-        val resolvedUseMFSR = useMFSR && !useMFNR && (useRaw || !useHdrComposition)
-        return if (resolvedUseMFSR == useMFSR) {
+        val resolvedUseRawMax = useRawMax
+        val resolvedUseJpgMax = useJpgMax && !resolvedUseRawMax
+        val resolvedUseRaw = when {
+            resolvedUseRawMax -> true
+            resolvedUseJpgMax -> false
+            else -> useRaw
+        }
+        return if (
+            resolvedUseRaw == useRaw &&
+            resolvedUseJpgMax == useJpgMax &&
+            resolvedUseRawMax == useRawMax
+        ) {
             this
         } else {
-            copy(useMFSR = resolvedUseMFSR)
+            copy(
+                useRaw = resolvedUseRaw,
+                useJpgMax = resolvedUseJpgMax,
+                useRawMax = resolvedUseRawMax,
+            )
         }
     }
 
@@ -100,7 +113,7 @@ data class CameraPreset(
                 effects = EffectParams.DEFAULT,
                 frameId = null,
                 useRaw = false,
-                useMFNR = false,
+                useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -115,7 +128,7 @@ data class CameraPreset(
                 effects = EffectParams.DEFAULT,
                 frameId = "polaroid",
                 useRaw = false,
-                useMFNR = true,
+                useJpgMax = true,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true
@@ -139,7 +152,7 @@ data class CameraPreset(
                 ),
                 frameId = "leica",
                 useRaw = true,
-                useMFNR = false,
+                useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
                 isBuiltIn = true

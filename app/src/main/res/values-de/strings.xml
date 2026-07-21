@@ -78,15 +78,8 @@
     <string name="settings_level_description">Horizontale Wasserwaage beim Fotografieren anzeigen</string>
     <string name="settings_grid_lines">Gitternetzlinien</string>
     <string name="settings_grid_description">Gitternetzlinien für die Bildkomposition anzeigen</string>
-    <string name="settings_use_multi_frame">Multi-Frame-Stacking</string>
-    <string name="settings_multi_frame_count">Anzahl der Bilder</string>
-    <string name="settings_multi_frame_count_description">Anzahl der Bilder für das Multi-Frame-Stacking (mehr Bilder = bessere Qualität, aber langsamer).</string>
-    <string name="settings_use_super_resolution">Super-Resolution</string>
-    <string name="settings_super_resolution_scale">Ausgabeskalierung: %1$.2f×</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Nehmen Sie einen kurzen Videoclip zusammen mit Ihrem Foto auf, um einen dynamischen Live-Foto-Effekt zu erzielen.</string>
-    <string name="settings_use_gpu_acceleration">GPU-Beschleunigung</string>
-    <string name="settings_use_gpu_acceleration_description">GPU (Vulkan) verwenden, um das Multi-Frame-Stacking zu beschleunigen. Standardmäßig aktiviert.</string>
     <string name="settings_section_frame">Rahmen-Wasserzeichen</string>
     <string name="settings_frame_style">Rahmenstil</string>
     <string name="settings_frame_description">Dekorativen Rahmen und Wasserzeichen zu Fotos hinzufügen</string>
