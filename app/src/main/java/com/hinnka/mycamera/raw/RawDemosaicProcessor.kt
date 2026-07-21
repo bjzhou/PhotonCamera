@@ -20,12 +20,18 @@ import com.hinnka.mycamera.lut.ChromaDenoiseShaders
 import com.hinnka.mycamera.lut.ShadowsHighlightsShader
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.processor.GlesGpuScheduler
+import com.hinnka.mycamera.processor.GlesRawRadianceStacker
+import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.RawNoiseModel
+import com.hinnka.mycamera.processor.RawStackResult
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -198,6 +204,7 @@ class RawDemosaicProcessor {
         private const val RCD_PQ_WRITE_BINDING = 5
         private const val RCD_PQ_READ_BINDING = 4
         private const val RCD_VH_DIR_BINDING = 4
+        private const val CAPTURE_PROGRAM_PREWARM_LONG_EDGE = 256
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MIN_WB_GAIN = 1e-3f
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MAX_WB_GAIN = 64.0f
         // PASS_3 needs 16 pixels, and the following color-noise stages consume another
@@ -258,6 +265,316 @@ class RawDemosaicProcessor {
             "RawDemosaicProcessor-GL",
         ).apply { isDaemon = true }
     }.asCoroutineDispatcher()
+
+    private val exportedStackTextureIds = mutableSetOf<Int>()
+
+    /** Prepares the persistent RAW renderer and first-use capture passes during camera idle time. */
+    suspend fun prewarmCapturePipeline(
+        colorEngine: RawRenderingEngine,
+        profileToneMapMode: RawProfileToneMapMode,
+        captureWidth: Int,
+        captureHeight: Int,
+        rawMaxFrameCount: Int,
+        rawMaxEnabled: Boolean,
+    ): Boolean =
+        withContext(glDispatcher) {
+            val start = System.currentTimeMillis()
+            val warmupWidth = captureWidth.coerceAtLeast(1)
+            val warmupHeight = captureHeight.coerceAtLeast(1)
+            if (!isInitialized && !initialize()) {
+                PLog.e(TAG, "Unable to prewarm RAW capture pipeline")
+                return@withContext false
+            }
+            val captureProfileReady = runCatching {
+                prewarmCaptureProfilePasses(
+                    profileToneMapMode = profileToneMapMode,
+                    captureWidth = warmupWidth,
+                    captureHeight = warmupHeight,
+                    frameCount = rawMaxFrameCount,
+                )
+            }.onFailure { error ->
+                PLog.w(TAG, "RAW capture profile pass prewarm failed", error)
+            }.getOrDefault(false)
+            currentCoroutineContext().ensureActive()
+            val renderEngineReady = runCatching {
+                prewarmRenderEnginePass(
+                    colorEngine = colorEngine,
+                    captureWidth = warmupWidth,
+                    captureHeight = warmupHeight,
+                    inputTextureId = linearOutputTextureId,
+                )
+            }.onFailure { error ->
+                PLog.w(TAG, "RAW render engine prewarm failed", error)
+            }.getOrDefault(false)
+            currentCoroutineContext().ensureActive()
+            val rawMaxReady = if (rawMaxEnabled) {
+                runCatching {
+                    GlesRawRadianceStacker(
+                        width = warmupWidth,
+                        height = warmupHeight,
+                        cfaPattern = 0,
+                        blackLevel = FloatArray(4),
+                        whiteLevel = 1023,
+                        noiseModel = FloatArray(2),
+                        rawNoiseModel = RawNoiseModel.EMPTY,
+                        lensShading = null,
+                        lensShadingWidth = 0,
+                        lensShadingHeight = 0,
+                        useCurrentGlContext = true,
+                        exportGpuLinearRgbSource = true,
+                        prewarmHighlightPrograms = true,
+                        prewarmLongPrograms = true,
+                    ).prewarmCapturePipeline(rawMaxFrameCount)
+                    true
+                }.onFailure { error ->
+                    PLog.w(TAG, "RAW Max program prewarm failed", error)
+                }.getOrDefault(false)
+            } else {
+                true
+            }
+            GLES30.glFinish()
+            val ready = captureProfileReady && renderEngineReady && rawMaxReady
+            PLog.d(
+                TAG,
+                "RAW capture pipeline prewarmed ready=$ready engine=$colorEngine " +
+                    "profileToneMap=$profileToneMapMode " +
+                    "capture=${warmupWidth}x$warmupHeight rawMax=$rawMaxEnabled " +
+                    "frames=$rawMaxFrameCount " +
+                    "took=${System.currentTimeMillis() - start}ms",
+            )
+            ready
+        }
+
+    /**
+     * Executes the same shader paths used by capture-time exposure matching and PGTM generation.
+     * Linking alone is insufficient on drivers that defer pipeline compilation until first draw.
+     */
+    private fun prewarmCaptureProfilePasses(
+        profileToneMapMode: RawProfileToneMapMode,
+        captureWidth: Int,
+        captureHeight: Int,
+        frameCount: Int,
+    ): Boolean {
+        val programSize = resolveLongEdgePreviewSize(
+            captureWidth,
+            captureHeight,
+            CAPTURE_PROGRAM_PREWARM_LONG_EDGE,
+        )
+        val identity = identityMatrix3x3()
+        val metadata = RawMetadata(
+            width = programSize.width,
+            height = programSize.height,
+            cfaPattern = RawMetadata.CFA_RGGB,
+            blackLevel = FloatArray(4),
+            whiteLevel = 65535f,
+            whiteBalanceGains = FloatArray(4) { 1f },
+            colorCorrectionMatrix = identity,
+            cameraWhite = floatArrayOf(1f, 1f, 1f),
+            frameCount = frameCount.coerceAtLeast(1),
+        )
+        val textures = IntArray(1)
+        GLES30.glGenTextures(textures.size, textures, 0)
+        return try {
+            val linearRawTexture = textures[0]
+            createCaptureWarmupTexture(
+                textureId = linearRawTexture,
+                internalFormat = GLES30.GL_RGBA16UI,
+                format = GLES30.GL_RGBA_INTEGER,
+                type = GLES30.GL_UNSIGNED_SHORT,
+                width = programSize.width,
+                height = programSize.height,
+                pixels = null,
+            )
+            // These two full-resolution working textures remain attached to the persistent RAW
+            // renderer and are reused by capture. Only their allocation belongs in prewarm.
+            setupFullResFramebuffer(captureWidth, captureHeight)
+            renderLinearRawRgbToFramebuffer(
+                sourceTextureId = linearRawTexture,
+                targetFramebufferId = demosaicFramebufferId,
+                width = programSize.width,
+                height = programSize.height,
+            )
+
+            val exposureReady = renderExposurePreviewRequest(
+                request = RawExposurePreviewRequest(
+                    width = programSize.width,
+                    height = programSize.height,
+                    solve = { renderSample -> if (renderSample(0f) != null) 0f else null },
+                ),
+                metadata = metadata,
+                samplesPerPixel = 4,
+                sourceTextureId = demosaicTextureId,
+                rawBlackPointCorrection = 0f,
+                rawWhitePointCorrection = 0f,
+                colorCorrectionMatrix = identity,
+                cameraWhite = metadata.cameraWhite,
+                dcpRenderPlan = null,
+                applyLinearDngBaselineExposure = false,
+                applyProfileDngBaselineExposure = false,
+                applyProfileGainTableMap = false,
+                clampProfileRgb = true,
+                outputBounds = Rect(0, 0, programSize.width, programSize.height),
+                outputRotation = 0,
+                spectralFilmLut = null,
+                colorEngine = RawRenderingEngine.AdobeCurve,
+                outputWorkingColorSpace = ColorSpace.ProPhoto,
+                profileToEngineTransform = identity,
+                rawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+                useProfileExposureRamp = true,
+                applyProfileDcpBaselineExposureOffset = false,
+                supportProfileOverrange = false,
+            ) != null
+            val warmedProfileMap = when (profileToneMapMode) {
+                RawProfileToneMapMode.Photon,
+                RawProfileToneMapMode.GooglePixel -> generateProfileGainTableMapOnGpu(
+                    rawTextureId = linearRawTexture,
+                    width = programSize.width,
+                    height = programSize.height,
+                    samplesPerPixel = 4,
+                    metadata = metadata,
+                    statsBounds = Rect(0, 0, programSize.width, programSize.height),
+                    baselineExposureEv = 0f,
+                    profileToneMapMode = profileToneMapMode,
+                    colorCorrectionMatrix = identity,
+                    cameraWhite = metadata.cameraWhite,
+                    hueSatMap = null,
+                )
+
+                else -> null
+            }
+            val profileReady = when (profileToneMapMode) {
+                RawProfileToneMapMode.Photon,
+                RawProfileToneMapMode.GooglePixel -> warmedProfileMap != null
+
+                else -> true
+            }
+
+            // Execute only a small viewport to force deferred driver compilation. PGTM output is
+            // scene-dependent, so the synthetic map is deliberately not uploaded or retained.
+            renderLinearRcdPass(
+                metadata = metadata,
+                sourceTextureId = demosaicTextureId,
+                targetFramebufferId = linearOutputFramebufferId,
+                viewportWidth = programSize.width,
+                viewportHeight = programSize.height,
+                rawExposureCompensation = 0f,
+                colorCorrectionMatrix = identity,
+                cameraWhite = metadata.cameraWhite,
+                hueSatMap = null,
+                applyDngBaselineExposure = false,
+                applyProfileGainTableMap = false,
+                profileBaselineExposureOffsetEv = 0f,
+                clampProfileRgb = true,
+                supportProfileOverrange = false,
+                label = "CaptureWarmupLinearRcdPass",
+            )
+            PLog.d(
+                TAG,
+                "RAW reusable capture state prewarmed: capture=${captureWidth}x$captureHeight " +
+                    "programViewport=${programSize.width}x${programSize.height} " +
+                    "profile=$profileToneMapMode",
+            )
+            exposureReady && profileReady
+        } finally {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            GLES30.glDeleteTextures(textures.size, textures, 0)
+        }
+    }
+
+    private fun prewarmRenderEnginePass(
+        colorEngine: RawRenderingEngine,
+        captureWidth: Int,
+        captureHeight: Int,
+        inputTextureId: Int,
+    ): Boolean {
+        check(inputTextureId != 0) { "Full-resolution RAW warmup input is unavailable" }
+        val programSize = resolveLongEdgePreviewSize(
+            captureWidth,
+            captureHeight,
+            CAPTURE_PROGRAM_PREWARM_LONG_EDGE,
+        )
+        // Allocate the render targets at capture size because these objects remain reusable, but
+        // draw only a small viewport: full-frame tone mapping is real capture work, not prewarm.
+        setupEngineToneFramebuffer(captureWidth, captureHeight)
+        val engineToneReady = renderEngineTonePass(
+            inputTextureId = inputTextureId,
+            dcpRenderPlan = null,
+            applyDcpHueSatMap = false,
+            spectralFilmLut = null,
+            colorEngine = colorEngine,
+            profileToEngineTransform = identityMatrix3x3(),
+            profileExposureUniforms = ProfileExposureUniforms.NEUTRAL,
+            rawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+            outputTransform = computeWorkingToOutputTransform(
+                colorEngine.workingColorSpace,
+                ColorSpace.SRGB,
+            ),
+            viewportWidth = programSize.width,
+            viewportHeight = programSize.height,
+        )
+        setupCombinedFramebuffer(captureWidth, captureHeight)
+        return engineToneReady && renderSrgbPass(
+            inputTextureId = engineToneTextureId,
+            viewportWidth = programSize.width,
+            viewportHeight = programSize.height,
+        )
+    }
+
+    private fun createCaptureWarmupTexture(
+        textureId: Int,
+        internalFormat: Int,
+        format: Int,
+        type: Int,
+        width: Int,
+        height: Int,
+        pixels: ByteBuffer?,
+    ) {
+        check(textureId != 0) { "Unable to allocate capture warmup texture" }
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            internalFormat,
+            width,
+            height,
+            0,
+            format,
+            type,
+            pixels,
+        )
+        checkGlError("createCaptureWarmupTexture")
+    }
+
+    /** Runs the stacker in this renderer's persistent EGL context and registers its GPU result. */
+    internal suspend fun runStackingOnGlContext(
+        block: () -> RawStackResult?,
+    ): RawStackResult? = withContext(glDispatcher) {
+        if (!isInitialized && !initialize()) {
+            PLog.e(TAG, "Unable to initialize shared RAW stacking context")
+            return@withContext null
+        }
+        block()?.also { result ->
+            result.gpuLinearRgbSource?.let { source ->
+                check(source.textureId != 0)
+                exportedStackTextureIds += source.textureId
+            }
+        }
+    }
+
+    internal suspend fun releaseGpuLinearRgbSource(source: GpuLinearRgbSource?) {
+        if (source == null) return
+        withContext(glDispatcher) {
+            if (exportedStackTextureIds.remove(source.textureId)) {
+                GLES30.glDeleteTextures(1, intArrayOf(source.textureId), 0)
+                checkGlError("release stacked LinearRaw texture")
+            }
+        }
+    }
 
     // EGL 资源
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -739,6 +1056,7 @@ class RawDemosaicProcessor {
                 height = input.height,
                 rowStride = input.rowStride,
                 samplesPerPixel = input.samplesPerPixel,
+                gpuLinearRgbSource = input.gpuLinearRgbSource,
                 metadata = input.metadata.copy(profileGainTableMap = null),
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
@@ -862,6 +1180,7 @@ class RawDemosaicProcessor {
         height: Int,
         rowStride: Int,
         samplesPerPixel: Int,
+        gpuLinearRgbSource: GpuLinearRgbSource? = null,
         metadata: RawMetadata,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
@@ -939,6 +1258,7 @@ class RawDemosaicProcessor {
                 height = height,
                 rowStride = rowStride,
                 samplesPerPixel = samplesPerPixel,
+                gpuLinearRgbSource = gpuLinearRgbSource,
                 metadata = renderMetadata,
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
@@ -987,6 +1307,7 @@ class RawDemosaicProcessor {
         height: Int = 0,
         rowStride: Int = 0,
         samplesPerPixel: Int = 1,
+        gpuLinearRgbSource: GpuLinearRgbSource? = null,
         metadata: RawMetadata? = null,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
@@ -1030,6 +1351,24 @@ class RawDemosaicProcessor {
         var actualHeight = height
         var actualRowStride = rowStride
         var actualSamplesPerPixel = samplesPerPixel.coerceAtLeast(1)
+        val borrowedGpuSource = gpuLinearRgbSource?.takeIf { source ->
+            val valid = source.textureId != 0 &&
+                source.width == width && source.height == height &&
+                source.samplesPerPixel in 3..4 &&
+                exportedStackTextureIds.contains(source.textureId)
+            if (!valid) {
+                PLog.w(
+                    TAG,
+                    "Ignoring invalid or stale stacked GPU source texture=${source.textureId} " +
+                        "source=${source.width}x${source.height}x${source.samplesPerPixel} " +
+                        "buffer=${width}x${height}x$samplesPerPixel",
+                )
+            }
+            valid
+        }
+        if (borrowedGpuSource != null) {
+            actualSamplesPerPixel = borrowedGpuSource.samplesPerPixel
+        }
         var actualMetadata = metadata
         var actualRotation = rotation
         var dngRawDataCleanup: DngRawData? = null
@@ -1216,7 +1555,17 @@ class RawDemosaicProcessor {
                 return@withContext null
             }
             setupFullResFramebuffer(actualWidth, actualHeight)
-            if (actualSamplesPerPixel in 3..4) {
+            if (borrowedGpuSource != null) {
+                if (rawTextureId != 0 && rawTextureId != borrowedGpuSource.textureId) {
+                    GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
+                }
+                rawTextureId = borrowedGpuSource.textureId
+                PLog.d(
+                    TAG,
+                    "Using GPU-resident LinearRaw input: ${actualWidth}x${actualHeight} " +
+                        "samplesPerPixel=$actualSamplesPerPixel texture=$rawTextureId",
+                )
+            } else if (actualSamplesPerPixel in 3..4) {
                 uploadLinearRawRgbTextureFromBuffer(
                     actualRawData,
                     actualWidth,
@@ -1467,24 +1816,30 @@ class RawDemosaicProcessor {
                 // keep the raw-domain repair enabled before Filmic HR.
                 val rawDomainHighlightReconstructionEnabled = true
                 if (RawMetadata.isQuadBayer(actualMetadata.cfaPattern)) {
+                    check(ensureQuadBayerPrograms()) {
+                        "Unable to initialize Quad Bayer demosaic programs"
+                    }
                     runQuadBayerDemosaic(
                         actualMetadata,
                         actualWidth,
                         actualHeight,
                         highlightReconstructionEnabled = rawDomainHighlightReconstructionEnabled
                     )
-                } else {
-                if (actualMetadata.frameCount > 1) {
+                } else if (actualMetadata.frameCount > 1) {
+                    check(ensureStandardBayerRcdPrograms()) {
+                        "Unable to initialize Standard Bayer RCD programs"
+                    }
                     runStandardBayerRcdDemosaic(actualMetadata, actualWidth, actualHeight)
                 } else {
-                    // Linear HDR/MFSR helpers below also call the old RCD method directly.
+                    check(ensureVgnPrograms()) {
+                        "Unable to initialize single-frame VGN demosaic programs"
+                    }
                     runSingleFrameVgnDemosaic(
                         metadata = actualMetadata,
                         width = actualWidth,
                         height = actualHeight,
                         highlightReconstructionEnabled = rawDomainHighlightReconstructionEnabled,
                     )
-                }
                 }
             }
             dngWarpRectilinear?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }?.let { warps ->
@@ -1735,7 +2090,9 @@ class RawDemosaicProcessor {
             releaseDenoiseProfileFramebuffers()
             // rawTextureId 已被 RCD populate 消费，提前释放 GPU 显存
             if (rawTextureId != 0) {
-                GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
+                if (rawTextureId != borrowedGpuSource?.textureId) {
+                    GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
+                }
                 rawTextureId = 0
             }
             val workingColorSpace = resolveWorkingColorSpace()
@@ -1861,6 +2218,9 @@ class RawDemosaicProcessor {
                 )
             }
         } finally {
+            if (rawTextureId == borrowedGpuSource?.textureId) {
+                rawTextureId = 0
+            }
             embeddedDngJpegPreview?.takeIf { !it.isRecycled }?.recycle()
             dngRawDataCleanup?.close()
         }
@@ -1870,6 +2230,8 @@ class RawDemosaicProcessor {
         rawTextureId: Int,
         width: Int,
         height: Int,
+        rawTextureWidth: Int = width,
+        rawTextureHeight: Int = height,
         samplesPerPixel: Int,
         metadata: RawMetadata,
         statsBounds: Rect?,
@@ -1879,11 +2241,13 @@ class RawDemosaicProcessor {
         cameraWhite: FloatArray,
         hueSatMap: DcpHueSatMap?,
     ): DngProfileGainTableMap? {
-        if (rawTextureId == 0 || width <= 0 || height <= 0 || metadata.whiteLevel <= 0f) {
+        if (rawTextureId == 0 || width <= 0 || height <= 0 ||
+            rawTextureWidth <= 0 || rawTextureHeight <= 0 || metadata.whiteLevel <= 0f
+        ) {
             PLog.e(
                 TAG,
                 "GPU RAW PGTM input invalid: texture=$rawTextureId size=${width}x$height " +
-                    "white=${metadata.whiteLevel}",
+                    "source=${rawTextureWidth}x$rawTextureHeight white=${metadata.whiteLevel}",
             )
             return null
         }
@@ -1905,8 +2269,16 @@ class RawDemosaicProcessor {
             return null
         }
         val exposureGain = DngBaselineExposure.exactGain(baselineExposureEv)
-        val safeStatsBounds = sanitizePgtmStatsBounds(statsBounds, width, height) ?: run {
-            PLog.e(TAG, "GPU RAW PGTM stats bounds invalid: source=${width}x$height bounds=$statsBounds")
+        val safeStatsBounds = sanitizePgtmStatsBounds(
+            statsBounds,
+            rawTextureWidth,
+            rawTextureHeight,
+        ) ?: run {
+            PLog.e(
+                TAG,
+                "GPU RAW PGTM stats bounds invalid: source=${rawTextureWidth}x$rawTextureHeight " +
+                    "bounds=$statsBounds",
+            )
             return null
         }
         val gridSize = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
@@ -1963,8 +2335,8 @@ class RawDemosaicProcessor {
             )
             GLES31.glUniform2i(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uImageSize"),
-                width,
-                height,
+                rawTextureWidth,
+                rawTextureHeight,
             )
             GLES31.glUniform4i(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uStatsBounds"),
@@ -2239,6 +2611,7 @@ class RawDemosaicProcessor {
             PLog.d(
                 TAG,
                 "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
+                    "source=${rawTextureWidth}x$rawTextureHeight " +
                     "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
                     photonSummary +
                     "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
@@ -2547,27 +2920,14 @@ class RawDemosaicProcessor {
             initShaderProgram()
             if (sharpenProgram == 0 || passthroughProgram == 0 ||
                 chromaDenoiseGuideProgram == 0 || chromaDenoiseProgram == 0 ||
-                rcdPopulateProgram == 0 || rcdStep1Program == 0 || rcdStep2Program == 0 ||
-                rcdStep3Program == 0 || rcdStep40Program == 0 || rcdStep41Program == 0 ||
-                rcdStep42Program == 0 || rcdStep43Program == 0 || rcdWriteOutputProgram == 0 ||
-                quadPopulateProgram == 0 || quadGreenProgram == 0 || quadChromaProgram == 0 ||
-                quadRefineProgram == 0 || quadWriteOutputProgram == 0 ||
-                linearRcdProgram == 0 || linearRawRgbProgram == 0 ||
-                vgnPrograms.any { it == 0 }
+                linearRcdProgram == 0 || linearRawRgbProgram == 0
             ) {
                 PLog.e(
                     TAG, "Critical shader programs failed to compile or link. " +
                             "sharpen=$sharpenProgram pass=$passthroughProgram " +
                             "chromaGuide=$chromaDenoiseGuideProgram " +
                             "chromaDenoise=$chromaDenoiseProgram " +
-                            "populate=$rcdPopulateProgram step1=$rcdStep1Program step2=$rcdStep2Program " +
-                            "step3=$rcdStep3Program step40=$rcdStep40Program step41=$rcdStep41Program " +
-                            "step42=$rcdStep42Program step43=$rcdStep43Program write=$rcdWriteOutputProgram " +
-                            "quadPopulate=$quadPopulateProgram quadGreen=$quadGreenProgram " +
-                            "quadChroma=$quadChromaProgram quadRefine=$quadRefineProgram " +
-                            "quadWrite=$quadWriteOutputProgram " +
-                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram " +
-                            "vgn=${vgnPrograms.contentToString()}"
+                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram"
                 )
                 return false
             }
@@ -2708,8 +3068,9 @@ class RawDemosaicProcessor {
             GLES30.glDeleteShader(fShaderPass)
         }
 
-        // 2.8 RCD Programs
-        initRcdPrograms(vShader)
+        // LinearRaw/Profile programs are common to both CFA and pre-demosaiced inputs.
+        // Expensive CFA demosaic programs are compiled only if a CFA input actually needs them.
+        initLinearRawPrograms(vShader)
 
         GLES30.glDeleteShader(vShader)
         PLog.d(
@@ -2999,24 +3360,7 @@ class RawDemosaicProcessor {
         }
     """.trimIndent()
 
-    private fun initRcdPrograms(vShader: Int) {
-        rcdPopulateProgram = compileComputeProgram(RcdShaders.POPULATE, "POPULATE")
-        rcdStep1Program = compileComputeProgram(RcdShaders.STEP_1, "STEP_1")
-        rcdStep2Program = compileComputeProgram(RcdShaders.STEP_2, "STEP_2")
-        rcdStep3Program = compileComputeProgram(RcdShaders.STEP_3, "STEP_3")
-        rcdStep40Program = compileComputeProgram(RcdShaders.STEP_4_0, "STEP_4_0")
-        rcdStep41Program = compileComputeProgram(RcdShaders.STEP_4_1, "STEP_4_1")
-        rcdStep42Program = compileComputeProgram(RcdShaders.STEP_4_2, "STEP_4_2")
-        rcdStep43Program = compileComputeProgram(RcdShaders.STEP_4_3, "STEP_4_3")
-        rcdWriteOutputProgram = compileComputeProgram(RcdShaders.WRITE_OUTPUT, "WRITE_OUTPUT")
-        VgnShaders.PROGRAM_SOURCES.forEachIndexed { index, (label, source) ->
-            vgnPrograms[index] = compileComputeProgram(source, "VGN_${label.uppercase(Locale.ROOT)}")
-        }
-        quadPopulateProgram = compileComputeProgram(QuadBayerShaders.POPULATE, "QUAD_POPULATE")
-        quadGreenProgram = compileComputeProgram(QuadBayerShaders.GREEN, "QUAD_GREEN")
-        quadChromaProgram = compileComputeProgram(QuadBayerShaders.CHROMA, "QUAD_CHROMA")
-        quadRefineProgram = compileComputeProgram(QuadBayerShaders.REFINE, "QUAD_REFINE")
-        quadWriteOutputProgram = compileComputeProgram(QuadBayerShaders.WRITE_OUTPUT, "QUAD_WRITE_OUTPUT")
+    private fun initLinearRawPrograms(vShader: Int) {
         pgtmCellStatsProgram = compileComputeProgram(
             DngHdrProfileGainTableGpuShaders.CELL_STATS,
             "DNG_PGTM_CELL_STATS",
@@ -3056,6 +3400,92 @@ class RawDemosaicProcessor {
             WARP_RECTILINEAR_FRAGMENT_SHADER,
             "warpRectilinear"
         )
+    }
+
+    private fun ensureStandardBayerRcdPrograms(): Boolean {
+        if (rcdPopulateProgram != 0 && rcdStep1Program != 0 && rcdStep2Program != 0 &&
+            rcdStep3Program != 0 && rcdStep40Program != 0 && rcdStep41Program != 0 &&
+            rcdStep42Program != 0 && rcdStep43Program != 0 && rcdWriteOutputProgram != 0
+        ) {
+            return true
+        }
+        val start = System.currentTimeMillis()
+        if (rcdPopulateProgram == 0) {
+            rcdPopulateProgram = compileComputeProgram(RcdShaders.POPULATE, "POPULATE")
+        }
+        if (rcdStep1Program == 0) {
+            rcdStep1Program = compileComputeProgram(RcdShaders.STEP_1, "STEP_1")
+        }
+        if (rcdStep2Program == 0) {
+            rcdStep2Program = compileComputeProgram(RcdShaders.STEP_2, "STEP_2")
+        }
+        if (rcdStep3Program == 0) {
+            rcdStep3Program = compileComputeProgram(RcdShaders.STEP_3, "STEP_3")
+        }
+        if (rcdStep40Program == 0) {
+            rcdStep40Program = compileComputeProgram(RcdShaders.STEP_4_0, "STEP_4_0")
+        }
+        if (rcdStep41Program == 0) {
+            rcdStep41Program = compileComputeProgram(RcdShaders.STEP_4_1, "STEP_4_1")
+        }
+        if (rcdStep42Program == 0) {
+            rcdStep42Program = compileComputeProgram(RcdShaders.STEP_4_2, "STEP_4_2")
+        }
+        if (rcdStep43Program == 0) {
+            rcdStep43Program = compileComputeProgram(RcdShaders.STEP_4_3, "STEP_4_3")
+        }
+        if (rcdWriteOutputProgram == 0) {
+            rcdWriteOutputProgram = compileComputeProgram(RcdShaders.WRITE_OUTPUT, "WRITE_OUTPUT")
+        }
+        val ready = rcdPopulateProgram != 0 && rcdStep1Program != 0 && rcdStep2Program != 0 &&
+            rcdStep3Program != 0 && rcdStep40Program != 0 && rcdStep41Program != 0 &&
+            rcdStep42Program != 0 && rcdStep43Program != 0 && rcdWriteOutputProgram != 0
+        PLog.d(TAG, "Standard Bayer RCD programs ready=$ready, took=${System.currentTimeMillis() - start}ms")
+        return ready
+    }
+
+    private fun ensureVgnPrograms(): Boolean {
+        if (vgnPrograms.all { it != 0 }) return true
+        val start = System.currentTimeMillis()
+        VgnShaders.PROGRAM_SOURCES.forEachIndexed { index, (label, source) ->
+            if (vgnPrograms[index] == 0) {
+                vgnPrograms[index] = compileComputeProgram(
+                    source,
+                    "VGN_${label.uppercase(Locale.ROOT)}",
+                )
+            }
+        }
+        val ready = vgnPrograms.all { it != 0 }
+        PLog.d(TAG, "Single-frame VGN programs ready=$ready, took=${System.currentTimeMillis() - start}ms")
+        return ready
+    }
+
+    private fun ensureQuadBayerPrograms(): Boolean {
+        if (quadPopulateProgram != 0 && quadGreenProgram != 0 && quadChromaProgram != 0 &&
+            quadRefineProgram != 0 && quadWriteOutputProgram != 0
+        ) {
+            return true
+        }
+        val start = System.currentTimeMillis()
+        if (quadPopulateProgram == 0) {
+            quadPopulateProgram = compileComputeProgram(QuadBayerShaders.POPULATE, "QUAD_POPULATE")
+        }
+        if (quadGreenProgram == 0) {
+            quadGreenProgram = compileComputeProgram(QuadBayerShaders.GREEN, "QUAD_GREEN")
+        }
+        if (quadChromaProgram == 0) {
+            quadChromaProgram = compileComputeProgram(QuadBayerShaders.CHROMA, "QUAD_CHROMA")
+        }
+        if (quadRefineProgram == 0) {
+            quadRefineProgram = compileComputeProgram(QuadBayerShaders.REFINE, "QUAD_REFINE")
+        }
+        if (quadWriteOutputProgram == 0) {
+            quadWriteOutputProgram = compileComputeProgram(QuadBayerShaders.WRITE_OUTPUT, "QUAD_WRITE_OUTPUT")
+        }
+        val ready = quadPopulateProgram != 0 && quadGreenProgram != 0 && quadChromaProgram != 0 &&
+            quadRefineProgram != 0 && quadWriteOutputProgram != 0
+        PLog.d(TAG, "Quad Bayer programs ready=$ready, took=${System.currentTimeMillis() - start}ms")
+        return ready
     }
 
     private fun linkFragmentProgram(
@@ -8814,6 +9244,17 @@ class RawDemosaicProcessor {
         denoiseNlmMaxSsboBytes = 0L
         releaseDarktableFilmicHighlightReconstructionFramebuffers()
 
+        if (exportedStackTextureIds.isNotEmpty()) {
+            if (rawTextureId in exportedStackTextureIds) {
+                rawTextureId = 0
+            }
+            GLES30.glDeleteTextures(
+                exportedStackTextureIds.size,
+                exportedStackTextureIds.toIntArray(),
+                0,
+            )
+            exportedStackTextureIds.clear()
+        }
         if (rawTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
         if (profileGainTableTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(profileGainTableTextureId), 0)

@@ -16,6 +16,17 @@ enum class RawStackBufferLayout {
     LINEAR_RGB,
 }
 
+/**
+ * Opaque LinearRaw texture exported by the stacker into the persistent RAW renderer context.
+ * It may only be consumed or released on that context's GL dispatcher.
+ */
+data class GpuLinearRgbSource(
+    val textureId: Int,
+    val width: Int,
+    val height: Int,
+    val samplesPerPixel: Int = 4,
+)
+
 data class RawStackResult(
     var fusedBayerBuffer: ByteBuffer?,
     val width: Int,
@@ -30,6 +41,7 @@ data class RawStackResult(
     val inputRowStepSamples: Int? = null,
     val inputColStepSamples: Int? = null,
     val baselineExposureEv: Float? = null,
+    val gpuLinearRgbSource: GpuLinearRgbSource? = null,
 )
 
 enum class YuvHdrStackFrameRole {
@@ -170,6 +182,8 @@ object MultiFrameStacker {
         lensShadingWidth: Int = 0,
         lensShadingHeight: Int = 0,
         applyLensShadingCorrection: Boolean = true,
+        useCurrentGlContext: Boolean = false,
+        exportGpuLinearRgbSource: Boolean = false,
     ): RawStackResult? {
         if (frames.isEmpty()) return null
         val images = frames.map { it.image }
@@ -202,6 +216,8 @@ object MultiFrameStacker {
             lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
             outputScale = normalizedOutputScale,
             debugConfig = RawStackRuntimeDebug.debugConfig,
+            useCurrentGlContext = useCurrentGlContext,
+            exportGpuLinearRgbSource = exportGpuLinearRgbSource,
         ).processFrames(frames)
     }
 

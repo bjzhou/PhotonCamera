@@ -31,6 +31,7 @@ import com.hinnka.mycamera.lut.applyEffectsToVideoFile
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
+import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackFrame
@@ -2595,6 +2596,8 @@ object GalleryManager {
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
     ) = withContext(Dispatchers.IO) {
+        var stackProcessor: RawDemosaicProcessor? = null
+        var gpuSourceToRelease: GpuLinearRgbSource? = null
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -2668,22 +2671,29 @@ object GalleryManager {
                     )
                 }
             }
-            val rawStackResult = MultiFrameStacker.processBurstRaw(
-                frames = effectiveRawStackFrames,
-                cfaPattern = stackCfaPattern,
-                outputScale = if (currentUseSuperResolution) superResolutionScale else 1f,
-                masterBlackLevel = stackBlackLevel,
-                whiteLevel = stackWhiteLevel,
-                whiteBalanceGains = rawMetadata.whiteBalanceGains,
-                noiseModel = rawMetadata.noiseProfile,
-                rawNoiseModel = RawNoiseModel.fromCamera2NoiseProfile(rawMetadata.channelNoiseProfile),
-                lensShading = rawMetadata.lensShadingMap,
-                lensShadingWidth = rawMetadata.lensShadingMapWidth,
-                lensShadingHeight = rawMetadata.lensShadingMapHeight,
-                applyLensShadingCorrection = applyRawLensShading,
-            )
+            val processor = RawDemosaicProcessor.getInstance()
+            stackProcessor = processor
+            val rawStackResult = processor.runStackingOnGlContext {
+                MultiFrameStacker.processBurstRaw(
+                    frames = effectiveRawStackFrames,
+                    cfaPattern = stackCfaPattern,
+                    outputScale = if (currentUseSuperResolution) superResolutionScale else 1f,
+                    masterBlackLevel = stackBlackLevel,
+                    whiteLevel = stackWhiteLevel,
+                    whiteBalanceGains = rawMetadata.whiteBalanceGains,
+                    noiseModel = rawMetadata.noiseProfile,
+                    rawNoiseModel = RawNoiseModel.fromCamera2NoiseProfile(rawMetadata.channelNoiseProfile),
+                    lensShading = rawMetadata.lensShadingMap,
+                    lensShadingWidth = rawMetadata.lensShadingMapWidth,
+                    lensShadingHeight = rawMetadata.lensShadingMapHeight,
+                    applyLensShadingCorrection = applyRawLensShading,
+                    useCurrentGlContext = true,
+                    exportGpuLinearRgbSource = true,
+                )
+            }
 
             val finalStackResult = rawStackResult ?: return@withContext
+            gpuSourceToRelease = finalStackResult.gpuLinearRgbSource
 
             val stackedMetadata = if (finalStackResult.isNormalizedSensorData) {
                 metadata.withNormalizedRawLevelCorrectionsCleared("RAW stack")
@@ -2709,7 +2719,6 @@ object GalleryManager {
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
             var pendingDngWrite: Deferred<Boolean>? = null
             val rawResult = try {
-                val processor = RawDemosaicProcessor.getInstance()
                 val imageLayout = finalStackResult.bufferLayout.toDngImageLayout()
                 val inputSamplesPerPixel = finalStackResult.inputColStepSamples
                 val inputRowStepSamples = finalStackResult.inputRowStepSamples
@@ -2731,6 +2740,7 @@ object GalleryManager {
                 )
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
                     rawBuffer = fusedBayerBuffer,
+                    gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
                     characteristics = characteristics,
@@ -2868,6 +2878,7 @@ object GalleryManager {
                         height = finalStackResult.height,
                         rowStride = checkNotNull(inputRowStepSamples) * Short.SIZE_BYTES,
                         samplesPerPixel = checkNotNull(inputSamplesPerPixel),
+                        gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
                         metadata = checkNotNull(renderMetadata),
                         aspectRatio = aspectRatio,
                         cropRegion = updatedMetadata.cropRegion,
@@ -3050,6 +3061,10 @@ object GalleryManager {
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
+        } finally {
+            withContext(NonCancellable) {
+                stackProcessor?.releaseGpuLinearRgbSource(gpuSourceToRelease)
+            }
         }
     }
 

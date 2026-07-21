@@ -57,6 +57,8 @@ import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawProfile
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawDemosaicProcessor
+import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -2097,12 +2099,59 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun prewarmDepthEstimator() {
+    fun prewarmCapturePipeline() {
         if (startupPrewarmJob?.isActive == true) return
 
         startupPrewarmJob = viewModelScope.launch {
             val prefs = userPreferencesRepository.userPreferences.firstOrNull()
-            prewarmRawDcp(prefs?.rawDcpIdForLens(state.value.currentCameraId))
+            val currentState = state.value
+            val captureSize = currentState.currentCaptureSize
+            val rawCaptureEnabled = prefs?.useRaw == true
+            val rawMaxFrameCount = MultiFrameConfig.normalFrameCount(
+                prefs?.multiFrameCount ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
+            )
+            supervisorScope {
+                val dcpPrewarmJob = if (rawCaptureEnabled) {
+                    async {
+                        runCatching {
+                            prewarmRawDcp(prefs.rawDcpIdForLens(currentState.currentCameraId))
+                        }.onFailure { error ->
+                            if (error is CancellationException) throw error
+                            PLog.w(TAG, "RAW DCP prewarm failed", error)
+                        }
+                    }
+                } else {
+                    null
+                }
+
+                // Keep the two GL warmups sequential. They use independent contexts but still
+                // share one GPU with preview, so running both at once only increases contention.
+                if (rawCaptureEnabled) {
+                    runCatching {
+                        RawDemosaicProcessor.getInstance().prewarmCapturePipeline(
+                            prefs.rawRenderingEngine,
+                            prefs.rawToneMappingParameters
+                                .normalized()
+                                .profileToneMapMode,
+                            captureWidth = captureSize.width,
+                            captureHeight = captureSize.height,
+                            rawMaxFrameCount = rawMaxFrameCount,
+                            rawMaxEnabled = currentState.isMultiFrameEnabled,
+                        )
+                    }.onFailure { error ->
+                        if (error is CancellationException) throw error
+                        PLog.w(TAG, "RAW capture pipeline prewarm failed", error)
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                runCatching {
+                    contentRepository.imageProcessor.prewarmCapturePipeline()
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    PLog.w(TAG, "LUT capture pipeline prewarm failed", error)
+                }
+                dcpPrewarmJob?.await()
+            }
         }
     }
 
@@ -2540,6 +2589,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.startVideoRecording()
             }
             return
+        }
+
+        startupPrewarmJob?.takeIf { it.isActive }?.let { job ->
+            PLog.d(TAG, "Canceling idle capture prewarm for shutter priority")
+            job.cancel()
         }
 
         if (userPreferences.value.saveLocation) {
@@ -5795,7 +5849,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // Delay prewarming to avoid stuttering during the initial reveal animation
             // 150ms initial delay + 800ms animation + 250ms buffer
             delay(1200)
-            prewarmDepthEstimator()
+            prewarmCapturePipeline()
         }
     }
 

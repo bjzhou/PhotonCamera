@@ -4,6 +4,7 @@ import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
+import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import kotlin.math.acos
 import kotlin.math.ceil
@@ -30,6 +31,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
     calculationWbGains: FloatArray,
     outputScale: Float,
     private val backend: Backend,
+    private val exportFullSizeTexture: Boolean = false,
 ) {
     interface Backend {
         fun linkComputeProgram(source: String, name: String): Int
@@ -46,6 +48,11 @@ internal class GlesRadianceVgnChromaPostprocessor(
         val glReadMs: Long,
         val copyMs: Long,
         val allocMs: Long,
+    )
+
+    data class ProcessResult(
+        val readbackTiming: ReadbackTiming,
+        val exportedTextureId: Int,
     )
 
     private val calculationRgbGains = floatArrayOf(
@@ -81,6 +88,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
     private var capturedRgb = 0
     private var originalYccd = 0
     private var smoothYccd = 0
+    private var fullSizeCameraRgb = 0
+    private var gpuExportEnabled = exportFullSizeTexture
     private var readbackFbo = 0
     private val ownedTextures = ArrayList<Int>(3)
 
@@ -154,10 +163,27 @@ internal class GlesRadianceVgnChromaPostprocessor(
             GlesRadianceVgnChromaShaders.colorNoiseFilter,
             "raw_radiance_vgn_chroma_filter",
         )
-        finalProgram = backend.linkComputeProgram(
-            GlesRadianceVgnChromaShaders.finalCameraRgb,
-            "raw_radiance_vgn_chroma_final_camera_rgb",
-        )
+        finalProgram = if (gpuExportEnabled) {
+            runCatching {
+                backend.linkComputeProgram(
+                    GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = true),
+                    "raw_radiance_vgn_chroma_final_camera_rgb_2d",
+                )
+            }.onFailure { error ->
+                gpuExportEnabled = false
+                PLog.w(TAG, "Full-size Radiance GPU export shader unavailable; using CPU handoff", error)
+            }.getOrElse {
+                backend.linkComputeProgram(
+                    GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false),
+                    "raw_radiance_vgn_chroma_final_camera_rgb_array",
+                )
+            }
+        } else {
+            backend.linkComputeProgram(
+                GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false),
+                "raw_radiance_vgn_chroma_final_camera_rgb_array",
+            )
+        }
     }
 
     fun initStorage() {
@@ -194,7 +220,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         backend.checkGlError("Radiance VGN chroma capture tile ${tile.index}")
     }
 
-    fun processAndReadback(outputBuffer: ByteBuffer): ReadbackTiming {
+    fun processAndReadback(outputBuffer: ByteBuffer): ProcessResult {
         check(capturedRgb != 0) { "Radiance VGN chroma has no captured Radiance output" }
         originalYccd = createArrayTexture()
         smoothYccd = createArrayTexture()
@@ -239,10 +265,46 @@ internal class GlesRadianceVgnChromaPostprocessor(
             originalYccd = result.first
             scratch = result.second
         }
-        dispatchFinal(scratch)
-        originalYccd = scratch.also { scratch = originalYccd }
-
-        val timing = readback(outputBuffer)
+        if (gpuExportEnabled) {
+            // One of the three working arrays is dead before the final conversion. Reclaim it so
+            // the full-size 2D handoff does not increase the legacy peak texture storage.
+            ownedTextures.firstOrNull { it != originalYccd && it != scratch }?.let { disposable ->
+                deleteTexture(disposable)
+                if (capturedRgb == disposable) capturedRgb = 0
+                if (smoothYccd == disposable) smoothYccd = 0
+            }
+        }
+        val gpuTiming = if (gpuExportEnabled) {
+            runCatching {
+                fullSizeCameraRgb = createFullSizeTexture()
+                dispatchFinal(destination = 0, fullSize = true)
+                readbackFullSize(outputBuffer)
+            }.onFailure { error ->
+                deleteTexture(fullSizeCameraRgb)
+                fullSizeCameraRgb = 0
+                gpuExportEnabled = false
+                PLog.w(TAG, "Full-size Radiance GPU export failed; using CPU handoff", error)
+                finalProgram = backend.linkComputeProgram(
+                    GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false),
+                    "raw_radiance_vgn_chroma_final_camera_rgb_array_fallback",
+                )
+            }.getOrNull()
+        } else {
+            null
+        }
+        val timing = gpuTiming ?: run {
+            dispatchFinal(scratch)
+            originalYccd = scratch.also { scratch = originalYccd }
+            readback(outputBuffer)
+        }
+        if (gpuTiming != null) {
+            val releasedScratch = scratch
+            deleteTexture(releasedScratch)
+            if (capturedRgb == releasedScratch) capturedRgb = 0
+            if (originalYccd == releasedScratch) originalYccd = 0
+            if (smoothYccd == releasedScratch) smoothYccd = 0
+            scratch = 0
+        }
         for (unit in 0..2) {
             GLES31.glBindImageTexture(
                 unit,
@@ -260,7 +322,15 @@ internal class GlesRadianceVgnChromaPostprocessor(
         capturedRgb = 0
         originalYccd = 0
         smoothYccd = 0
-        return timing
+        val exportedTextureId = fullSizeCameraRgb
+        if (exportedTextureId != 0) {
+            ownedTextures.removeAll { it == exportedTextureId }
+            fullSizeCameraRgb = 0
+        }
+        return ProcessResult(
+            readbackTiming = timing,
+            exportedTextureId = exportedTextureId,
+        )
     }
 
     fun release() {
@@ -271,6 +341,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         capturedRgb = 0
         originalYccd = 0
         smoothYccd = 0
+        fullSizeCameraRgb = 0
         if (readbackFbo != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(readbackFbo), 0)
             readbackFbo = 0
@@ -342,7 +413,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         dispatchImage(colorNoiseFilterProgram, "color noise filter")
     }
 
-    private fun dispatchFinal(destination: Int) {
+    private fun dispatchFinal(destination: Int, fullSize: Boolean = false) {
         GLES31.glUseProgram(finalProgram)
         setTiledUniforms(finalProgram)
         GLES31.glUniform3fv(
@@ -352,7 +423,19 @@ internal class GlesRadianceVgnChromaPostprocessor(
             0,
         )
         bindArrayImage(0, originalYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, destination, GLES31.GL_WRITE_ONLY)
+        if (fullSize) {
+            GLES31.glBindImageTexture(
+                2,
+                fullSizeCameraRgb,
+                0,
+                false,
+                0,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_RGBA16UI,
+            )
+        } else {
+            bindArrayImage(1, destination, GLES31.GL_WRITE_ONLY)
+        }
         dispatchImage(finalProgram, "final camera RGB")
     }
 
@@ -506,6 +589,29 @@ internal class GlesRadianceVgnChromaPostprocessor(
         return texture
     }
 
+    private fun createFullSizeTexture(): Int {
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        val texture = ids[0]
+        check(texture != 0) { "Failed to allocate full-size Radiance RGB texture" }
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexStorage2D(
+            GLES30.GL_TEXTURE_2D,
+            1,
+            GLES30.GL_RGBA16UI,
+            imageWidth,
+            imageHeight,
+        )
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        ownedTextures += texture
+        backend.checkGlError("full-size Radiance RGB ${imageWidth}x$imageHeight")
+        return texture
+    }
+
     private fun deleteTexture(texture: Int) {
         if (texture == 0) return
         GLES30.glDeleteTextures(1, intArrayOf(texture), 0)
@@ -592,7 +698,88 @@ internal class GlesRadianceVgnChromaPostprocessor(
         )
     }
 
+    private fun readbackFullSize(outputBuffer: ByteBuffer): ReadbackTiming {
+        val allocationStart = System.currentTimeMillis()
+        val scratchBytes = layerWidth.toLong() * layerHeight.toLong() * 8L
+        val scratch = LargeDirectBuffer.allocate(scratchBytes, "Radiance full-size RGB readback")
+            ?: throw IllegalStateException("Unable to allocate full-size Radiance readback scratch")
+        val allocationMs = System.currentTimeMillis() - allocationStart
+        outputBuffer.clear()
+        var glReadMs = 0L
+        var copyMs = 0L
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
+        )
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readbackFbo)
+        try {
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                fullSizeCameraRgb,
+                0,
+            )
+            GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
+            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            check(status == GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                "Full-size Radiance framebuffer incomplete: 0x${status.toString(16)}"
+            }
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
+            tiles.forEach { tile ->
+                scratch.clear()
+                val readStart = System.currentTimeMillis()
+                GLES30.glReadPixels(
+                    tile.outputCore.left,
+                    tile.outputCore.top,
+                    tile.outputCore.width,
+                    tile.outputCore.height,
+                    GLES30.GL_RGBA_INTEGER,
+                    GLES30.GL_UNSIGNED_SHORT,
+                    scratch,
+                )
+                glReadMs += System.currentTimeMillis() - readStart
+                backend.checkGlError("Full-size Radiance read tile ${tile.index}")
+                val copyStart = System.currentTimeMillis()
+                check(
+                    DirectBufferPixelPacker.unpackRgba16TileToRgb16(
+                        source = scratch,
+                        sourceWidth = tile.outputCore.width,
+                        sourceHeight = tile.outputCore.height,
+                        destination = outputBuffer,
+                        destinationWidth = imageWidth,
+                        destinationHeight = imageHeight,
+                        destinationLeft = tile.outputCore.left,
+                        destinationTop = tile.outputCore.top,
+                    ),
+                ) { "Unable to pack full-size Radiance tile ${tile.index}" }
+                copyMs += System.currentTimeMillis() - copyStart
+                backend.yieldToUiRenderer()
+            }
+        } finally {
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            LargeDirectBuffer.free(scratch)
+        }
+        outputBuffer.rewind()
+        return ReadbackTiming(
+            elapsedMs = allocationMs + glReadMs + copyMs,
+            glReadMs = glReadMs,
+            copyMs = copyMs,
+            allocMs = allocationMs,
+        )
+    }
+
     private fun groupCount(value: Int): Int = (value + 15) / 16
+
+    private companion object {
+        const val TAG = "GlesRadianceVgnChroma"
+    }
 }
 
 internal data class RadianceVgnChromaIirCoefficients(
@@ -1331,15 +1518,30 @@ internal object GlesRadianceVgnChromaShaders {
         }
     """.trimIndent()
 
-    val finalCameraRgb = """
+    val finalCameraRgb: String
+        get() = finalCameraRgb(exportFullSizeTexture = false)
+
+    fun finalCameraRgb(exportFullSizeTexture: Boolean): String {
+        val outputDeclaration = if (exportFullSizeTexture) {
+            "layout(rgba16ui, binding = 2) writeonly uniform highp uimage2D uFullSizeOutput;"
+        } else {
+            "layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;"
+        }
+        val outputStore = if (exportFullSizeTexture) {
+            "imageStore(uFullSizeOutput, p, outputPixel);"
+        } else {
+            "imageStore(uOutput, storage, outputPixel);"
+        }
+        return """
         #version 310 es
         precision highp float;
         precision highp int;
         precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uInput;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;
+        $outputDeclaration
         uniform vec3 uCalculationGains;
 
         $tiledImageCommon
@@ -1361,10 +1563,12 @@ internal object GlesRadianceVgnChromaShaders {
             uvec4 encoded = imageLoad(uInput, storage);
             vec3 cameraRgb = yccdToCalculationRgb(encoded) /
                 max(uCalculationGains, vec3(1e-6));
-            imageStore(uOutput, storage, uvec4(
+            uvec4 outputPixel = uvec4(
                 uvec3(clamp(cameraRgb, vec3(0.0), vec3(65504.0)) + vec3(0.5)),
                 65535u
-            ));
+            );
+            $outputStore
         }
-    """.trimIndent()
+        """.trimIndent()
+    }
 }

@@ -37,6 +37,10 @@ internal class GlesRawRadianceStacker(
     private val tuning: RawStackTuningProfile = RawStackTuningProfile(),
     debugConfig: RawStackDebugConfig = RawStackDebugConfig.Disabled,
     private val radianceFusionTuning: RawRadianceFusionTuning = RawRadianceFusionTuning(),
+    private val useCurrentGlContext: Boolean = false,
+    private val exportGpuLinearRgbSource: Boolean = false,
+    private val prewarmHighlightPrograms: Boolean = false,
+    private val prewarmLongPrograms: Boolean = false,
 ) {
     private data class TextureLevel(val texture: Int, val width: Int, val height: Int)
     private data class TemporalGraphSeedResources(
@@ -144,6 +148,10 @@ internal class GlesRawRadianceStacker(
         val allocMs: Long,
         val mode: String,
     )
+    private data class ReconstructionResult(
+        val readTiming: ReadOutputTiming,
+        val exportedTextureId: Int = 0,
+    )
     private data class RadianceVgnImageBinding(
         val unit: Int,
         val texture: Int,
@@ -211,6 +219,7 @@ internal class GlesRawRadianceStacker(
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var ownsEglContext = false
 
     private val textures = ArrayList<Int>()
     private val programs = ArrayList<Int>()
@@ -426,11 +435,109 @@ internal class GlesRawRadianceStacker(
     private var activeRadianceHighlightFrame: RawRadianceHighlightFrame? = null
     private var activeRadianceLongFrames: List<RawRadianceLongFramePlan> = emptyList()
 
+    /** Compiles RAW Max programs and executes representative GPU paths in the idle GL context. */
+    internal fun prewarmCapturePipeline(frameCount: Int) {
+        require(useCurrentGlContext) {
+            "RAW Max capture prewarm requires the caller-owned current EGL context"
+        }
+        val start = System.currentTimeMillis()
+        try {
+            attachCurrentEgl()
+            ensureGles31()
+            initPrograms()
+            applyRawRenderState()
+            prewarmAlignmentProgramExecution()
+            PLog.d(
+                TAG,
+                "RAW Max reusable programs prewarmed size=${width}x$height frames=$frameCount " +
+                    "took=${System.currentTimeMillis() - start}ms",
+            )
+        } finally {
+            release()
+        }
+    }
+
+    private fun prewarmAlignmentProgramExecution() {
+        renderFbo = createFramebuffer()
+        val trackingTextures = IntArray(2) {
+            createTexture2D(
+                PREWARM_TRACKING_WIDTH,
+                PREWARM_TRACKING_HEIGHT,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_LINEAR,
+            )
+        }
+        // Program execution is deliberately representative rather than production-sized. Real
+        // RAW uploads, temporal graph construction and CPU flow solving depend on captured frames
+        // and cannot produce reusable results during prewarm.
+        val syntheticRawTexture = createTexture2D(
+            PREWARM_RAW_WIDTH,
+            PREWARM_RAW_HEIGHT,
+            GLES30.GL_R16UI,
+            GLES30.GL_NEAREST,
+        )
+        trackingTextures.forEachIndexed { index, texture ->
+            buildTrackingProxy(
+                rawTexture = syntheticRawTexture,
+                outputTexture = texture,
+                outputWidth = PREWARM_TRACKING_WIDTH,
+                outputHeight = PREWARM_TRACKING_HEIGHT,
+                levelScale = PREWARM_TRACKING_SCALE,
+                exposureScale = 1f,
+                label = "program prewarm frame $index",
+            )
+        }
+        val edgeTexture = createTexture2D(
+            PREWARM_GRID_WIDTH,
+            PREWARM_GRID_HEIGHT,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        drawAlignment(
+            reference = TextureLevel(
+                trackingTextures[0],
+                PREWARM_TRACKING_WIDTH,
+                PREWARM_TRACKING_HEIGHT,
+            ),
+            current = TextureLevel(
+                trackingTextures[1],
+                PREWARM_TRACKING_WIDTH,
+                PREWARM_TRACKING_HEIGHT,
+            ),
+            levelScale = PREWARM_TRACKING_SCALE,
+            outputTexture = edgeTexture,
+            outputGridWidth = PREWARM_GRID_WIDTH,
+            outputGridHeight = PREWARM_GRID_HEIGHT,
+            outputTileSpacing = PREWARM_GRID_SPACING,
+            preAlignment = null,
+            alignWindowSize = max(
+                hwmfPrefilter.alignWindowSize,
+                PREWARM_TRACKING_SCALE * MIN_TEMPORAL_WINDOW_LEVEL_PIXELS,
+            ),
+            label = "program prewarm edge",
+        )
+        readFlowTextures(
+            textures = listOf(edgeTexture),
+            textureWidth = PREWARM_GRID_WIDTH,
+            textureHeight = PREWARM_GRID_HEIGHT,
+            label = "program prewarm readback",
+        )
+        PLog.d(
+            TAG,
+            "RAW Max alignment programs executed during prewarm: " +
+                "tracking=${PREWARM_TRACKING_WIDTH}x$PREWARM_TRACKING_HEIGHT " +
+                "grid=${PREWARM_GRID_WIDTH}x$PREWARM_GRID_HEIGHT",
+        )
+    }
+
     internal fun processFrames(
         frames: List<RawStackFrame>,
         highlightFrame: RawRadianceHighlightFrame? = null,
         longFrames: List<RawRadianceLongFramePlan> = emptyList(),
     ): RawStackResult? {
+        require(!exportGpuLinearRgbSource || useCurrentGlContext) {
+            "A GPU LinearRaw export requires the caller-owned current EGL context"
+        }
         val images = frames.map { it.image }
         activeRadianceHighlightFrame = highlightFrame
         activeRadianceLongFrames = longFrames
@@ -459,6 +566,7 @@ internal class GlesRawRadianceStacker(
         val referenceFocusDistance = frames.first().focusDistanceDiopters
         val frameExposureScales = List(frames.size) { 1f }
         var outputBuffer: ByteBuffer? = null
+        var exportedTextureId = 0
         var returned = false
         val startTime = System.currentTimeMillis()
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
@@ -469,7 +577,11 @@ internal class GlesRawRadianceStacker(
             )
                 ?.order(ByteOrder.nativeOrder()) ?: return null
 
-            initEgl()
+            if (useCurrentGlContext) {
+                attachCurrentEgl()
+            } else {
+                initEgl()
+            }
             ensureGles31()
             validateGpuResourceLimits()
             initPrograms()
@@ -637,7 +749,7 @@ internal class GlesRawRadianceStacker(
                     "highlightAccepted=${highlightAlignment != null}"
             }
             val superResolutionDecision = decideSuperResolutionOutput(alignedFrameCount)
-            val reconstructionReadTiming = reconstructRadianceTiles(
+            val reconstructionResult = reconstructRadianceTiles(
                 referenceImage = images[0],
                 frames = frames,
                 acceptedFrames = acceptedSuperResolutionFrames,
@@ -648,7 +760,8 @@ internal class GlesRawRadianceStacker(
                 longAlignments = longAlignments,
             )
             GlesGpuScheduler.yieldToUiRenderer()
-            val readTiming = reconstructionReadTiming
+            val readTiming = reconstructionResult.readTiming
+            exportedTextureId = reconstructionResult.exportedTextureId
             outputBuffer.rewind()
             val diagnostics = if (hwmfDebug.collectMetrics) {
                 collectFinalDiagnostics(
@@ -664,7 +777,8 @@ internal class GlesRawRadianceStacker(
             RawStackRuntimeDebug.i(TAG) {
                 "GLES RAW stacking completed in ${System.currentTimeMillis() - startTime}ms " +
                     "readback=${readTiming.elapsedMs}ms glRead=${readTiming.glReadMs}ms " +
-                    "copy=${readTiming.copyMs}ms alloc=${readTiming.allocMs}ms mode=${readTiming.mode}"
+                    "copy=${readTiming.copyMs}ms alloc=${readTiming.allocMs}ms " +
+                    "gpuHandoff=${exportedTextureId != 0} mode=${readTiming.mode}"
             }
             RawStackResult(
                 fusedBayerBuffer = outputBuffer,
@@ -678,6 +792,13 @@ internal class GlesRawRadianceStacker(
                 inputRowStepSamples = outputWidth * 3,
                 inputColStepSamples = 3,
                 baselineExposureEv = highlightAlignment?.frame?.baselineExposureEv,
+                gpuLinearRgbSource = exportedTextureId.takeIf { it != 0 }?.let { textureId ->
+                    GpuLinearRgbSource(
+                        textureId = textureId,
+                        width = outputWidth,
+                        height = outputHeight,
+                    )
+                },
             )
         } catch (e: Exception) {
             PLog.e(TAG, "GLES RAW stacking failed", e)
@@ -688,11 +809,15 @@ internal class GlesRawRadianceStacker(
             GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, TAG)
             if (!returned) {
                 LargeDirectBuffer.free(outputBuffer)
+                if (exportedTextureId != 0) {
+                    GLES30.glDeleteTextures(1, intArrayOf(exportedTextureId), 0)
+                }
             }
         }
     }
 
     private fun initEgl() {
+        ownsEglContext = true
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
             throw IllegalStateException("eglGetDisplay failed")
@@ -718,6 +843,22 @@ internal class GlesRawRadianceStacker(
         }
         if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
             throw IllegalStateException("eglMakeCurrent failed: ${EGL14.eglGetError()}")
+        }
+    }
+
+    private fun attachCurrentEgl() {
+        eglDisplay = EGL14.eglGetCurrentDisplay()
+        eglContext = EGL14.eglGetCurrentContext()
+        eglSurface = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
+        ownsEglContext = false
+        check(eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            "GLES RAW stack requires a current EGL display"
+        }
+        check(eglContext != EGL14.EGL_NO_CONTEXT) {
+            "GLES RAW stack requires a current EGL context"
+        }
+        check(eglSurface != EGL14.EGL_NO_SURFACE) {
+            "GLES RAW stack requires a current EGL draw surface"
         }
     }
 
@@ -750,6 +891,8 @@ internal class GlesRawRadianceStacker(
     }
 
     private fun initPrograms() {
+        val needsHighlightPrograms = activeRadianceHighlightFrame != null || prewarmHighlightPrograms
+        val needsLongPrograms = activeRadianceLongFrames.isNotEmpty() || prewarmLongPrograms
         proxyProgram = linkComputeProgram(RAW_PROXY_COMPUTE_SHADER, "raw_proxy")
         trackingProxyProgram = linkComputeProgram(RAW_TRACKING_PROXY_COMPUTE_SHADER, "raw_tracking_proxy")
         downsampleProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, DOWNSAMPLE_FRAGMENT_SHADER, "raw_downsample")
@@ -826,7 +969,7 @@ internal class GlesRawRadianceStacker(
             ),
             "raw_radiance_normalize_r32ui_usampler",
         )
-        if (activeRadianceHighlightFrame != null) {
+        if (needsHighlightPrograms) {
             radianceHighlightNormalizeProgram = linkGraphicsProgram(
                 FULLSCREEN_VERTEX_SHADER,
                 GlesRawRadianceFusionShaders.normalize(
@@ -839,7 +982,7 @@ internal class GlesRawRadianceStacker(
                 "raw_radiance_highlight_normalize_r32ui_usampler",
             )
         }
-        if (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty()) {
+        if (needsHighlightPrograms || needsLongPrograms) {
             radianceHighlightValidateFlowProgram = linkGraphicsProgram(
                 FULLSCREEN_VERTEX_SHADER,
                 GlesRawRadianceFusionShaders.validateHighlightFlow,
@@ -856,7 +999,7 @@ internal class GlesRawRadianceStacker(
                 "raw_radiance_highlight_compose_flow",
             )
         }
-        if (activeRadianceLongFrames.isNotEmpty()) {
+        if (needsLongPrograms) {
             radianceLongEligibilityProgram = linkGraphicsProgram(
                 FULLSCREEN_VERTEX_SHADER,
                 GlesRawRadianceFusionShaders.longEligibility,
@@ -945,6 +1088,7 @@ internal class GlesRawRadianceStacker(
             tiles = radianceTiles,
             calculationWbGains = demosaicCalculationWbGains,
             outputScale = superResolutionScale,
+            exportFullSizeTexture = exportGpuLinearRgbSource,
             backend = object : GlesRadianceVgnChromaPostprocessor.Backend {
                 override fun linkComputeProgram(source: String, name: String): Int =
                     this@GlesRawRadianceStacker.linkComputeProgram(source, name)
@@ -1213,9 +1357,27 @@ internal class GlesRawRadianceStacker(
         }
         val byteOffset = firstRow * plane.rowStride
         val uploadBuffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder()).apply { position(byteOffset) }
+        uploadRawBufferRows(
+            uploadBuffer = uploadBuffer,
+            texture = texture,
+            rowStridePixels = plane.rowStride / RAW_BYTES_PER_PIXEL,
+            firstRow = firstRow,
+            rowCount = rowCount,
+            label = label,
+        )
+    }
+
+    private fun uploadRawBufferRows(
+        uploadBuffer: ByteBuffer,
+        texture: Int,
+        rowStridePixels: Int,
+        firstRow: Int,
+        rowCount: Int,
+        label: String,
+    ) {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, plane.rowStride / 2)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowStridePixels)
         GLES30.glTexSubImage2D(
             GLES30.GL_TEXTURE_2D,
             0,
@@ -5396,7 +5558,7 @@ internal class GlesRawRadianceStacker(
         outputBuffer: ByteBuffer,
         highlightAlignment: RadianceHighlightAlignment?,
         longAlignments: List<RadianceLongAlignment>,
-    ): ReadOutputTiming {
+    ): ReconstructionResult {
         check(radianceTiles.isNotEmpty())
         var requiredRcdWidth = 1
         var requiredRcdHeight = 1
@@ -5463,6 +5625,7 @@ internal class GlesRawRadianceStacker(
         }
         var totalGlReadMs = 0L
         var totalCopyMs = 0L
+        var exportedTextureId = 0
         val referenceFrameNoiseModel = frameNoiseModel(frames.first())
         RawStackRuntimeDebug.i(TAG) {
             "Radiance tiled reconstruction tiles=${radianceTiles.size} " +
@@ -5610,37 +5773,42 @@ internal class GlesRawRadianceStacker(
                     candidateFrameCount = candidateFrameCount,
                 )
             }
-            chromaPostprocessor?.processAndReadback(outputBuffer)?.let { timing ->
+            chromaPostprocessor?.processAndReadback(outputBuffer)?.let { result ->
+                val timing = result.readbackTiming
                 readbackAllocMs += timing.allocMs
                 totalGlReadMs += timing.glReadMs
                 totalCopyMs += timing.copyMs
+                exportedTextureId = result.exportedTextureId
             }
         } finally {
             LargeDirectBuffer.free(readbackScratch)
         }
         outputBuffer.rewind()
-        return ReadOutputTiming(
-            elapsedMs = readbackAllocMs + totalGlReadMs + totalCopyMs,
-            glReadMs = totalGlReadMs,
-            copyMs = totalCopyMs,
-            allocMs = readbackAllocMs,
-            mode = if (radianceUsesVgnSemanticBackend) {
-                if (chromaPostprocessor != null && highlightAlignment != null) {
-                    "radiance-vgn-semantic-highlight-chroma-iir-rgb16-tiled"
-                } else if (chromaPostprocessor != null) {
-                    "radiance-vgn-semantic-chroma-iir-rgb16-tiled"
-                } else if (highlightAlignment != null) {
-                    "radiance-vgn-semantic-highlight-rgb16-tiled"
+        return ReconstructionResult(
+            readTiming = ReadOutputTiming(
+                elapsedMs = readbackAllocMs + totalGlReadMs + totalCopyMs,
+                glReadMs = totalGlReadMs,
+                copyMs = totalCopyMs,
+                allocMs = readbackAllocMs,
+                mode = if (radianceUsesVgnSemanticBackend) {
+                    if (chromaPostprocessor != null && highlightAlignment != null) {
+                        "radiance-vgn-semantic-highlight-chroma-iir-rgb16-tiled"
+                    } else if (chromaPostprocessor != null) {
+                        "radiance-vgn-semantic-chroma-iir-rgb16-tiled"
+                    } else if (highlightAlignment != null) {
+                        "radiance-vgn-semantic-highlight-rgb16-tiled"
+                    } else {
+                        "radiance-vgn-semantic-rgb16-tiled"
+                    }
                 } else {
-                    "radiance-vgn-semantic-rgb16-tiled"
-                }
-            } else {
-                if (highlightAlignment != null) {
-                    "radiance-rcd-fallback-highlight-rgb16-tiled"
-                } else {
-                    "radiance-rcd-fallback-rgb16-tiled"
-                }
-            },
+                    if (highlightAlignment != null) {
+                        "radiance-rcd-fallback-highlight-rgb16-tiled"
+                    } else {
+                        "radiance-rcd-fallback-rgb16-tiled"
+                    }
+                },
+            ),
+            exportedTextureId = exportedTextureId,
         )
     }
 
@@ -7404,18 +7572,26 @@ internal class GlesRawRadianceStacker(
             if (buffers.isNotEmpty()) {
                 GLES31.glDeleteBuffers(buffers.size, buffers.toIntArray(), 0)
             }
-            EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-            if (eglSurface != EGL14.EGL_NO_SURFACE) {
-                EGL14.eglDestroySurface(eglDisplay, eglSurface)
+            if (ownsEglContext) {
+                EGL14.eglMakeCurrent(
+                    eglDisplay,
+                    EGL14.EGL_NO_SURFACE,
+                    EGL14.EGL_NO_SURFACE,
+                    EGL14.EGL_NO_CONTEXT,
+                )
+                if (eglSurface != EGL14.EGL_NO_SURFACE) {
+                    EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                }
+                if (eglContext != EGL14.EGL_NO_CONTEXT) {
+                    EGL14.eglDestroyContext(eglDisplay, eglContext)
+                }
+                EGL14.eglTerminate(eglDisplay)
             }
-            if (eglContext != EGL14.EGL_NO_CONTEXT) {
-                EGL14.eglDestroyContext(eglDisplay, eglContext)
-            }
-            EGL14.eglTerminate(eglDisplay)
         }
         eglDisplay = EGL14.EGL_NO_DISPLAY
         eglContext = EGL14.EGL_NO_CONTEXT
         eglSurface = EGL14.EGL_NO_SURFACE
+        ownsEglContext = false
     }
 
     companion object {
@@ -7423,6 +7599,15 @@ internal class GlesRawRadianceStacker(
 
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         private const val LOCAL_SIZE = 16
+        private const val RAW_BYTES_PER_PIXEL = 2
+        private const val PREWARM_TRACKING_SCALE = 4
+        private const val PREWARM_TRACKING_WIDTH = 64
+        private const val PREWARM_TRACKING_HEIGHT = 48
+        private const val PREWARM_RAW_WIDTH = PREWARM_TRACKING_WIDTH * PREWARM_TRACKING_SCALE * 2
+        private const val PREWARM_RAW_HEIGHT = PREWARM_TRACKING_HEIGHT * PREWARM_TRACKING_SCALE * 2
+        private const val PREWARM_GRID_WIDTH = 4
+        private const val PREWARM_GRID_HEIGHT = 3
+        private const val PREWARM_GRID_SPACING = 16
         private const val MIN_TEMPORAL_GRAPH_FRAME_COUNT = 3
         private const val MIN_TEMPORAL_TRACKING_LEVEL = 2
         private const val MIN_TEMPORAL_WINDOW_LEVEL_PIXELS = 8

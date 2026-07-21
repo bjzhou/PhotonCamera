@@ -191,6 +191,21 @@ class LutImageProcessor {
     // 曲线纹理
     private var curveTextureId = 0
 
+    /** Initializes the persistent LUT/HDR GL pipeline before the first captured photo needs it. */
+    suspend fun prewarmCapturePipeline(): Boolean = withContext(glDispatcher) {
+        if (isReleased) return@withContext false
+        val start = System.currentTimeMillis()
+        val ready = initialize()
+        if (ready) {
+            GLES30.glFinish()
+        }
+        PLog.d(
+            TAG,
+            "LUT capture pipeline prewarmed ready=$ready, took=${System.currentTimeMillis() - start}ms",
+        )
+        ready
+    }
+
     /**
      * 初始化 EGL 环境
      */

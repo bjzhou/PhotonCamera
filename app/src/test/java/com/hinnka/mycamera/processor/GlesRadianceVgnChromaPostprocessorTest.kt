@@ -49,6 +49,19 @@ class GlesRadianceVgnChromaPostprocessorTest {
     }
 
     @Test
+    fun gpuHandoffVariantWritesTheSameFinalPixelToAFullSizeTexture() {
+        val tiled = GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false)
+        val fullSize = GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = true)
+
+        assertTrue(tiled.contains("uimage2DArray uOutput"))
+        assertTrue(tiled.contains("imageStore(uOutput, storage, outputPixel)"))
+        assertTrue(!tiled.contains("uFullSizeOutput"))
+        assertTrue(fullSize.contains("uimage2D uFullSizeOutput"))
+        assertTrue(fullSize.contains("imageStore(uFullSizeOutput, p, outputPixel)"))
+        assertTrue(!fullSize.contains("uimage2DArray uOutput"))
+    }
+
+    @Test
     fun nativeScaleRetainsReferenceVgnCoefficientsAndSrScaleLowersDigitalCutoff() {
         val native = RadianceVgnChromaIirCoefficients.forOutputScale(1f)
         val sr = RadianceVgnChromaIirCoefficients.forOutputScale(1.5f)
@@ -95,6 +108,7 @@ class GlesRadianceVgnChromaPostprocessorTest {
             GlesRadianceVgnChromaShaders.iirError,
             GlesRadianceVgnChromaShaders.colorNoiseFilter,
             GlesRadianceVgnChromaShaders.finalCameraRgb,
+            GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = true),
         )
         sources.forEachIndexed { index, source ->
             val sourceFile = File.createTempFile("radiance-vgn-chroma-$index-", ".compute")

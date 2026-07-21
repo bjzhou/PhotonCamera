@@ -10,6 +10,7 @@ import android.util.Log
 import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngBaselineExposure
 import com.hinnka.mycamera.raw.DngProfileToneCurve
@@ -463,6 +464,7 @@ object RawProcessor {
 
     suspend fun prepareRawDngProfile(
         rawBuffer: ByteBuffer,
+        gpuLinearRgbSource: GpuLinearRgbSource? = null,
         width: Int,
         height: Int,
         characteristics: CameraCharacteristics,
@@ -533,6 +535,7 @@ object RawProcessor {
                 rowStride = inputRowStrideBytes,
                 samplesPerPixel = inputSamplesPerPixel,
                 metadata = statsMetadata.copy(profileGainTableMap = null),
+                gpuLinearRgbSource = gpuLinearRgbSource,
             )
         )
         val exposureOffsetEv = captureProfile?.exposureOffsetEv

@@ -261,6 +261,8 @@ class GlesRawRadianceFusion(
     outputScale: Float,
     private val debugConfig: RawStackDebugConfig = RawStackDebugConfig.Disabled,
     private val fusionTuning: RawRadianceFusionTuning = RawRadianceFusionTuning(),
+    private val useCurrentGlContext: Boolean = false,
+    private val exportGpuLinearRgbSource: Boolean = false,
 ) {
     private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
@@ -369,6 +371,8 @@ class GlesRawRadianceFusion(
             tuning = tuning,
             debugConfig = debugConfig,
             radianceFusionTuning = fusionTuning,
+            useCurrentGlContext = useCurrentGlContext,
+            exportGpuLinearRgbSource = exportGpuLinearRgbSource,
         ).processFrames(
             frames = fusionFrames,
             highlightFrame = highlightFrame,

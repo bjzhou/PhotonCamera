@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.graphics.Rect
+import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import java.nio.ByteBuffer
 
 /** Metadata generated before a RAW buffer is written as DNG. */
@@ -21,6 +22,7 @@ data class RawDngCaptureProfileInput(
     val rowStride: Int,
     val samplesPerPixel: Int,
     val metadata: RawMetadata,
+    val gpuLinearRgbSource: GpuLinearRgbSource? = null,
 )
 
 data class RawDngCaptureProfileResult(

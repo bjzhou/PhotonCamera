@@ -187,7 +187,6 @@ class MainActivity : ComponentActivity() {
         arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
     private var hasPermissions by mutableStateOf(false)
-    private var mlPreloadComplete by mutableStateOf(false)
     private var pendingRoute by mutableStateOf<String?>(null)
     private var pendingLutImportUris by mutableStateOf<List<Uri>>(emptyList())
 
@@ -284,15 +283,14 @@ class MainActivity : ComponentActivity() {
                     preferences = cameraViewModel.userPreferences.value
                 )
             } finally {
-                mlPreloadComplete = true
-                StartupTrace.mark("MainActivity.mlPreloadComplete")
+                StartupTrace.mark("MainActivity.mlPreloadFinished")
             }
         }
 
         splashScreen.setKeepOnScreenCondition {
             val cameraInitialized = cameraViewModel.isInitialized.value
             val galleryInitialized = galleryViewModel.isInitialized.value
-            !(cameraInitialized && galleryInitialized && mlPreloadComplete)
+            !(cameraInitialized && galleryInitialized)
         }
 
 
