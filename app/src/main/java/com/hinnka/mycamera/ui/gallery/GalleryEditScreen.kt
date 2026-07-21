@@ -277,8 +277,10 @@ fun GalleryEditScreen(
             editRawCfaCorrectionMode = if (fast || rawDevelopIsBaked) "" else editRawCfaCorrectionMode,
             editRawDcpId = if (fast || rawDevelopIsBaked) null else editRawDcpId,
             editRawRenderingEngine = if (fast || rawDevelopIsBaked) "" else editRawColorEngine.name,
-            editRawBaselineLutId = editRawBaselineLutId.takeUnless { rawDevelopIsBaked },
-            editRawBaselineRecipeParams = editRawBaselineRecipeParams.takeUnless { rawDevelopIsBaked },
+            // RAW develop controls above are baked into original.jpg, while baseline color
+            // correction is still applied by PhotoProcessor to that bitmap preview.
+            editRawBaselineLutId = editRawBaselineLutId,
+            editRawBaselineRecipeParams = editRawBaselineRecipeParams,
             editComputationalAperture = if (fast) 0f else editComputationalAperture,
             editFocusX = editFocusX,
             editFocusY = editFocusY,
