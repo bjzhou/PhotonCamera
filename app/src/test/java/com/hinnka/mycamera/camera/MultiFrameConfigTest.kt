@@ -8,6 +8,7 @@ import org.junit.Test
 class MultiFrameConfigTest {
     @Test
     fun cameraStateStartsWithValidMultiFrameCount() {
+        assertEquals(7, MultiFrameConfig.DEFAULT_FRAME_COUNT)
         assertEquals(MultiFrameConfig.DEFAULT_FRAME_COUNT, CameraState().multiFrameCount)
     }
 
@@ -45,12 +46,13 @@ class MultiFrameConfigTest {
     @Test
     fun normalizeFrameCountNeverAllowsEmptyBurst() {
         assertEquals(MultiFrameConfig.MIN_FRAME_COUNT, MultiFrameConfig.normalizeFrameCount(0))
-        assertEquals(MultiFrameConfig.DEFAULT_FRAME_COUNT, MultiFrameConfig.normalizeFrameCount(6))
+        assertEquals(MultiFrameConfig.DEFAULT_FRAME_COUNT, MultiFrameConfig.normalizeFrameCount(7))
         assertEquals(MultiFrameConfig.MAX_FRAME_COUNT, MultiFrameConfig.normalizeFrameCount(100))
     }
 
     @Test
     fun outputScaleSupportsFloatingPointRangeAndRejectsNonFiniteValues() {
+        assertEquals(1f, MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE)
         assertEquals(1f, MultiFrameConfig.normalizeOutputScale(0.5f))
         assertEquals(1.35f, MultiFrameConfig.normalizeOutputScale(1.35f))
         assertEquals(2f, MultiFrameConfig.normalizeOutputScale(2.5f))
@@ -75,7 +77,7 @@ class MultiFrameConfigTest {
     @Test
     fun configuredFrameCountIsPartitionedWithoutGrowingBurst() {
         assertEquals(
-            4,
+            5,
             MultiFrameConfig.normalFrameCount(MultiFrameConfig.DEFAULT_FRAME_COUNT),
         )
         assertEquals(1, MultiFrameConfig.longFrameCount(MultiFrameConfig.DEFAULT_FRAME_COUNT))

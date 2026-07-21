@@ -5,10 +5,10 @@ import kotlin.math.roundToInt
 object MultiFrameConfig {
     const val MIN_FRAME_COUNT = 3
     const val MAX_FRAME_COUNT = 20
-    const val DEFAULT_FRAME_COUNT = 6
+    const val DEFAULT_FRAME_COUNT = 7
     const val MIN_OUTPUT_SCALE = 1f
     const val MAX_OUTPUT_SCALE = 2f
-    const val DEFAULT_SUPER_RESOLUTION_SCALE = 1.5f
+    const val DEFAULT_SUPER_RESOLUTION_SCALE = 1f
     const val SHORT_FRAME_COUNT = 1
     const val SHORT_FRAME_EXPOSURE_DIVISOR = 3.0
     const val LONG_FRAME_COUNT_DIVISOR = 4

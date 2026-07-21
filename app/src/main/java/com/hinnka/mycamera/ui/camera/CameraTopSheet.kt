@@ -37,7 +37,6 @@ import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
-import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -121,8 +120,6 @@ fun CameraTopSheet(
     onJpgMaxToggle: (Boolean) -> Unit,
     useRawMax: Boolean,
     onRawMaxToggle: (Boolean) -> Unit,
-    rawMaxOutputScale: Float,
-    onRawMaxOutputScaleChange: (Float) -> Unit,
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
@@ -132,12 +129,6 @@ fun CameraTopSheet(
     var showRawSheet by rememberSaveable { mutableStateOf(false) }
     var showNaturalLightWarning by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
-    var rawMaxOutputScaleDraft by remember { mutableFloatStateOf(rawMaxOutputScale) }
-
-    LaunchedEffect(rawMaxOutputScale) {
-        rawMaxOutputScaleDraft = rawMaxOutputScale.coerceIn(1f, 2f)
-    }
-
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
         action()
@@ -249,38 +240,6 @@ fun CameraTopSheet(
                             checked = useRawMax,
                             onCheckedChange = onRawMaxToggle,
                             modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                if (useRawMax) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = stringResource(
-                                R.string.settings_raw_max_output_scale,
-                                rawMaxOutputScaleDraft,
-                            ),
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            modifier = Modifier.width(112.dp),
-                        )
-                        CustomSlider(
-                            value = rawMaxOutputScaleDraft,
-                            onValueChange = { rawMaxOutputScaleDraft = it.coerceIn(1f, 2f) },
-                            onValueChangeFinished = {
-                                onRawMaxOutputScaleChange(rawMaxOutputScaleDraft)
-                            },
-                            onDoubleTap = {
-                                rawMaxOutputScaleDraft = 1.5f
-                                onRawMaxOutputScaleChange(1.5f)
-                            },
-                            valueRange = 1f..2f,
-                            modifier = Modifier.weight(1f),
-                            activeTrackColor = Color(0xFFFF6B35),
                         )
                     }
                 }

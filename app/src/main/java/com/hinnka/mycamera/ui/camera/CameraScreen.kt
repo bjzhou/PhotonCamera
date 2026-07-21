@@ -226,7 +226,6 @@ fun CameraScreen(
     val useJpgMax by viewModel.useJpgMax.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useRawMax by viewModel.useRawMax.collectAsState()
-    val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
@@ -1511,8 +1510,6 @@ fun CameraScreen(
             onRawMaxToggle = {
                 viewModel.setUseRawMax(it)
             },
-            rawMaxOutputScale = rawMaxOutputScale,
-            onRawMaxOutputScaleChange = viewModel::setRawMaxOutputScale,
             useMultipleExposure = useMultipleExposure,
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding

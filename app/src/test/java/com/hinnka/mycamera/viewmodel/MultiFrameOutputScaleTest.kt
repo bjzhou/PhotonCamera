@@ -21,7 +21,7 @@ class MultiFrameOutputScaleTest {
         assertEquals(1f, resolveMultiFrameOutputScale(useJpgMax = false, useRawMax = true, rawMaxOutputScale = 0.5f))
         assertEquals(2f, resolveMultiFrameOutputScale(useJpgMax = false, useRawMax = true, rawMaxOutputScale = 2.5f))
         assertEquals(
-            1.5f,
+            1f,
             resolveMultiFrameOutputScale(useJpgMax = false, useRawMax = true, rawMaxOutputScale = Float.NaN),
         )
     }

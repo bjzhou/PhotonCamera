@@ -200,7 +200,8 @@
     <string name="multiple_exposure_cancel">Cancel Session</string>
     <string name="settings_multiple_exposure_count">Multiple Exposure Count</string>
     <string name="settings_multiple_exposure_count_description">How many exposures to combine for one final image. Default is 2 for a classic double exposure workflow.</string>
-    <string name="settings_raw_max_output_scale">Output scale: %1$.2f×</string>
+    <string name="settings_raw_max_output_scale">RAWmax super-resolution scale</string>
+    <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_max_frame_count">Max Frame Count</string>
     <string name="settings_max_frame_count_description">Number of frames used by JPGmax and RAWmax. More frames improve noise reduction but take longer to process.</string>
     <string name="settings_use_live_photo">Live Photo</string>

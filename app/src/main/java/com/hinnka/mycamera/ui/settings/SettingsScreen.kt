@@ -332,6 +332,7 @@ fun SettingsScreen(
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
     val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
+    val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableLuts = viewModel.availableLutList
     val previewThumbnail = viewModel.previewThumbnail
@@ -1724,6 +1725,9 @@ fun SettingsScreen(
                         onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
                         onAdjustmentStart = { isRawSliderAdjusting = true },
                         onAdjustmentEnd = { commitRawSliderValues() },
+                        showRawMaxOutputScaleControl = true,
+                        rawMaxOutputScale = rawMaxOutputScale,
+                        onRawMaxOutputScaleChange = viewModel::setRawMaxOutputScale,
                         contentMode = RawEditPanelContentMode.FULL
                     )
 

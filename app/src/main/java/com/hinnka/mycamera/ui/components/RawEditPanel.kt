@@ -26,6 +26,7 @@ import android.hardware.camera2.CameraCharacteristics
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.MeteringSystem
@@ -120,17 +121,49 @@ fun RawEditPanel(
     onAdjustmentEnd: () -> Unit,
     onRawExposureCompensationReset: ((Float) -> Unit)? = null,
     onOpenBaselineLutSheet: (() -> Unit)? = null,
+    showRawMaxOutputScaleControl: Boolean = false,
+    rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+    onRawMaxOutputScaleChange: (Float) -> Unit = {},
     showAutoExposureControl: Boolean = true,
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
     modifier: Modifier = Modifier
 ) {
+    var rawMaxOutputScaleDraft by remember {
+        mutableFloatStateOf(MultiFrameConfig.normalizeOutputScale(rawMaxOutputScale))
+    }
+    LaunchedEffect(rawMaxOutputScale) {
+        rawMaxOutputScaleDraft = MultiFrameConfig.normalizeOutputScale(rawMaxOutputScale)
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        if (showRawMaxOutputScaleControl && contentMode == RawEditPanelContentMode.FULL) {
+            val valueFormat = stringResource(R.string.settings_raw_max_output_scale_value)
+            SliderSettingItem(
+                title = stringResource(R.string.settings_raw_max_output_scale),
+                value = rawMaxOutputScaleDraft,
+                valueRange = MultiFrameConfig.MIN_OUTPUT_SCALE..MultiFrameConfig.MAX_OUTPUT_SCALE,
+                resetValue = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+                onResetValue = { scale ->
+                    rawMaxOutputScaleDraft = scale
+                    onRawMaxOutputScaleChange(scale)
+                },
+                onValueChange = {
+                    rawMaxOutputScaleDraft = MultiFrameConfig.normalizeOutputScale(it)
+                },
+                onValueChangeFinished = {
+                    onRawMaxOutputScaleChange(rawMaxOutputScaleDraft)
+                },
+                valueTextFormatter = { scale -> String.format(valueFormat, scale) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         RawRenderingEngineSelector(
             selectedEngine = rawRenderingEngine,
             onSelectEngine = onRawColorEngineChange

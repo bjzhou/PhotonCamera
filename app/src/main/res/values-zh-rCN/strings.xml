@@ -198,7 +198,8 @@
     <string name="multiple_exposure_cancel">取消拍摄</string>
     <string name="settings_multiple_exposure_count">多重曝光张数</string>
     <string name="settings_multiple_exposure_count_description">最终合成所使用的曝光张数。默认 2 张，更接近经典双重曝光工作流。</string>
-    <string name="settings_raw_max_output_scale">输出倍率：%1$.2f×</string>
+    <string name="settings_raw_max_output_scale">RAWmax 超分倍率</string>
+    <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_max_frame_count">Max 帧数</string>
     <string name="settings_max_frame_count_description">JPGmax 与 RAWmax 使用的帧数。帧数越多降噪越明显，但处理也越慢。</string>
     <string name="settings_use_live_photo">动态照片 (Live Photo)</string>
