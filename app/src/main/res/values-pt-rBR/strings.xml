@@ -83,6 +83,7 @@
     <string name="settings_multi_frame_count">Contagem de Multi-frame</string>
     <string name="settings_multi_frame_count_description">Número de quadros para empilhamento multi-frame (mais quadros = melhor qualidade, mas mais lento).</string>
     <string name="settings_use_super_resolution">Super Resolução</string>
+    <string name="settings_super_resolution_scale">Escala de saída: %1$.2f×</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturar um pequeno clipe de vídeo junto com sua foto para um efeito dinâmico de Live Photo.</string>
     <string name="settings_use_gpu_acceleration">Aceleração por GPU</string>

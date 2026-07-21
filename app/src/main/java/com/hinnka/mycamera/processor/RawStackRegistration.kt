@@ -1,12 +1,11 @@
 package com.hinnka.mycamera.processor
 
 /**
- * Photon-side model of CamX HWMF registration wiring.
+ * Registration model used by Radiance RAW fusion.
  *
- * CamX feeds MFNR/MFSR registration through fixed-size registration images and
- * posts an ICA perspective transform with confidence. The transform producer may
- * be CVP/DME or the external swregistration node, but downstream consumers see
- * the same shape: perspective matrix data plus confidence and identity fallback.
+ * Registration produces a perspective transform together with confidence and an identity
+ * fallback. The data shape follows the fixed-resolution registration context used by the
+ * pipeline's prefilter and blend stages.
  */
 data class RawStackRegistrationResolution(
     val width: Int,

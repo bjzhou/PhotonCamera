@@ -6,11 +6,11 @@ import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.utils.BitmapUtils
-import com.hinnka.mycamera.utils.LargeDirectBuffer
 
 enum class RawStackBufferLayout {
     CFA,
@@ -31,11 +31,6 @@ data class RawStackResult(
     val inputRowStepSamples: Int? = null,
     val inputColStepSamples: Int? = null,
     val baselineExposureEv: Float? = null,
-)
-
-data class RawHdrStackFrame(
-    val image: SafeImage,
-    val exposureProduct: Double,
 )
 
 enum class YuvHdrStackFrameRole {
@@ -228,73 +223,10 @@ object MultiFrameStacker {
     }
 
     @Synchronized
-    fun processHdrBurstRaw(
-        shortFrame: RawHdrStackFrame,
-        normalFrames: List<RawHdrStackFrame>,
-        cfaPattern: Int,
-        useGpuAcceleration: Boolean = true,
-        masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
-        whiteLevel: Int = 1023,
-        whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
-        noiseModel: FloatArray = floatArrayOf(0f, 0f),
-        rawNoiseModel: RawNoiseModel = RawNoiseModel.fromLegacyNoiseModel(noiseModel),
-        lensShading: FloatArray? = null,
-        lensShadingWidth: Int = 0,
-        lensShadingHeight: Int = 0,
-        applyLensShadingCorrection: Boolean = true,
-    ): RawStackResult? {
-        if (normalFrames.isEmpty()) {
-            shortFrame.image.close()
-            return null
-        }
-        val width = shortFrame.image.width
-        val height = shortFrame.image.height
-        RawStackRuntimeDebug.d(TAG) {
-            "Starting RAW HDR stacking for short+${normalFrames.size} normal frames. " +
-                "Pattern=$cfaPattern GPU=$useGpuAcceleration BL=${masterBlackLevel.joinToString()} " +
-                "WL=$whiteLevel WB=${whiteBalanceGains.joinToString()}"
-        }
-        if (!useGpuAcceleration) {
-            PLog.w(TAG, "RAW HDR denoise stack requires GLES; GPU acceleration setting is ignored")
-        }
-        RawStackRuntimeDebug.i(TAG) { "Using GLES RAW HDR stacker" }
-        val tuning = RawStackTuningResolver.resolve(
-            mode = RawStackMode.HDR_MFNR,
-            frameCount = normalFrames.size + 1,
-        )
-        val stackLensShading = validLensShadingOrNull(
-            lensShading = lensShading,
-            width = lensShadingWidth,
-            height = lensShadingHeight,
-            enabled = applyLensShadingCorrection,
-        )
-        return GlesRawStacker(
-            width = width,
-            height = height,
-            cfaPattern = cfaPattern,
-            blackLevel = masterBlackLevel,
-            whiteLevel = whiteLevel,
-            whiteBalanceGains = whiteBalanceGains,
-            noiseModel = noiseModel,
-            rawNoiseModel = rawNoiseModel,
-            lensShading = stackLensShading,
-            lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
-            lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
-            tuning = tuning,
-            debugConfig = RawStackRuntimeDebug.debugConfig,
-        ).processHdr(
-            shortFrame = GlesRawHdrInputFrame(shortFrame.image, shortFrame.exposureProduct),
-            normalFrames = normalFrames.map { GlesRawHdrInputFrame(it.image, it.exposureProduct) },
-        )
-    }
-
-    @Synchronized
     fun processBurstRaw(
         frames: List<RawStackFrame>,
         cfaPattern: Int,
-        enableSuperResolution: Boolean = false,
-        superResolutionScale: Float = 1.5f,
-        useGpuAcceleration: Boolean = true,
+        outputScale: Float = 1f,
         masterBlackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 1023,
         whiteBalanceGains: FloatArray = floatArrayOf(1f, 1f, 1f, 1f),
@@ -311,97 +243,32 @@ object MultiFrameStacker {
         val height = images[0].height
 
         RawStackRuntimeDebug.d(TAG) {
-            "Starting RAW stacking for ${images.size} frames. Pattern=$cfaPattern " +
-                "SR=$enableSuperResolution scale=$superResolutionScale GPU=$useGpuAcceleration " +
+            "Starting RAW Radiance fusion for ${images.size} frames. Pattern=$cfaPattern " +
+                "outputScale=${MultiFrameConfig.normalizeOutputScale(outputScale)} " +
                 "BL=${masterBlackLevel.joinToString()} WL=$whiteLevel"
         }
-        val outputScale = if (enableSuperResolution) superResolutionScale.coerceIn(1.0f, 2.0f) else 1.0f
-        val useNativeSuperResolution = outputScale > 1.0f
-
-        if (useGpuAcceleration) {
-            RawStackRuntimeDebug.i(TAG) {
-                "Using unified GLES RAW Radiance fusion outputScale=$outputScale"
-            }
-            val stackLensShading = validLensShadingOrNull(
-                lensShading = lensShading,
-                width = lensShadingWidth,
-                height = lensShadingHeight,
-                enabled = applyLensShadingCorrection,
-            )
-            return GlesRawRadianceFusion(
-                width = width,
-                height = height,
-                cfaPattern = cfaPattern,
-                blackLevel = masterBlackLevel,
-                whiteLevel = whiteLevel,
-                whiteBalanceGains = whiteBalanceGains,
-                noiseModel = noiseModel,
-                rawNoiseModel = rawNoiseModel,
-                lensShading = stackLensShading,
-                lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
-                lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
-                outputScale = outputScale,
-                debugConfig = RawStackRuntimeDebug.debugConfig,
-            ).processFrames(frames)
-        }
-
-        RawStackRuntimeDebug.i(TAG) { "Using CPU RAW stacker" }
-        val stackerPtr = createRawStackerNative(width, height, useNativeSuperResolution)
-        if (stackerPtr == 0L) {
-            PLog.e(TAG, "Failed to create CPU raw stacker")
-            return null
-        }
-
-        var cpuFusedBayerBuffer: ByteBuffer? = null
-        var returnsCpuFusedBayer = false
-        try {
-            val stagedIndices = mutableListOf<Int>()
-            for (image in images) {
-                image.use {
-                    if (image.width != width || image.height != height) return@use
-                    val buffer = image.planes[0].buffer
-                    val rowStride = image.planes[0].rowStride
-                    stageRawFrameNative(stackerPtr, buffer, rowStride, cfaPattern)
-                    stagedIndices.add(stagedIndices.size)
-                }
-            }
-            for (idx in stagedIndices) {
-                processRawFrameNative(stackerPtr, idx)
-            }
-            clearStagedRawFramesNative(stackerPtr)
-
-            val stackedWidth = if (useNativeSuperResolution) width * 2 else width
-            val stackedHeight = if (useNativeSuperResolution) height * 2 else height
-            val outputByteCount = stackedWidth.toLong() * stackedHeight.toLong() * 2L
-            cpuFusedBayerBuffer = allocateFusedBayerBuffer(outputByteCount, "CPU") ?: return null
-            processRawStackWithBufferNative(stackerPtr, cpuFusedBayerBuffer)
-
-            cpuFusedBayerBuffer.rewind()
-            RawStackRuntimeDebug.i(TAG) { "CPU RAW stacking completed successfully" }
-            returnsCpuFusedBayer = true
-            return RawStackResult(
-                fusedBayerBuffer = cpuFusedBayerBuffer,
-                width = stackedWidth,
-                height = stackedHeight,
-                isNormalizedSensorData = false,
-                blackLevel = masterBlackLevel.copyOf(),
-                fusedBayerUsesNativeAllocator = true,
-            )
-
-        } finally {
-            releaseRawStackerNative(stackerPtr)
-            if (!returnsCpuFusedBayer) {
-                LargeDirectBuffer.free(cpuFusedBayerBuffer)
-            }
-        }
-    }
-
-    private fun allocateFusedBayerBuffer(byteCount: Long, label: String): ByteBuffer? {
-        if (byteCount <= 0L || byteCount > Int.MAX_VALUE) {
-            PLog.e(TAG, "$label fused Bayer buffer size is invalid: $byteCount")
-            return null
-        }
-        return LargeDirectBuffer.allocate(byteCount, "$label fused Bayer")
+        val normalizedOutputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
+        val stackLensShading = validLensShadingOrNull(
+            lensShading = lensShading,
+            width = lensShadingWidth,
+            height = lensShadingHeight,
+            enabled = applyLensShadingCorrection,
+        )
+        return GlesRawRadianceFusion(
+            width = width,
+            height = height,
+            cfaPattern = cfaPattern,
+            blackLevel = masterBlackLevel,
+            whiteLevel = whiteLevel,
+            whiteBalanceGains = whiteBalanceGains,
+            noiseModel = noiseModel,
+            rawNoiseModel = rawNoiseModel,
+            lensShading = stackLensShading,
+            lensShadingWidth = if (stackLensShading != null) lensShadingWidth else 0,
+            lensShadingHeight = if (stackLensShading != null) lensShadingHeight else 0,
+            outputScale = normalizedOutputScale,
+            debugConfig = RawStackRuntimeDebug.debugConfig,
+        ).processFrames(frames)
     }
 
     private fun validLensShadingOrNull(
@@ -438,11 +305,5 @@ object MultiFrameStacker {
 
     private external fun releaseStackerNative(stackerPtr: Long)
 
-    private external fun createRawStackerNative(width: Int, height: Int, enableSuperRes: Boolean): Long
-    private external fun stageRawFrameNative(stackerPtr: Long, rawData: ByteBuffer, rowStride: Int, cfaPattern: Int)
-    private external fun processRawFrameNative(stackerPtr: Long, index: Int)
-    private external fun clearStagedRawFramesNative(stackerPtr: Long)
-    private external fun processRawStackWithBufferNative(stackerPtr: Long, outputBuffer: ByteBuffer)
-    private external fun releaseRawStackerNative(stackerPtr: Long)
 
 }

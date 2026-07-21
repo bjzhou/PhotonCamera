@@ -57,6 +57,51 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
+    fun fromJson_keepsRawMfsrWhenYuvHdrPreferenceIsEnabled() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_raw_mfsr_hdr_preference",
+              "name": "RAW MFSR with HDR Preference",
+              "useRaw": true,
+              "useMFNR": false,
+              "useHdrComposition": true,
+              "useMFSR": true,
+              "colorRecipe": {},
+              "effects": {}
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertTrue(preset.useRaw)
+        assertTrue(preset.useHdrComposition)
+        assertTrue(preset.useMFSR)
+    }
+
+    @Test
+    fun fromJson_stillRejectsYuvMfsrAndHdrCombination() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_yuv_mfsr_hdr_conflict",
+              "name": "YUV MFSR HDR Conflict",
+              "useRaw": false,
+              "useMFNR": false,
+              "useHdrComposition": true,
+              "useMFSR": true,
+              "colorRecipe": {},
+              "effects": {}
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertTrue(preset.useHdrComposition)
+        assertFalse(preset.useMFSR)
+    }
+
+    @Test
     fun listFromJson_ignoresUnknownFieldsAndUsesCurrentDefaults() {
         val presets = CameraPreset.listFromJson(
             """

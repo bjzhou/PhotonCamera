@@ -18,6 +18,29 @@ class MultiFrameConfigTest {
     }
 
     @Test
+    fun outputScaleSupportsFloatingPointRangeAndRejectsNonFiniteValues() {
+        assertEquals(1f, MultiFrameConfig.normalizeOutputScale(0.5f))
+        assertEquals(1.35f, MultiFrameConfig.normalizeOutputScale(1.35f))
+        assertEquals(2f, MultiFrameConfig.normalizeOutputScale(2.5f))
+        assertEquals(1f, MultiFrameConfig.normalizeOutputScale(Float.NaN))
+        assertEquals(
+            MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+            MultiFrameConfig.normalizeOutputScale(
+                Float.POSITIVE_INFINITY,
+                MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+            ),
+        )
+    }
+
+    @Test
+    fun fractionalRawOutputDimensionsMatchRadianceEvenSizeRule() {
+        assertEquals(65, MultiFrameConfig.scaledRawOutputDimension(65, 1f))
+        assertEquals(98, MultiFrameConfig.scaledRawOutputDimension(65, 1.5f))
+        assertEquals(98, MultiFrameConfig.scaledRawOutputDimension(66, 1.5f))
+        assertEquals(130, MultiFrameConfig.scaledRawOutputDimension(65, 2f))
+    }
+
+    @Test
     fun configuredFrameCountIsPartitionedWithoutGrowingBurst() {
         assertEquals(
             4,

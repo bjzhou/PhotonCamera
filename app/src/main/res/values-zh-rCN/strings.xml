@@ -201,6 +201,7 @@
     <string name="settings_multi_frame_count">多帧降噪帧数</string>
     <string name="settings_multi_frame_count_description">YUV 多帧降噪使用的帧数（帧数越多降噪越明显，但处理也越慢）。</string>
     <string name="settings_use_super_resolution">多帧超分</string>
+    <string name="settings_super_resolution_scale">输出倍率：%1$.2f×</string>
     <string name="settings_use_live_photo">动态照片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照时同时录制一段短视频，让照片动起来。</string>
     <string name="settings_develop_animation">显影动画</string>
@@ -782,7 +783,7 @@
     <string name="settings_raw_blacks_adjustment">黑色</string>
     <string name="settings_raw_whites_adjustment">白色</string>
     <string name="settings_raw_lens_shading_correction">镜头阴影校正</string>
-    <string name="settings_raw_lens_shading_correction_description">RAW 显影时应用镜头阴影增益图，包括 RAW 多帧和 RAW HDR 处理。</string>
+    <string name="settings_raw_lens_shading_correction_description">RAW 显影时应用镜头阴影增益图，包括 RAW 多帧处理。</string>
     <string name="settings_export_dng_with_raw_export">导出 RAW 时同时导出 DNG</string>
     <string name="settings_export_dng_with_raw_export_description">导出 RAW 照片时，同时将对应的原始 DNG 文件导出到系统相册。</string>
     <string name="settings_raw_black_level_correction">黑电平校正</string>

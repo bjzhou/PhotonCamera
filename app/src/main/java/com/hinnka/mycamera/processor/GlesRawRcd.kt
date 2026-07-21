@@ -4,7 +4,7 @@ package com.hinnka.mycamera.processor
  * Shared output adapters for the region-based RCD pipeline.
  *
  * The demosaic itself is owned by [com.hinnka.mycamera.raw.RcdShaders]. Its RCD interior and
- * PPG photo-border completion are dispatched together by [GlesRawStacker] before this adapter
+ * PPG photo-border completion are dispatched together by [GlesRawRadianceStacker] before this adapter
  * reads the RGB working buffers. Keeping this shader mode-agnostic prevents HDR and Radiance
  * from growing separate post-demosaic paths.
  */

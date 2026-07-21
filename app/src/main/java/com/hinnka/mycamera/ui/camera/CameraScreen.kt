@@ -227,6 +227,7 @@ fun CameraScreen(
     val useHdrComposition by viewModel.useHdrComposition.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val useMFSR by viewModel.useMFSR.collectAsState()
+    val superResolutionScale by viewModel.superResolutionScale.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
     val aiFocusTargetMode by viewModel.aiFocusTargetMode.collectAsState()
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
@@ -1514,6 +1515,8 @@ fun CameraScreen(
             onMFSRToggle = {
                 viewModel.setUseMFSR(it)
             },
+            superResolutionScale = superResolutionScale,
+            onSuperResolutionScaleChange = viewModel::setSuperResolutionScale,
             useHdrComposition = useHdrComposition,
             onHdrCompositionToggle = {
                 viewModel.setUseHdrComposition(it)

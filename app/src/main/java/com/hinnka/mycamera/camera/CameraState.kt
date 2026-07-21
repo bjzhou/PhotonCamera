@@ -343,10 +343,9 @@ data class CameraState(
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
 
     val isRawSupported: Boolean = false,
-    val useMFNR: Boolean = false,
+    val multiFrameOutputScale: Float? = null,
     val useHdrComposition: Boolean = false,
     val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT,
-    val useMFSR: Boolean = false,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -390,6 +389,9 @@ data class CameraState(
 
     val isHLG: Boolean
         get() = currentDynamicRangeProfile == "HLG10"
+
+    val isMultiFrameEnabled: Boolean
+        get() = multiFrameOutputScale != null
 
     /**
      * 获取当前相机信息

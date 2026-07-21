@@ -13,7 +13,7 @@ enum class RawBurstFrameRole {
 
 /**
  * Global reference-to-frame transform used only as the starting point for local optical flow.
- * Translation is expressed in the half-resolution Bayer plane used by [GlesRawStacker].
+ * Translation is expressed in the half-resolution Bayer plane used by [GlesRawRadianceStacker].
  */
 data class RawFramePreAlignment(
     val translationXPlanePx: Float,

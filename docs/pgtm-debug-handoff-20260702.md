@@ -228,3 +228,7 @@ The generator tests now include:
 - The main live/UI path is now the source of truth. Avoid reintroducing file-level DNG rewrites unless full DNG color/profile metadata is parsed and it is proven to be byte-for-byte equivalent to the UI path.
 - Lightroom desktop/mobile was observed to ignore PGTM in the tested sentinel DNGs, while the app and system gallery applied it. Use the app/system gallery for PGTM render validation.
 - `app/build.gradle.kts` had an unrelated pre-existing version change in the worktree before this branch was created. It is intentionally not part of this PGTM commit.
+# 历史交接说明
+
+> 本文记录 2026-07-02 的调试现场；其中 `GlesRawStacker` 名称与链路已被 Radiance 实现取代，
+> 不代表当前生产架构。

@@ -96,7 +96,11 @@ fun PresetEditorScreen(
     var useMFNR by remember { mutableStateOf(sourcePreset?.useMFNR ?: false) }
     var useHdrComposition by remember { mutableStateOf(sourcePreset?.useHdrComposition ?: true) }
     var useMFSR by remember {
-        mutableStateOf(sourcePreset?.let { it.useMFSR && !it.useMFNR && !it.useHdrComposition } ?: false)
+        mutableStateOf(
+            sourcePreset?.let {
+                it.useMFSR && !it.useMFNR && (it.useRaw || !it.useHdrComposition)
+            } ?: false
+        )
     }
     var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
 
@@ -141,7 +145,7 @@ fun PresetEditorScreen(
             useRaw = useRaw,
             useMFNR = useMFNR,
             useHdrComposition = useHdrComposition,
-            useMFSR = useMFSR && !useMFNR && !useHdrComposition,
+            useMFSR = useMFSR && !useMFNR && (useRaw || !useHdrComposition),
             frameId = frameId,
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
@@ -301,7 +305,9 @@ fun PresetEditorScreen(
                         useMFSR = it
                         if (it) {
                             useMFNR = false
-                            useHdrComposition = false
+                            if (!useRaw) {
+                                useHdrComposition = false
+                            }
                         }
                     }
                 )
@@ -313,7 +319,7 @@ fun PresetEditorScreen(
                     checked = useHdrComposition,
                     onCheckedChange = {
                         useHdrComposition = it
-                        if (it) {
+                        if (it && !useRaw) {
                             useMFSR = false
                         }
                     }
@@ -404,6 +410,9 @@ fun PresetEditorScreen(
                     checked = useRaw,
                     onCheckedChange = {
                         useRaw = it
+                        if (!it && useHdrComposition) {
+                            useMFSR = false
+                        }
                     }
                 )
 

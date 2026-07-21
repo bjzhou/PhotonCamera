@@ -82,6 +82,7 @@
     <string name="settings_multi_frame_count">Jumlah Multi-frame</string>
     <string name="settings_multi_frame_count_description">Jumlah frame untuk penumpukan multi-frame (lebih banyak frame = kualitas lebih baik tetapi lebih lambat).</string>
     <string name="settings_use_super_resolution">Resolusi Super</string>
+    <string name="settings_super_resolution_scale">Skala keluaran: %1$.2f×</string>
     <string name="settings_use_live_photo">Foto Live</string>
     <string name="settings_use_live_photo_description">Tangkap klip video pendek bersama foto Anda untuk efek foto live yang dinamis.</string>
     <string name="settings_use_gpu_acceleration">Akselerasi GPU</string>

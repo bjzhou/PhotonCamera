@@ -8,6 +8,7 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RcdShaders
@@ -18,11 +19,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.ShortBuffer
 import kotlin.math.ceil
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-class GlesRawStacker(
+internal class GlesRawRadianceStacker(
     private val width: Int,
     private val height: Int,
     private val cfaPattern: Int,
@@ -34,9 +34,8 @@ class GlesRawStacker(
     private val lensShading: FloatArray?,
     private val lensShadingWidth: Int,
     private val lensShadingHeight: Int,
-    private val tuning: RawStackTuningProfile = RawStackTuningResolver.resolve(RawStackMode.MFNR),
+    private val tuning: RawStackTuningProfile = RawStackTuningProfile(),
     debugConfig: RawStackDebugConfig = RawStackDebugConfig.Disabled,
-    private val fusionPipeline: RawFusionPipeline = RawFusionPipeline.LEGACY_CFA,
     private val radianceFusionTuning: RawRadianceFusionTuning = RawRadianceFusionTuning(),
 ) {
     private data class TextureLevel(val texture: Int, val width: Int, val height: Int)
@@ -255,72 +254,45 @@ class GlesRawStacker(
         )
     private val hwmfPrefilter = tuning.prefilter
     private val hwmfBlend = tuning.blend
-    private val hwmfPostfilter = tuning.postfilter
     private val hwmfSr = tuning.superResolution
     private val hwmfDebug = debugConfig.normalized()
     private val registrationSetup = RawStackRegistrationResolver.resolve(width, height)
     private val registrationSummary = registrationSetup.toSummary()
-    private val radianceFusionEnabled = fusionPipeline == RawFusionPipeline.RADIANCE_RGB
-    private val radianceUsesVgnSemanticBackend = radianceFusionEnabled && cfaPattern in 0..3
+    private val radianceUsesVgnSemanticBackend = cfaPattern in 0..3
     private val radianceVgnChromaPostprocessEnabled =
         radianceUsesVgnSemanticBackend && radianceFusionTuning.vgnChromaPostprocessEnabled
     private val visualizeRadianceFusionRejections =
-        radianceFusionEnabled && hwmfDebug.visualizeRadianceFusionRejections
+        hwmfDebug.visualizeRadianceFusionRejections
     private val visualizeRadianceSrDetail =
-        radianceFusionEnabled && hwmfDebug.visualizeRadianceSrDetail
+        hwmfDebug.visualizeRadianceSrDetail
     private val visualizeRadianceHighlightReconstruction =
-        radianceFusionEnabled && hwmfDebug.visualizeRadianceHighlightReconstruction
+        hwmfDebug.visualizeRadianceHighlightReconstruction
     private val visualizeRadianceLongParticipation =
-        radianceFusionEnabled && hwmfDebug.visualizeRadianceLongParticipation
+        hwmfDebug.visualizeRadianceLongParticipation
     private val logRadianceFusionParticipation =
-        radianceFusionEnabled && hwmfDebug.logRadianceFusionParticipation
-    private val dualTileConfidence = radianceFusionEnabled
-    private val superResolutionEnabled = tuning.mode == RawStackMode.MFSR || radianceFusionEnabled
-    private val superResolutionScale = if (superResolutionEnabled) {
-        hwmfSr.outputScale.coerceIn(1.0f, hwmfSr.internalScale.coerceIn(1.0f, 2.0f))
-    } else {
-        1.0f
-    }
-    private val outputWidth = scaledRawDimension(width, superResolutionScale)
-    private val outputHeight = scaledRawDimension(height, superResolutionScale)
+        hwmfDebug.logRadianceFusionParticipation
+    private val superResolutionScale = MultiFrameConfig.normalizeOutputScale(hwmfSr.outputScale)
+        .coerceAtMost(MultiFrameConfig.normalizeOutputScale(hwmfSr.internalScale))
+    private val outputWidth = MultiFrameConfig.scaledRawOutputDimension(width, superResolutionScale)
+    private val outputHeight = MultiFrameConfig.scaledRawOutputDimension(height, superResolutionScale)
     private val rawCfaPeriod = when {
         cfaPattern >= 8 -> 8
         cfaPattern >= 4 -> 4
         else -> 2
     }
-    private val radianceTiles = if (radianceFusionEnabled) {
-        RadianceTilePlanner.plan(
-            rawWidth = width,
-            rawHeight = height,
-            outputWidth = outputWidth,
-            outputHeight = outputHeight,
-            coreSizeRawPx = radianceFusionTuning.tileCoreSizeRawPx,
-            outputSpatialRadiusPx = SUPER_RESOLUTION_SPATIAL_RADIUS,
-            cfaPeriod = rawCfaPeriod,
-        )
-    } else {
-        emptyList()
-    }
-    private val superResolutionAccumulatorWidth = if (radianceFusionEnabled) {
-        radianceTiles.maxOf { it.outputWorking.width }
-    } else {
-        outputWidth
-    }
-    private val superResolutionAccumulatorHeight = if (radianceFusionEnabled) {
-        radianceTiles.maxOf { it.outputWorking.height }
-    } else {
-        minOf(outputHeight, SUPER_RESOLUTION_STRIPE_ROWS + 2 * SUPER_RESOLUTION_SPATIAL_RADIUS)
-    }
-    private val radianceOutputTileWidth = if (radianceFusionEnabled) {
-        radianceTiles.maxOf { it.outputCore.width }
-    } else {
-        outputWidth
-    }
-    private val radianceOutputTileHeight = if (radianceFusionEnabled) {
-        radianceTiles.maxOf { it.outputCore.height }
-    } else {
-        outputHeight
-    }
+    private val radianceTiles = RadianceTilePlanner.plan(
+        rawWidth = width,
+        rawHeight = height,
+        outputWidth = outputWidth,
+        outputHeight = outputHeight,
+        coreSizeRawPx = radianceFusionTuning.tileCoreSizeRawPx,
+        outputSpatialRadiusPx = SUPER_RESOLUTION_SPATIAL_RADIUS,
+        cfaPeriod = rawCfaPeriod,
+    )
+    private val superResolutionAccumulatorWidth = radianceTiles.maxOf { it.outputWorking.width }
+    private val superResolutionAccumulatorHeight = radianceTiles.maxOf { it.outputWorking.height }
+    private val radianceOutputTileWidth = radianceTiles.maxOf { it.outputCore.width }
+    private val radianceOutputTileHeight = radianceTiles.maxOf { it.outputCore.height }
     private val superResolutionPhaseTracker = RawStackSuperResolutionPhaseTracker(
         cfaPeriod = rawCfaPeriod,
         outputScale = superResolutionScale,
@@ -355,9 +327,6 @@ class GlesRawStacker(
     private var robustnessProgram = 0
     private var tileMaskProgram = 0
     private var registrationSampleProgram = 0
-    private var clearAccumulatorProgram = 0
-    private var accumulateProgram = 0
-    private var normalizeProgram = 0
     private var clearSuperResolutionAccumulatorProgram = 0
     private var accumulateSuperResolutionProgram = 0
     private var normalizeSuperResolutionProgram = 0
@@ -381,12 +350,8 @@ class GlesRawStacker(
     private var rcdRegionStep42Program = 0
     private var rcdRegionStep43Program = 0
     private var rcdRegionBorderPpgProgram = 0
-    private var hdrShortGlobalAlignProgram = 0
-    private var hdrNormalCfaInputProgram = 0
     private var rcdStoreRgbProgram = 0
-    private var hdrRgbFusionProgram = 0
     private var diagnosticAlignmentProgram = 0
-    private var diagnosticFinalProgram = 0
     private var diagnosticBuffer = 0
     private var diagnosticsFailed = false
 
@@ -398,7 +363,6 @@ class GlesRawStacker(
 
     private var refRaw = 0
     private var curRaw = 0
-    private var hdrShortRaw = 0
     private var refProxy = 0
     private var curProxy = 0
     private var flowTexture = 0
@@ -409,11 +373,6 @@ class GlesRawStacker(
     private var kernelTexture = 0
     private var robustnessTexture = 0
     private var tileMaskTexture = 0
-    private var hdrNormalRgbStripeTexture = 0
-    private var hdrReferenceRgbStripeTexture = 0
-    private var hdrShortRgbStripeTexture = 0
-    private var accumulatorValueWeightTexture = 0
-    private var accumulatorStatisticsTexture = 0
     private var superResolutionAccumulatorTexture = 0
     private var superResolutionAccumulatorBwTexture = 0
     private var radianceNrWeightRgTexture = 0
@@ -442,7 +401,6 @@ class GlesRawStacker(
     private var rcdRegionCapacityHeight = 0
     private val rcdRegionBuffers = IntArray(9)
     private var outputTexture = 0
-    private var hdrLinearOutputTexture = 0
     private var lensShadingTexture = 0
     private var currentRegistrationTransform = registrationSetup.identityTransform(RawStackRegistrationStage.BLEND)
     private var currentRegistrationSrTransform = registrationSetup.identityTransform(RawStackRegistrationStage.BLEND)
@@ -465,15 +423,8 @@ class GlesRawStacker(
     private var superResolutionDetailFrameCount = 0
     private var superResolutionDetailWeightSum = 0f
     private var superResolutionDetailWeightMax = 0f
-    private var hdrShortRawOffsetX = 0f
-    private var hdrShortRawOffsetY = 0f
-    private var hdrWeightMap: GlesRawHdrWeightMap? = null
     private var activeRadianceHighlightFrame: RawRadianceHighlightFrame? = null
     private var activeRadianceLongFrames: List<RawRadianceLongFramePlan> = emptyList()
-
-    fun process(images: List<SafeImage>): RawStackResult? {
-        return processFrames(images.map { RawStackFrame(it) })
-    }
 
     internal fun processFrames(
         frames: List<RawStackFrame>,
@@ -481,8 +432,8 @@ class GlesRawStacker(
         longFrames: List<RawRadianceLongFramePlan> = emptyList(),
     ): RawStackResult? {
         val images = frames.map { it.image }
-        activeRadianceHighlightFrame = highlightFrame?.takeIf { radianceFusionEnabled }
-        activeRadianceLongFrames = longFrames.takeIf { radianceFusionEnabled }.orEmpty()
+        activeRadianceHighlightFrame = highlightFrame
+        activeRadianceLongFrames = longFrames
         val ownedImages = buildList {
             addAll(images)
             activeRadianceHighlightFrame?.shortFrame?.image?.let(::add)
@@ -503,17 +454,10 @@ class GlesRawStacker(
             return null
         }
 
-        val outputBytesPerPixel = if (radianceFusionEnabled) 6L else 2L
-        val outputByteCount = outputWidth.toLong() * outputHeight.toLong() * outputBytesPerPixel
+        val outputByteCount = outputWidth.toLong() * outputHeight.toLong() * 6L
         val referenceExposureProduct = validExposureProduct(frames.first().exposureProduct)
         val referenceFocusDistance = frames.first().focusDistanceDiopters
-        val frameExposureScales = if (radianceFusionEnabled) {
-            List(frames.size) { 1f }
-        } else {
-            frames.map { frame ->
-                hdrExposureScale(referenceExposureProduct, validExposureProduct(frame.exposureProduct))
-            }
-        }
+        val frameExposureScales = List(frames.size) { 1f }
         var outputBuffer: ByteBuffer? = null
         var returned = false
         val startTime = System.currentTimeMillis()
@@ -521,7 +465,7 @@ class GlesRawStacker(
         return try {
             outputBuffer = LargeDirectBuffer.allocate(
                 outputByteCount,
-                if (radianceFusionEnabled) "GLES RAW fused linear RGB16" else "GLES RAW fused Bayer",
+                "GLES RAW Radiance fused linear RGB16",
             )
                 ?.order(ByteOrder.nativeOrder()) ?: return null
 
@@ -532,7 +476,7 @@ class GlesRawStacker(
             initResources()
             applyRawRenderState()
             RawStackRuntimeDebug.d(TAG) {
-                "HWMF RAW stack mode=${tuning.mode} pipeline=$fusionPipeline frames=${images.size} " +
+                "Radiance RAW stack frames=${images.size} " +
                     "out=${outputWidth}x$outputHeight srScale=${superResolutionScale.formatScale()} " +
                     "${registrationSummary.compactSummary()} regProxy=REG_OUT " +
                     "regCtx=${registrationSetup.referenceContextSummary()} " +
@@ -540,18 +484,12 @@ class GlesRawStacker(
                     "blendLk=$lkRefinePasses blendSmooth=$flowSmoothPasses"
             }
             RawStackRuntimeDebug.d(TAG) {
-                if (radianceFusionEnabled) {
-                    "HWMF Radiance same-exposure fusion ref=$referenceExposureProduct normalization=disabled"
-                } else {
-                    "HWMF RAW exposure normalization ref=$referenceExposureProduct " +
-                        "scaleMin=${frameExposureScales.minOrNull()?.formatScale()} " +
-                        "scaleMax=${frameExposureScales.maxOrNull()?.formatScale()}"
-                }
+                "Radiance same-exposure fusion ref=$referenceExposureProduct normalization=disabled"
             }
             var referenceTrackingTexture = 0
             uploadRawTexture(images[0], refRaw, "reference")
             RawStackRuntimeDebug.i(TAG) {
-                "HWMF reference listIndex=0 frameNumber=${frames[0].frameNumber} " +
+                "Radiance reference listIndex=0 frameNumber=${frames[0].frameNumber} " +
                     "sensorTimestampNs=${frames[0].sensorTimestampNs} " +
                     "imageTimestampNs=${images[0].timestamp} exposure=${frames[0].exposureProduct}"
             }
@@ -605,13 +543,6 @@ class GlesRawStacker(
             superResolutionPhaseTracker.reset()
             resetSuperResolutionDecisionStats()
             val acceptedSuperResolutionFrames = ArrayList<AcceptedSuperResolutionFrame>()
-            // Deferred reconstruction owns MFSR stripes and Radiance tiles. The CFA accumulator
-            // is only needed for MFNR output and optional diagnostic statistics.
-            val needsBaseAccumulator = !superResolutionEnabled || hwmfDebug.collectMetrics
-            if (needsBaseAccumulator) {
-                clearAccumulator()
-                accumulateFrame(refRaw, isReference = true)
-            }
             GlesGpuScheduler.yieldToUiRenderer()
 
             var alignedFrameCount = 0
@@ -650,34 +581,23 @@ class GlesRawStacker(
                     GlesGpuScheduler.yieldToUiRenderer()
                     continue
                 }
-                if (superResolutionEnabled) {
-                    if (needsBaseAccumulator) {
-                        accumulateFrame(curRaw, isReference = false, exposureScale = exposureScale)
-                    }
-                    if (shouldAccumulateSuperResolutionFrame()) {
-                        // Phase novelty is a ranking signal, not an admission gate. Temporal graph
-                        // summaries may legitimately quantize the global phase to zero while the
-                        // refined local flow still contains useful sub-pixel observations.
-                        val continuousDetailWeight = max(
-                            currentRegistrationSrDetailWeight,
-                            currentRegistrationSrWeight * 0.35f,
-                        )
-                        recordSuperResolutionDetailFrame(continuousDetailWeight)
-                        acceptedSuperResolutionFrames += cacheAcceptedSuperResolutionFrame(
-                            frameIndex = index,
-                            image = images[index],
-                            exposureScale = exposureScale,
-                            registrationWeight = currentRegistrationNrWeight,
-                            detailWeight = if (radianceFusionEnabled) {
-                                continuousDetailWeight
-                            } else {
-                                currentRegistrationSrDetailWeight
-                            },
-                        )
-                        recordAccumulatedSuperResolutionPhase()
-                    }
-                } else {
-                    accumulateFrame(curRaw, isReference = false, exposureScale = exposureScale)
+                if (shouldAccumulateSuperResolutionFrame()) {
+                    // Phase novelty is a ranking signal, not an admission gate. Temporal graph
+                    // summaries may legitimately quantize the global phase to zero while the
+                    // refined local flow still contains useful sub-pixel observations.
+                    val continuousDetailWeight = max(
+                        currentRegistrationSrDetailWeight,
+                        currentRegistrationSrWeight * 0.35f,
+                    )
+                    recordSuperResolutionDetailFrame(continuousDetailWeight)
+                    acceptedSuperResolutionFrames += cacheAcceptedSuperResolutionFrame(
+                        frameIndex = index,
+                        image = images[index],
+                        exposureScale = exposureScale,
+                        registrationWeight = currentRegistrationNrWeight,
+                        detailWeight = continuousDetailWeight,
+                    )
+                    recordAccumulatedSuperResolutionPhase()
                 }
                 if (hwmfDebug.collectMetrics) {
                     recordAlignmentDiagnostics()
@@ -716,33 +636,19 @@ class GlesRawStacker(
                     "acceptedLong=${longAlignments.size} " +
                     "highlightAccepted=${highlightAlignment != null}"
             }
-            val superResolutionDecision = if (superResolutionEnabled) {
-                decideSuperResolutionOutput(alignedFrameCount)
-            } else {
-                SuperResolutionOutputDecision.Disabled
-            }
-            val reconstructionReadTiming = when {
-                radianceFusionEnabled -> reconstructRadianceTiles(
-                    referenceImage = images[0],
-                    frames = frames,
-                    acceptedFrames = acceptedSuperResolutionFrames,
-                    candidateFrameCount = (images.size - 1).coerceAtLeast(0) +
-                        activeRadianceLongFrames.size,
-                    outputBuffer = outputBuffer,
-                    highlightAlignment = highlightAlignment,
-                    longAlignments = longAlignments,
-                )
-                superResolutionEnabled -> reconstructSuperResolutionStripes(
-                    referenceImage = images[0],
-                    acceptedFrames = acceptedSuperResolutionFrames,
-                )
-                else -> {
-                    normalizeOutput()
-                    null
-                }
-            }
+            val superResolutionDecision = decideSuperResolutionOutput(alignedFrameCount)
+            val reconstructionReadTiming = reconstructRadianceTiles(
+                referenceImage = images[0],
+                frames = frames,
+                acceptedFrames = acceptedSuperResolutionFrames,
+                candidateFrameCount = (images.size - 1).coerceAtLeast(0) +
+                    activeRadianceLongFrames.size,
+                outputBuffer = outputBuffer,
+                highlightAlignment = highlightAlignment,
+                longAlignments = longAlignments,
+            )
             GlesGpuScheduler.yieldToUiRenderer()
-            val readTiming = reconstructionReadTiming ?: readOutput(outputBuffer)
+            val readTiming = reconstructionReadTiming
             outputBuffer.rewind()
             val diagnostics = if (hwmfDebug.collectMetrics) {
                 collectFinalDiagnostics(
@@ -765,16 +671,12 @@ class GlesRawStacker(
                 width = outputWidth,
                 height = outputHeight,
                 isNormalizedSensorData = true,
-                blackLevel = if (radianceFusionEnabled) FloatArray(4) else normalizedBlackLevel.copyOf(),
+                blackLevel = FloatArray(4),
                 fusedBayerUsesNativeAllocator = true,
                 diagnostics = diagnostics,
-                bufferLayout = if (radianceFusionEnabled) {
-                    RawStackBufferLayout.LINEAR_RGB
-                } else {
-                    RawStackBufferLayout.CFA
-                },
-                inputRowStepSamples = if (radianceFusionEnabled) outputWidth * 3 else null,
-                inputColStepSamples = if (radianceFusionEnabled) 3 else null,
+                bufferLayout = RawStackBufferLayout.LINEAR_RGB,
+                inputRowStepSamples = outputWidth * 3,
+                inputColStepSamples = 3,
                 baselineExposureEv = highlightAlignment?.frame?.baselineExposureEv,
             )
         } catch (e: Exception) {
@@ -782,173 +684,6 @@ class GlesRawStacker(
             null
         } finally {
             ownedImages.forEach { it.close() }
-            release()
-            GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, TAG)
-            if (!returned) {
-                LargeDirectBuffer.free(outputBuffer)
-            }
-        }
-    }
-
-    fun processHdr(
-        shortFrame: GlesRawHdrInputFrame,
-        normalFrames: List<GlesRawHdrInputFrame>,
-    ): RawStackResult? {
-        val allImages = buildList {
-            add(shortFrame.image)
-            normalFrames.forEach { add(it.image) }
-        }
-        if (normalFrames.isEmpty() || width <= 0 || height <= 0) {
-            allImages.forEach { it.close() }
-            return null
-        }
-        if (allImages.any { it.width != width || it.height != height }) {
-            PLog.w(TAG, "GLES RAW HDR stack got mixed frame sizes")
-            allImages.forEach { it.close() }
-            return null
-        }
-        if (allImages.any { it.format != ImageFormat.RAW_SENSOR }) {
-            PLog.w(TAG, "GLES RAW HDR stack only supports RAW_SENSOR input")
-            allImages.forEach { it.close() }
-            return null
-        }
-
-        val outputByteCount = width.toLong() * height.toLong() * 8L
-        var outputBuffer: ByteBuffer? = null
-        var returned = false
-        val startTime = System.currentTimeMillis()
-        val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
-        return try {
-            outputBuffer = LargeDirectBuffer.allocate(outputByteCount, "GLES RAW HDR linear RGBX16")
-                ?.order(ByteOrder.nativeOrder()) ?: return null
-
-            initEgl()
-            ensureGles31()
-            initPrograms()
-            initHdrPrograms()
-            initResources()
-            initHdrResources()
-            hdrLinearOutputTexture = createTexture2D(
-                width,
-                height,
-                GLES30.GL_RGBA16UI,
-                GLES30.GL_NEAREST,
-            )
-            applyRawRenderState()
-            RawStackRuntimeDebug.d(TAG) {
-                "HWMF RAW HDR stack mode=${tuning.mode} normalFrames=${normalFrames.size} " +
-                    "calculationWb=${demosaicCalculationWbGains.contentToString()} " +
-                    "${registrationSummary.compactSummary()} regProxy=REG_OUT " +
-                    "regCtx=${registrationSetup.referenceContextSummary()} " +
-                    "prefilterLevels=$pyramidLevels flowGrid=$flowGridSpacing " +
-                    "blendLk=$lkRefinePasses blendSmooth=$flowSmoothPasses"
-            }
-
-            val shortExposureProduct = validExposureProduct(shortFrame.exposureProduct)
-            val referenceExposureProduct = validExposureProduct(normalFrames.first().exposureProduct)
-            val referenceOutputScale = hdrExposureScale(shortExposureProduct, referenceExposureProduct)
-            val shortAlignmentScale = hdrExposureScale(referenceExposureProduct, shortExposureProduct)
-            val alignmentScales = normalFrames.map {
-                hdrExposureScale(referenceExposureProduct, validExposureProduct(it.exposureProduct))
-            }
-            val outputScales = normalFrames.map {
-                hdrExposureScale(shortExposureProduct, validExposureProduct(it.exposureProduct))
-            }
-            uploadRawTexture(shortFrame.image, hdrShortRaw, "short highlight recovery")
-            uploadRawTexture(normalFrames.first().image, refRaw, "HDR normal reference")
-            buildProxy(refRaw, refProxy, "normal reference", exposureScale = 1.0f)
-            val refPyramid = createPyramid(refProxy)
-            val curPyramid = createPyramid(curProxy)
-            buildPyramid(refPyramid)
-            buildProxy(hdrShortRaw, curProxy, "short global alignment", exposureScale = shortAlignmentScale)
-            buildPyramid(curPyramid)
-            alignHdrShortToReference(refPyramid, curPyramid)
-            computeStructureTensor()
-            clearAccumulator()
-            currentRegistrationTransform = registrationSetup.identityTransform(RawStackRegistrationStage.BLEND)
-            currentRegistrationSrTransform = registrationSetup.identityTransform(RawStackRegistrationStage.BLEND)
-            currentRegistrationSrWeight = 1.0f
-            acceptedRegistrationTranslations.clear()
-            acceptedSrRegistrationTranslations.clear()
-            accumulateFrame(
-                rawTexture = refRaw,
-                isReference = true,
-                exposureScale = referenceOutputScale,
-                hdrMode = true,
-            )
-
-            var alignedFrameCount = 1
-            normalFrames.drop(1).forEachIndexed { relativeIndex, frame ->
-                val frameIndex = relativeIndex + 1
-                val alignmentScale = alignmentScales[frameIndex]
-                val outputScale = outputScales[frameIndex]
-                uploadRawTexture(frame.image, curRaw, "normal frame $frameIndex")
-                buildProxy(curRaw, curProxy, "normal frame $frameIndex", exposureScale = alignmentScale)
-                buildPyramid(curPyramid)
-                alignCurrentToReference(
-                    reference = refPyramid,
-                    current = curPyramid,
-                    preAlignment = null,
-                    frameIndex = frameIndex,
-                )
-                refineFlow()
-                smoothFlow()
-                computeRobustness()
-                computeTileMask()
-                accumulateFrame(
-                    rawTexture = curRaw,
-                    isReference = false,
-                    exposureScale = outputScale,
-                    hdrMode = true,
-                )
-                if (hwmfDebug.collectMetrics) {
-                    recordAlignmentDiagnostics()
-                }
-                alignedFrameCount += 1
-                GlesGpuScheduler.yieldToUiRenderer()
-            }
-            reconstructHdrRgbStripes(
-                shortImage = shortFrame.image,
-                referenceImage = normalFrames.first().image,
-                referenceExposureScale = referenceOutputScale,
-            )
-            val readTiming = readHdrLinearOutput(outputBuffer)
-            outputBuffer.rewind()
-            val diagnostics = if (hwmfDebug.collectMetrics) {
-                collectFinalDiagnostics(
-                    frameCount = normalFrames.size + 1,
-                    alignedFrameCount = alignedFrameCount,
-                    elapsedMs = System.currentTimeMillis() - startTime,
-                )
-            } else {
-                null
-            }
-            returned = true
-            RawStackRuntimeDebug.i(TAG) {
-                "GLES RAW HDR stacking completed in ${System.currentTimeMillis() - startTime}ms " +
-                    "normalAligned=$alignedFrameCount/${normalFrames.size} " +
-                    "readback=${readTiming.elapsedMs}ms glRead=${readTiming.glReadMs}ms " +
-                    "copy=${readTiming.copyMs}ms alloc=${readTiming.allocMs}ms mode=${readTiming.mode}"
-            }
-            RawStackResult(
-                fusedBayerBuffer = outputBuffer,
-                width = width,
-                height = height,
-                isNormalizedSensorData = true,
-                blackLevel = normalizedBlackLevel.copyOf(),
-                fusedBayerUsesNativeAllocator = true,
-                profileGainTableMap = null,
-                profileToneMapMode = RawProfileToneMapMode.Default,
-                diagnostics = diagnostics,
-                bufferLayout = RawStackBufferLayout.LINEAR_RGB,
-                inputRowStepSamples = width * 4,
-                inputColStepSamples = 4,
-            )
-        } catch (e: Exception) {
-            PLog.e(TAG, "GLES RAW HDR stacking failed", e)
-            null
-        } finally {
-            allImages.forEach { it.close() }
             release()
             GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, TAG)
             if (!returned) {
@@ -1027,7 +762,7 @@ class GlesRawStacker(
         tileMaskProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
             tileMaskFragmentShader(
-                dualConfidence = dualTileConfidence,
+                dualConfidence = true,
                 trackRejectionReasons = visualizeRadianceFusionRejections,
             ),
             if (visualizeRadianceFusionRejections) {
@@ -1044,132 +779,107 @@ class GlesRawStacker(
             REGISTRATION_GLOBAL_ALIGN_COMPUTE_SHADER,
             "raw_registration_global_align",
         )
-        clearAccumulatorProgram = linkComputeProgram(CLEAR_ACCUMULATOR_COMPUTE_SHADER, "raw_clear_accumulator")
-        accumulateProgram = linkComputeProgram(ACCUMULATE_COMPUTE_SHADER, "raw_accumulate")
-        normalizeProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, NORMALIZE_FRAGMENT_SHADER, "raw_normalize")
-        if (superResolutionEnabled) {
-            copyScalarProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
-                COPY_SCALAR_FRAGMENT_SHADER,
-                "raw_copy_scalar",
-            )
-            if (dualTileConfidence) {
-                copyRgbaProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
-                    COPY_RGBA_FRAGMENT_SHADER,
-                    "raw_copy_rgba",
-                )
-            }
-            if (radianceFusionEnabled) {
-                clearSuperResolutionAccumulatorProgram = linkComputeProgram(
-                    GlesRawRadianceFusionShaders.clearAccumulator(
-                        trackRejections = visualizeRadianceFusionRejections,
-                        trackLongParticipation = visualizeRadianceLongParticipation,
-                    ),
-                    if (visualizeRadianceFusionRejections) {
-                        "raw_radiance_clear_r32ui_rgba16f_writeonly"
-                    } else {
-                        "raw_radiance_clear_r32ui_writeonly"
-                    },
-                )
-                accumulateSuperResolutionProgram = linkComputeProgram(
-                    GlesRawRadianceFusionShaders.accumulate(
-                        RAW_COMMON,
-                        trackRejections = visualizeRadianceFusionRejections,
-                        trackParticipation = logRadianceFusionParticipation,
-                        trackLongParticipation = visualizeRadianceLongParticipation,
-                    ),
-                    if (visualizeRadianceFusionRejections) {
-                        "raw_radiance_accumulate_r32ui_read_write_rgba16f_ping_pong_writeonly"
-                    } else {
-                        "raw_radiance_accumulate_r32ui_read_write"
-                    },
-                )
-                radianceReferenceBaseProgram = linkComputeProgram(
-                    GlesRawRadianceFusionShaders.captureReferenceBase,
-                    "raw_radiance_reference_base_rgba16f_writeonly",
-                )
-                normalizeSuperResolutionProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
-                    GlesRawRadianceFusionShaders.normalize(
-                        showRejections = visualizeRadianceFusionRejections,
-                        showSrDetail = visualizeRadianceSrDetail,
-                        showLongParticipation = visualizeRadianceLongParticipation,
-                    ),
-                    "raw_radiance_normalize_r32ui_usampler",
-                )
-                if (activeRadianceHighlightFrame != null) {
-                    radianceHighlightNormalizeProgram = linkGraphicsProgram(
-                        FULLSCREEN_VERTEX_SHADER,
-                        GlesRawRadianceFusionShaders.normalize(
-                            showRejections = visualizeRadianceFusionRejections,
-                            showSrDetail = visualizeRadianceSrDetail,
-                            reconstructHighlights = true,
-                            showHighlightReconstruction =
-                                visualizeRadianceHighlightReconstruction,
-                            showLongParticipation = visualizeRadianceLongParticipation,
-                        ),
-                        "raw_radiance_highlight_normalize_r32ui_usampler",
-                    )
-                }
-                if (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty()) {
-                    radianceHighlightValidateFlowProgram = linkGraphicsProgram(
-                        FULLSCREEN_VERTEX_SHADER,
-                        GlesRawRadianceFusionShaders.validateHighlightFlow,
-                        "raw_radiance_highlight_validate_flow",
-                    )
-                    radianceHighlightPropagateFlowProgram = linkGraphicsProgram(
-                        FULLSCREEN_VERTEX_SHADER,
-                        GlesRawRadianceFusionShaders.propagateHighlightFlow,
-                        "raw_radiance_highlight_propagate_flow",
-                    )
-                    radianceHighlightComposeFlowProgram = linkGraphicsProgram(
-                        FULLSCREEN_VERTEX_SHADER,
-                        GlesRawRadianceFusionShaders.composeHighlightFlow,
-                        "raw_radiance_highlight_compose_flow",
-                    )
-                }
-                if (activeRadianceLongFrames.isNotEmpty()) {
-                    radianceLongEligibilityProgram = linkGraphicsProgram(
-                        FULLSCREEN_VERTEX_SHADER,
-                        GlesRawRadianceFusionShaders.longEligibility,
-                        "raw_radiance_long_eligibility",
-                    )
-                    radianceLongObservabilityDiagnosticProgram = linkGraphicsProgram(
-                        FULLSCREEN_VERTEX_SHADER,
-                        RAW_LONG_OBSERVABILITY_DIAGNOSTIC_FRAGMENT_SHADER,
-                        "raw_radiance_long_observability_diagnostic",
-                    )
-                }
-                if (radianceUsesVgnSemanticBackend) {
-                    initRadianceReconstructionPrograms()
-                    if (radianceVgnChromaPostprocessEnabled) {
-                        radianceVgnChromaPostprocessor = createRadianceVgnChromaPostprocessor().also {
-                            it.initPrograms()
-                        }
-                    }
-                } else {
-                    // VGN is defined only for the four standard 2x2 Bayer layouts. Preserve
-                    // Quad/Nona CFA support through the phase-aware region RCD backend.
-                    initRcdRegionPrograms("raw_radiance_fallback")
-                    initRcdStoreRgbProgram()
-                }
+        copyScalarProgram = linkGraphicsProgram(
+            FULLSCREEN_VERTEX_SHADER,
+            COPY_SCALAR_FRAGMENT_SHADER,
+            "raw_copy_scalar",
+        )
+        copyRgbaProgram = linkGraphicsProgram(
+            FULLSCREEN_VERTEX_SHADER,
+            COPY_RGBA_FRAGMENT_SHADER,
+            "raw_copy_rgba",
+        )
+        clearSuperResolutionAccumulatorProgram = linkComputeProgram(
+            GlesRawRadianceFusionShaders.clearAccumulator(
+                trackRejections = visualizeRadianceFusionRejections,
+                trackLongParticipation = visualizeRadianceLongParticipation,
+            ),
+            if (visualizeRadianceFusionRejections) {
+                "raw_radiance_clear_r32ui_rgba16f_writeonly"
             } else {
-                clearSuperResolutionAccumulatorProgram = linkComputeProgram(
-                    CLEAR_SUPER_RESOLUTION_ACCUMULATOR_COMPUTE_SHADER,
-                    "raw_sr_clear_accumulator",
-                )
-                accumulateSuperResolutionProgram = linkComputeProgram(
-                    SUPER_RESOLUTION_RCD_ACCUMULATE_COMPUTE_SHADER,
-                    "raw_sr_accumulate",
-                )
-                normalizeSuperResolutionProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
-                    SUPER_RESOLUTION_NORMALIZE_RCD_FRAGMENT_SHADER,
-                    "raw_sr_normalize",
-                )
-                initRcdRegionPrograms("raw_sr")
+                "raw_radiance_clear_r32ui_writeonly"
+            },
+        )
+        accumulateSuperResolutionProgram = linkComputeProgram(
+            GlesRawRadianceFusionShaders.accumulate(
+                RAW_COMMON,
+                trackRejections = visualizeRadianceFusionRejections,
+                trackParticipation = logRadianceFusionParticipation,
+                trackLongParticipation = visualizeRadianceLongParticipation,
+            ),
+            if (visualizeRadianceFusionRejections) {
+                "raw_radiance_accumulate_r32ui_read_write_rgba16f_ping_pong_writeonly"
+            } else {
+                "raw_radiance_accumulate_r32ui_read_write"
+            },
+        )
+        radianceReferenceBaseProgram = linkComputeProgram(
+            GlesRawRadianceFusionShaders.captureReferenceBase,
+            "raw_radiance_reference_base_rgba16f_writeonly",
+        )
+        normalizeSuperResolutionProgram = linkGraphicsProgram(
+            FULLSCREEN_VERTEX_SHADER,
+            GlesRawRadianceFusionShaders.normalize(
+                showRejections = visualizeRadianceFusionRejections,
+                showSrDetail = visualizeRadianceSrDetail,
+                showLongParticipation = visualizeRadianceLongParticipation,
+            ),
+            "raw_radiance_normalize_r32ui_usampler",
+        )
+        if (activeRadianceHighlightFrame != null) {
+            radianceHighlightNormalizeProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesRawRadianceFusionShaders.normalize(
+                    showRejections = visualizeRadianceFusionRejections,
+                    showSrDetail = visualizeRadianceSrDetail,
+                    reconstructHighlights = true,
+                    showHighlightReconstruction = visualizeRadianceHighlightReconstruction,
+                    showLongParticipation = visualizeRadianceLongParticipation,
+                ),
+                "raw_radiance_highlight_normalize_r32ui_usampler",
+            )
+        }
+        if (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty()) {
+            radianceHighlightValidateFlowProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesRawRadianceFusionShaders.validateHighlightFlow,
+                "raw_radiance_highlight_validate_flow",
+            )
+            radianceHighlightPropagateFlowProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesRawRadianceFusionShaders.propagateHighlightFlow,
+                "raw_radiance_highlight_propagate_flow",
+            )
+            radianceHighlightComposeFlowProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesRawRadianceFusionShaders.composeHighlightFlow,
+                "raw_radiance_highlight_compose_flow",
+            )
+        }
+        if (activeRadianceLongFrames.isNotEmpty()) {
+            radianceLongEligibilityProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesRawRadianceFusionShaders.longEligibility,
+                "raw_radiance_long_eligibility",
+            )
+            radianceLongObservabilityDiagnosticProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                RAW_LONG_OBSERVABILITY_DIAGNOSTIC_FRAGMENT_SHADER,
+                "raw_radiance_long_observability_diagnostic",
+            )
+        }
+        if (radianceUsesVgnSemanticBackend) {
+            initRadianceReconstructionPrograms()
+            if (radianceVgnChromaPostprocessEnabled) {
+                radianceVgnChromaPostprocessor = createRadianceVgnChromaPostprocessor().also {
+                    it.initPrograms()
+                }
             }
+        } else {
+            // VGN is defined only for the four standard 2x2 Bayer layouts. Preserve Quad/Nona
+            // support through the phase-aware region RCD backend.
+            initRcdRegionPrograms("raw_radiance_fallback")
+            initRcdStoreRgbProgram()
         }
         initDiagnosticPrograms()
     }
@@ -1200,26 +910,6 @@ class GlesRawStacker(
         )
     }
 
-    private fun initHdrPrograms() {
-        if (hdrShortGlobalAlignProgram != 0) return
-        hdrShortGlobalAlignProgram = linkComputeProgram(
-            GlesRawHdrShaders.shortGlobalAlign,
-            "raw_hdr_short_global_align",
-        )
-        hdrWeightMap = createHdrWeightMap().also { it.initPrograms() }
-        hdrNormalCfaInputProgram = linkComputeProgram(
-            GlesRawHdrShaders.normalCfaInputAdapter(RAW_COMMON),
-            "raw_hdr_normal_cfa_input",
-        )
-        initRcdStoreRgbProgram()
-        hdrRgbFusionProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesRawHdrShaders.rgbFusion(),
-            "raw_hdr_rgb_fusion",
-        )
-        initRcdRegionPrograms("raw_hdr")
-    }
-
     private fun initRadianceReconstructionPrograms() {
         check(radianceUsesVgnSemanticBackend)
         if (radianceVgnPrograms[0] != 0) return
@@ -1248,54 +938,6 @@ class GlesRawStacker(
         )
     }
 
-    private fun createHdrWeightMap(): GlesRawHdrWeightMap {
-        return GlesRawHdrWeightMap(
-            width = width,
-            height = height,
-            rawCommonShader = RAW_COMMON,
-            backend = object : GlesRawHdrWeightMap.Backend {
-                override fun linkComputeProgram(source: String, name: String): Int =
-                    this@GlesRawStacker.linkComputeProgram(source, name)
-
-                override fun createTexture2D(
-                    width: Int,
-                    height: Int,
-                    internalFormat: Int,
-                    filter: Int,
-                ): Int = this@GlesRawStacker.createTexture2D(
-                    width,
-                    height,
-                    internalFormat,
-                    filter,
-                )
-
-                override fun bindTexture(
-                    program: Int,
-                    name: String,
-                    unit: Int,
-                    texture: Int,
-                ) {
-                    this@GlesRawStacker.bindTexture(program, name, unit, texture)
-                }
-
-                override fun bindImage(unit: Int, texture: Int, access: Int, format: Int) {
-                    this@GlesRawStacker.bindImage(unit, texture, access, format)
-                }
-
-                override fun setCommonUniforms(program: Int) {
-                    this@GlesRawStacker.setCommonUniforms(program)
-                }
-
-                override fun uniformLocation(program: Int, name: String): Int =
-                    this@GlesRawStacker.uniformLocation(program, name)
-
-                override fun checkGlError(label: String) {
-                    this@GlesRawStacker.checkGlError(label)
-                }
-            },
-        )
-    }
-
     private fun createRadianceVgnChromaPostprocessor(): GlesRadianceVgnChromaPostprocessor {
         return GlesRadianceVgnChromaPostprocessor(
             imageWidth = outputWidth,
@@ -1305,13 +947,13 @@ class GlesRawStacker(
             outputScale = superResolutionScale,
             backend = object : GlesRadianceVgnChromaPostprocessor.Backend {
                 override fun linkComputeProgram(source: String, name: String): Int =
-                    this@GlesRawStacker.linkComputeProgram(source, name)
+                    this@GlesRawRadianceStacker.linkComputeProgram(source, name)
 
                 override fun uniformLocation(program: Int, name: String): Int =
-                    this@GlesRawStacker.uniformLocation(program, name)
+                    this@GlesRawRadianceStacker.uniformLocation(program, name)
 
                 override fun checkGlError(label: String) {
-                    this@GlesRawStacker.checkGlError(label)
+                    this@GlesRawRadianceStacker.checkGlError(label)
                 }
 
                 override fun yieldToUiRenderer() {
@@ -1325,47 +967,27 @@ class GlesRawStacker(
         val maxTextureSize = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
         val maxSize = maxTextureSize[0].coerceAtLeast(1)
-        val requiredTextureWidth = if (radianceFusionEnabled) {
-            maxOf(width, radianceOutputTileWidth, superResolutionAccumulatorWidth)
-        } else {
-            maxOf(width, outputWidth)
-        }
-        val requiredTextureHeight = if (radianceFusionEnabled) {
-            maxOf(height, radianceOutputTileHeight, superResolutionAccumulatorHeight)
-        } else {
-            maxOf(height, outputHeight)
-        }
+        val requiredTextureWidth = maxOf(width, radianceOutputTileWidth, superResolutionAccumulatorWidth)
+        val requiredTextureHeight = maxOf(height, radianceOutputTileHeight, superResolutionAccumulatorHeight)
         if (requiredTextureWidth > maxSize || requiredTextureHeight > maxSize) {
             throw IllegalStateException(
-                "RAW ${tuning.mode} texture ${requiredTextureWidth}x$requiredTextureHeight " +
+                "Radiance texture ${requiredTextureWidth}x$requiredTextureHeight " +
                     "exceeds GL_MAX_TEXTURE_SIZE=$maxSize",
             )
         }
-        if (superResolutionEnabled && RawStackRuntimeDebug.enabled) {
-            val accumulatorBytesPerPixel = if (radianceFusionEnabled) {
-                4L * 4L + 8L +
-                    (if (visualizeRadianceFusionRejections) 16L else 0L) +
-                    (if (visualizeRadianceLongParticipation) 4L else 0L)
-            } else {
-                4L * 3L
-            }
+        if (RawStackRuntimeDebug.enabled) {
+            val accumulatorBytesPerPixel = 4L * 4L + 8L +
+                (if (visualizeRadianceFusionRejections) 16L else 0L) +
+                (if (visualizeRadianceLongParticipation) 4L else 0L)
             val accumulatorBytes = superResolutionAccumulatorWidth.toLong() *
                 superResolutionAccumulatorHeight.toLong() *
                 accumulatorBytesPerPixel
-            val baseAccumulatorBytes = if (!radianceFusionEnabled || hwmfDebug.collectMetrics) {
-                width.toLong() * height.toLong() * 8L
-            } else {
-                0L
-            }
-            val baseOutputBytes = width.toLong() * height.toLong() * 2L
-            val outputBytes = outputWidth.toLong() * outputHeight.toLong() *
-                if (radianceFusionEnabled) 6L else 2L
+            val outputBytes = outputWidth.toLong() * outputHeight.toLong() * 6L
             RawStackRuntimeDebug.d(TAG) {
-                "HWMF $fusionPipeline resources out=${outputWidth}x$outputHeight maxTex=$maxSize " +
+                "Radiance resources out=${outputWidth}x$outputHeight maxTex=$maxSize " +
                     "srAccumulatorWindow=${superResolutionAccumulatorWidth}x" +
                     "$superResolutionAccumulatorHeight/${accumulatorBytes.mibString()} " +
-                    "baseAccumulator=${baseAccumulatorBytes.mibString()} " +
-                    "baseOutput=${baseOutputBytes.mibString()} output=${outputBytes.mibString()}"
+                    "output=${outputBytes.mibString()}"
             }
         }
     }
@@ -1377,14 +999,9 @@ class GlesRawStacker(
                 DIAGNOSTIC_ALIGNMENT_COMPUTE_SHADER,
                 "raw_stack_diagnostic_alignment",
             )
-            diagnosticFinalProgram = linkComputeProgram(
-                DIAGNOSTIC_FINAL_COMPUTE_SHADER,
-                "raw_stack_diagnostic_final",
-            )
         } catch (e: Exception) {
             diagnosticsFailed = true
             diagnosticAlignmentProgram = 0
-            diagnosticFinalProgram = 0
             PLog.w(TAG, "RAW stack diagnostics disabled after shader setup failure", e)
         }
     }
@@ -1399,9 +1016,7 @@ class GlesRawStacker(
         curProxy = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
         flowTexture = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
         flowScratchTexture = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
-        if (radianceFusionEnabled &&
-            (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty())
-        ) {
+        if (activeRadianceHighlightFrame != null || activeRadianceLongFrames.isNotEmpty()) {
             radianceHighlightReverseFlowTexture = createTexture2D(
                 gridWidth,
                 gridHeight,
@@ -1426,89 +1041,77 @@ class GlesRawStacker(
         tileMaskTexture = createTexture2D(
             gridWidth,
             gridHeight,
-            if (dualTileConfidence) GLES30.GL_RGBA16F else GLES30.GL_R16F,
+            GLES30.GL_RGBA16F,
             GLES30.GL_LINEAR,
         )
-        if (!radianceFusionEnabled || hwmfDebug.collectMetrics) {
-            accumulatorValueWeightTexture = createTexture2D(width, height, GLES30.GL_R32UI, GLES30.GL_NEAREST)
-            accumulatorStatisticsTexture = createTexture2D(width, height, GLES30.GL_R32UI, GLES30.GL_NEAREST)
+        superResolutionAccumulatorTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_R32UI,
+            GLES30.GL_NEAREST,
+        )
+        superResolutionAccumulatorBwTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_R32UI,
+            GLES30.GL_NEAREST,
+        )
+        superResolutionAccumulatorBTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_R32UI,
+            GLES30.GL_NEAREST,
+        )
+        radianceNrWeightRgTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_R32UI,
+            GLES30.GL_NEAREST,
+        )
+        radianceDetailBwTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_R32UI,
+            GLES30.GL_NEAREST,
+        )
+        radianceReferenceBaseTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_NEAREST,
+        )
+        radianceDetailWeightRgTexture = createTexture2D(
+            superResolutionAccumulatorWidth,
+            superResolutionAccumulatorHeight,
+            GLES30.GL_R32UI,
+            GLES30.GL_NEAREST,
+        )
+        if (visualizeRadianceFusionRejections) {
+            radianceFusionRejectionTexture = createTexture2D(
+                superResolutionAccumulatorWidth,
+                superResolutionAccumulatorHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_NEAREST,
+            )
+            radianceFusionRejectionScratchTexture = createTexture2D(
+                superResolutionAccumulatorWidth,
+                superResolutionAccumulatorHeight,
+                GLES30.GL_RGBA16F,
+                GLES30.GL_NEAREST,
+            )
         }
-        if (superResolutionEnabled) {
-            superResolutionAccumulatorTexture = createTexture2D(
+        if (visualizeRadianceLongParticipation) {
+            radianceLongParticipationTexture = createTexture2D(
                 superResolutionAccumulatorWidth,
                 superResolutionAccumulatorHeight,
                 GLES30.GL_R32UI,
                 GLES30.GL_NEAREST,
             )
-            superResolutionAccumulatorBwTexture = createTexture2D(
-                superResolutionAccumulatorWidth,
-                superResolutionAccumulatorHeight,
-                GLES30.GL_R32UI,
-                GLES30.GL_NEAREST,
-            )
-            superResolutionAccumulatorBTexture = createTexture2D(
-                superResolutionAccumulatorWidth,
-                superResolutionAccumulatorHeight,
-                GLES30.GL_R32UI,
-                GLES30.GL_NEAREST,
-            )
-            if (radianceFusionEnabled) {
-                radianceNrWeightRgTexture = createTexture2D(
-                    superResolutionAccumulatorWidth,
-                    superResolutionAccumulatorHeight,
-                    GLES30.GL_R32UI,
-                    GLES30.GL_NEAREST,
-                )
-                radianceDetailBwTexture = createTexture2D(
-                    superResolutionAccumulatorWidth,
-                    superResolutionAccumulatorHeight,
-                    GLES30.GL_R32UI,
-                    GLES30.GL_NEAREST,
-                )
-                radianceReferenceBaseTexture = createTexture2D(
-                    superResolutionAccumulatorWidth,
-                    superResolutionAccumulatorHeight,
-                    GLES30.GL_RGBA16F,
-                    GLES30.GL_NEAREST,
-                )
-                radianceDetailWeightRgTexture = createTexture2D(
-                    superResolutionAccumulatorWidth,
-                    superResolutionAccumulatorHeight,
-                    GLES30.GL_R32UI,
-                    GLES30.GL_NEAREST,
-                )
-                if (visualizeRadianceFusionRejections) {
-                    radianceFusionRejectionTexture = createTexture2D(
-                        superResolutionAccumulatorWidth,
-                        superResolutionAccumulatorHeight,
-                        GLES30.GL_RGBA16F,
-                        GLES30.GL_NEAREST,
-                    )
-                    radianceFusionRejectionScratchTexture = createTexture2D(
-                        superResolutionAccumulatorWidth,
-                        superResolutionAccumulatorHeight,
-                        GLES30.GL_RGBA16F,
-                        GLES30.GL_NEAREST,
-                    )
-                }
-                if (visualizeRadianceLongParticipation) {
-                    radianceLongParticipationTexture = createTexture2D(
-                        superResolutionAccumulatorWidth,
-                        superResolutionAccumulatorHeight,
-                        GLES30.GL_R32UI,
-                        GLES30.GL_NEAREST,
-                    )
-                }
-            }
         }
         outputTexture = createTexture2D(
-            if (radianceFusionEnabled) radianceOutputTileWidth else outputWidth,
-            if (radianceFusionEnabled) {
-                radianceOutputTileHeight
-            } else {
-                outputHeight
-            },
-            if (radianceFusionEnabled) GLES30.GL_RGBA16UI else GLES30.GL_RG8,
+            radianceOutputTileWidth,
+            radianceOutputTileHeight,
+            GLES30.GL_RGBA16UI,
             GLES30.GL_NEAREST,
         )
         lensShadingTexture = createLensShadingTexture()
@@ -1518,16 +1121,10 @@ class GlesRawStacker(
         initDiagnosticResources()
     }
 
-    private fun initHdrResources() {
-        hdrShortRaw = createTexture2D(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
-        checkNotNull(hdrWeightMap) { "HDR weight map is not initialized" }.initResources()
-    }
-
     private fun initDiagnosticResources() {
         if (!hwmfDebug.collectMetrics ||
             diagnosticsFailed ||
-            diagnosticAlignmentProgram == 0 ||
-            diagnosticFinalProgram == 0
+            diagnosticAlignmentProgram == 0
         ) {
             return
         }
@@ -1663,10 +1260,6 @@ class GlesRawStacker(
         }
     }
 
-    private fun ensureRcdStripeResources(capacityRows: Int) {
-        ensureRcdRegionResources(width, capacityRows)
-    }
-
     private fun ensureRadianceTileResources(capacityWidth: Int, capacityHeight: Int) {
         if (!radianceUsesVgnSemanticBackend) {
             ensureRcdRegionResources(capacityWidth, capacityHeight)
@@ -1762,29 +1355,6 @@ class GlesRawStacker(
         }
     }
 
-    private fun ensureHdrRcdStripeResources(capacityRows: Int) {
-        ensureRcdStripeResources(capacityRows)
-        if (hdrNormalRgbStripeTexture != 0) return
-        hdrNormalRgbStripeTexture = createTexture2D(
-            rcdRegionCapacityWidth,
-            rcdRegionCapacityHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_LINEAR,
-        )
-        hdrReferenceRgbStripeTexture = createTexture2D(
-            rcdRegionCapacityWidth,
-            rcdRegionCapacityHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_LINEAR,
-        )
-        hdrShortRgbStripeTexture = createTexture2D(
-            rcdRegionCapacityWidth,
-            rcdRegionCapacityHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_LINEAR,
-        )
-    }
-
     private fun uploadRcdRawRegion(image: SafeImage, region: RadianceTileRect, label: String) {
         require(
             rcdRawRegionTexture != 0 &&
@@ -1814,10 +1384,6 @@ class GlesRawStacker(
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         checkGlError("uploadRcdRawRegion $label")
-    }
-
-    private fun uploadRcdRawStripe(image: SafeImage, firstRow: Int, rowCount: Int, label: String) {
-        uploadRcdRawRegion(image, RadianceTileRect(0, firstRow, width, firstRow + rowCount), label)
     }
 
     private fun bindRcdRegionBuffers() {
@@ -1874,19 +1440,6 @@ class GlesRawStacker(
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
 
         completeRcdRegionWithPpgBorder(region, label)
-    }
-
-    private fun runRcdStripe(
-        firstRow: Int,
-        rowCount: Int,
-        label: String,
-        reconstructHighlights: Boolean = true,
-    ) {
-        runRcdRegion(
-            RadianceTileRect(0, firstRow, width, firstRow + rowCount),
-            label,
-            reconstructHighlights,
-        )
     }
 
     /**
@@ -1952,23 +1505,10 @@ class GlesRawStacker(
         return exposureProduct.takeIf { it.isFinite() && it > 0.0 } ?: 1.0
     }
 
-    private fun hdrExposureScale(referenceExposureProduct: Double, frameExposureProduct: Double): Float {
+    private fun relativeExposureScale(referenceExposureProduct: Double, frameExposureProduct: Double): Float {
         return (referenceExposureProduct / frameExposureProduct)
             .toFloat()
             .coerceIn(0.0001f, 64.0f)
-    }
-
-    private fun hdrBaselineExposureEv(shortExposureProduct: Double, referenceExposureProduct: Double): Float {
-        if (!shortExposureProduct.isFinite() || shortExposureProduct <= 0.0 ||
-            !referenceExposureProduct.isFinite() || referenceExposureProduct <= 0.0
-        ) {
-            return 0f
-        }
-        return if (shortExposureProduct < referenceExposureProduct) {
-            (ln(referenceExposureProduct / shortExposureProduct) / ln(2.0)).toFloat()
-        } else {
-            0f
-        }.coerceIn(0f, 8f)
     }
 
     private fun buildProxy(
@@ -2837,57 +2377,46 @@ class GlesRawStacker(
         detailWeight: Float,
     ): AcceptedSuperResolutionFrame {
         val cachedFlow = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
-        val cachedRobustnessBytesPerPixel = if (radianceFusionEnabled) 2L else 1L
+        val cachedRobustnessBytesPerPixel = 2L
         val cachedRobustness = createTexture2D(
             planeWidth,
             planeHeight,
-            if (radianceFusionEnabled) GLES30.GL_R16F else GLES30.GL_R8,
+            GLES30.GL_R16F,
             GLES30.GL_NEAREST,
         )
-        val cachedTileMaskBytesPerPixel = if (dualTileConfidence) 8L else 2L
+        val cachedTileMaskBytesPerPixel = 8L
         val cachedTileMask = createTexture2D(
             gridWidth,
             gridHeight,
-            if (dualTileConfidence) GLES30.GL_RGBA16F else GLES30.GL_R16F,
+            GLES30.GL_RGBA16F,
             GLES30.GL_LINEAR,
         )
         RawStackRuntimeDebug.d(TAG) {
             val cacheBytes = planeWidth.toLong() * planeHeight * cachedRobustnessBytesPerPixel +
                 gridWidth.toLong() * gridHeight * (8L + cachedTileMaskBytesPerPixel)
-            "Cache $fusionPipeline frame=$frameIndex alignment=${cacheBytes.mibString()} " +
-                "robustness=${if (radianceFusionEnabled) "R16F" else "R8"} " +
-                "flow=RGBA16F tile=${if (dualTileConfidence) "RGBA16F" else "R16F"}"
+            "Cache Radiance frame=$frameIndex alignment=${cacheBytes.mibString()} " +
+                "robustness=R16F flow=RGBA16F tile=RGBA16F"
         }
-        copyFlow(flowTexture, cachedFlow, "cache $fusionPipeline flow frame $frameIndex")
+        copyFlow(flowTexture, cachedFlow, "cache Radiance flow frame $frameIndex")
         copyScalarTexture(
             robustnessTexture,
             cachedRobustness,
             planeWidth,
             planeHeight,
-            "cache $fusionPipeline robustness frame $frameIndex",
+            "cache Radiance robustness frame $frameIndex",
         )
-        if (dualTileConfidence) {
-            copyRgbaTexture(
-                tileMaskTexture,
-                cachedTileMask,
-                gridWidth,
-                gridHeight,
-                "cache $fusionPipeline dual tile confidence frame $frameIndex",
-            )
-        } else {
-            copyScalarTexture(
-                tileMaskTexture,
-                cachedTileMask,
-                gridWidth,
-                gridHeight,
-                "cache $fusionPipeline tile mask frame $frameIndex",
-            )
-        }
+        copyRgbaTexture(
+            tileMaskTexture,
+            cachedTileMask,
+            gridWidth,
+            gridHeight,
+            "cache Radiance dual tile confidence frame $frameIndex",
+        )
         val flowValues = readFlowTexture(
             texture = cachedFlow,
             textureWidth = gridWidth,
             textureHeight = gridHeight,
-            label = "cache $fusionPipeline flow bounds frame $frameIndex",
+            label = "cache Radiance flow bounds frame $frameIndex",
         )
         var minFlowX = 0f
         var maxFlowX = 0f
@@ -2930,7 +2459,7 @@ class GlesRawStacker(
         referencePyramid: List<TextureLevel>,
         currentPyramid: List<TextureLevel>,
     ): RadianceHighlightAlignment? {
-        if (!radianceFusionEnabled || highlight.anchorFrameIndex !in frames.indices) return null
+        if (highlight.anchorFrameIndex !in frames.indices) return null
         val anchorIsReference = highlight.anchorFrameIndex == 0
         val anchorAlignment = if (anchorIsReference) {
             null
@@ -3034,7 +2563,7 @@ class GlesRawStacker(
         referencePyramid: List<TextureLevel>,
         currentPyramid: List<TextureLevel>,
     ): List<RadianceLongAlignment> {
-        if (!radianceFusionEnabled || longFrames.isEmpty() || frames.isEmpty()) return emptyList()
+        if (longFrames.isEmpty() || frames.isEmpty()) return emptyList()
         val acceptedNormalIndices = buildList {
             add(0)
             acceptedFrames.forEach { frame -> add(frame.frameIndex) }
@@ -4181,10 +3710,8 @@ class GlesRawStacker(
         GLES30.glUseProgram(tileMaskProgram)
         bindTexture(tileMaskProgram, "uReference", 0, referenceProxyTexture)
         bindTexture(tileMaskProgram, "uRobustness", 1, robustnessTexture)
-        if (dualTileConfidence) {
-            bindTexture(tileMaskProgram, "uFlowGrid", 3, flowTexture)
-            setDetailConfidenceUniforms(tileMaskProgram)
-        }
+        bindTexture(tileMaskProgram, "uFlowGrid", 3, flowTexture)
+        setDetailConfidenceUniforms(tileMaskProgram)
         if (visualizeRadianceFusionRejections) {
             bindTexture(tileMaskProgram, "uCurrent", 2, currentProxyTexture)
         }
@@ -4251,7 +3778,7 @@ class GlesRawStacker(
             val candidateTranslation = registrationTranslation(estimate.candidateTransform)
             PLog.d(
                 TAG,
-                "HWMF registration frame=$frameIndex source=${estimate.source} conf=${estimate.confidence} " +
+                "Radiance registration frame=$frameIndex source=${estimate.source} conf=${estimate.confidence} " +
                     "forceIdentity=${estimate.forceIdentity} accepted=$accepted accept=${acceptance.reason} " +
                     "global=${globalEstimate.globalSummaryOrEmpty()} " +
                     "seed=${seedTranslation.translationSummary()} " +
@@ -4353,18 +3880,14 @@ class GlesRawStacker(
             spatialWeight,
         ).coerceIn(0f, 1f)
         val nrAccepted = nrUsable && nrFrameWeight > 0f
-        val accepted = if (radianceFusionEnabled) nrAccepted else detailAccepted
+        val accepted = nrAccepted
         val phaseNovelty = if (detailAccepted) {
             superResolutionPhaseTracker.noveltyWeight(phase.dx, phase.dy)
         } else {
             0f
         }
         currentRegistrationSrWeight = if (detailAccepted) detailFrameWeight else 0f
-        currentRegistrationNrWeight = if (radianceFusionEnabled) {
-            if (nrAccepted) nrFrameWeight else 0f
-        } else {
-            if (detailAccepted) detailFrameWeight else 0f
-        }
+        currentRegistrationNrWeight = if (nrAccepted) nrFrameWeight else 0f
         currentRegistrationSrDetailWeight = currentRegistrationSrWeight * phaseNovelty
         RawStackRuntimeDebug.d(TAG) {
             "Temporal frame=$frameIndex nrAccepted=$nrAccepted detailAccepted=$detailAccepted " +
@@ -4451,7 +3974,6 @@ class GlesRawStacker(
         estimate: RawStackRegistrationEstimate,
         seedTranslation: RegistrationTranslation?,
     ): String? {
-        if (tuning.mode != RawStackMode.MFNR && tuning.mode != RawStackMode.MFSR) return null
         if (estimate.source != RawStackRegistrationSource.IMAGE_TRANSLATION) return null
         val hasRelaxedConfidence = estimate.confidence >= hwmfBlend.denoiseRelaxedRegistrationConfidenceMin
         val hasSeedConfidence = estimate.confidence >= hwmfBlend.denoiseSeedRegistrationConfidenceMin
@@ -4491,7 +4013,6 @@ class GlesRawStacker(
         estimate: RawStackRegistrationEstimate,
         seedTranslation: RegistrationTranslation?,
     ): String? {
-        if (tuning.mode != RawStackMode.MFNR && tuning.mode != RawStackMode.MFSR) return null
         val seed = seedTranslation ?: return null
         if (!estimate.globalBestScore.isFinite() ||
             estimate.globalBestScore > hwmfBlend.denoiseSeedFallbackRegistrationScoreMax
@@ -4517,7 +4038,7 @@ class GlesRawStacker(
         estimate: RawStackRegistrationEstimate,
         seedTranslation: RegistrationTranslation?,
     ): RegistrationSrGate {
-        if (!superResolutionEnabled || estimate.forceIdentity) return RegistrationSrGate.Zero
+        if (estimate.forceIdentity) return RegistrationSrGate.Zero
         val translation = registrationTranslation(estimate.candidateTransform) ?: return RegistrationSrGate.Zero
         val confidenceWeight = smoothStep(
             hwmfSr.registrationConfidenceStart.toFloat(),
@@ -4546,7 +4067,7 @@ class GlesRawStacker(
         estimate: RawStackRegistrationEstimate,
         seedTranslation: RegistrationTranslation?,
     ): RegistrationSrGate? {
-        if (!superResolutionEnabled || estimate.forceIdentity) return null
+        if (estimate.forceIdentity) return null
         if (estimate.source != RawStackRegistrationSource.IMAGE_TRANSLATION) return null
         val seed = seedTranslation ?: return null
         val confidenceWeight = smoothStep(
@@ -5067,7 +4588,7 @@ class GlesRawStacker(
             GLES31.glUniform1i(uniformLocation(registrationSampleProgram, "uTileSize"), flowGridSpacing)
             GLES31.glUniform1i(
                 uniformLocation(registrationSampleProgram, "uUseDetailTileConfidence"),
-                if (dualTileConfidence) 1 else 0,
+                1,
             )
             GLES31.glDispatchCompute(groupCount(gridWidth), groupCount(gridHeight), 1)
             GLES31.glMemoryBarrier(
@@ -5182,45 +4703,29 @@ class GlesRawStacker(
         )
     }
 
-    private fun clearAccumulator() {
-        GLES31.glUseProgram(clearAccumulatorProgram)
-        bindImage(0, accumulatorValueWeightTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        bindImage(1, accumulatorStatisticsTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        GLES31.glUniform2i(uniformLocation(clearAccumulatorProgram, "uImageSize"), width, height)
-        GLES31.glDispatchCompute(groupCount(width), groupCount(height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
-        checkGlError("clearAccumulator")
-    }
-
     private fun clearSuperResolutionAccumulator() {
         GLES31.glUseProgram(clearSuperResolutionAccumulatorProgram)
-        if (radianceFusionEnabled) {
-            bindImage(0, superResolutionAccumulatorTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(2, radianceNrWeightRgTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(3, superResolutionAccumulatorBTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(4, radianceDetailBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(5, radianceDetailWeightRgTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            if (visualizeRadianceFusionRejections) {
-                bindImage(
-                    6,
-                    radianceFusionRejectionTexture,
-                    GLES31.GL_WRITE_ONLY,
-                    GLES30.GL_RGBA16F,
-                )
-            }
-            if (visualizeRadianceLongParticipation) {
-                bindImage(
-                    7,
-                    radianceLongParticipationTexture,
-                    GLES31.GL_WRITE_ONLY,
-                    GLES30.GL_R32UI,
-                )
-            }
-        } else {
-            bindImage(0, superResolutionAccumulatorTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-            bindImage(2, superResolutionAccumulatorBTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(0, superResolutionAccumulatorTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(2, radianceNrWeightRgTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(3, superResolutionAccumulatorBTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(4, radianceDetailBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(5, radianceDetailWeightRgTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        if (visualizeRadianceFusionRejections) {
+            bindImage(
+                6,
+                radianceFusionRejectionTexture,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_RGBA16F,
+            )
+        }
+        if (visualizeRadianceLongParticipation) {
+            bindImage(
+                7,
+                radianceLongParticipationTexture,
+                GLES31.GL_WRITE_ONLY,
+                GLES30.GL_R32UI,
+            )
         }
         GLES31.glUniform2i(
             uniformLocation(clearSuperResolutionAccumulatorProgram, "uImageSize"),
@@ -5234,259 +4739,6 @@ class GlesRawStacker(
         )
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
         checkGlError("clearSuperResolutionAccumulator")
-    }
-
-    private fun accumulateFrame(
-        rawTexture: Int,
-        isReference: Boolean,
-        exposureScale: Float = 1.0f,
-        hdrMode: Boolean = false,
-    ) {
-        GLES31.glUseProgram(accumulateProgram)
-        bindTexture(accumulateProgram, "uInputRaw", 0, rawTexture)
-        bindTexture(accumulateProgram, "uFlowGrid", 1, flowTexture)
-        bindTexture(accumulateProgram, "uRobustness", 2, robustnessTexture)
-        bindTexture(accumulateProgram, "uTileMask", 3, tileMaskTexture)
-        bindTexture(accumulateProgram, "uKernel", 4, kernelTexture)
-        bindTexture(accumulateProgram, "uLensShadingMap", 5, lensShadingTexture)
-        bindImage(0, accumulatorValueWeightTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
-        bindImage(1, accumulatorStatisticsTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
-        setCommonUniforms(accumulateProgram)
-        GLES31.glUniform2i(uniformLocation(accumulateProgram, "uImageSize"), width, height)
-        GLES31.glUniform2i(uniformLocation(accumulateProgram, "uPlaneSize"), planeWidth, planeHeight)
-        GLES31.glUniform2i(uniformLocation(accumulateProgram, "uGridSize"), gridWidth, gridHeight)
-        GLES31.glUniform1i(uniformLocation(accumulateProgram, "uTileSize"), flowGridSpacing)
-        GLES31.glUniform1i(uniformLocation(accumulateProgram, "uIsReference"), if (isReference) 1 else 0)
-        GLES31.glUniform1i(uniformLocation(accumulateProgram, "uHdrMode"), if (hdrMode) 1 else 0)
-        GLES31.glUniform1f(uniformLocation(accumulateProgram, "uExposureScale"), exposureScale)
-        GLES31.glUniform1f(
-            uniformLocation(accumulateProgram, "uFrameWeight"),
-            if (isReference) 1.0f else hwmfBlend.nonReferenceFrameWeight,
-        )
-        setBlendAccumulatorUniforms(accumulateProgram)
-        var imageRow = 0
-        // Each dispatch writes a disjoint output-row range. Queue all ranges before publishing
-        // the completed accumulator instead of forcing a CPU/GPU rendezvous for every stripe.
-        while (imageRow < height) {
-            val rowCount = minOf(BASE_ACCUMULATOR_DISPATCH_ROWS, height - imageRow)
-            GLES31.glUniform1i(
-                uniformLocation(accumulateProgram, "uImageRowOffset"),
-                imageRow,
-            )
-            GLES31.glDispatchCompute(groupCount(width), groupCount(rowCount), 1)
-            imageRow += rowCount
-        }
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
-        checkGlError("accumulateFrame")
-    }
-
-    private fun alignHdrShortToReference(reference: List<TextureLevel>, shortFrame: List<TextureLevel>) {
-        val levelIndex = GlesRawHdrConfig.ALIGN_LEVEL
-            .coerceAtMost(reference.lastIndex)
-            .coerceAtMost(shortFrame.lastIndex)
-        val ref = reference[levelIndex]
-        val cur = shortFrame[levelIndex]
-        val minLevelSide = minOf(ref.width, ref.height)
-        val searchRadius = minOf(
-            GlesRawHdrConfig.SHORT_GLOBAL_SEARCH_RADIUS_LEVEL,
-            max(1, minLevelSide / 6),
-        )
-        val sampleBorder = minOf(
-            GlesRawHdrConfig.SHORT_GLOBAL_SAMPLE_BORDER,
-            max(1, minLevelSide / 5),
-        )
-        val scoreSide = searchRadius * 2 + 1
-        val scoreCount = scoreSide * scoreSide
-        val floatCount = scoreCount * GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_STRIDE
-        val byteCount = floatCount * 4
-        try {
-            val scoreBufferId = prepareReadbackScratchBuffer(byteCount)
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_BUFFER_BINDING,
-                scoreBufferId,
-            )
-            GLES31.glUseProgram(hdrShortGlobalAlignProgram)
-            bindTexture(hdrShortGlobalAlignProgram, "uReference", 0, ref.texture)
-            bindTexture(hdrShortGlobalAlignProgram, "uCurrent", 1, cur.texture)
-            GLES31.glUniform2i(uniformLocation(hdrShortGlobalAlignProgram, "uLevelSize"), ref.width, ref.height)
-            GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uLevelScale"), 1 shl levelIndex)
-            GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uSearchRadius"), searchRadius)
-            GLES31.glUniform1i(
-                uniformLocation(hdrShortGlobalAlignProgram, "uSampleStep"),
-                GlesRawHdrConfig.SHORT_GLOBAL_SAMPLE_STEP,
-            )
-            GLES31.glUniform1i(uniformLocation(hdrShortGlobalAlignProgram, "uSampleBorder"), sampleBorder)
-            GLES31.glDispatchCompute(scoreSide, scoreSide, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
-            checkGlError("alignHdrShortToReference dispatch")
-
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, scoreBufferId)
-            val mapped = GLES31.glMapBufferRange(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                0,
-                byteCount,
-                GLES31.GL_MAP_READ_BIT,
-            ) ?: throw IllegalStateException("HDR short alignment score buffer map failed")
-            val scores = try {
-                FloatArray(floatCount).also { values ->
-                    val byteBuffer = mapped as? ByteBuffer
-                        ?: throw IllegalStateException("HDR short alignment score buffer is not ByteBuffer")
-                    byteBuffer.order(ByteOrder.nativeOrder()).asFloatBuffer().get(values)
-                }
-            } finally {
-                GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
-            }
-            var bestScore = Float.POSITIVE_INFINITY
-            var bestDx = 0f
-            var bestDy = 0f
-            for (index in 0 until scoreCount) {
-                val offset = index * GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_STRIDE
-                val score = scores[offset + 2]
-                if (score.isFinite() && score < bestScore) {
-                    bestScore = score
-                    bestDx = scores[offset]
-                    bestDy = scores[offset + 1]
-                }
-            }
-            setHdrShortAlignment(bestDx, bestDy)
-            RawStackRuntimeDebug.d(TAG) {
-                "HDR short alignment level=$levelIndex score=$bestScore " +
-                    "planeOffset=($bestDx,$bestDy) " +
-                    "rawOffset=($hdrShortRawOffsetX,$hdrShortRawOffsetY)"
-            }
-        } catch (e: Exception) {
-            PLog.w(TAG, "Failed to compute HDR short global alignment", e)
-            setHdrShortAlignment(0f, 0f)
-        } finally {
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                GlesRawHdrConfig.SHORT_ALIGNMENT_SCORE_BUFFER_BINDING,
-                0,
-            )
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        }
-    }
-
-    private fun setHdrShortAlignment(dx: Float, dy: Float) {
-        hdrShortRawOffsetX = (dx.takeIf { it.isFinite() } ?: 0f) * 2f
-        hdrShortRawOffsetY = (dy.takeIf { it.isFinite() } ?: 0f) * 2f
-    }
-
-    private fun accumulateSuperResolutionFrame(
-        isReference: Boolean,
-        sourceRowOffset: Int,
-        sourceRowCount: Int,
-        exposureScale: Float = 1.0f,
-        frameFlowTexture: Int = flowTexture,
-        frameRobustnessTexture: Int = robustnessTexture,
-        frameTileMaskTexture: Int = tileMaskTexture,
-        registrationWeight: Float = currentRegistrationSrWeight,
-        detailWeight: Float = currentRegistrationSrDetailWeight,
-        outputRowOffset: Int = 0,
-        outputRowCount: Int = superResolutionAccumulatorHeight,
-    ) {
-        GLES31.glUseProgram(accumulateSuperResolutionProgram)
-        bindTexture(accumulateSuperResolutionProgram, "uFlowGrid", 1, frameFlowTexture)
-        bindTexture(accumulateSuperResolutionProgram, "uRobustness", 2, frameRobustnessTexture)
-        bindTexture(accumulateSuperResolutionProgram, "uTileMask", 3, frameTileMaskTexture)
-        bindTexture(accumulateSuperResolutionProgram, "uKernel", 4, kernelTexture)
-        bindTexture(accumulateSuperResolutionProgram, "uLensShadingMap", 5, lensShadingTexture)
-        bindImage(0, superResolutionAccumulatorTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
-        bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
-        bindImage(2, superResolutionAccumulatorBTexture, GLES31.GL_READ_WRITE, GLES30.GL_R32UI)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, rcdRegionBuffers[1])
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, rcdRegionBuffers[2])
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 3, rcdRegionBuffers[3])
-        setCommonUniforms(accumulateSuperResolutionProgram)
-        GLES31.glUniform2i(
-            uniformLocation(accumulateSuperResolutionProgram, "uImageSize"),
-            width,
-            height,
-        )
-        GLES31.glUniform2i(
-            uniformLocation(accumulateSuperResolutionProgram, "uOutputSize"),
-            outputWidth,
-            outputHeight,
-        )
-        GLES31.glUniform2i(
-            uniformLocation(accumulateSuperResolutionProgram, "uPlaneSize"),
-            planeWidth,
-            planeHeight,
-        )
-        GLES31.glUniform2i(
-            uniformLocation(accumulateSuperResolutionProgram, "uGridSize"),
-            gridWidth,
-            gridHeight,
-        )
-        GLES31.glUniform1i(
-            uniformLocation(accumulateSuperResolutionProgram, "uTileSize"),
-            flowGridSpacing,
-        )
-        GLES31.glUniform1i(
-            uniformLocation(accumulateSuperResolutionProgram, "uIsReference"),
-            if (isReference) 1 else 0,
-        )
-        GLES31.glUniform1i(
-            uniformLocation(accumulateSuperResolutionProgram, "uSourceRowOffset"),
-            sourceRowOffset,
-        )
-        GLES31.glUniform2i(
-            uniformLocation(accumulateSuperResolutionProgram, "uSourceSize"),
-            width,
-            sourceRowCount,
-        )
-        GLES31.glUniform3f(
-            uniformLocation(accumulateSuperResolutionProgram, "uCalculationGains"),
-            demosaicCalculationWbGains[0],
-            1f,
-            demosaicCalculationWbGains[3],
-        )
-        GLES31.glUniform1f(
-            uniformLocation(accumulateSuperResolutionProgram, "uOutputScale"),
-            superResolutionScale,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(accumulateSuperResolutionProgram, "uFrameWeight"),
-            if (isReference) 1.0f else hwmfBlend.nonReferenceFrameWeight,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(accumulateSuperResolutionProgram, "uExposureScale"),
-            exposureScale,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(accumulateSuperResolutionProgram, "uSrMinEffectiveWeight"),
-            hwmfSr.minEffectiveWeight.coerceAtLeast(0f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(accumulateSuperResolutionProgram, "uSrSplatRadius"),
-            hwmfSr.cfaFootprintSigmaRawPx.coerceAtLeast(0.25f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(accumulateSuperResolutionProgram, "uRegistrationSrWeight"),
-            if (isReference) 1.0f else registrationWeight.coerceIn(0.0f, 1.0f),
-        )
-        setBlendAccumulatorUniforms(accumulateSuperResolutionProgram)
-        val safeRowCount = outputRowCount.coerceIn(1, superResolutionAccumulatorHeight)
-        GLES31.glUniform1i(
-            uniformLocation(accumulateSuperResolutionProgram, "uOutputRowOffset"),
-            outputRowOffset,
-        )
-        GLES31.glUniform1i(
-            uniformLocation(accumulateSuperResolutionProgram, "uOutputRowCount"),
-            safeRowCount,
-        )
-        GLES31.glDispatchCompute(groupCount(outputWidth), groupCount(safeRowCount), 1)
-        // The following frame reuses the RCD SSBOs and reads these accumulator images. Publish
-        // both resource classes without blocking the CPU on a fence.
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-        )
-        checkGlError("accumulateSuperResolutionFrame")
     }
 
     private fun accumulateRadianceFusionFrame(
@@ -5888,7 +5140,7 @@ class GlesRawStacker(
         }
         val fallbackReason = qualityReason ?: if (!hasAnySrSupport) "sr-support-none" else null
         if (RawStackRuntimeDebug.enabled) {
-            val message = "HWMF MFSR output effective=$mode " +
+            val message = "Radiance output effective=$mode " +
                 "reason=${fallbackReason ?: "ok"} aligned=$alignedFrameCount " +
                 "srFrames=$superResolutionDetailFrameCount " +
                 "srWeightSum=${superResolutionDetailWeightSum.formatWeight()} " +
@@ -5910,38 +5162,6 @@ class GlesRawStacker(
             phaseBinTotal = superResolutionPhaseTracker.totalBinCount,
             phaseBinSamples = superResolutionPhaseTracker.phaseBinCounts,
         )
-    }
-
-    private fun populateHdrNormalRcdStripe(
-        sourceRowOffset: Int,
-        sourceRowCount: Int,
-        referenceExposureScale: Float,
-    ) {
-        bindRcdRegionBuffers()
-        GLES31.glUseProgram(hdrNormalCfaInputProgram)
-        bindTexture(hdrNormalCfaInputProgram, "uAccumulatorValueWeight", 0, accumulatorValueWeightTexture)
-        bindTexture(hdrNormalCfaInputProgram, "uReferenceRaw", 1, refRaw)
-        bindTexture(hdrNormalCfaInputProgram, "uLensShadingMap", 2, lensShadingTexture)
-        setCommonUniforms(hdrNormalCfaInputProgram)
-        GLES31.glUniform2i(uniformLocation(hdrNormalCfaInputProgram, "uImageSize"), width, height)
-        GLES31.glUniform2i(uniformLocation(hdrNormalCfaInputProgram, "uStripeSize"), width, sourceRowCount)
-        GLES31.glUniform1i(
-            uniformLocation(hdrNormalCfaInputProgram, "uSourceRowOffset"),
-            sourceRowOffset,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(hdrNormalCfaInputProgram, "uReferenceExposureScale"),
-            referenceExposureScale,
-        )
-        GLES31.glUniform4fv(
-            uniformLocation(hdrNormalCfaInputProgram, "uCalculationWbGains"),
-            1,
-            demosaicCalculationWbGains,
-            0,
-        )
-        GLES31.glDispatchCompute(groupCount(width), groupCount(sourceRowCount), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-        checkGlError("HDR normal RCD populate")
     }
 
     private fun storeRcdRgbRegion(
@@ -5981,208 +5201,6 @@ class GlesRawStacker(
             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
         )
         checkGlError(label)
-    }
-
-    private fun storeRcdRgbStripe(
-        targetTexture: Int,
-        rowCount: Int,
-        label: String,
-        exposureScale: Float = 1f,
-        desaturateBeforeExposureScale: Boolean = false,
-    ) {
-        storeRcdRgbRegion(
-            targetTexture = targetTexture,
-            regionWidth = width,
-            regionHeight = rowCount,
-            label = label,
-            exposureScale = exposureScale,
-            desaturateBeforeExposureScale = desaturateBeforeExposureScale,
-        )
-    }
-
-    private fun reconstructHdrRgbStripes(
-        shortImage: SafeImage,
-        referenceImage: SafeImage,
-        referenceExposureScale: Float,
-    ) {
-        var requiredRows = 1
-        var outputRow = 0
-        while (outputRow < height) {
-            val outputCount = minOf(GlesRawHdrConfig.RGB_STRIPE_ROWS, height - outputRow)
-            val weightRowOffset = maxOf(
-                0,
-                outputRow - GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
-            )
-            val weightRowEnd = minOf(
-                height,
-                outputRow + outputCount + GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
-            )
-            val weightRowCount = weightRowEnd - weightRowOffset
-            val normalBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                weightRowOffset, weightRowCount, 1f, 0f, 0f, rawCfaPeriod, height,
-            )
-            val shortBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                weightRowOffset,
-                weightRowCount,
-                1f,
-                hdrShortRawOffsetY * 0.5f,
-                hdrShortRawOffsetY * 0.5f,
-                rawCfaPeriod,
-                height,
-            )
-            requiredRows = max(requiredRows, max(normalBand.rowCount, shortBand.rowCount))
-            outputRow += outputCount
-        }
-        ensureHdrRcdStripeResources(requiredRows)
-
-        outputRow = 0
-        while (outputRow < height) {
-            val outputCount = minOf(GlesRawHdrConfig.RGB_STRIPE_ROWS, height - outputRow)
-            val weightRowOffset = maxOf(
-                0,
-                outputRow - GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
-            )
-            val weightRowEnd = minOf(
-                height,
-                outputRow + outputCount + GlesRawHdrConfig.WEIGHT_SMOOTH_HALO_ROWS,
-            )
-            val weightRowCount = weightRowEnd - weightRowOffset
-            val normalBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                weightRowOffset, weightRowCount, 1f, 0f, 0f, rawCfaPeriod, height,
-            )
-            val shortBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                weightRowOffset,
-                weightRowCount,
-                1f,
-                hdrShortRawOffsetY * 0.5f,
-                hdrShortRawOffsetY * 0.5f,
-                rawCfaPeriod,
-                height,
-            )
-
-            populateHdrNormalRcdStripe(
-                sourceRowOffset = normalBand.firstRow,
-                sourceRowCount = normalBand.rowCount,
-                referenceExposureScale = referenceExposureScale,
-            )
-            completeRcdRegionWithPpgBorder(
-                RadianceTileRect(0, normalBand.firstRow, width, normalBand.endExclusive),
-                "HDR normal",
-            )
-            storeRcdRgbStripe(hdrNormalRgbStripeTexture, normalBand.rowCount, "HDR normal RGB store")
-
-            uploadRcdRawStripe(referenceImage, normalBand.firstRow, normalBand.rowCount, "HDR reference")
-            runRcdStripe(
-                normalBand.firstRow,
-                normalBand.rowCount,
-                "HDR reference",
-                reconstructHighlights = false,
-            )
-            storeRcdRgbStripe(
-                hdrReferenceRgbStripeTexture,
-                normalBand.rowCount,
-                "HDR reference RGB store",
-            )
-
-            uploadRcdRawStripe(shortImage, shortBand.firstRow, shortBand.rowCount, "HDR short")
-            runRcdStripe(
-                shortBand.firstRow,
-                shortBand.rowCount,
-                "HDR short",
-                reconstructHighlights = false,
-            )
-            storeRcdRgbStripe(hdrShortRgbStripeTexture, shortBand.rowCount, "HDR short RGB store")
-
-            checkNotNull(hdrWeightMap) { "HDR weight map is not initialized" }.computeStripe(
-                GlesRawHdrWeightMap.Inputs(
-                    referenceRgbTexture = hdrReferenceRgbStripeTexture,
-                    shortRgbTexture = hdrShortRgbStripeTexture,
-                    referenceRawTexture = refRaw,
-                    lensShadingTexture = lensShadingTexture,
-                    referenceSourceWidth = width,
-                    referenceSourceHeight = normalBand.rowCount,
-                    shortSourceWidth = width,
-                    shortSourceHeight = shortBand.rowCount,
-                    referenceSourceRowOffset = normalBand.firstRow,
-                    shortSourceRowOffset = shortBand.firstRow,
-                    weightRowOffset = weightRowOffset,
-                    weightRowCount = weightRowCount,
-                    referenceExposureScale = referenceExposureScale,
-                    shortRawOffsetX = hdrShortRawOffsetX,
-                    shortRawOffsetY = hdrShortRawOffsetY,
-                    noiseFloorVariance = hwmfPostfilter.noiseFloorVariance,
-                    lscNoiseGainMax = hwmfPostfilter.lscNoiseGainMax,
-                ),
-            )
-
-            bindFramebufferOutput(hdrLinearOutputTexture, "HDR linear RGB fusion")
-            GLES30.glViewport(0, outputRow, width, outputCount)
-            GLES30.glUseProgram(hdrRgbFusionProgram)
-            bindTexture(hdrRgbFusionProgram, "uNormalRgb", 0, hdrNormalRgbStripeTexture)
-            bindTexture(hdrRgbFusionProgram, "uReferenceRgb", 1, hdrReferenceRgbStripeTexture)
-            bindTexture(hdrRgbFusionProgram, "uShortRgb", 2, hdrShortRgbStripeTexture)
-            bindTexture(
-                hdrRgbFusionProgram,
-                "uWeightMap",
-                3,
-                checkNotNull(hdrWeightMap) { "HDR weight map is not initialized" }.outputTexture,
-            )
-            GLES31.glUniform2i(
-                uniformLocation(hdrRgbFusionProgram, "uNormalSourceSize"),
-                width,
-                normalBand.rowCount,
-            )
-            GLES31.glUniform2i(
-                uniformLocation(hdrRgbFusionProgram, "uShortSourceSize"),
-                width,
-                shortBand.rowCount,
-            )
-            GLES31.glUniform1i(
-                uniformLocation(hdrRgbFusionProgram, "uNormalSourceRowOffset"),
-                normalBand.firstRow,
-            )
-            GLES31.glUniform1i(
-                uniformLocation(hdrRgbFusionProgram, "uShortSourceRowOffset"),
-                shortBand.firstRow,
-            )
-            GLES31.glUniform2f(
-                uniformLocation(hdrRgbFusionProgram, "uShortRawOffset"),
-                hdrShortRawOffsetX,
-                hdrShortRawOffsetY,
-            )
-            GLES31.glUniform1f(
-                uniformLocation(hdrRgbFusionProgram, "uReferenceExposureScale"),
-                referenceExposureScale,
-            )
-            GLES31.glUniform1i(
-                uniformLocation(hdrRgbFusionProgram, "uDebugOutputSource"),
-                GlesRawHdrConfig.DEBUG_OUTPUT_SOURCE,
-            )
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-            finishFramebufferPass("HDR linear RGB fusion")
-            outputRow += outputCount
-            GlesGpuScheduler.yieldToUiRenderer()
-        }
-    }
-
-    private fun normalizeOutput(
-        targetTexture: Int = outputTexture,
-        targetWidth: Int = width,
-        targetHeight: Int = height,
-        label: String = "normalizeOutput",
-    ) {
-        bindFramebufferOutput(targetTexture, label)
-        GLES30.glViewport(0, 0, targetWidth, targetHeight)
-        GLES30.glUseProgram(normalizeProgram)
-        bindTexture(normalizeProgram, "uAccumulatorValueWeight", 0, accumulatorValueWeightTexture)
-        bindTexture(normalizeProgram, "uAccumulatorStatistics", 1, accumulatorStatisticsTexture)
-        bindTexture(normalizeProgram, "uReferenceRaw", 2, refRaw)
-        bindTexture(normalizeProgram, "uLensShadingMap", 3, lensShadingTexture)
-        setCommonUniforms(normalizeProgram)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(normalizeProgram, "uImageSize"), width, height)
-        setPostfilterUniforms(normalizeProgram)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        finishFramebufferPass(label)
     }
 
     private fun createRadianceFusionStatsBuffer(frameCount: Int): Int {
@@ -6360,7 +5378,6 @@ class GlesRawStacker(
         highlightAlignment: RadianceHighlightAlignment?,
         longAlignments: List<RadianceLongAlignment>,
     ): ReadOutputTiming {
-        check(radianceFusionEnabled)
         check(radianceTiles.isNotEmpty())
         var requiredRcdWidth = 1
         var requiredRcdHeight = 1
@@ -7381,145 +6398,6 @@ class GlesRawStacker(
         }
     }
 
-    private fun reconstructSuperResolutionStripes(
-        referenceImage: SafeImage,
-        acceptedFrames: List<AcceptedSuperResolutionFrame>,
-    ): ReadOutputTiming? {
-        check(!radianceFusionEnabled) {
-            "Radiance reconstruction must use the two-dimensional tile path"
-        }
-        var requiredRcdRows = 1
-        var planRow = 0
-        while (planRow < outputHeight) {
-            val coreCount = minOf(SUPER_RESOLUTION_STRIPE_ROWS, outputHeight - planRow)
-            val planStart = max(0, planRow - SUPER_RESOLUTION_SPATIAL_RADIUS)
-            val planEnd = minOf(outputHeight, planRow + coreCount + SUPER_RESOLUTION_SPATIAL_RADIUS)
-            val planCount = planEnd - planStart
-            requiredRcdRows = max(
-                requiredRcdRows,
-                RawSuperResolutionStripePlanner.sourceRowBand(
-                    planStart, planCount, superResolutionScale, 0f, 0f, rawCfaPeriod, height,
-                ).rowCount,
-            )
-            acceptedFrames.forEach { frame ->
-                requiredRcdRows = max(
-                    requiredRcdRows,
-                    RawSuperResolutionStripePlanner.sourceRowBand(
-                        planStart,
-                        planCount,
-                        superResolutionScale,
-                        frame.minFlowYPlanePx,
-                        frame.maxFlowYPlanePx,
-                        rawCfaPeriod,
-                        height,
-                    ).rowCount,
-                )
-            }
-            planRow += coreCount
-        }
-        ensureRcdStripeResources(requiredRcdRows)
-        var outputRowOffset = 0
-        while (outputRowOffset < outputHeight) {
-            val outputRowCount = minOf(
-                SUPER_RESOLUTION_STRIPE_ROWS,
-                outputHeight - outputRowOffset,
-            )
-            val accumulationRowOffset = max(
-                0,
-                outputRowOffset - SUPER_RESOLUTION_SPATIAL_RADIUS,
-            )
-            val accumulationEnd = minOf(
-                outputHeight,
-                outputRowOffset + outputRowCount + SUPER_RESOLUTION_SPATIAL_RADIUS,
-            )
-            val accumulationRowCount = accumulationEnd - accumulationRowOffset
-            clearSuperResolutionAccumulator()
-            val referenceBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                accumulationRowOffset,
-                accumulationRowCount,
-                superResolutionScale,
-                0f,
-                0f,
-                rawCfaPeriod,
-                height,
-            )
-            uploadRcdRawStripe(
-                referenceImage,
-                referenceBand.firstRow,
-                referenceBand.rowCount,
-                "reference",
-            )
-            runRcdStripe(referenceBand.firstRow, referenceBand.rowCount, "reference")
-            accumulateSuperResolutionFrame(
-                isReference = true,
-                sourceRowOffset = referenceBand.firstRow,
-                sourceRowCount = referenceBand.rowCount,
-                outputRowOffset = accumulationRowOffset,
-                outputRowCount = accumulationRowCount,
-            )
-            acceptedFrames.forEach { frame ->
-                val sourceBand = RawSuperResolutionStripePlanner.sourceRowBand(
-                    outputRowOffset = accumulationRowOffset,
-                    outputRowCount = accumulationRowCount,
-                    outputScale = superResolutionScale,
-                    minFlowYPlanePx = frame.minFlowYPlanePx,
-                    maxFlowYPlanePx = frame.maxFlowYPlanePx,
-                    cfaPeriod = rawCfaPeriod,
-                    rawHeight = height,
-                )
-                uploadRcdRawStripe(
-                    image = frame.image,
-                    firstRow = sourceBand.firstRow,
-                    rowCount = sourceBand.rowCount,
-                    label = "MFSR stripe frame ${frame.frameIndex}",
-                )
-                runRcdStripe(sourceBand.firstRow, sourceBand.rowCount, "frame ${frame.frameIndex}")
-                accumulateSuperResolutionFrame(
-                    isReference = false,
-                    sourceRowOffset = sourceBand.firstRow,
-                    sourceRowCount = sourceBand.rowCount,
-                    exposureScale = frame.exposureScale,
-                    frameFlowTexture = frame.flowTexture,
-                    frameRobustnessTexture = frame.robustnessTexture,
-                    frameTileMaskTexture = frame.tileMaskTexture,
-                    registrationWeight = frame.registrationWeight,
-                    detailWeight = frame.detailWeight,
-                    outputRowOffset = accumulationRowOffset,
-                    outputRowCount = accumulationRowCount,
-                )
-            }
-            normalizeSuperResolutionStripe(
-                outputRowOffset = outputRowOffset,
-                outputRowCount = outputRowCount,
-                accumulatorRowOffset = accumulationRowOffset,
-            )
-            outputRowOffset += outputRowCount
-            GlesGpuScheduler.yieldToUiRenderer()
-        }
-        return null
-    }
-
-    private fun normalizeSuperResolutionStripe(
-        outputRowOffset: Int,
-        outputRowCount: Int,
-        accumulatorRowOffset: Int,
-    ) {
-        bindFramebufferOutput(outputTexture, "normalizeSuperResolutionStripe")
-        GLES30.glViewport(0, outputRowOffset, outputWidth, outputRowCount)
-        GLES30.glUseProgram(normalizeSuperResolutionProgram)
-        bindTexture(normalizeSuperResolutionProgram, "uSrAccumulator", 0, superResolutionAccumulatorTexture)
-        bindTexture(normalizeSuperResolutionProgram, "uSrAccumulatorBw", 1, superResolutionAccumulatorBwTexture)
-        bindTexture(normalizeSuperResolutionProgram, "uSrAccumulatorB", 2, superResolutionAccumulatorBTexture)
-        setCommonUniforms(normalizeSuperResolutionProgram)
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(normalizeSuperResolutionProgram, "uAccumulatorRowOffset"),
-            accumulatorRowOffset,
-        )
-        setPostfilterUniforms(normalizeSuperResolutionProgram)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        finishFramebufferPass("normalizeSuperResolutionStripe")
-    }
-
     private fun recordAlignmentDiagnostics() {
         runDiagnosticStep("alignment") {
             GLES31.glUseProgram(diagnosticAlignmentProgram)
@@ -7604,59 +6482,6 @@ class GlesRawStacker(
         superResolutionDecision: SuperResolutionOutputDecision = SuperResolutionOutputDecision.Disabled,
     ): RawStackDiagnostics? {
         if (!hwmfDebug.collectMetrics) return null
-        // The compact MFSR accumulator intentionally retains only value/weight detail data.
-        // Final diagnostics sample the full base accumulator instead of allocating or decoding
-        // a separate diagnostic representation for a production-disabled code path.
-        val diagnosticAccumulatorWidth = width
-        val diagnosticAccumulatorHeight = height
-        val diagnosticOutputScale = 1.0f
-        val finalRecorded = runDiagnosticStep("final") {
-            GLES31.glUseProgram(diagnosticFinalProgram)
-            bindTexture(diagnosticFinalProgram, "uAccumulatorValueWeight", 0, accumulatorValueWeightTexture)
-            bindTexture(diagnosticFinalProgram, "uAccumulatorStatistics", 1, accumulatorStatisticsTexture)
-            bindTexture(diagnosticFinalProgram, "uLensShadingMap", 2, lensShadingTexture)
-            setCommonUniforms(diagnosticFinalProgram)
-            setPostfilterUniforms(diagnosticFinalProgram)
-            GLES31.glBindBufferBase(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                DIAGNOSTIC_BUFFER_BINDING,
-                diagnosticBuffer,
-            )
-            setDiagnosticSampleUniforms(diagnosticFinalProgram)
-            GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(diagnosticFinalProgram, "uAccumulatorSize"),
-                diagnosticAccumulatorWidth,
-                diagnosticAccumulatorHeight,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(diagnosticFinalProgram, "uOutputScale"),
-                diagnosticOutputScale,
-            )
-            GLES31.glUniform1i(GLES31.glGetUniformLocation(diagnosticFinalProgram, "uCfaPattern"), cfaPattern)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(diagnosticFinalProgram, "uSuperResolutionEnabled"),
-                0,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(diagnosticFinalProgram, "uWeightHistogramRange"),
-                diagnosticWeightHistogramRange(frameCount),
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(diagnosticFinalProgram, "uPostResidualHistogramRange"),
-                diagnosticPostResidualHistogramRange(),
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(diagnosticFinalProgram, "uLensShadingEdgeFraction"),
-                hwmfDebug.lensShadingEdgeFraction,
-            )
-            GLES31.glDispatchCompute(groupCount(diagnosticSampleWidth()), groupCount(diagnosticSampleHeight()), 1)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, DIAGNOSTIC_BUFFER_BINDING, 0)
-            checkGlError("collectFinalDiagnostics")
-        }
-        if (!finalRecorded) return null
         val stats = readDiagnosticStats() ?: return null
         val diagnostics = buildDiagnostics(
             stats = stats,
@@ -7675,8 +6500,7 @@ class GlesRawStacker(
         if (!hwmfDebug.collectMetrics ||
             diagnosticsFailed ||
             diagnosticBuffer == 0 ||
-            diagnosticAlignmentProgram == 0 ||
-            diagnosticFinalProgram == 0
+            diagnosticAlignmentProgram == 0
         ) {
             return false
         }
@@ -7745,7 +6569,7 @@ class GlesRawStacker(
         val highConfidenceCount = uintStat(stats, DIAGNOSTIC_HIGH_CONFIDENCE_COUNT_INDEX)
 
         return RawStackDiagnostics(
-            mode = tuning.mode,
+            outputScale = superResolutionScale,
             frameCount = frameCount,
             alignedFrameCount = alignedFrameCount,
             width = outputWidth,
@@ -7991,15 +6815,6 @@ class GlesRawStacker(
         return (height + hwmfDebug.sampleStep - 1) / hwmfDebug.sampleStep
     }
 
-    private fun scaledRawDimension(size: Int, scale: Float): Int {
-        val scaled = (size.toFloat() * scale.coerceAtLeast(1.0f)).roundToInt().coerceAtLeast(1)
-        return if (scale > 1.0f && scaled > 1 && scaled % 2 != 0) {
-            scaled - 1
-        } else {
-            scaled
-        }
-    }
-
     private fun diagnosticFlowHistogramRange(): Float {
         return max(1.0f, hwmfBlend.flowOutlierThresholdPx.coerceAtLeast(0f) * 2.0f)
     }
@@ -8119,188 +6934,6 @@ class GlesRawStacker(
             this[3], this[4], this[5],
             this[6], this[7], this[8],
         )
-    }
-
-    private fun readHdrLinearOutput(outputBuffer: ByteBuffer): ReadOutputTiming {
-        return readLinearRgbOutput(
-            outputBuffer = outputBuffer,
-            texture = hdrLinearOutputTexture,
-            readWidth = width,
-            readHeight = height,
-            label = "HDR",
-        )
-    }
-
-    private fun readLinearRgbOutput(
-        outputBuffer: ByteBuffer,
-        texture: Int,
-        readWidth: Int,
-        readHeight: Int,
-        label: String,
-    ): ReadOutputTiming {
-        val startTime = System.currentTimeMillis()
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readbackFbo)
-        return try {
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D,
-                texture,
-                0,
-            )
-            GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
-            checkFramebuffer("readLinearRgbOutput $label")
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-            outputBuffer.clear()
-            val readStart = System.currentTimeMillis()
-            GLES30.glReadPixels(
-                0,
-                0,
-                readWidth,
-                readHeight,
-                GLES30.GL_RGBA_INTEGER,
-                GLES30.GL_UNSIGNED_SHORT,
-                outputBuffer,
-            )
-            val readMs = System.currentTimeMillis() - readStart
-            checkGlError("readLinearRgbOutput $label RGBA16UI")
-            outputBuffer.rewind()
-            ReadOutputTiming(
-                elapsedMs = System.currentTimeMillis() - startTime,
-                glReadMs = readMs,
-                copyMs = 0L,
-                allocMs = 0L,
-                mode = "${label.lowercase()}-rgba16ui-direct",
-            )
-        } finally {
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        }
-    }
-
-    private fun readOutput(outputBuffer: ByteBuffer): ReadOutputTiming {
-        val startTime = System.currentTimeMillis()
-        try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readbackFbo)
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D,
-                outputTexture,
-                0,
-            )
-            GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
-            checkFramebuffer("readOutput")
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-            val implementationReadFormat = IntArray(1)
-            val implementationReadType = IntArray(1)
-            GLES30.glGetIntegerv(
-                GLES30.GL_IMPLEMENTATION_COLOR_READ_FORMAT,
-                implementationReadFormat,
-                0,
-            )
-            GLES30.glGetIntegerv(
-                GLES30.GL_IMPLEMENTATION_COLOR_READ_TYPE,
-                implementationReadType,
-                0,
-            )
-            checkGlError("query RAW output readback format")
-
-            if (implementationReadFormat[0] == GLES30.GL_RG &&
-                implementationReadType[0] == GLES30.GL_UNSIGNED_BYTE
-            ) {
-                outputBuffer.clear()
-                val directReadStart = System.currentTimeMillis()
-                GLES30.glReadPixels(
-                    0,
-                    0,
-                    outputWidth,
-                    outputHeight,
-                    GLES30.GL_RG,
-                    GLES30.GL_UNSIGNED_BYTE,
-                    outputBuffer,
-                )
-                val directReadMs = System.currentTimeMillis() - directReadStart
-                checkGlError("readOutput RG8 direct")
-                outputBuffer.rewind()
-                return ReadOutputTiming(
-                    elapsedMs = System.currentTimeMillis() - startTime,
-                    glReadMs = directReadMs,
-                    copyMs = 0L,
-                    allocMs = 0L,
-                    mode = "rg8-direct",
-                )
-            }
-
-            RawStackRuntimeDebug.d(TAG) {
-                "GLES RAW RG readback unavailable; implementation format=" +
-                    "0x${implementationReadFormat[0].toString(16)} type=" +
-                    "0x${implementationReadType[0].toString(16)}, using striped RGBA readback"
-            }
-            return readOutputViaRgbaStripes(outputBuffer, startTime)
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        }
-    }
-
-    private fun readOutputViaRgbaStripes(outputBuffer: ByteBuffer, readbackStartTime: Long): ReadOutputTiming {
-        val stripeCapacityRows = minOf(READBACK_STRIPE_ROWS, outputHeight)
-        val stripeCapacityBytes = outputWidth.toLong() * stripeCapacityRows.toLong() * 4L
-        require(stripeCapacityBytes in 1..Int.MAX_VALUE.toLong()) {
-            "GLES RAW readback stripe exceeds buffer range: $stripeCapacityBytes"
-        }
-        val allocStart = System.currentTimeMillis()
-        val packed = LargeDirectBuffer.allocate(
-            stripeCapacityBytes,
-            "GLES RAW striped RGBA readback",
-        )
-            ?: throw IllegalStateException("Failed to allocate GLES RAW packed readback")
-        val allocMs = System.currentTimeMillis() - allocStart
-        try {
-            outputBuffer.clear()
-            val outShorts = outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
-            var totalGlReadMs = 0L
-            var totalCopyMs = 0L
-            var firstRow = 0
-            while (firstRow < outputHeight) {
-                val rowCount = minOf(stripeCapacityRows, outputHeight - firstRow)
-                packed.clear()
-                val glReadStart = System.currentTimeMillis()
-                GLES30.glReadPixels(
-                    0,
-                    firstRow,
-                    outputWidth,
-                    rowCount,
-                    GLES30.GL_RGBA,
-                    GLES30.GL_UNSIGNED_BYTE,
-                    packed,
-                )
-                totalGlReadMs += System.currentTimeMillis() - glReadStart
-                checkGlError("readOutput RGBA rows=$firstRow..${firstRow + rowCount}")
-
-                val copyStart = System.currentTimeMillis()
-                val stripePixelCount = outputWidth * rowCount
-                val outputPixelOffset = firstRow * outputWidth
-                for (index in 0 until stripePixelCount) {
-                    val packedOffset = index * 4
-                    val lo = packed.get(packedOffset).toInt() and 0xFF
-                    val hi = packed.get(packedOffset + 1).toInt() and 0xFF
-                    outShorts.put(outputPixelOffset + index, ((hi shl 8) or lo).toShort())
-                }
-                totalCopyMs += System.currentTimeMillis() - copyStart
-                firstRow += rowCount
-            }
-            outputBuffer.rewind()
-            return ReadOutputTiming(
-                elapsedMs = System.currentTimeMillis() - readbackStartTime,
-                glReadMs = totalGlReadMs,
-                copyMs = totalCopyMs,
-                allocMs = allocMs,
-                mode = "rgba8-striped",
-            )
-        } finally {
-            LargeDirectBuffer.free(packed)
-        }
     }
 
     private fun bindFramebufferOutput(texture: Int, label: String) {
@@ -8490,23 +7123,15 @@ class GlesRawStacker(
         )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(program, "uHighlightSuppressionStrength"),
-            if (radianceFusionEnabled) 1f else hwmfBlend.highlightSuppressionStrength
+            1f
         )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(program, "uHighlightSuppressionStart"),
-            if (radianceFusionEnabled) {
-                radianceFusionTuning.highlightNormalClipStart
-            } else {
-                hwmfBlend.highlightSuppressionStart
-            }
+            radianceFusionTuning.highlightNormalClipStart
         )
         GLES31.glUniform1f(
             GLES31.glGetUniformLocation(program, "uHighlightSuppressionEnd"),
-            if (radianceFusionEnabled) {
-                radianceFusionTuning.highlightNormalClipFull
-            } else {
-                hwmfBlend.highlightSuppressionEnd
-            }
+            radianceFusionTuning.highlightNormalClipFull
         )
     }
 
@@ -8521,93 +7146,6 @@ class GlesRawStacker(
         GLES31.glUniform1i(
             GLES31.glGetUniformLocation(program, "uRegistrationForceIdentity"),
             if (transform.forceIdentity) 1 else 0,
-        )
-    }
-
-    private fun setPostfilterUniforms(program: Int) {
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uFinalSmoothStrength"), hwmfPostfilter.finalSmoothStrength)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uFlatVarianceStart"), hwmfPostfilter.flatVarianceStart)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uFlatVarianceEnd"), hwmfPostfilter.flatVarianceEnd)
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uDetailKeepNoiseLowScale"),
-            hwmfPostfilter.detailKeepNoiseLowScale
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uDetailKeepNoiseHighScale"),
-            hwmfPostfilter.detailKeepNoiseHighScale
-        )
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(program, "uDetailKeepOffsetLow"), hwmfPostfilter.detailKeepOffsetLow)
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uDetailKeepOffsetHigh"),
-            hwmfPostfilter.detailKeepOffsetHigh
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uDetailKeepSuppression"),
-            hwmfPostfilter.detailKeepSuppression
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLscNoiseGainMax"),
-            hwmfPostfilter.lscNoiseGainMax.coerceAtLeast(1.0f)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uPostfilterNoiseFloor"),
-            hwmfPostfilter.noiseFloorVariance.coerceAtLeast(0f)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLowLightSignalLow"),
-            hwmfPostfilter.lowLightSignalLow
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLowLightSignalHigh"),
-            hwmfPostfilter.lowLightSignalHigh
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLowLightSmoothBoost"),
-            hwmfPostfilter.lowLightSmoothBoost
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLscSmoothGainStart"),
-            hwmfPostfilter.lscSmoothGainStart
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLscSmoothGainEnd"),
-            hwmfPostfilter.lscSmoothGainEnd
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLscSmoothBoost"),
-            hwmfPostfilter.lscSmoothBoost
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLowWeightStart"),
-            hwmfPostfilter.lowWeightStart
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLowWeightEnd"),
-            hwmfPostfilter.lowWeightEnd
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uLowWeightSmoothBoost"),
-            hwmfPostfilter.lowWeightSmoothBoost
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uResidualNoiseWeight"),
-            hwmfPostfilter.residualNoiseWeight.coerceAtLeast(0f)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uResidualNoiseLowScale"),
-            hwmfPostfilter.residualNoiseLowScale.coerceAtLeast(0f)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uResidualNoiseHighScale"),
-            hwmfPostfilter.residualNoiseHighScale.coerceAtLeast(hwmfPostfilter.residualNoiseLowScale)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uResidualSmoothBoost"),
-            hwmfPostfilter.residualSmoothBoost.coerceAtLeast(0f)
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(program, "uMaxSmoothStrength"),
-            hwmfPostfilter.maxSmoothStrength.coerceIn(0f, 1f)
         )
     }
 
@@ -8862,7 +7400,7 @@ class GlesRawStacker(
     }
 
     companion object {
-        private const val TAG = "GlesRawStacker"
+        private const val TAG = "GlesRawRadianceStacker"
 
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         private const val LOCAL_SIZE = 16
@@ -8875,11 +7413,8 @@ class GlesRawStacker(
         private const val MAX_TEMPORAL_TRACKING_SCALE = 16
         private const val TRACKING_TEXTURE_BYTES_PER_PIXEL = 8L
         private const val MAX_TEMPORAL_TRACKING_BYTES = 32L * 1024L * 1024L
-        private const val BASE_ACCUMULATOR_DISPATCH_ROWS = 256
-        private const val SUPER_RESOLUTION_STRIPE_ROWS = 256
         private const val SUPER_RESOLUTION_SPATIAL_RADIUS = 2
         private const val RADIANCE_RECONSTRUCTION_RADIUS_RAW_PX = 1
-        private const val READBACK_STRIPE_ROWS = 128
         private const val DIAGNOSTIC_BUFFER_BINDING = 9
         private const val REGISTRATION_SAMPLE_BUFFER_BINDING = 10
         private const val REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING = 11
@@ -10328,7 +8863,7 @@ class GlesRawStacker(
                 }
 
                 dualConfidence -> "fragColor = vec4(nrMask, detailMask, 0.0, 0.0);"
-                else -> "fragColor = legacyMask;"
+                else -> "fragColor = confidenceMask;"
             }
             return """
                 #version 300 es
@@ -10419,17 +8954,17 @@ class GlesRawStacker(
                     float weakPenalty = clamp(1.0 - max(0.0, weak - uTileWeakStart) / uTileWeakRange, 0.0, 1.0);
                     float detailBoost = detail > uTileDetailHigh ?
                         uTileDetailBoostHigh : (detail > uTileDetailMid ? uTileDetailBoostMid : uTileDetailBoostLow);
-                    float legacyMask = clamp((0.60 * robustNorm + 0.40 * weakPenalty) *
+                    float confidenceMask = clamp((0.60 * robustNorm + 0.40 * weakPenalty) *
                         (0.55 + 0.45 * detailBoost), 0.0, 1.0);
                     if (detail > uTileDetailHigh) {
-                        legacyMask = max(legacyMask, uTileMaskMinHighDetail * robustNorm);
+                        confidenceMask = max(confidenceMask, uTileMaskMinHighDetail * robustNorm);
                     } else if (detail > uTileDetailMid) {
-                        legacyMask = max(legacyMask, uTileMaskMinMidDetail * robustNorm);
+                        confidenceMask = max(confidenceMask, uTileMaskMinMidDetail * robustNorm);
                     }
                     // NR is a spatial confidence filter over already noise-normalized per-pixel
                     // robustness. It deliberately has no texture or patch-peak requirement.
                     float nrMask = clamp(0.75 * meanR + 0.25 * weakPenalty, 0.0, 1.0);
-                    ${if (dualConfidence) "float detailMask = legacyMask * detailAlignmentConfidence;" else ""}
+                    ${if (dualConfidence) "float detailMask = confidenceMask * detailAlignmentConfidence;" else ""}
                     $output
                 }
             """.trimIndent()
@@ -10535,1201 +9070,11 @@ class GlesRawStacker(
             }
         """.trimIndent()
 
-        private val CLEAR_ACCUMULATOR_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
-            layout(r32ui, binding = 0) writeonly uniform highp uimage2D uAccumulatorValueWeight;
-            layout(r32ui, binding = 1) writeonly uniform highp uimage2D uAccumulatorStatistics;
-            uniform ivec2 uImageSize;
 
-            void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
-                imageStore(uAccumulatorValueWeight, p, uvec4(0u));
-                imageStore(uAccumulatorStatistics, p, uvec4(0u));
-            }
-        """.trimIndent()
 
-        private val CLEAR_SUPER_RESOLUTION_ACCUMULATOR_COMPUTE_SHADER = """
-            #version 310 es
-            precision highp float;
-            precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
-            layout(r32ui, binding = 0) writeonly uniform highp uimage2D uAccumulatorRw;
-            layout(r32ui, binding = 1) writeonly uniform highp uimage2D uAccumulatorGw;
-            layout(r32ui, binding = 2) writeonly uniform highp uimage2D uAccumulatorBw;
-            uniform ivec2 uImageSize;
 
-            void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
-                imageStore(uAccumulatorRw, p, uvec4(0u));
-                imageStore(uAccumulatorGw, p, uvec4(0u));
-                imageStore(uAccumulatorBw, p, uvec4(0u));
-            }
-        """.trimIndent()
 
-        private val ACCUMULATE_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform highp usampler2D uInputRaw;
-            uniform sampler2D uFlowGrid;
-            uniform sampler2D uRobustness;
-            uniform sampler2D uTileMask;
-            uniform sampler2D uKernel;
-            uniform sampler2D uLensShadingMap;
-            layout(r32ui, binding = 0) uniform highp uimage2D uAccumulatorValueWeight;
-            layout(r32ui, binding = 1) uniform highp uimage2D uAccumulatorStatistics;
-            uniform ivec2 uImageSize;
-            uniform ivec2 uPlaneSize;
-            uniform ivec2 uGridSize;
-            uniform int uTileSize;
-            uniform int uIsReference;
-            uniform int uCfaPattern;
-            uniform float uBlackLevel[4];
-            uniform float uWhiteLevel;
-            uniform float uNoiseAlpha;
-            uniform float uNoiseBeta;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uFrameWeight;
-            uniform int uHdrMode;
-            uniform float uExposureScale;
-            uniform float uMinBlendBaseWeight;
-            uniform float uRobustnessFloorFactor;
-            uniform float uPrecisionReferenceSignal;
-            uniform float uLscNoiseGainMax;
-            uniform float uWienerBaseWeight;
-            uniform float uDenoiseSignalLow;
-            uniform float uDenoiseSignalHigh;
-            uniform float uDenoiseLscGainStart;
-            uniform float uDenoiseLscGainEnd;
-            uniform float uDenoiseStaticRobustStart;
-            uniform float uDenoiseStaticRobustEnd;
-            uniform float uDenoiseStaticTileStart;
-            uniform float uDenoiseStaticTileEnd;
-            uniform float uDenoiseNonReferenceWeightBoost;
-            uniform float uDenoiseNonReferenceWeightFloor;
-            uniform float uDenoiseReferenceDarkWeightScale;
-            uniform int uImageRowOffset;
-            uniform float uHighlightSuppressionStrength;
-            uniform float uHighlightSuppressionStart;
-            uniform float uHighlightSuppressionEnd;
 
-            vec2 flowAt(vec2 planePos) {
-                vec2 grid = planePos / float(uTileSize) - vec2(0.5);
-                vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
-                return texture(uFlowGrid, clamp(uv, vec2(0.0), vec2(1.0))).rg;
-            }
-
-            $LOCAL_FLOW_WARP_GLSL
-
-            float mapAt(sampler2D tex, vec2 planePos) {
-                vec2 uv = (clamp(planePos, vec2(0.0), vec2(uPlaneSize - ivec2(1))) + vec2(0.5)) / vec2(uPlaneSize);
-                return texture(tex, uv).r;
-            }
-
-            float tileMaskAt(vec2 planePos) {
-                vec2 grid = planePos / float(uTileSize) - vec2(0.5);
-                vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
-                return texture(uTileMask, clamp(uv, vec2(0.0), vec2(1.0))).r;
-            }
-
-            float lscGain(ivec2 samplePos) {
-                vec2 uv = (vec2(samplePos) + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(uLensShadingMap, uv);
-                int channel = lensShadingChannelAt(uCfaPattern, samplePos);
-                if (channel == 0) return gains.r;
-                if (channel == 1) return gains.g;
-                if (channel == 2) return gains.b;
-                return gains.a;
-            }
-
-            float lscNoiseGain(ivec2 samplePos) {
-                return clamp(lscGain(samplePos), 1e-3, max(uLscNoiseGainMax, 1.0));
-            }
-
-            float rawNormAt(ivec2 samplePos, int bayerIndex) {
-                samplePos = clamp(samplePos, ivec2(0), uImageSize - ivec2(1));
-                float raw = float(texelFetch(uInputRaw, samplePos, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
-                // Keep HDR headroom until the sample has been mapped to the short-exposure
-                // output domain. Clamping here destroys channel ratios before uExposureScale.
-                return max(raw - uBlackLevel[bayerIndex], 0.0) * lscGain(samplePos) / range;
-            }
-
-            float rawSensorNormAt(ivec2 samplePos) {
-                samplePos = clamp(samplePos, ivec2(0), uImageSize - ivec2(1));
-                int bayerIndex = bayerIndexAt(uCfaPattern, samplePos);
-                float raw = float(texelFetch(uInputRaw, samplePos, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
-                return clamp(max(raw - uBlackLevel[bayerIndex], 0.0) / range, 0.0, 1.0);
-            }
-
-            float tileSensorMax(ivec2 samplePos) {
-                ivec2 base = samplePos - ivec2(samplePos.x & 1, samplePos.y & 1);
-                float m = 0.0;
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        m = max(m, rawSensorNormAt(base + ivec2(x, y)));
-                    }
-                }
-                return m;
-            }
-
-            float tileSensorMean(ivec2 samplePos) {
-                ivec2 base = samplePos - ivec2(samplePos.x & 1, samplePos.y & 1);
-                float sum = 0.0;
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        sum += rawSensorNormAt(base + ivec2(x, y));
-                    }
-                }
-                return sum * 0.25;
-            }
-
-            float highlightClipAlpha(ivec2 samplePos) {
-                float pixel = rawSensorNormAt(samplePos);
-                float tile = tileSensorMax(samplePos);
-                float tileMean = tileSensorMean(samplePos);
-                float pixelClip = smoothstep(0.90, 0.985, pixel);
-                float tileMeanGate = smoothstep(0.68, 0.88, tileMean);
-                float edgeProtect = 1.0 - smoothstep(0.10, 0.30, tile - pixel);
-                float tileClip = smoothstep(0.91, 0.995, tile) * tileMeanGate * edgeProtect;
-                return clamp(max(pixelClip, 0.62 * tileClip), 0.0, 1.0);
-            }
-
-            float nonReferenceOverexposureAlpha(ivec2 samplePos, float sampledValue) {
-                float pixel = rawSensorNormAt(samplePos);
-                float tile = tileSensorMax(samplePos);
-                float tileMean = tileSensorMean(samplePos);
-                float pixelClip = smoothstep(0.965, 0.997, pixel);
-                float sampledClip = smoothstep(0.985, 0.999, sampledValue);
-                float tileClip = smoothstep(0.975, 0.999, tile) * smoothstep(0.78, 0.94, tileMean);
-                return clamp(max(max(pixelClip, 0.55 * sampledClip), 0.75 * tileClip), 0.0, 1.0);
-            }
-
-            ivec2 cfaPhaseOffset(int cfaPattern, ivec2 p) {
-                int period = cfaPeriod(cfaPattern);
-                return ivec2(p.x % period, p.y % period);
-            }
-
-            ivec2 maxLatticeForPhase(ivec2 phaseOffset, int period) {
-                return max((uImageSize - ivec2(1) - phaseOffset) / ivec2(period), ivec2(0));
-            }
-
-            float fetchSamePhase(ivec2 lattice, ivec2 phaseOffset, int period, int bayerIndex) {
-                lattice = clamp(lattice, ivec2(0), maxLatticeForPhase(phaseOffset, period));
-                return rawNormAt(phaseOffset + lattice * period, bayerIndex);
-            }
-
-            float sampleSamePhase(vec2 rawPos, ivec2 phaseOffset, int period, int bayerIndex) {
-                ivec2 maxLattice = maxLatticeForPhase(phaseOffset, period);
-                vec2 phase = vec2(float(phaseOffset.x), float(phaseOffset.y));
-                vec2 pos = clamp(
-                    (rawPos - phase) / float(period),
-                    vec2(0.0),
-                    vec2(float(maxLattice.x), float(maxLattice.y))
-                );
-                ivec2 p0 = ivec2(floor(pos));
-                ivec2 p1 = min(p0 + ivec2(1), maxLattice);
-                vec2 f = pos - vec2(p0);
-                float v00 = fetchSamePhase(p0, phaseOffset, period, bayerIndex);
-                float v10 = fetchSamePhase(ivec2(p1.x, p0.y), phaseOffset, period, bayerIndex);
-                float v01 = fetchSamePhase(ivec2(p0.x, p1.y), phaseOffset, period, bayerIndex);
-                float v11 = fetchSamePhase(p1, phaseOffset, period, bayerIndex);
-                return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
-            }
-
-            ivec2 nearestSamePhase(vec2 rawPos, ivec2 phaseOffset, int period) {
-                vec2 phase = vec2(float(phaseOffset.x), float(phaseOffset.y));
-                ivec2 lattice = ivec2(round((rawPos - phase) / float(period)));
-                lattice = clamp(lattice, ivec2(0), maxLatticeForPhase(phaseOffset, period));
-                return phaseOffset + lattice * period;
-            }
-
-            float kernelSupportHighlightInfluence(vec2 rawPos, ivec2 phaseOffset, int period) {
-                ivec2 maxLattice = maxLatticeForPhase(phaseOffset, period);
-                vec2 phase = vec2(float(phaseOffset.x), float(phaseOffset.y));
-                vec2 latticePos = clamp(
-                    (rawPos - phase) / float(period),
-                    vec2(0.0),
-                    vec2(float(maxLattice.x), float(maxLattice.y))
-                );
-                ivec2 latticeBase = ivec2(floor(latticePos));
-                float maxSensorSignal = 0.0;
-                // The 3x3 reconstruction taps each use bilinear same-phase sampling. Their union
-                // is the 4x4 lattice footprint [base-1, base+2]. Record the complete support so
-                // every destination block modified by a highlight can preserve short-frame chroma.
-                for (int y = -1; y <= 2; ++y) {
-                    for (int x = -1; x <= 2; ++x) {
-                        ivec2 lattice = clamp(latticeBase + ivec2(x, y), ivec2(0), maxLattice);
-                        ivec2 samplePos = phaseOffset + lattice * period;
-                        maxSensorSignal = max(maxSensorSignal, rawSensorNormAt(samplePos));
-                    }
-                }
-                return step(0.90, maxSensorSignal);
-            }
-
-            vec3 kernelMatrix(vec4 params) {
-                float k1 = params.x;
-                float k2 = params.y;
-                float c2 = params.z;
-                float s2 = params.w;
-                float sumK = k1 + k2;
-                float diffK = k1 - k2;
-                return vec3(0.5 * (sumK + diffK * c2), 0.5 * diffK * s2, 0.5 * (sumK - diffK * c2));
-            }
-
-            float kernelWeight(vec2 tap, vec4 params) {
-                vec3 k = kernelMatrix(params);
-                float mahalanobis = k.x * tap.x * tap.x + 2.0 * k.y * tap.x * tap.y + k.z * tap.y * tap.y;
-                return exp(-0.5 * max(mahalanobis, 0.0));
-            }
-
-            float noiseVarianceForChannel(float correctedSignalNorm, int bayerIndex, float lscGainForNoise) {
-                float channelAlpha = uNoiseAlphaByChannel[bayerIndex];
-                float channelBeta = uNoiseBetaByChannel[bayerIndex];
-                if (channelAlpha <= 0.0 && channelBeta <= 0.0) return 1e-10;
-                float gain = clamp(lscGainForNoise, 1e-3, max(uLscNoiseGainMax, 1.0));
-                return max(
-                    channelAlpha * clamp(correctedSignalNorm, 0.0, 1.0) * gain +
-                    channelBeta * gain * gain,
-                    1e-10
-                );
-            }
-
-            float sensorPrecisionWeight(float correctedSignalNorm, int bayerIndex, float lscGainForNoise) {
-                float channelAlpha = uNoiseAlphaByChannel[bayerIndex];
-                float channelBeta = uNoiseBetaByChannel[bayerIndex];
-                if (channelAlpha <= 0.0 && channelBeta <= 0.0) return 1.0;
-                float variance = noiseVarianceForChannel(correctedSignalNorm, bayerIndex, lscGainForNoise);
-                float referenceVariance = noiseVarianceForChannel(uPrecisionReferenceSignal, bayerIndex, 1.0);
-                return clamp(referenceVariance / variance, 0.05, 4.0);
-            }
-
-            float denoiseNeed(float correctedSignalNorm, float lscGainForNoise) {
-                float dark = 1.0 - smoothstep(
-                    min(uDenoiseSignalLow, uDenoiseSignalHigh),
-                    max(uDenoiseSignalLow, uDenoiseSignalHigh),
-                    correctedSignalNorm
-                );
-                float lsc = smoothstep(
-                    min(uDenoiseLscGainStart, uDenoiseLscGainEnd),
-                    max(uDenoiseLscGainStart, uDenoiseLscGainEnd),
-                    lscGainForNoise
-                );
-                return clamp(max(dark, dark * 0.45 + lsc * 0.55), 0.0, 1.0);
-            }
-
-            float denoiseStaticConfidence(float local, float robust) {
-                float tileConfidence = smoothstep(
-                    min(uDenoiseStaticTileStart, uDenoiseStaticTileEnd),
-                    max(uDenoiseStaticTileStart, uDenoiseStaticTileEnd),
-                    local
-                );
-                float robustConfidence = smoothstep(
-                    min(uDenoiseStaticRobustStart, uDenoiseStaticRobustEnd),
-                    max(uDenoiseStaticRobustStart, uDenoiseStaticRobustEnd),
-                    robust
-                );
-                return clamp(tileConfidence * robustConfidence, 0.0, 1.0);
-            }
-
-            vec4 loadAccumulator(ivec2 p) {
-                vec2 valueWeight = unpackHalf2x16(imageLoad(uAccumulatorValueWeight, p).r);
-                vec2 statistics = unpackHalf2x16(imageLoad(uAccumulatorStatistics, p).r);
-                return vec4(valueWeight, statistics);
-            }
-
-            void storeAccumulator(ivec2 p, vec4 value) {
-                imageStore(
-                    uAccumulatorValueWeight,
-                    p,
-                    uvec4(packHalf2x16(value.rg), 0u, 0u, 0u)
-                );
-                imageStore(
-                    uAccumulatorStatistics,
-                    p,
-                    uvec4(packHalf2x16(value.ba), 0u, 0u, 0u)
-                );
-            }
-
-            void main() {
-                ivec2 p = ivec2(
-                    int(gl_GlobalInvocationID.x),
-                    int(gl_GlobalInvocationID.y) + uImageRowOffset
-                );
-                if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
-                vec4 prev = loadAccumulator(p);
-                int bayerIndex = bayerIndexAt(uCfaPattern, p);
-                int period = cfaPeriod(uCfaPattern);
-                ivec2 phaseOffset = cfaPhaseOffset(uCfaPattern, p);
-                vec2 planePos = vec2(float(p.x / 2), float(p.y / 2));
-                if (planePos.x < -0.001 || planePos.y < -0.001 ||
-                    planePos.x > float(uPlaneSize.x - 1) + 0.001 ||
-                    planePos.y > float(uPlaneSize.y - 1) + 0.001) {
-                    storeAccumulator(p, prev);
-                    return;
-                }
-
-                float value = 0.0;
-                float robust = 1.0;
-                float local = 1.0;
-                float alignmentRobust = 1.0;
-                float clipAlpha = 0.0;
-                float highlightInfluence = 0.0;
-                float sourceLscNoiseGain = 1.0;
-                if (uIsReference != 0) {
-                    value = rawNormAt(p, bayerIndex);
-                    sourceLscNoiseGain = lscNoiseGain(p);
-                    if (uHdrMode != 0) {
-                        clipAlpha = highlightClipAlpha(p);
-                        highlightInfluence = step(0.90, rawSensorNormAt(p));
-                    }
-                } else {
-                    // Robustness and tile acceptance are evaluated with this exact local-flow warp.
-                    // Sampling from a different global/hybrid warp after that validation creates
-                    // CFA-phase edge residuals that demosaic into colored fringes.
-                    vec2 sourcePlane = localFlowSourcePlane(planePos);
-                    if (sourcePlane.x < 0.0 || sourcePlane.y < 0.0 ||
-                        sourcePlane.x > float(uPlaneSize.x - 1) ||
-                        sourcePlane.y > float(uPlaneSize.y - 1)) {
-                        storeAccumulator(p, prev);
-                        return;
-                    }
-                    alignmentRobust = mapAt(uRobustness, planePos);
-                    robust = alignmentRobust;
-                    local = tileMaskAt(planePos);
-                    float base = local * max(robust, uRobustnessFloorFactor * local);
-                    if (base <= uMinBlendBaseWeight) {
-                        storeAccumulator(p, prev);
-                        return;
-                    }
-                    vec2 sourceRaw = vec2(p) + (sourcePlane - planePos) * 2.0;
-                    if (uHdrMode != 0) {
-                        highlightInfluence = kernelSupportHighlightInfluence(sourceRaw, phaseOffset, period);
-                        ivec2 kernelCoord = clamp(ivec2(round(planePos)), ivec2(0), uPlaneSize - ivec2(1));
-                        vec4 kernel = texelFetch(uKernel, kernelCoord, 0);
-                        float sumValue = 0.0;
-                        float sumWeight = 0.0;
-                        for (int y = -1; y <= 1; ++y) {
-                            for (int x = -1; x <= 1; ++x) {
-                                vec2 tap = vec2(float(x), float(y));
-                                float tapWeight = kernelWeight(tap, kernel);
-                                sumValue += sampleSamePhase(
-                                    sourceRaw + tap * float(period),
-                                    phaseOffset,
-                                    period,
-                                    bayerIndex
-                                ) * tapWeight;
-                                sumWeight += tapWeight;
-                            }
-                        }
-                        value = sumValue / max(sumWeight, 1e-5);
-                    } else {
-                        value = sampleSamePhase(sourceRaw, phaseOffset, period, bayerIndex);
-                    }
-                    ivec2 sourceSample = nearestSamePhase(sourceRaw, phaseOffset, period);
-                    sourceLscNoiseGain = lscNoiseGain(sourceSample);
-                    if (uHdrMode != 0) {
-                        clipAlpha = highlightClipAlpha(sourceSample);
-                        float highlightSuppression = 1.0 - 0.62 * smoothstep(0.78, 0.98, value);
-                        highlightSuppression *= 1.0 - clipAlpha;
-                        robust = base * highlightSuppression;
-                    } else {
-                        clipAlpha = nonReferenceOverexposureAlpha(sourceSample, value);
-                        float highlightSuppression = 1.0 - uHighlightSuppressionStrength *
-                            smoothstep(uHighlightSuppressionStart, uHighlightSuppressionEnd, value);
-                        highlightSuppression *= 1.0 - clipAlpha;
-                        robust = base * highlightSuppression;
-                    }
-                }
-
-                float sourceValue = value;
-                float outputValue = clamp(sourceValue * uExposureScale, 0.0, 1.0);
-                float variance = noiseVarianceForChannel(sourceValue, bayerIndex, sourceLscNoiseGain);
-                float outputVariance = variance * uExposureScale * uExposureScale;
-                float wiener = (outputValue * outputValue) / (outputValue * outputValue + outputVariance + 1e-6);
-                float precisionWeight = sensorPrecisionWeight(sourceValue, bayerIndex, sourceLscNoiseGain);
-                float weight = precisionWeight * (uWienerBaseWeight + wiener);
-                float denoiseAmount = denoiseNeed(sourceValue, sourceLscNoiseGain);
-                if (uIsReference == 0) {
-                    float staticConfidence = denoiseStaticConfidence(local, alignmentRobust);
-                    if (uHdrMode == 0) staticConfidence *= 1.0 - clipAlpha;
-                    float denoiseBoost = denoiseAmount * staticConfidence;
-                    weight *= uFrameWeight * robust;
-                    weight *= mix(1.0, max(uDenoiseNonReferenceWeightBoost, 1.0), denoiseBoost);
-                    weight = max(
-                        weight,
-                        precisionWeight * uFrameWeight * robust *
-                            max(uDenoiseNonReferenceWeightFloor, 0.0) * denoiseBoost
-                    );
-                } else if (uHdrMode == 0) {
-                    weight *= mix(1.0, clamp(uDenoiseReferenceDarkWeightScale, 0.05, 1.0), denoiseAmount);
-                }
-                if (uHdrMode != 0) {
-                    weight *= 1.0 - clipAlpha;
-                }
-                if (weight <= 0.0 &&
-                    (uHdrMode == 0 || (clipAlpha <= 0.0 && highlightInfluence <= 0.0))) {
-                    storeAccumulator(p, prev);
-                    return;
-                }
-
-                float clipMass = uHdrMode != 0 ?
-                    precisionWeight * uFrameWeight * max(clipAlpha, highlightInfluence) :
-                    weight * clamp(robust, 0.0, 1.0);
-                vec4 next = prev + vec4(
-                    outputValue * weight,
-                    weight,
-                    outputValue * outputValue * weight,
-                    clipMass
-                );
-                storeAccumulator(p, next);
-            }
-        """.trimIndent()
-
-        private val SUPER_RESOLUTION_ACCUMULATE_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform highp usampler2D uInputRaw; // Removed with the remaining legacy CFA helpers.
-            uniform sampler2D uFlowGrid;
-            uniform sampler2D uRobustness;
-            uniform sampler2D uTileMask;
-            uniform sampler2D uKernel;
-            uniform sampler2D uLensShadingMap;
-            layout(r32ui, binding = 0) uniform highp uimage2D uAccumulatorRw;
-            layout(r32ui, binding = 1) uniform highp uimage2D uAccumulatorGw;
-            layout(r32ui, binding = 2) uniform highp uimage2D uAccumulatorBw;
-            layout(std430, binding = 1) readonly buffer RcdRgb0_Buf { float rcdRgb0[]; };
-            layout(std430, binding = 2) readonly buffer RcdRgb1_Buf { float rcdRgb1[]; };
-            layout(std430, binding = 3) readonly buffer RcdRgb2_Buf { float rcdRgb2[]; };
-            uniform ivec2 uImageSize;
-            uniform ivec2 uSourceSize;
-            uniform int uSourceRowOffset;
-            uniform ivec2 uOutputSize;
-            uniform ivec2 uPlaneSize;
-            uniform ivec2 uGridSize;
-            uniform int uTileSize;
-            uniform int uIsReference;
-            uniform int uCfaPattern;
-            uniform float uBlackLevel[4];
-            uniform float uWhiteLevel;
-            uniform float uNoiseAlpha;
-            uniform float uNoiseBeta;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uFrameWeight;
-            uniform float uExposureScale;
-            uniform float uOutputScale;
-            uniform float uSrMinEffectiveWeight;
-            uniform float uSrSplatRadius;
-            uniform float uRegistrationSrWeight;
-            uniform float uMinBlendBaseWeight;
-            uniform float uRobustnessFloorFactor;
-            uniform float uPrecisionReferenceSignal;
-            uniform float uLscNoiseGainMax;
-            uniform float uWienerBaseWeight;
-            uniform float uHighlightSuppressionStrength;
-            uniform float uHighlightSuppressionStart;
-            uniform float uHighlightSuppressionEnd;
-            uniform int uOutputRowOffset;
-            uniform int uOutputRowCount;
-
-            vec2 referenceRawPos(ivec2 outputPos) {
-                return (vec2(outputPos) + vec2(0.5)) / max(uOutputScale, 1.0) - vec2(0.5);
-            }
-
-            vec2 flowAt(vec2 planePos) {
-                vec2 grid = planePos / float(uTileSize) - vec2(0.5);
-                vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
-                return texture(uFlowGrid, clamp(uv, vec2(0.0), vec2(1.0))).rg;
-            }
-
-            vec2 localFlowSourceRaw(vec2 rawPos) {
-                return rawPos + flowAt(rawPos * 0.5) * 2.0;
-            }
-
-            float mapAt(sampler2D tex, vec2 planePos) {
-                vec2 uv = (clamp(planePos, vec2(0.0), vec2(uPlaneSize - ivec2(1))) + vec2(0.5)) / vec2(uPlaneSize);
-                return texture(tex, uv).r;
-            }
-
-            float tileMaskAt(vec2 planePos) {
-                vec2 grid = planePos / float(uTileSize) - vec2(0.5);
-                vec2 uv = (grid + vec2(0.5)) / vec2(uGridSize);
-                return texture(uTileMask, clamp(uv, vec2(0.0), vec2(1.0))).r;
-            }
-
-            float lscGain(ivec2 samplePos) {
-                vec2 uv = (vec2(samplePos) + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(uLensShadingMap, uv);
-                int channel = lensShadingChannelAt(uCfaPattern, samplePos);
-                if (channel == 0) return gains.r;
-                if (channel == 1) return gains.g;
-                if (channel == 2) return gains.b;
-                return gains.a;
-            }
-
-            float lscNoiseGain(ivec2 samplePos) {
-                return clamp(lscGain(samplePos), 1e-3, max(uLscNoiseGainMax, 1.0));
-            }
-
-            float rawNormAt(ivec2 samplePos, int bayerIndex) {
-                samplePos = clamp(samplePos, ivec2(0), uImageSize - ivec2(1));
-                float raw = float(texelFetch(uInputRaw, samplePos, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
-                return clamp(max(raw - uBlackLevel[bayerIndex], 0.0) * lscGain(samplePos) / range, 0.0, 1.0);
-            }
-
-            float rawSensorNormAt(ivec2 samplePos) {
-                samplePos = clamp(samplePos, ivec2(0), uImageSize - ivec2(1));
-                int bayerIndex = bayerIndexAt(uCfaPattern, samplePos);
-                float raw = float(texelFetch(uInputRaw, samplePos, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
-                return clamp(max(raw - uBlackLevel[bayerIndex], 0.0) / range, 0.0, 1.0);
-            }
-
-            float tileSensorMax(ivec2 samplePos) {
-                ivec2 base = samplePos - ivec2(samplePos.x & 1, samplePos.y & 1);
-                float m = 0.0;
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        m = max(m, rawSensorNormAt(base + ivec2(x, y)));
-                    }
-                }
-                return m;
-            }
-
-            float tileSensorMean(ivec2 samplePos) {
-                ivec2 base = samplePos - ivec2(samplePos.x & 1, samplePos.y & 1);
-                float sum = 0.0;
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        sum += rawSensorNormAt(base + ivec2(x, y));
-                    }
-                }
-                return sum * 0.25;
-            }
-
-            float highlightClipAlpha(ivec2 samplePos) {
-                float pixel = rawSensorNormAt(samplePos);
-                float tile = tileSensorMax(samplePos);
-                float tileMean = tileSensorMean(samplePos);
-                float pixelClip = smoothstep(0.965, 0.997, pixel);
-                float tileClip = smoothstep(0.975, 0.999, tile) * smoothstep(0.78, 0.94, tileMean);
-                return clamp(max(pixelClip, 0.75 * tileClip), 0.0, 1.0);
-            }
-
-            vec3 kernelMatrix(vec4 params) {
-                float k1 = params.x;
-                float k2 = params.y;
-                float c2 = params.z;
-                float s2 = params.w;
-                float sumK = k1 + k2;
-                float diffK = k1 - k2;
-                return vec3(0.5 * (sumK + diffK * c2), 0.5 * diffK * s2, 0.5 * (sumK - diffK * c2));
-            }
-
-            float kernelWeight(vec2 tap, vec4 params) {
-                vec3 k = kernelMatrix(params);
-                float mahalanobis = k.x * tap.x * tap.x + 2.0 * k.y * tap.x * tap.y + k.z * tap.y * tap.y;
-                return exp(-0.5 * max(mahalanobis, 0.0));
-            }
-
-            float noiseVarianceForChannel(float correctedSignalNorm, int bayerIndex, float lscGainForNoise) {
-                float channelAlpha = uNoiseAlphaByChannel[bayerIndex];
-                float channelBeta = uNoiseBetaByChannel[bayerIndex];
-                if (channelAlpha <= 0.0 && channelBeta <= 0.0) return 1e-10;
-                float gain = clamp(lscGainForNoise, 1e-3, max(uLscNoiseGainMax, 1.0));
-                return max(
-                    channelAlpha * clamp(correctedSignalNorm, 0.0, 1.0) * gain +
-                    channelBeta * gain * gain,
-                    1e-10
-                );
-            }
-
-            float sensorPrecisionWeight(float correctedSignalNorm, int bayerIndex, float lscGainForNoise) {
-                float channelAlpha = uNoiseAlphaByChannel[bayerIndex];
-                float channelBeta = uNoiseBetaByChannel[bayerIndex];
-                if (channelAlpha <= 0.0 && channelBeta <= 0.0) return 1.0;
-                float variance = noiseVarianceForChannel(correctedSignalNorm, bayerIndex, lscGainForNoise);
-                float referenceVariance = noiseVarianceForChannel(uPrecisionReferenceSignal, bayerIndex, 1.0);
-                return clamp(referenceVariance / variance, 0.05, 4.0);
-            }
-
-            ivec2 phaseForBayerIndex(int bayerIndex) {
-                int period = cfaPeriod(uCfaPattern);
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
-                        if (x < period && y < period &&
-                            bayerIndexAt(uCfaPattern, ivec2(x, y)) == bayerIndex) {
-                            return ivec2(x, y);
-                        }
-                    }
-                }
-                return ivec2(0);
-            }
-
-            vec2 channelObservation(vec2 rawPos, int bayerIndex, vec4 steeringKernel) {
-                int period = cfaPeriod(uCfaPattern);
-                ivec2 phaseOffset = phaseForBayerIndex(bayerIndex);
-                ivec2 maxLattice = max(
-                    (uImageSize - ivec2(1) - phaseOffset) / ivec2(period),
-                    ivec2(0)
-                );
-                vec2 lattice = clamp(
-                    (rawPos - vec2(phaseOffset)) / float(period),
-                    vec2(0.0),
-                    vec2(maxLattice)
-                );
-                ivec2 p0 = ivec2(floor(lattice));
-                ivec2 p1 = min(p0 + ivec2(1), maxLattice);
-                float sigma = max(uSrSplatRadius, 0.25);
-                float valueSum = 0.0;
-                float weightSum = 0.0;
-                for (int y = 0; y <= 1; ++y) {
-                    for (int x = 0; x <= 1; ++x) {
-                        ivec2 q = ivec2(x == 0 ? p0.x : p1.x, y == 0 ? p0.y : p1.y);
-                        ivec2 samplePos = phaseOffset + q * period;
-                        vec2 delta = vec2(samplePos) - rawPos;
-                        ivec2 qxm = max(q - ivec2(1, 0), ivec2(0));
-                        ivec2 qxp = min(q + ivec2(1, 0), maxLattice);
-                        ivec2 qym = max(q - ivec2(0, 1), ivec2(0));
-                        ivec2 qyp = min(q + ivec2(0, 1), maxLattice);
-                        float center = rawNormAt(samplePos, bayerIndex);
-                        float xm = rawNormAt(phaseOffset + qxm * period, bayerIndex);
-                        float xp = rawNormAt(phaseOffset + qxp * period, bayerIndex);
-                        float ym = rawNormAt(phaseOffset + qym * period, bayerIndex);
-                        float yp = rawNormAt(phaseOffset + qyp * period, bayerIndex);
-                        float spanX = max(float(qxp.x - qxm.x) * float(period), 1.0);
-                        float spanY = max(float(qyp.y - qym.y) * float(period), 1.0);
-                        vec2 gradient = vec2((xp - xm) / spanX, (yp - ym) / spanY);
-                        // First-order local polynomial regression evaluated at the target point.
-                        // Clamp to the observed same-color neighborhood to prevent ringing at
-                        // clipped edges and isolated hot pixels.
-                        float projected = center - dot(gradient, delta);
-                        float localMin = min(center, min(min(xm, xp), min(ym, yp)));
-                        float localMax = max(center, max(max(xm, xp), max(ym, yp)));
-                        float value = clamp(projected, localMin, localMax);
-                        value = clamp(value * uExposureScale, 0.0, 1.0);
-                        float spatialWeight = exp(-0.5 * dot(delta, delta) / (sigma * sigma));
-                        spatialWeight *= kernelWeight(delta * 0.5, steeringKernel);
-                        valueSum += value * spatialWeight;
-                        weightSum += spatialWeight;
-                    }
-                }
-                return vec2(valueSum, weightSum);
-            }
-
-            float cubicWeight(float x) {
-                x = abs(x);
-                if (x < 1.0) return 1.5 * x * x * x - 2.5 * x * x + 1.0;
-                if (x < 2.0) return -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0;
-                return 0.0;
-            }
-
-            vec3 rcdRgbAt(ivec2 p) {
-                p = clamp(p, ivec2(0), uSourceSize - ivec2(1));
-                int index = p.y * uSourceSize.x + p.x;
-                return vec3(rcdRgb0[index], rcdRgb1[index], rcdRgb2[index]);
-            }
-
-            vec3 sampleRcdRgb(vec2 globalRawPos) {
-                vec2 localPos = globalRawPos - vec2(0.0, float(uSourceRowOffset));
-                ivec2 origin = ivec2(floor(localPos));
-                vec3 sum = vec3(0.0);
-                float weightSum = 0.0;
-                for (int y = -1; y <= 2; ++y) {
-                    for (int x = -1; x <= 2; ++x) {
-                        ivec2 q = origin + ivec2(x, y);
-                        float weight = cubicWeight(localPos.x - float(q.x)) *
-                            cubicWeight(localPos.y - float(q.y));
-                        sum += rcdRgbAt(q) * weight;
-                        weightSum += weight;
-                    }
-                }
-                return clamp(sum / max(weightSum, 1e-6), 0.0, 1.0);
-            }
-
-            void main() {
-                ivec2 accumulatorP = ivec2(gl_GlobalInvocationID.xy);
-                ivec2 p = accumulatorP + ivec2(0, uOutputRowOffset);
-                if (accumulatorP.x >= uOutputSize.x || accumulatorP.y >= uOutputRowCount ||
-                    p.y >= uOutputSize.y) return;
-
-                vec2 prevRw = unpackHalf2x16(imageLoad(uAccumulatorRw, accumulatorP).r);
-                vec2 prevGw = unpackHalf2x16(imageLoad(uAccumulatorGw, accumulatorP).r);
-                vec2 prevBw = unpackHalf2x16(imageLoad(uAccumulatorBw, accumulatorP).r);
-                vec2 refRaw = referenceRawPos(p);
-                vec2 planePos = refRaw * 0.5;
-
-                vec2 sourceRaw = refRaw;
-                float base = 1.0;
-                if (uIsReference == 0) {
-                    if (uRegistrationSrWeight <= 0.0) return;
-                    sourceRaw = localFlowSourceRaw(refRaw);
-                    if (sourceRaw.x < -0.5 || sourceRaw.y < -0.5 ||
-                        sourceRaw.x > float(uImageSize.x) - 0.5 ||
-                        sourceRaw.y > float(uImageSize.y) - 0.5) {
-                        return;
-                    }
-                    float local = tileMaskAt(planePos);
-                    float robust = mapAt(uRobustness, planePos);
-                    base = local * max(robust, uRobustnessFloorFactor * local);
-                    if (base <= max(uMinBlendBaseWeight, uSrMinEffectiveWeight * 0.25)) return;
-                }
-
-                vec3 rgb = sampleRcdRgb(sourceRaw) * uExposureScale;
-                float signal = max(max(rgb.r, rgb.g), rgb.b);
-                float temporalWeight = 1.0;
-                if (uIsReference == 0) {
-                    float highlightSuppression = 1.0 - uHighlightSuppressionStrength *
-                        smoothstep(uHighlightSuppressionStart, uHighlightSuppressionEnd, signal);
-                    temporalWeight = uFrameWeight * base * highlightSuppression *
-                        clamp(uRegistrationSrWeight, 0.0, 1.0);
-                }
-                if (temporalWeight <= 1e-5) return;
-
-                vec2 nextRw = prevRw + vec2(rgb.r * temporalWeight, temporalWeight);
-                vec2 nextGw = prevGw + vec2(rgb.g * temporalWeight, temporalWeight);
-                vec2 nextBw = prevBw + vec2(rgb.b * temporalWeight, temporalWeight);
-                imageStore(uAccumulatorRw, accumulatorP, uvec4(packHalf2x16(nextRw), 0u, 0u, 0u));
-                imageStore(uAccumulatorGw, accumulatorP, uvec4(packHalf2x16(nextGw), 0u, 0u, 0u));
-                imageStore(uAccumulatorBw, accumulatorP, uvec4(packHalf2x16(nextBw), 0u, 0u, 0u));
-            }
-        """.trimIndent()
-
-        private val SUPER_RESOLUTION_RCD_ACCUMULATE_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform sampler2D uFlowGrid;
-            uniform sampler2D uRobustness;
-            uniform sampler2D uTileMask;
-            layout(r32ui, binding = 0) uniform highp uimage2D uAccumulatorRw;
-            layout(r32ui, binding = 1) uniform highp uimage2D uAccumulatorGw;
-            layout(r32ui, binding = 2) uniform highp uimage2D uAccumulatorBw;
-            layout(std430, binding = 1) readonly buffer RcdRgb0_Buf { float rcdRgb0[]; };
-            layout(std430, binding = 2) readonly buffer RcdRgb1_Buf { float rcdRgb1[]; };
-            layout(std430, binding = 3) readonly buffer RcdRgb2_Buf { float rcdRgb2[]; };
-            uniform ivec2 uImageSize;
-            uniform ivec2 uOutputSize;
-            uniform ivec2 uPlaneSize;
-            uniform ivec2 uGridSize;
-            uniform ivec2 uSourceSize;
-            uniform int uSourceRowOffset;
-            uniform vec3 uCalculationGains;
-            uniform int uTileSize;
-            uniform int uIsReference;
-            uniform float uFrameWeight;
-            uniform float uExposureScale;
-            uniform float uOutputScale;
-            uniform float uRegistrationSrWeight;
-            uniform float uSrMinEffectiveWeight;
-            uniform float uMinBlendBaseWeight;
-            uniform float uRobustnessFloorFactor;
-            uniform float uHighlightSuppressionStrength;
-            uniform float uHighlightSuppressionStart;
-            uniform float uHighlightSuppressionEnd;
-            uniform float uDenoiseSignalLow;
-            uniform float uDenoiseSignalHigh;
-            uniform float uDenoiseStaticRobustStart;
-            uniform float uDenoiseStaticRobustEnd;
-            uniform float uDenoiseStaticTileStart;
-            uniform float uDenoiseStaticTileEnd;
-            uniform float uDenoiseNonReferenceWeightBoost;
-            uniform float uDenoiseNonReferenceWeightFloor;
-            uniform float uDenoiseReferenceDarkWeightScale;
-            uniform int uOutputRowOffset;
-            uniform int uOutputRowCount;
-
-            vec2 referenceRawPos(ivec2 outputPos) {
-                return (vec2(outputPos) + vec2(0.5)) / max(uOutputScale, 1.0) - vec2(0.5);
-            }
-            vec2 flowAt(vec2 planePos) {
-                vec2 grid = planePos / float(uTileSize) - vec2(0.5);
-                return texture(uFlowGrid, clamp((grid + vec2(0.5)) / vec2(uGridSize), vec2(0.0), vec2(1.0))).rg;
-            }
-            float mapAt(sampler2D tex, vec2 planePos) {
-                vec2 uv = (clamp(planePos, vec2(0.0), vec2(uPlaneSize - ivec2(1))) + vec2(0.5)) / vec2(uPlaneSize);
-                return texture(tex, uv).r;
-            }
-            float tileMaskAt(vec2 planePos) {
-                vec2 grid = planePos / float(uTileSize) - vec2(0.5);
-                return texture(uTileMask, clamp((grid + vec2(0.5)) / vec2(uGridSize), vec2(0.0), vec2(1.0))).r;
-            }
-            float cubicWeight(float x) {
-                x = abs(x);
-                if (x < 1.0) return 1.5*x*x*x - 2.5*x*x + 1.0;
-                if (x < 2.0) return -0.5*x*x*x + 2.5*x*x - 4.0*x + 2.0;
-                return 0.0;
-            }
-            vec3 rcdRgbAt(ivec2 p) {
-                p = clamp(p, ivec2(0), uSourceSize - ivec2(1));
-                int i = p.y * uSourceSize.x + p.x;
-                return vec3(rcdRgb0[i], rcdRgb1[i], rcdRgb2[i]) /
-                    max(uCalculationGains, vec3(1e-6));
-            }
-            vec3 sampleRcdRgb(vec2 globalRawPos) {
-                vec2 pos = globalRawPos - vec2(0.0, float(uSourceRowOffset));
-                ivec2 origin = ivec2(floor(pos));
-                vec3 sum = vec3(0.0);
-                float weight = 0.0;
-                for (int y = -1; y <= 2; ++y) for (int x = -1; x <= 2; ++x) {
-                    ivec2 q = origin + ivec2(x, y);
-                    float w = cubicWeight(pos.x - float(q.x)) * cubicWeight(pos.y - float(q.y));
-                    sum += rcdRgbAt(q) * w;
-                    weight += w;
-                }
-                return clamp(sum / max(weight, 1e-6), 0.0, 1.0);
-            }
-            float denoiseNeed(float signal) {
-                return 1.0 - smoothstep(
-                    min(uDenoiseSignalLow, uDenoiseSignalHigh),
-                    max(uDenoiseSignalLow, uDenoiseSignalHigh),
-                    signal
-                );
-            }
-            float denoiseStaticConfidence(float local, float robust) {
-                float tileConfidence = smoothstep(
-                    min(uDenoiseStaticTileStart, uDenoiseStaticTileEnd),
-                    max(uDenoiseStaticTileStart, uDenoiseStaticTileEnd),
-                    local
-                );
-                float robustConfidence = smoothstep(
-                    min(uDenoiseStaticRobustStart, uDenoiseStaticRobustEnd),
-                    max(uDenoiseStaticRobustStart, uDenoiseStaticRobustEnd),
-                    robust
-                );
-                return clamp(tileConfidence * robustConfidence, 0.0, 1.0);
-            }
-            void main() {
-                ivec2 ap = ivec2(gl_GlobalInvocationID.xy);
-                ivec2 p = ap + ivec2(0, uOutputRowOffset);
-                if (ap.x >= uOutputSize.x || ap.y >= uOutputRowCount || p.y >= uOutputSize.y) return;
-                vec2 refRawPos = referenceRawPos(p);
-                vec2 planePos = refRawPos * 0.5;
-                vec2 sourceRaw = refRawPos;
-                float temporalWeight = 1.0;
-                float local = 1.0;
-                float robust = 1.0;
-                float srCoverage = 1.0;
-                if (uIsReference == 0) {
-                    if (uRegistrationSrWeight <= 0.0) return;
-                    sourceRaw += flowAt(planePos) * 2.0;
-                    if (sourceRaw.x < 0.0 || sourceRaw.y < 0.0 ||
-                        sourceRaw.x > float(uImageSize.x - 1) || sourceRaw.y > float(uImageSize.y - 1)) return;
-                    local = tileMaskAt(planePos);
-                    robust = mapAt(uRobustness, planePos);
-                    srCoverage = local * max(robust, uRobustnessFloorFactor * local);
-                    // Registration already admitted this frame. Keep robustness continuous;
-                    // the old CFA-SR hard threshold rejected nearly every RCD RGB observation.
-                    temporalWeight = uFrameWeight * clamp(uRegistrationSrWeight, 0.0, 1.0);
-                }
-                vec3 rgb = clamp(sampleRcdRgb(sourceRaw) * uExposureScale, 0.0, 1.0);
-                float denoiseAmount = denoiseNeed(dot(rgb, vec3(0.2126, 0.7152, 0.0722)));
-                if (uIsReference == 0) {
-                    float staticConfidence = denoiseStaticConfidence(local, robust);
-                    float relaxedRobust = smoothstep(
-                        0.25 * min(uDenoiseStaticRobustStart, uDenoiseStaticRobustEnd),
-                        min(uDenoiseStaticRobustStart, uDenoiseStaticRobustEnd),
-                        robust
-                    );
-                    // NR coverage is deliberately wider than SR detail coverage. Reliable flow in
-                    // dark/flat regions still contributes temporal denoising even when the strict
-                    // detail tile mask is low.
-                    float nrCoverage = denoiseAmount * relaxedRobust *
-                        max(uDenoiseNonReferenceWeightFloor, 0.0);
-                    float fusionCoverage = max(srCoverage, nrCoverage);
-                    temporalWeight *= fusionCoverage * mix(
-                        1.0,
-                        max(uDenoiseNonReferenceWeightBoost, 1.0),
-                        denoiseAmount * staticConfidence
-                    );
-                    float signal = max(max(rgb.r, rgb.g), rgb.b);
-                    temporalWeight *= 1.0 - uHighlightSuppressionStrength *
-                        smoothstep(uHighlightSuppressionStart, uHighlightSuppressionEnd, signal);
-                } else {
-                    temporalWeight *= mix(
-                        1.0,
-                        clamp(uDenoiseReferenceDarkWeightScale, 0.05, 1.0),
-                        denoiseAmount
-                    );
-                }
-                if (temporalWeight <= 1e-6) return;
-                vec2 rw = unpackHalf2x16(imageLoad(uAccumulatorRw, ap).r) + vec2(rgb.r, 1.0) * temporalWeight;
-                vec2 gw = unpackHalf2x16(imageLoad(uAccumulatorGw, ap).r) + vec2(rgb.g, 1.0) * temporalWeight;
-                vec2 bw = unpackHalf2x16(imageLoad(uAccumulatorBw, ap).r) + vec2(rgb.b, 1.0) * temporalWeight;
-                imageStore(uAccumulatorRw, ap, uvec4(packHalf2x16(rw), 0u, 0u, 0u));
-                imageStore(uAccumulatorGw, ap, uvec4(packHalf2x16(gw), 0u, 0u, 0u));
-                imageStore(uAccumulatorBw, ap, uvec4(packHalf2x16(bw), 0u, 0u, 0u));
-            }
-        """.trimIndent()
-
-        private val SUPER_RESOLUTION_NORMALIZE_FRAGMENT_SHADER = """
-            #version 300 es
-            $RAW_COMMON
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            uniform highp usampler2D uSrAccumulator;
-            uniform highp usampler2D uSrAccumulatorBw;
-            uniform highp usampler2D uSrAccumulatorB;
-            uniform sampler2D uBasePackedRaw;
-            uniform sampler2D uLensShadingMap;
-            uniform ivec2 uImageSize;
-            uniform int uCfaPattern;
-            uniform float uOutputScale;
-            uniform int uForceBaseUpscale;
-            uniform float uDetailConfidenceStart;
-            uniform float uDetailConfidenceFull;
-            uniform float uLscNoiseGainMax;
-            uniform float uLowLightSignalLow;
-            uniform float uLowLightSignalHigh;
-            uniform float uLscSmoothGainStart;
-            uniform float uLscSmoothGainEnd;
-            uniform float uReconstructionLowLightSuppression;
-            uniform float uReconstructionLscSuppression;
-            uniform int uOutputRowOffset;
-
-            vec2 referenceRawPos(ivec2 outputPos) {
-                return (vec2(outputPos) + vec2(0.5)) / max(uOutputScale, 1.0) - vec2(0.5);
-            }
-
-            float channelLscNoiseGain(vec2 rawPos) {
-                vec2 uv = (rawPos + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(uLensShadingMap, uv);
-                ivec2 samplePos = clamp(
-                    ivec2(round(rawPos)),
-                    ivec2(0),
-                    uImageSize - ivec2(1)
-                );
-                int channel = lensShadingChannelAt(uCfaPattern, samplePos);
-                float gain = channel == 0 ? gains.r :
-                    (channel == 1 ? gains.g : (channel == 2 ? gains.b : gains.a));
-                return clamp(gain, 1e-3, max(uLscNoiseGainMax, 1.0));
-            }
-
-            float basePackedNormAt(ivec2 samplePos) {
-                samplePos = clamp(samplePos, ivec2(0), uImageSize - ivec2(1));
-                vec2 rg = texelFetch(uBasePackedRaw, samplePos, 0).rg;
-                float lo = floor(rg.r * 255.0 + 0.5);
-                float hi = floor(rg.g * 255.0 + 0.5);
-                return clamp((lo + hi * 256.0) / 65535.0, 0.0, 1.0);
-            }
-
-            ivec2 maxLatticeForPhase(ivec2 phaseOffset, int period) {
-                return max((uImageSize - ivec2(1) - phaseOffset) / ivec2(period), ivec2(0));
-            }
-
-            float fetchBaseSamePhase(ivec2 lattice, ivec2 phaseOffset, int period) {
-                lattice = clamp(lattice, ivec2(0), maxLatticeForPhase(phaseOffset, period));
-                return basePackedNormAt(phaseOffset + lattice * period);
-            }
-
-            float sampleBaseSamePhase(vec2 rawPos, ivec2 phaseOffset, int period) {
-                ivec2 maxLattice = maxLatticeForPhase(phaseOffset, period);
-                vec2 phase = vec2(float(phaseOffset.x), float(phaseOffset.y));
-                vec2 pos = clamp(
-                    (rawPos - phase) / float(period),
-                    vec2(0.0),
-                    vec2(float(maxLattice.x), float(maxLattice.y))
-                );
-                ivec2 p0 = ivec2(floor(pos));
-                ivec2 p1 = min(p0 + ivec2(1), maxLattice);
-                vec2 f = pos - vec2(p0);
-                float v00 = fetchBaseSamePhase(p0, phaseOffset, period);
-                float v10 = fetchBaseSamePhase(ivec2(p1.x, p0.y), phaseOffset, period);
-                float v01 = fetchBaseSamePhase(ivec2(p0.x, p1.y), phaseOffset, period);
-                float v11 = fetchBaseSamePhase(p1, phaseOffset, period);
-                return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
-            }
-
-            float baseOutputNorm(ivec2 outputPos, int period, ivec2 phaseOffset) {
-                return sampleBaseSamePhase(referenceRawPos(outputPos), phaseOffset, period);
-            }
-
-            ivec2 phaseForBayerIndex(int bayerIndex) {
-                int period = cfaPeriod(uCfaPattern);
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
-                        if (x < period && y < period &&
-                            bayerIndexAt(uCfaPattern, ivec2(x, y)) == bayerIndex) {
-                            return ivec2(x, y);
-                        }
-                    }
-                }
-                return ivec2(0);
-            }
-
-            vec3 baseLinearRgb(vec2 rawPos) {
-                int period = cfaPeriod(uCfaPattern);
-                float red = sampleBaseSamePhase(rawPos, phaseForBayerIndex(0), period);
-                float green = 0.5 * (
-                    sampleBaseSamePhase(rawPos, phaseForBayerIndex(1), period) +
-                    sampleBaseSamePhase(rawPos, phaseForBayerIndex(2), period)
-                );
-                float blue = sampleBaseSamePhase(rawPos, phaseForBayerIndex(3), period);
-                return vec3(red, green, blue);
-            }
-
-            float mosaicValue(vec3 rgb, ivec2 outputPos) {
-                int channel = bayerIndexAt(uCfaPattern, outputPos);
-                if (channel == 0) return rgb.r;
-                if (channel == 3) return rgb.b;
-                return rgb.g;
-            }
-
-            float lowLightAmount(float signal) {
-                return 1.0 - smoothstep(
-                    min(uLowLightSignalLow, uLowLightSignalHigh),
-                    max(uLowLightSignalLow, uLowLightSignalHigh),
-                    signal
-                );
-            }
-
-            float lscSmoothAmount(float lscGainForNoise) {
-                return smoothstep(
-                    min(uLscSmoothGainStart, uLscSmoothGainEnd),
-                    max(uLscSmoothGainStart, uLscSmoothGainEnd),
-                    lscGainForNoise
-                );
-            }
-
-            void main() {
-                ivec2 p = ivec2(gl_FragCoord.xy);
-                ivec2 accumulatorP = p - ivec2(0, uOutputRowOffset);
-                vec2 accumulatedRw = unpackHalf2x16(texelFetch(uSrAccumulator, accumulatorP, 0).r);
-                vec2 accumulatedGw = unpackHalf2x16(texelFetch(uSrAccumulatorBw, accumulatorP, 0).r);
-                vec2 accumulatedBw = unpackHalf2x16(texelFetch(uSrAccumulatorB, accumulatorP, 0).r);
-                vec3 reconstructedRgb = clamp(vec3(
-                    accumulatedRw.x / max(accumulatedRw.y, 1e-5),
-                    accumulatedGw.x / max(accumulatedGw.y, 1e-5),
-                    accumulatedBw.x / max(accumulatedBw.y, 1e-5)
-                ), 0.0, 1.0);
-                float fused = mosaicValue(reconstructedRgb, p);
-
-                uint raw = uint(floor(fused * 65535.0 + 0.5));
-                uint lo = raw & 255u;
-                uint hi = (raw >> 8) & 255u;
-                fragColor = vec4(float(lo) / 255.0, float(hi) / 255.0, 0.0, 1.0);
-            }
-        """.trimIndent()
-
-        /** Pure RCD-MFSR normalization; intentionally contains no base or fallback input. */
-        private val SUPER_RESOLUTION_NORMALIZE_RCD_FRAGMENT_SHADER = """
-            #version 300 es
-            $RAW_COMMON
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            uniform highp usampler2D uSrAccumulator;
-            uniform highp usampler2D uSrAccumulatorBw;
-            uniform highp usampler2D uSrAccumulatorB;
-            uniform int uCfaPattern;
-            uniform int uAccumulatorRowOffset;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uFinalSmoothStrength;
-            uniform float uFlatVarianceStart;
-            uniform float uFlatVarianceEnd;
-            uniform float uDetailKeepNoiseLowScale;
-            uniform float uDetailKeepNoiseHighScale;
-            uniform float uDetailKeepOffsetLow;
-            uniform float uDetailKeepOffsetHigh;
-            uniform float uDetailKeepSuppression;
-            uniform float uPostfilterNoiseFloor;
-            uniform float uLowLightSignalLow;
-            uniform float uLowLightSignalHigh;
-            uniform float uLowLightSmoothBoost;
-            uniform float uMaxSmoothStrength;
-
-            vec4 rgbWeightAt(ivec2 p) {
-                ivec2 size = textureSize(uSrAccumulator, 0);
-                p = clamp(p, ivec2(0), size - ivec2(1));
-                vec2 rw = unpackHalf2x16(texelFetch(uSrAccumulator, p, 0).r);
-                vec2 gw = unpackHalf2x16(texelFetch(uSrAccumulatorBw, p, 0).r);
-                vec2 bw = unpackHalf2x16(texelFetch(uSrAccumulatorB, p, 0).r);
-                return vec4(
-                    rw.x / max(rw.y, 1e-6),
-                    gw.x / max(gw.y, 1e-6),
-                    bw.x / max(bw.y, 1e-6),
-                    min(rw.y, min(gw.y, bw.y))
-                );
-            }
-
-            void main() {
-                ivec2 outputPos = ivec2(gl_FragCoord.xy);
-                ivec2 stripePos = outputPos - ivec2(0, uAccumulatorRowOffset);
-                vec4 centerSample = rgbWeightAt(stripePos);
-                vec3 rgb = clamp(centerSample.rgb, 0.0, 1.0);
-                vec3 mean = vec3(0.0);
-                vec3 mean2 = vec3(0.0);
-                float count = 0.0;
-                for (int y = -2; y <= 2; ++y) {
-                    for (int x = -2; x <= 2; ++x) {
-                        vec3 value = rgbWeightAt(stripePos + ivec2(x, y)).rgb;
-                        mean += value;
-                        mean2 += value * value;
-                        count += 1.0;
-                    }
-                }
-                mean /= count;
-                mean2 /= count;
-                vec3 variance = max(mean2 - mean * mean, vec3(0.0));
-                vec3 alpha = vec3(
-                    uNoiseAlphaByChannel[0],
-                    0.5 * (uNoiseAlphaByChannel[1] + uNoiseAlphaByChannel[2]),
-                    uNoiseAlphaByChannel[3]
-                );
-                vec3 beta = vec3(
-                    uNoiseBetaByChannel[0],
-                    0.5 * (uNoiseBetaByChannel[1] + uNoiseBetaByChannel[2]),
-                    uNoiseBetaByChannel[3]
-                );
-                vec3 noise = max(
-                    alpha * rgb + beta,
-                    vec3(max(uPostfilterNoiseFloor, 0.0))
-                ) / max(centerSample.a, 1.0);
-                vec3 structure = max(variance - noise, vec3(0.0));
-                vec3 wienerGain = structure / max(variance, vec3(1e-6));
-                vec3 denoised = mean + wienerGain * (rgb - mean);
-                vec3 noiseStd = sqrt(max(noise, vec3(1e-10)));
-                vec3 detail = abs(rgb - mean);
-                vec3 detailKeep = smoothstep(
-                    uDetailKeepNoiseLowScale * noiseStd + vec3(uDetailKeepOffsetLow),
-                    uDetailKeepNoiseHighScale * noiseStd + vec3(uDetailKeepOffsetHigh),
-                    detail
-                );
-                vec3 flatness = vec3(1.0) - smoothstep(
-                    vec3(uFlatVarianceStart), vec3(uFlatVarianceEnd), structure
-                );
-                float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-                float shadow = 1.0 - smoothstep(
-                    min(uLowLightSignalLow, uLowLightSignalHigh),
-                    max(uLowLightSignalLow, uLowLightSignalHigh),
-                    luma
-                );
-                vec3 smoothAmount = uFinalSmoothStrength * flatness *
-                    (vec3(1.0) - uDetailKeepSuppression * detailKeep) *
-                    (1.0 + uLowLightSmoothBoost * shadow);
-                smoothAmount = clamp(smoothAmount, vec3(0.0), vec3(uMaxSmoothStrength));
-                rgb = clamp(mix(rgb, denoised, smoothAmount), 0.0, 1.0);
-                int channel = bayerIndexAt(uCfaPattern, outputPos);
-                float value = channel == 0 ? rgb.r : (channel == 3 ? rgb.b : rgb.g);
-                uint raw = uint(floor(value * 65535.0 + 0.5));
-                fragColor = vec4(
-                    float(raw & 255u) / 255.0,
-                    float((raw >> 8) & 255u) / 255.0,
-                    0.0,
-                    1.0
-                );
-            }
-        """.trimIndent()
 
         private val DIAGNOSTIC_ALIGNMENT_COMPUTE_SHADER = """
             #version 310 es
@@ -11965,577 +9310,6 @@ class GlesRawStacker(
             }
         """.trimIndent()
 
-        private val DIAGNOSTIC_FINAL_COMPUTE_SHADER = """
-            #version 310 es
-            $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
-            uniform highp usampler2D uAccumulatorValueWeight;
-            uniform highp usampler2D uAccumulatorStatistics;
-            uniform sampler2D uLensShadingMap;
-            uniform ivec2 uImageSize;
-            uniform ivec2 uAccumulatorSize;
-            uniform ivec2 uSampleGridSize;
-            uniform int uSampleStep;
-            uniform int uCfaPattern;
-            uniform int uSuperResolutionEnabled;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uOutputScale;
-            uniform float uWeightHistogramRange;
-            uniform float uPostResidualHistogramRange;
-            uniform float uLensShadingEdgeFraction;
-            uniform float uFinalSmoothStrength;
-            uniform float uFlatVarianceStart;
-            uniform float uFlatVarianceEnd;
-            uniform float uDetailKeepNoiseLowScale;
-            uniform float uDetailKeepNoiseHighScale;
-            uniform float uDetailKeepOffsetLow;
-            uniform float uDetailKeepOffsetHigh;
-            uniform float uDetailKeepSuppression;
-            uniform float uLscNoiseGainMax;
-            uniform float uPostfilterNoiseFloor;
-            uniform float uLowLightSignalLow;
-            uniform float uLowLightSignalHigh;
-            uniform float uLowLightSmoothBoost;
-            uniform float uLscSmoothGainStart;
-            uniform float uLscSmoothGainEnd;
-            uniform float uLscSmoothBoost;
-            uniform float uLowWeightStart;
-            uniform float uLowWeightEnd;
-            uniform float uLowWeightSmoothBoost;
-            uniform float uResidualNoiseWeight;
-            uniform float uResidualNoiseLowScale;
-            uniform float uResidualNoiseHighScale;
-            uniform float uResidualSmoothBoost;
-            uniform float uMaxSmoothStrength;
-            layout(std430, binding = $DIAGNOSTIC_BUFFER_BINDING) buffer RawStackDiagnosticStats {
-                uint stats[];
-            };
 
-            const int HIST_BINS = $DIAGNOSTIC_HIST_BINS;
-            const int WEIGHT_COUNT_INDEX = $DIAGNOSTIC_WEIGHT_COUNT_INDEX;
-            const int WEIGHT_SUM_INDEX = $DIAGNOSTIC_WEIGHT_SUM_INDEX;
-            const int WEIGHT_MAX_INDEX = $DIAGNOSTIC_WEIGHT_MAX_INDEX;
-            const int LSC_COUNT_INDEX = $DIAGNOSTIC_LSC_COUNT_INDEX;
-            const int LSC_SUM_INDEX = $DIAGNOSTIC_LSC_SUM_INDEX;
-            const int LSC_MAX_INDEX = $DIAGNOSTIC_LSC_MAX_INDEX;
-            const int LSC_EDGE_COUNT_INDEX = $DIAGNOSTIC_LSC_EDGE_COUNT_INDEX;
-            const int LSC_EDGE_SUM_INDEX = $DIAGNOSTIC_LSC_EDGE_SUM_INDEX;
-            const int POST_RESIDUAL_COUNT_INDEX = $DIAGNOSTIC_POST_RESIDUAL_COUNT_INDEX;
-            const int POST_RESIDUAL_SUM_INDEX = $DIAGNOSTIC_POST_RESIDUAL_SUM_INDEX;
-            const int POST_RESIDUAL_MAX_INDEX = $DIAGNOSTIC_POST_RESIDUAL_MAX_INDEX;
-            const int POST_SMOOTH_COUNT_INDEX = $DIAGNOSTIC_POST_SMOOTH_COUNT_INDEX;
-            const int POST_SMOOTH_SUM_INDEX = $DIAGNOSTIC_POST_SMOOTH_SUM_INDEX;
-            const int POST_SMOOTH_MAX_INDEX = $DIAGNOSTIC_POST_SMOOTH_MAX_INDEX;
-            const int POST_EFFECTIVE_SMOOTH_COUNT_INDEX = $DIAGNOSTIC_POST_EFFECTIVE_SMOOTH_COUNT_INDEX;
-            const int POST_EFFECTIVE_SMOOTH_SUM_INDEX = $DIAGNOSTIC_POST_EFFECTIVE_SMOOTH_SUM_INDEX;
-            const int POST_EFFECTIVE_SMOOTH_MAX_INDEX = $DIAGNOSTIC_POST_EFFECTIVE_SMOOTH_MAX_INDEX;
-            const int POST_WIENER_COUNT_INDEX = $DIAGNOSTIC_POST_WIENER_COUNT_INDEX;
-            const int POST_WIENER_SUM_INDEX = $DIAGNOSTIC_POST_WIENER_SUM_INDEX;
-            const int POST_WIENER_MAX_INDEX = $DIAGNOSTIC_POST_WIENER_MAX_INDEX;
-            const int POST_LSC_COUNT_INDEX = $DIAGNOSTIC_POST_LSC_COUNT_INDEX;
-            const int POST_LSC_SUM_INDEX = $DIAGNOSTIC_POST_LSC_SUM_INDEX;
-            const int POST_LSC_MAX_INDEX = $DIAGNOSTIC_POST_LSC_MAX_INDEX;
-            const int POST_LOW_WEIGHT_COUNT_INDEX = $DIAGNOSTIC_POST_LOW_WEIGHT_COUNT_INDEX;
-            const int POST_LOW_WEIGHT_SUM_INDEX = $DIAGNOSTIC_POST_LOW_WEIGHT_SUM_INDEX;
-            const int POST_LOW_WEIGHT_MAX_INDEX = $DIAGNOSTIC_POST_LOW_WEIGHT_MAX_INDEX;
-            const int SR_SUPPORT_COUNT_INDEX = $DIAGNOSTIC_SR_SUPPORT_COUNT_INDEX;
-            const int SR_SUPPORT_SUM_INDEX = $DIAGNOSTIC_SR_SUPPORT_SUM_INDEX;
-            const int SR_SUPPORT_MAX_INDEX = $DIAGNOSTIC_SR_SUPPORT_MAX_INDEX;
-            const int WEIGHT_HIST_OFFSET = $DIAGNOSTIC_WEIGHT_HIST_OFFSET;
-            const int POST_RESIDUAL_HIST_OFFSET = $DIAGNOSTIC_POST_RESIDUAL_HIST_OFFSET;
-            const int POST_SMOOTH_HIST_OFFSET = $DIAGNOSTIC_POST_SMOOTH_HIST_OFFSET;
-            const int POST_EFFECTIVE_SMOOTH_HIST_OFFSET = $DIAGNOSTIC_POST_EFFECTIVE_SMOOTH_HIST_OFFSET;
-            const int POST_WIENER_HIST_OFFSET = $DIAGNOSTIC_POST_WIENER_HIST_OFFSET;
-            const int POST_LSC_HIST_OFFSET = $DIAGNOSTIC_POST_LSC_HIST_OFFSET;
-            const int POST_LOW_WEIGHT_HIST_OFFSET = $DIAGNOSTIC_POST_LOW_WEIGHT_HIST_OFFSET;
-            const int SR_SUPPORT_HIST_OFFSET = $DIAGNOSTIC_SR_SUPPORT_HIST_OFFSET;
-            const float UNIT_Q = ${DIAGNOSTIC_UNIT_QUANTIZATION};
-            const float POST_RESIDUAL_Q = ${DIAGNOSTIC_POST_RESIDUAL_QUANTIZATION};
-            const float WEIGHT_Q = ${DIAGNOSTIC_WEIGHT_QUANTIZATION};
-            const float LSC_Q = ${DIAGNOSTIC_LSC_QUANTIZATION};
-
-            uint quant(float value, float scale) {
-                return uint(clamp(value * scale + 0.5, 0.0, 4294967040.0));
-            }
-
-            int histBin(float value, float range) {
-                float normalized = clamp(value / max(range, 1e-6), 0.0, 1.0);
-                return int(clamp(floor(normalized * float(HIST_BINS - 1) + 0.5), 0.0, float(HIST_BINS - 1)));
-            }
-
-            float lscGain(ivec2 samplePos) {
-                vec2 uv = (vec2(samplePos) + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(uLensShadingMap, uv);
-                int channel = lensShadingChannelAt(uCfaPattern, samplePos);
-                if (channel == 0) return gains.r;
-                if (channel == 1) return gains.g;
-                if (channel == 2) return gains.b;
-                return gains.a;
-            }
-
-            bool isEdgeSample(ivec2 p) {
-                int edgeX = max(1, int(float(uImageSize.x) * uLensShadingEdgeFraction + 0.5));
-                int edgeY = max(1, int(float(uImageSize.y) * uLensShadingEdgeFraction + 0.5));
-                return p.x < edgeX || p.y < edgeY ||
-                    p.x >= uImageSize.x - edgeX ||
-                    p.y >= uImageSize.y - edgeY;
-            }
-
-            ivec2 accumulatorCoord(ivec2 samplePos) {
-                vec2 mapped = (vec2(samplePos) + vec2(0.5)) * max(uOutputScale, 1.0) - vec2(0.5);
-                return clamp(ivec2(round(mapped)), ivec2(0), uAccumulatorSize - ivec2(1));
-            }
-
-            vec4 readAccumulator(ivec2 p) {
-                vec2 valueWeight = unpackHalf2x16(texelFetch(uAccumulatorValueWeight, p, 0).r);
-                vec2 statistics = unpackHalf2x16(texelFetch(uAccumulatorStatistics, p, 0).r);
-                return vec4(valueWeight, statistics);
-            }
-
-            float lscNoiseGain(ivec2 samplePos) {
-                return clamp(lscGain(samplePos), 1e-3, max(uLscNoiseGainMax, 1.0));
-            }
-
-            float noiseVarianceForChannel(float correctedSignalNorm, int bayerIndex, float lscGainForNoise) {
-                float channelAlpha = uNoiseAlphaByChannel[bayerIndex];
-                float channelBeta = uNoiseBetaByChannel[bayerIndex];
-                float gain = clamp(lscGainForNoise, 1e-3, max(uLscNoiseGainMax, 1.0));
-                float floorVariance = max(uPostfilterNoiseFloor, 0.0) * gain * gain;
-                if (channelAlpha <= 0.0 && channelBeta <= 0.0) return floorVariance;
-                float modelVariance =
-                    channelAlpha * clamp(correctedSignalNorm, 0.0, 1.0) * gain +
-                    channelBeta * gain * gain;
-                return max(modelVariance, floorVariance);
-            }
-
-            float postFusedAt(ivec2 p, float fallback) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                vec4 a = readAccumulator(p);
-                if (a.g <= 1e-5) return fallback;
-                return clamp(a.r / max(a.g, 1e-5), 0.0, 1.0);
-            }
-
-            float lowLightAmount(float signal) {
-                return 1.0 - smoothstep(
-                    min(uLowLightSignalLow, uLowLightSignalHigh),
-                    max(uLowLightSignalLow, uLowLightSignalHigh),
-                    signal
-                );
-            }
-
-            float lscSmoothAmount(float lscGainForNoise) {
-                return smoothstep(
-                    min(uLscSmoothGainStart, uLscSmoothGainEnd),
-                    max(uLscSmoothGainStart, uLscSmoothGainEnd),
-                    lscGainForNoise
-                );
-            }
-
-            float lowWeightAmount(float accumulatorWeight) {
-                return 1.0 - smoothstep(
-                    min(uLowWeightStart, uLowWeightEnd),
-                    max(uLowWeightStart, uLowWeightEnd),
-                    accumulatorWeight
-                );
-            }
-
-            float accumulatorResidualNoise(vec4 accumulator, float fused) {
-                if (accumulator.g <= 1e-5) return 0.0;
-                float sampleMean2 = max(accumulator.b / max(accumulator.g, 1e-5), 0.0);
-                float temporalVariance = max(sampleMean2 - fused * fused, 0.0);
-                return temporalVariance / max(accumulator.g, 1.0);
-            }
-
-            float residualNoiseSigmaRatio(float residualNoise, float modelNoise) {
-                return sqrt(max(residualNoise, 0.0) / max(modelNoise, 1e-10));
-            }
-
-            float residualNoiseAmount(float residualSigmaRatio) {
-                float low = max(uResidualNoiseLowScale, 0.0);
-                float high = max(uResidualNoiseHighScale, uResidualNoiseLowScale + 1e-4);
-                return smoothstep(low, high, residualSigmaRatio);
-            }
-
-            float finalSmoothAmount(
-                float variance,
-                float noise,
-                float detailDeviation,
-                float signal,
-                float lscGainForNoise,
-                float accumulatorWeight,
-                float residualAmount
-            ) {
-                float flatness = 1.0 - smoothstep(uFlatVarianceStart, uFlatVarianceEnd, variance);
-                float noiseStd = sqrt(max(noise, 1e-10));
-                float detailKeep = smoothstep(
-                    uDetailKeepNoiseLowScale * noiseStd + uDetailKeepOffsetLow,
-                    uDetailKeepNoiseHighScale * noiseStd + uDetailKeepOffsetHigh,
-                    detailDeviation
-                );
-                float base = uFinalSmoothStrength * flatness * (1.0 - uDetailKeepSuppression * detailKeep);
-                float lowLight = lowLightAmount(signal);
-                float lsc = lscSmoothAmount(lscGainForNoise);
-                float lowWeight = lowWeightAmount(accumulatorWeight);
-                float residualNeed = residualAmount * max(max(lowLight, lsc), lowWeight);
-                float boost =
-                    1.0 +
-                    uLowLightSmoothBoost * lowLight +
-                    uLscSmoothBoost * lsc +
-                    uLowWeightSmoothBoost * lowWeight * max(lowLight, lsc) +
-                    uResidualSmoothBoost * residualNeed;
-                return min(max(uMaxSmoothStrength, 0.0), base * boost);
-            }
-
-            void main() {
-                ivec2 sampleIndex = ivec2(gl_GlobalInvocationID.xy);
-                if (sampleIndex.x >= uSampleGridSize.x || sampleIndex.y >= uSampleGridSize.y) return;
-                ivec2 raw = min(sampleIndex * uSampleStep, uImageSize - ivec2(1));
-
-                ivec2 mappedAccumulatorCoord = accumulatorCoord(raw);
-                vec4 accumulator = readAccumulator(mappedAccumulatorCoord);
-                float weight = max(accumulator.g, 0.0);
-                atomicAdd(stats[WEIGHT_COUNT_INDEX], 1u);
-                atomicAdd(stats[WEIGHT_SUM_INDEX], quant(weight, WEIGHT_Q));
-                atomicMax(stats[WEIGHT_MAX_INDEX], quant(weight, WEIGHT_Q));
-                atomicAdd(stats[WEIGHT_HIST_OFFSET + histBin(weight, uWeightHistogramRange)], 1u);
-
-                if (uSuperResolutionEnabled != 0) {
-                    ivec2 cellOrigin = mappedAccumulatorCoord - ivec2(
-                        mappedAccumulatorCoord.x & 1,
-                        mappedAccumulatorCoord.y & 1
-                    );
-                    cellOrigin = clamp(cellOrigin, ivec2(0), max(uAccumulatorSize - ivec2(2), ivec2(0)));
-                    float srSupport = max(readAccumulator(cellOrigin).a, 0.0);
-                    srSupport = min(srSupport, max(readAccumulator(cellOrigin + ivec2(1, 0)).a, 0.0));
-                    srSupport = min(srSupport, max(readAccumulator(cellOrigin + ivec2(0, 1)).a, 0.0));
-                    srSupport = min(srSupport, max(readAccumulator(cellOrigin + ivec2(1, 1)).a, 0.0));
-                    atomicAdd(stats[SR_SUPPORT_COUNT_INDEX], 1u);
-                    atomicAdd(stats[SR_SUPPORT_SUM_INDEX], quant(srSupport, WEIGHT_Q));
-                    atomicMax(stats[SR_SUPPORT_MAX_INDEX], quant(srSupport, WEIGHT_Q));
-                    atomicAdd(
-                        stats[SR_SUPPORT_HIST_OFFSET + histBin(srSupport, uWeightHistogramRange)],
-                        1u
-                    );
-                }
-
-                float gain = max(lscGain(raw), 0.0);
-                atomicAdd(stats[LSC_COUNT_INDEX], 1u);
-                atomicAdd(stats[LSC_SUM_INDEX], quant(gain, LSC_Q));
-                atomicMax(stats[LSC_MAX_INDEX], quant(gain, LSC_Q));
-                if (isEdgeSample(raw)) {
-                    atomicAdd(stats[LSC_EDGE_COUNT_INDEX], 1u);
-                    atomicAdd(stats[LSC_EDGE_SUM_INDEX], quant(gain, LSC_Q));
-                }
-
-                vec4 post = readAccumulator(raw);
-                if (post.g <= 1e-5) return;
-
-                float fused = clamp(post.r / max(post.g, 1e-5), 0.0, 1.0);
-                float mean = 0.0;
-                float mean2 = 0.0;
-                float count = 0.0;
-                int period = cfaPeriod(uCfaPattern);
-                for (int y = -2; y <= 2; ++y) {
-                    for (int x = -2; x <= 2; ++x) {
-                        ivec2 q = raw + ivec2(x * period, y * period);
-                        if (q.x >= 0 && q.y >= 0 && q.x < uImageSize.x && q.y < uImageSize.y) {
-                            float v = postFusedAt(q, fused);
-                            mean += v;
-                            mean2 += v * v;
-                            count += 1.0;
-                        }
-                    }
-                }
-                mean /= max(count, 1.0);
-                mean2 /= max(count, 1.0);
-
-                int bayerIndex = bayerIndexAt(uCfaPattern, raw);
-                float variance = max(mean2 - mean * mean, 0.0);
-                float sampleLscNoiseGain = lscNoiseGain(raw);
-                float modelNoise = noiseVarianceForChannel(fused, bayerIndex, sampleLscNoiseGain) / max(post.g, 1.0);
-                float residualNoise = accumulatorResidualNoise(post, fused) * max(uResidualNoiseWeight, 0.0);
-                float residualSigmaRatio = residualNoiseSigmaRatio(residualNoise, modelNoise);
-                float residualAmount = residualNoiseAmount(residualSigmaRatio);
-                float residualNoiseForStructure = min(
-                    residualNoise,
-                    modelNoise * max(uResidualNoiseHighScale * uResidualNoiseHighScale, 1.0)
-                );
-                float noise = max(modelNoise, residualNoiseForStructure);
-                float structureVariance = max(variance - noise, 0.0);
-                float wienerGain = structureVariance / max(variance, 1e-6);
-                float detailDeviation = max(abs(fused - mean) - sqrt(max(noise, 1e-10)), 0.0);
-                float postSmoothAmount = finalSmoothAmount(
-                    structureVariance,
-                    noise,
-                    detailDeviation,
-                    fused,
-                    sampleLscNoiseGain,
-                    post.g,
-                    residualAmount
-                );
-                float residualMetric = clamp(residualSigmaRatio, 0.0, uPostResidualHistogramRange);
-                atomicAdd(stats[POST_RESIDUAL_COUNT_INDEX], 1u);
-                atomicAdd(stats[POST_RESIDUAL_SUM_INDEX], quant(residualMetric, POST_RESIDUAL_Q));
-                atomicMax(stats[POST_RESIDUAL_MAX_INDEX], quant(residualMetric, POST_RESIDUAL_Q));
-                atomicAdd(
-                    stats[POST_RESIDUAL_HIST_OFFSET + histBin(residualMetric, uPostResidualHistogramRange)],
-                    1u
-                );
-
-                float smoothMetric = clamp(postSmoothAmount, 0.0, 1.0);
-                atomicAdd(stats[POST_SMOOTH_COUNT_INDEX], 1u);
-                atomicAdd(stats[POST_SMOOTH_SUM_INDEX], quant(smoothMetric, UNIT_Q));
-                atomicMax(stats[POST_SMOOTH_MAX_INDEX], quant(smoothMetric, UNIT_Q));
-                atomicAdd(stats[POST_SMOOTH_HIST_OFFSET + histBin(smoothMetric, 1.0)], 1u);
-
-                float effectiveSmoothMetric = clamp(postSmoothAmount * (1.0 - wienerGain), 0.0, 1.0);
-                atomicAdd(stats[POST_EFFECTIVE_SMOOTH_COUNT_INDEX], 1u);
-                atomicAdd(stats[POST_EFFECTIVE_SMOOTH_SUM_INDEX], quant(effectiveSmoothMetric, UNIT_Q));
-                atomicMax(stats[POST_EFFECTIVE_SMOOTH_MAX_INDEX], quant(effectiveSmoothMetric, UNIT_Q));
-                atomicAdd(
-                    stats[POST_EFFECTIVE_SMOOTH_HIST_OFFSET + histBin(effectiveSmoothMetric, 1.0)],
-                    1u
-                );
-
-                float wienerMetric = clamp(wienerGain, 0.0, 1.0);
-                atomicAdd(stats[POST_WIENER_COUNT_INDEX], 1u);
-                atomicAdd(stats[POST_WIENER_SUM_INDEX], quant(wienerMetric, UNIT_Q));
-                atomicMax(stats[POST_WIENER_MAX_INDEX], quant(wienerMetric, UNIT_Q));
-                atomicAdd(stats[POST_WIENER_HIST_OFFSET + histBin(wienerMetric, 1.0)], 1u);
-
-                float lscMetric = clamp(lscSmoothAmount(sampleLscNoiseGain), 0.0, 1.0);
-                atomicAdd(stats[POST_LSC_COUNT_INDEX], 1u);
-                atomicAdd(stats[POST_LSC_SUM_INDEX], quant(lscMetric, UNIT_Q));
-                atomicMax(stats[POST_LSC_MAX_INDEX], quant(lscMetric, UNIT_Q));
-                atomicAdd(stats[POST_LSC_HIST_OFFSET + histBin(lscMetric, 1.0)], 1u);
-
-                float lowWeightMetric = clamp(lowWeightAmount(post.g), 0.0, 1.0);
-                atomicAdd(stats[POST_LOW_WEIGHT_COUNT_INDEX], 1u);
-                atomicAdd(stats[POST_LOW_WEIGHT_SUM_INDEX], quant(lowWeightMetric, UNIT_Q));
-                atomicMax(stats[POST_LOW_WEIGHT_MAX_INDEX], quant(lowWeightMetric, UNIT_Q));
-                atomicAdd(stats[POST_LOW_WEIGHT_HIST_OFFSET + histBin(lowWeightMetric, 1.0)], 1u);
-            }
-        """.trimIndent()
-
-        private val NORMALIZE_FRAGMENT_SHADER = """
-            #version 300 es
-            $RAW_COMMON
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            uniform highp usampler2D uAccumulatorValueWeight;
-            uniform highp usampler2D uAccumulatorStatistics;
-            uniform highp usampler2D uReferenceRaw;
-            uniform sampler2D uLensShadingMap;
-            uniform ivec2 uImageSize;
-            uniform int uCfaPattern;
-            uniform float uBlackLevel[4];
-            uniform float uWhiteLevel;
-            uniform float uNoiseAlpha;
-            uniform float uNoiseBeta;
-            uniform float uNoiseAlphaByChannel[4];
-            uniform float uNoiseBetaByChannel[4];
-            uniform float uFinalSmoothStrength;
-            uniform float uFlatVarianceStart;
-            uniform float uFlatVarianceEnd;
-            uniform float uDetailKeepNoiseLowScale;
-            uniform float uDetailKeepNoiseHighScale;
-            uniform float uDetailKeepOffsetLow;
-            uniform float uDetailKeepOffsetHigh;
-            uniform float uDetailKeepSuppression;
-            uniform float uLscNoiseGainMax;
-            uniform float uPostfilterNoiseFloor;
-            uniform float uLowLightSignalLow;
-            uniform float uLowLightSignalHigh;
-            uniform float uLowLightSmoothBoost;
-            uniform float uLscSmoothGainStart;
-            uniform float uLscSmoothGainEnd;
-            uniform float uLscSmoothBoost;
-            uniform float uLowWeightStart;
-            uniform float uLowWeightEnd;
-            uniform float uLowWeightSmoothBoost;
-            uniform float uResidualNoiseWeight;
-            uniform float uResidualNoiseLowScale;
-            uniform float uResidualNoiseHighScale;
-            uniform float uResidualSmoothBoost;
-            uniform float uMaxSmoothStrength;
-            float lscGain(ivec2 samplePos) {
-                vec2 uv = (vec2(samplePos) + vec2(0.5)) / vec2(uImageSize);
-                vec4 gains = texture(uLensShadingMap, uv);
-                int channel = lensShadingChannelAt(uCfaPattern, samplePos);
-                if (channel == 0) return gains.r;
-                if (channel == 1) return gains.g;
-                if (channel == 2) return gains.b;
-                return gains.a;
-            }
-
-            float lscNoiseGain(ivec2 samplePos) {
-                return clamp(lscGain(samplePos), 1e-3, max(uLscNoiseGainMax, 1.0));
-            }
-
-            float noiseVarianceForChannel(float correctedSignalNorm, int bayerIndex, float lscGainForNoise) {
-                float channelAlpha = uNoiseAlphaByChannel[bayerIndex];
-                float channelBeta = uNoiseBetaByChannel[bayerIndex];
-                float gain = clamp(lscGainForNoise, 1e-3, max(uLscNoiseGainMax, 1.0));
-                float floorVariance = max(uPostfilterNoiseFloor, 0.0) * gain * gain;
-                if (channelAlpha <= 0.0 && channelBeta <= 0.0) return floorVariance;
-                float modelVariance =
-                    channelAlpha * clamp(correctedSignalNorm, 0.0, 1.0) * gain +
-                    channelBeta * gain * gain;
-                return max(modelVariance, floorVariance);
-            }
-
-            float referenceNorm(ivec2 p, int bayerIndex) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                float raw = float(texelFetch(uReferenceRaw, p, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
-                return max(raw - uBlackLevel[bayerIndex], 0.0) * lscGain(p) / range;
-            }
-
-            vec4 readAccum(ivec2 p) {
-                p = clamp(p, ivec2(0), uImageSize - ivec2(1));
-                vec2 valueWeight = unpackHalf2x16(texelFetch(uAccumulatorValueWeight, p, 0).r);
-                vec2 statistics = unpackHalf2x16(texelFetch(uAccumulatorStatistics, p, 0).r);
-                return vec4(valueWeight, statistics);
-            }
-
-            float meanAt(ivec2 p) {
-                int b = bayerIndexAt(uCfaPattern, p);
-                vec4 a = readAccum(p);
-                if (a.g <= 1e-5) return referenceNorm(p, b);
-                return clamp(a.r / max(a.g, 1e-5), 0.0, 1.0);
-            }
-
-            void writePackedRaw(float value) {
-                uint raw = uint(floor(clamp(value, 0.0, 1.0) * 65535.0 + 0.5));
-                uint lo = raw & 255u;
-                uint hi = (raw >> 8) & 255u;
-                fragColor = vec4(float(lo) / 255.0, float(hi) / 255.0, 0.0, 1.0);
-            }
-
-            float lowLightAmount(float signal) {
-                return 1.0 - smoothstep(
-                    min(uLowLightSignalLow, uLowLightSignalHigh),
-                    max(uLowLightSignalLow, uLowLightSignalHigh),
-                    signal
-                );
-            }
-
-            float lscSmoothAmount(float lscGainForNoise) {
-                return smoothstep(
-                    min(uLscSmoothGainStart, uLscSmoothGainEnd),
-                    max(uLscSmoothGainStart, uLscSmoothGainEnd),
-                    lscGainForNoise
-                );
-            }
-
-            float lowWeightAmount(float accumulatorWeight) {
-                return 1.0 - smoothstep(
-                    min(uLowWeightStart, uLowWeightEnd),
-                    max(uLowWeightStart, uLowWeightEnd),
-                    accumulatorWeight
-                );
-            }
-
-            float accumulatorResidualNoise(vec4 accumulator, float fused) {
-                if (accumulator.g <= 1e-5) return 0.0;
-                float sampleMean2 = max(accumulator.b / max(accumulator.g, 1e-5), 0.0);
-                float temporalVariance = max(sampleMean2 - fused * fused, 0.0);
-                return temporalVariance / max(accumulator.g, 1.0);
-            }
-
-            float residualNoiseSigmaRatio(float residualNoise, float modelNoise) {
-                return sqrt(max(residualNoise, 0.0) / max(modelNoise, 1e-10));
-            }
-
-            float residualNoiseAmount(float residualSigmaRatio) {
-                float low = max(uResidualNoiseLowScale, 0.0);
-                float high = max(uResidualNoiseHighScale, uResidualNoiseLowScale + 1e-4);
-                return smoothstep(low, high, residualSigmaRatio);
-            }
-
-            float finalSmoothAmount(
-                float variance,
-                float noise,
-                float detailDeviation,
-                float signal,
-                float lscGainForNoise,
-                float accumulatorWeight,
-                float residualAmount
-            ) {
-                float flatness = 1.0 - smoothstep(uFlatVarianceStart, uFlatVarianceEnd, variance);
-                float noiseStd = sqrt(max(noise, 1e-10));
-                float detailKeep = smoothstep(
-                    uDetailKeepNoiseLowScale * noiseStd + uDetailKeepOffsetLow,
-                    uDetailKeepNoiseHighScale * noiseStd + uDetailKeepOffsetHigh,
-                    detailDeviation
-                );
-                float base = uFinalSmoothStrength * flatness * (1.0 - uDetailKeepSuppression * detailKeep);
-                float lowLight = lowLightAmount(signal);
-                float lsc = lscSmoothAmount(lscGainForNoise);
-                float lowWeight = lowWeightAmount(accumulatorWeight);
-                float residualNeed = residualAmount * max(max(lowLight, lsc), lowWeight);
-                float boost =
-                    1.0 +
-                    uLowLightSmoothBoost * lowLight +
-                    uLscSmoothBoost * lsc +
-                    uLowWeightSmoothBoost * lowWeight * max(lowLight, lsc) +
-                    uResidualSmoothBoost * residualNeed;
-                return min(max(uMaxSmoothStrength, 0.0), base * boost);
-            }
-
-            void main() {
-                ivec2 p = ivec2(gl_FragCoord.xy);
-                int bayerIndex = bayerIndexAt(uCfaPattern, p);
-                vec4 a = readAccum(p);
-                float reference = referenceNorm(p, bayerIndex);
-                float fused = a.g > 1e-5 ? clamp(a.r / max(a.g, 1e-5), 0.0, 1.0) : reference;
-
-                float mean = 0.0;
-                float mean2 = 0.0;
-                float count = 0.0;
-                int period = cfaPeriod(uCfaPattern);
-                for (int y = -2; y <= 2; ++y) {
-                    for (int x = -2; x <= 2; ++x) {
-                        ivec2 q = p + ivec2(x * period, y * period);
-                        if (q.x >= 0 && q.y >= 0 && q.x < uImageSize.x && q.y < uImageSize.y) {
-                            float v = meanAt(q);
-                            mean += v;
-                            mean2 += v * v;
-                            count += 1.0;
-                        }
-                    }
-                }
-                mean /= max(count, 1.0);
-                mean2 /= max(count, 1.0);
-                float variance = max(mean2 - mean * mean, 0.0);
-                float sampleLscNoiseGain = lscNoiseGain(p);
-                float modelNoise = noiseVarianceForChannel(fused, bayerIndex, sampleLscNoiseGain) / max(a.g, 1.0);
-                float residualNoise = accumulatorResidualNoise(a, fused) * max(uResidualNoiseWeight, 0.0);
-                float residualSigmaRatio = residualNoiseSigmaRatio(residualNoise, modelNoise);
-                float residualAmount = residualNoiseAmount(residualSigmaRatio);
-                float residualNoiseForStructure = min(
-                    residualNoise,
-                    modelNoise * max(uResidualNoiseHighScale * uResidualNoiseHighScale, 1.0)
-                );
-                float noise = max(modelNoise, residualNoiseForStructure);
-                float structureVariance = max(variance - noise, 0.0);
-                float wienerGain = structureVariance / max(variance, 1e-6);
-                float detailDeviation = max(abs(fused - mean) - sqrt(max(noise, 1e-10)), 0.0);
-                float smoothAmount = finalSmoothAmount(
-                    structureVariance,
-                    noise,
-                    detailDeviation,
-                    max(fused, reference),
-                    sampleLscNoiseGain,
-                    a.g,
-                    residualAmount
-                );
-                fused = mix(fused, mean + wienerGain * (fused - mean), smoothAmount);
-                fused = clamp(fused, 0.0, 1.0);
-
-                writePackedRaw(fused);
-            }
-        """.trimIndent()
     }
 }

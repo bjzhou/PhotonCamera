@@ -188,6 +188,7 @@
     <string name="settings_multi_frame_count">จำนวนเฟรมที่รวม</string>
     <string name="settings_multi_frame_count_description">จำนวนเฟรมสำหรับการรวมหลายเฟรม (เฟรมมาก = คุณภาพดีขึ้นแต่ช้าลง)</string>
     <string name="settings_use_super_resolution">ความละเอียดสูงพิเศษ (Super Resolution)</string>
+    <string name="settings_super_resolution_scale">อัตราขยายเอาต์พุต: %1$.2f×</string>
     <string name="settings_use_live_photo">ภาพเคลื่อนไหว (Live Photo)</string>
     <string name="settings_use_live_photo_description">บันทึกวิดีโอคลิปสั้นๆ พร้อมกับรูปภาพของคุณเพื่อให้ได้เอฟเฟกต์ภาพเคลื่อนไหวที่สมจริง</string>
     <string name="settings_develop_animation">พัฒนาแอนิเมชั่น</string>

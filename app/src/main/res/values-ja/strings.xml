@@ -82,6 +82,7 @@
     <string name="settings_multi_frame_count">合成本数</string>
     <string name="settings_multi_frame_count_description">マルチフレーム合成に使用するフレーム数（多いほど高画質ですが、処理が遅くなります）。</string>
     <string name="settings_use_super_resolution">超解像</string>
+    <string name="settings_super_resolution_scale">出力倍率：%1$.2f×</string>
     <string name="settings_use_live_photo">ライブフォト</string>
     <string name="settings_use_live_photo_description">写真と一緒に短い動画を撮影し、動きのあるライブフォト効果を作成します。</string>
     <string name="settings_use_gpu_acceleration">GPU加速</string>

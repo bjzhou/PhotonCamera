@@ -1,18 +1,15 @@
 package com.hinnka.mycamera.processor
 
 /**
- * Photon-side HWMF tuning profile.
+ * Tuning profile for the Radiance RAW fusion pipeline.
  *
- * The stage grouping deliberately follows the CamX/CHI HWMF flow:
- * Prefilter -> BlendInit/BlendLoop -> Postfilter. Values here are Photon
- * defaults derived from the current GLES RAW stacker behavior.
+ * All spatial values are expressed in source RAW pixels. The output sampling grid is selected
+ * independently by [RawStackSuperResolutionTuning.outputScale].
  */
 data class RawStackTuningProfile(
-    val mode: RawStackMode = RawStackMode.MFNR,
     val requestedFrameCount: Int = 0,
     val prefilter: RawStackPrefilterTuning = RawStackPrefilterTuning(),
     val blend: RawStackBlendTuning = RawStackBlendTuning(),
-    val postfilter: RawStackPostfilterTuning = RawStackPostfilterTuning(),
     val superResolution: RawStackSuperResolutionTuning = RawStackSuperResolutionTuning(),
 )
 
@@ -115,33 +112,6 @@ data class RawStackBlendTuning(
     val highlightSuppressionStrength: Float = 0.62f,
     val highlightSuppressionStart: Float = 0.78f,
     val highlightSuppressionEnd: Float = 0.98f,
-)
-
-data class RawStackPostfilterTuning(
-    val finalSmoothStrength: Float = 0.38f,
-    val flatVarianceStart: Float = 0.00025f,
-    val flatVarianceEnd: Float = 0.0035f,
-    val detailKeepNoiseLowScale: Float = 1.4f,
-    val detailKeepNoiseHighScale: Float = 3.2f,
-    val detailKeepOffsetLow: Float = 0.0025f,
-    val detailKeepOffsetHigh: Float = 0.010f,
-    val detailKeepSuppression: Float = 0.85f,
-    val lscNoiseGainMax: Float = 4.0f,
-    val noiseFloorVariance: Float = 0.000018f,
-    val lowLightSignalLow: Float = 0.015f,
-    val lowLightSignalHigh: Float = 0.16f,
-    val lowLightSmoothBoost: Float = 1.15f,
-    val lscSmoothGainStart: Float = 1.35f,
-    val lscSmoothGainEnd: Float = 3.2f,
-    val lscSmoothBoost: Float = 0.75f,
-    val lowWeightStart: Float = 1.2f,
-    val lowWeightEnd: Float = 4.5f,
-    val lowWeightSmoothBoost: Float = 0.55f,
-    val residualNoiseWeight: Float = 0.85f,
-    val residualNoiseLowScale: Float = 1.5f,
-    val residualNoiseHighScale: Float = 6.0f,
-    val residualSmoothBoost: Float = 1.10f,
-    val maxSmoothStrength: Float = 0.92f,
 )
 
 data class RawStackSuperResolutionTuning(

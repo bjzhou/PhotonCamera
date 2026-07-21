@@ -1,5 +1,8 @@
 # GlesRawStacker 重构方案：ImageStackAlignator 移动端等价实现
 
+> 历史设计文档：该方案描述的旧 `GlesRawStacker`、`RawStackMode` 与 MFNR/MFSR 双模式已经
+> 被 Radiance 单一实现取代。当前架构以 `docs/raw-stack-mfnr-mfsr-implementation-plan.md` 为准。
+
 ## 1. 方案目标
 
 本方案重构 Photon 的 RAW 多帧拍摄与合成链路，算法目标以 ImageStackAlignator 对 Google HWMF/MFSR 的实现为基准，同时满足 Android Camera2、GLES 3.1、移动端显存、功耗和拍摄延迟约束。

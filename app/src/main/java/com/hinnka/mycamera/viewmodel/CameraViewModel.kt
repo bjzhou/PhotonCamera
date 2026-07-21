@@ -271,6 +271,19 @@ private data class ActivePresetMatchState(
 
 private data class SettingValue<T>(val value: T)
 
+internal fun resolveMultiFrameOutputScale(
+    useMfnr: Boolean,
+    useMfsr: Boolean,
+    superResolutionScale: Float,
+): Float? = when {
+    useMfsr -> MultiFrameConfig.normalizeOutputScale(
+        outputScale = superResolutionScale,
+        fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+    )
+    useMfnr -> 1f
+    else -> null
+}
+
 private data class CameraFeatureUpdate(
     val lutId: SettingValue<String?>? = null,
     val colorRecipe: SettingValue<ColorRecipeParams>? = null,
@@ -590,10 +603,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             desiredUseMultipleExposure = false
             desiredUseMFNR = false
         }
-        if (update.useHdrComposition?.value == true) {
+        if (update.useHdrComposition?.value == true && !desiredUseRaw) {
             desiredUseMFSR = false
         }
-        if (desiredUseMFSR && desiredUseHdrComposition) {
+        if (!desiredUseRaw && desiredUseMFSR && desiredUseHdrComposition) {
             if (update.useMFSR?.value == true && update.useHdrComposition?.value != true) {
                 desiredUseHdrComposition = false
             } else {
@@ -605,24 +618,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             desiredUseMFNR = false
             desiredUseMFSR = false
         }
-        if (shouldSyncRawHdrCompositionEngineToAdobe(
-                prefs = prefs,
-                update = update,
-                desiredUseRaw = desiredUseRaw,
-                desiredUseHdrComposition = desiredUseHdrComposition
-            )
-        ) {
-            desiredRawRenderingEngine = RawRenderingEngine.AdobeCurve
-        }
-
+        val desiredMultiFrameOutputScale = resolveMultiFrameOutputScale(
+            useMfnr = desiredUseMFNR,
+            useMfsr = desiredUseMFSR,
+            superResolutionScale = prefs.superResolutionScale,
+        )
         val currentState = state.value
         val targetAspectRatio = update.aspectRatio?.value
+        val hdrCompositionRequiresReopen =
+            desiredUseHdrComposition != currentState.useHdrComposition &&
+                !(desiredUseRaw && currentState.isRawSupported)
         val needsCameraReopen =
             targetAspectRatio != null && targetAspectRatio != currentState.aspectRatio ||
                 desiredUseRaw != prefs.useRaw ||
-                desiredUseMFNR != prefs.useMFNR ||
-                desiredUseMFSR != currentState.useMFSR ||
-                desiredUseHdrComposition != currentState.useHdrComposition
+                desiredMultiFrameOutputScale != currentState.multiFrameOutputScale ||
+                hdrCompositionRequiresReopen
 
         update.colorRecipe?.let {
             val recipeLutId = if (update.lutId != null) {
@@ -654,16 +664,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (update.useRaw != null || desiredUseRaw != prefs.useRaw) {
             cameraController.setUseRaw(desiredUseRaw)
         }
-        if (update.useMFNR != null || desiredUseMFNR != prefs.useMFNR) {
-            cameraController.setUseMFNR(desiredUseMFNR)
-        }
         if (update.useHdrComposition != null || desiredUseHdrComposition != prefs.useHdrComposition) {
             cameraController.setUseHdrComposition(desiredUseHdrComposition)
         }
-        if (update.useMFSR != null || desiredUseMFSR != prefs.useMFSR ||
-            desiredUseHdrComposition != prefs.useHdrComposition
+        if (update.useMFNR != null || update.useMFSR != null ||
+            desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
         ) {
-            cameraController.setUseMFSR(desiredUseMFSR)
+            cameraController.setMultiFrameOutputScale(desiredMultiFrameOutputScale)
         }
 
         update.frameId?.let {
@@ -769,18 +776,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun shouldDisableNaturalLightForHdrComposition(prefs: UserPreferences): Boolean {
         return prefs.useHdrComposition && !isRawEnabledForNaturalLightHdrGuard(prefs)
-    }
-
-    private fun shouldSyncRawHdrCompositionEngineToAdobe(
-        prefs: UserPreferences,
-        update: CameraFeatureUpdate,
-        desiredUseRaw: Boolean,
-        desiredUseHdrComposition: Boolean
-    ): Boolean {
-        if (update.rawRenderingEngine != null) return false
-        val wasRawHdrComposition = prefs.useRaw && prefs.useHdrComposition
-        val isRawHdrComposition = desiredUseRaw && desiredUseHdrComposition
-        return isRawHdrComposition && !wasRawHdrComposition
     }
 
     private fun resolveCaptureRawRenderingEngine(userPrefs: UserPreferences?): RawRenderingEngine {
@@ -1227,6 +1222,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useMFSR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMFSR }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val superResolutionScale: StateFlow<Float> = userPreferencesRepository.userPreferences
+        .map {
+            MultiFrameConfig.normalizeOutputScale(
+                outputScale = it.superResolutionScale,
+                fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+            )
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+        )
     val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useLivePhoto }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1424,7 +1431,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 viewModelScope.launch {
                     handleMultipleExposureFrameCaptured(image, captureInfo)
                 }
-            } else if (state.value.useMFNR || state.value.useMFSR) {
+            } else if (state.value.isMultiFrameEnabled) {
                 val count = MultiFrameConfig.captureFrameCount(state.value.multiFrameCount)
                 PLog.d(TAG, "Burst frame received: ${pendingRawStackFrames.size + 1}/$count")
                 pendingRawStackFrames.add(
@@ -1457,7 +1464,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         val gyroOrderedFrames = gyroSelection.orderedAcceptedIndices.map { index ->
                             normalFrames[index]
                         }
-                        // Geometry is planned by GlesRawStacker's coarse temporal-flow graph.
+                        // Geometry is planned by the Radiance stacker's coarse temporal-flow graph.
                         // Running a second exhaustive RAW proxy registration here blocks the
                         // post-capture path on CPU and duplicates the GLES registration work.
                         val orderedNormalFrames = gyroOrderedFrames
@@ -1484,7 +1491,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 PLog.i(
                                     TAG,
                                     "Excluded ${auxiliaryFrames.size} short/auxiliary frames from " +
-                                        "non-RAW MFNR/MFSR accumulation",
+                                        "non-RAW multi-frame accumulation",
                                 )
                             }
                             orderedNormalFrames
@@ -1585,6 +1592,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
                 val effectiveUseMFNR = it.useMFNR && !multipleExposureEnabled
                 val effectiveUseMFSR = it.useMFSR && !multipleExposureEnabled
+                val effectiveMultiFrameOutputScale = resolveMultiFrameOutputScale(
+                    useMfnr = effectiveUseMFNR,
+                    useMfsr = effectiveUseMFSR,
+                    superResolutionScale = it.superResolutionScale,
+                )
                 val effectiveRawRenderingEngine = resolveCaptureRawRenderingEngine(it)
                 if (effectiveRawRenderingEngine != it.rawRenderingEngine) {
                     viewModelScope.launch {
@@ -1610,11 +1622,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentCameraState.useRaw != effectiveUseRaw) {
                     cameraController.setUseRaw(effectiveUseRaw)
                 }
-                if (currentCameraState.useMFNR != effectiveUseMFNR) {
-                    cameraController.setUseMFNR(effectiveUseMFNR)
-                }
-                if (currentCameraState.useMFSR != effectiveUseMFSR) {
-                    cameraController.setUseMFSR(effectiveUseMFSR)
+                if (currentCameraState.multiFrameOutputScale != effectiveMultiFrameOutputScale) {
+                    cameraController.setMultiFrameOutputScale(effectiveMultiFrameOutputScale)
                 }
                 if (multipleExposureEnabled && (it.useRaw || it.useMFNR || it.useMFSR)) {
                     viewModelScope.launch {
@@ -1804,9 +1813,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setShowGrid(prefs.showGrid)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
-                cameraController.setUseMFNR(prefs.useMFNR && !prefs.useMultipleExposure)
                 cameraController.setUseHdrComposition(prefs.useHdrComposition)
-                cameraController.setUseMFSR(prefs.useMFSR && !prefs.useMultipleExposure)
+                cameraController.setMultiFrameOutputScale(
+                    resolveMultiFrameOutputScale(
+                        useMfnr = prefs.useMFNR && !prefs.useMultipleExposure,
+                        useMfsr = prefs.useMFSR && !prefs.useMultipleExposure,
+                        superResolutionScale = prefs.superResolutionScale,
+                    )
+                )
                 cameraController.setMultiFrameCount(prefs.multiFrameCount)
                 cameraController.setUseLivePhoto(prefs.useLivePhoto && prefs.captureMode == CaptureMode.PHOTO)
                 cameraController.setTonemapMode(effectiveCameraTonemapMode(prefs))
@@ -3792,7 +3806,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setSuperResolutionScale(scale: Float) {
         viewModelScope.launch {
-            userPreferencesRepository.saveSuperResolutionScale(scale)
+            val normalizedScale = MultiFrameConfig.normalizeOutputScale(
+                outputScale = scale,
+                fallback = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
+            )
+            userPreferencesRepository.saveSuperResolutionScale(normalizedScale)
+            val prefs = userPreferencesRepository.userPreferences.first()
+            cameraController.setMultiFrameOutputScale(
+                resolveMultiFrameOutputScale(
+                    useMfnr = prefs.useMFNR && !prefs.useMultipleExposure,
+                    useMfsr = prefs.useMFSR && !prefs.useMultipleExposure,
+                    superResolutionScale = normalizedScale,
+                )
+            )
         }
     }
 
@@ -5173,7 +5199,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val rotation = (baseRotation + orientationOffset) % 360
 
             val useSuperRes = useMFSR.value
-            val superResScale = if (useSuperRes) 2f else 1.0f
+            val superResScale = when {
+                !useSuperRes -> 1f
+                isRawStack -> state.value.multiFrameOutputScale
+                    ?.let(MultiFrameConfig::normalizeOutputScale)
+                    ?: MultiFrameConfig.MIN_OUTPUT_SCALE
+                else -> 2f
+            }
 
             val aperture = if (state.value.isVirtualApertureEnabled) state.value.virtualAperture else null
             val baselineTarget = if (isRawStack) {
@@ -5235,8 +5267,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
                 spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
                 spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
-                width = (images[0].width.toFloat() * superResScale).roundToInt(),
-                height = (images[0].height.toFloat() * superResScale).roundToInt(),
+                width = MultiFrameConfig.scaledRawOutputDimension(images[0].width, superResScale),
+                height = MultiFrameConfig.scaledRawOutputDimension(images[0].height, superResScale),
                 ratio = aspectRatio,
                 rotation = rotation,
                 deviceModel = captureInfo.model,
@@ -5339,11 +5371,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val frameCount = state.value.hdrBracketFrameCount
                 .coerceAtLeast(HDR_BRACKET_FRAME_COUNT)
             hdrBracketExpectedFrameCount = frameCount
-            hdrBracketZeroEvFrameCount = if (isRawCaptureFormat(image.format)) {
-                (frameCount - 1).coerceAtLeast(1)
-            } else {
-                (frameCount - 2).coerceAtLeast(1)
-            }
+            hdrBracketZeroEvFrameCount = (frameCount - 2).coerceAtLeast(1)
         }
         hdrBracketImages.add(image)
         hdrBracketCaptureResults.add(captureResult)
@@ -5389,18 +5417,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val orderedFrames = orderHdrBracketFramesByTimestamp(images, captureResults)
         val orderedImages = orderedFrames.images
         val orderedCaptureResults = orderedFrames.captureResults
-        if (orderedImages.firstOrNull()?.format?.let(::isRawCaptureFormat) == true) {
-            processRawHdrBracket(
-                images = orderedImages,
-                captureResults = orderedCaptureResults,
-                zeroEvFrameCount = zeroEvFrameCount,
-                expectedFrameCount = expectedFrameCount,
-                captureInfo = captureInfo,
-                characteristics = characteristics,
-                captureResult = captureResult
-            )
-            return
-        }
         var imagesHandedToGallery = false
         try {
             if (orderedImages.size != expectedFrameCount) return
@@ -5411,7 +5427,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val chromaNoiseReductionValue = chromaNoiseReduction.firstOrNull() ?: 0f
             val photoQualityValue = photoQuality.firstOrNull() ?: 95
             val baseImage = orderedImages[HDR_BRACKET_ZERO_INDEX]
-            if (state.value.useMFSR) {
+            if (useMFSR.value) {
                 PLog.w(TAG, "YUV HDR bracket uses Mertens fusion without super resolution")
             }
             val useSuperRes = false
@@ -5585,106 +5601,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     "aeComp=${captureResult.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)}"
         )
         return rebuilt
-    }
-
-    private fun selectRawHdrMetadataFrameIndex(
-        captureResults: List<CaptureResult?>,
-        frameCount: Int
-    ): Int {
-        val measuredProducts = captureResults.mapIndexedNotNull { index, result ->
-            result?.let { captureExposureProduct(it) }?.let { product -> index to product }
-        }
-        val selected = measuredProducts.maxByOrNull { it.second }?.first
-        return selected ?: if (frameCount > 1) 1 else 0
-    }
-
-    private suspend fun processRawHdrBracket(
-        images: List<SafeImage>,
-        captureResults: List<CaptureResult?>,
-        zeroEvFrameCount: Int,
-        expectedFrameCount: Int,
-        captureInfo: CaptureInfo,
-        characteristics: CameraCharacteristics?,
-        captureResult: CaptureResult?
-    ) {
-        try {
-            if (images.size != expectedFrameCount) return
-            val context = getApplication<Application>()
-            val chars = characteristics ?: return
-            val lowExposureResult = captureResults
-                .filterNotNull()
-                .minByOrNull { captureExposureProduct(it) ?: Double.MAX_VALUE }
-                ?: captureResult
-                ?: return
-            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-            val sharpeningValue = RawSharpeningDefaults.forCapture(sharpening.firstOrNull() ?: 0f)
-            val noiseReductionValue = noiseReduction.firstOrNull() ?: 0f
-            val chromaNoiseReductionValue = ChromaDenoiseDefaults.forRawCapture(
-                chromaNoiseReduction.firstOrNull() ?: 0f
-            )
-            val photoQualityValue = photoQuality.firstOrNull() ?: 95
-            val captureMode = if (state.value.useMFNR) "raw_hdr_mfnr" else "raw_hdr_bracket"
-            val baseImage = images.first()
-            val metadataFrameIndex = selectRawHdrMetadataFrameIndex(captureResults, images.size)
-            val metadataImage = images.getOrNull(metadataFrameIndex) ?: baseImage
-            val metadataCaptureResult = captureResults.getOrNull(metadataFrameIndex)
-            val metadataCaptureInfo = rebuildHdrMetadataCaptureInfo(
-                fallback = captureInfo,
-                captureResult = metadataCaptureResult,
-                image = metadataImage,
-                characteristics = characteristics
-            )
-            PLog.d(TAG, "RAW HDR metadata frame index=$metadataFrameIndex")
-            val metadata = buildPhotoMetadata(
-                width = baseImage.width,
-                height = baseImage.height,
-                captureInfo = metadataCaptureInfo,
-                sharpeningValue = sharpeningValue,
-                noiseReductionValue = noiseReductionValue,
-                chromaNoiseReductionValue = chromaNoiseReductionValue,
-                captureMode = captureMode,
-                multipleExposureFrameCount = expectedFrameCount,
-                baselineTarget = BaselineColorCorrectionTarget.RAW,
-            )
-
-            val photoId = GalleryManager.preparePhoto(
-                context,
-                metadata,
-                metadataCaptureResult ?: lowExposureResult,
-                previewThumbnail,
-                false,
-                1.0f,
-                includeCropRegionInOutputSize = true
-            ) ?: return
-
-            viewModelScope.launch(Dispatchers.IO) {
-                GalleryManager.saveRawHdrBracketPhoto(
-                    context = context,
-                    photoId = photoId,
-                    images = images,
-                    captureResults = captureResults,
-                    zeroEvFrameCount = zeroEvFrameCount,
-                    rotation = metadata.rotation,
-                    aspectRatio = metadata.ratio ?: state.value.aspectRatio,
-                    characteristics = chars,
-                    lowExposureCaptureResult = lowExposureResult,
-                    shouldAutoSave = shouldAutoSave,
-                    photoProcessor = contentRepository.photoProcessor,
-                    sharpeningValue = sharpeningValue,
-                    noiseReductionValue = noiseReductionValue,
-                    chromaNoiseReductionValue = chromaNoiseReductionValue,
-                    photoQuality = photoQualityValue,
-                    useGpuAcceleration = useGpuAcceleration.firstOrNull() ?: DeviceUtil.defaultGpuAcceleration,
-                    exposureBias = state.value.exposureBias,
-                    exportDngWithRawExport = exportDngWithRawExport.firstOrNull() ?: false,
-                    capturePreviewThumbnail = previewThumbnail
-                )
-            }
-            PLog.d(TAG, "RAW HDR bracket image saved: $photoId, mode=$captureMode")
-            _imageSavedEvent.emit(Unit)
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to process RAW HDR bracket", e)
-        }
     }
 
     private suspend fun prepareBurst(context: Context, photoId: String, image: SafeImage, captureInfo: CaptureInfo) {

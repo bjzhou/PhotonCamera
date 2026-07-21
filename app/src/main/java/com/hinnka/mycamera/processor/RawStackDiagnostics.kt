@@ -26,7 +26,7 @@ data class RawStackMetricDistribution(
 }
 
 data class RawStackDiagnostics(
-    val mode: RawStackMode,
+    val outputScale: Float,
     val frameCount: Int,
     val alignedFrameCount: Int,
     val width: Int,
@@ -73,7 +73,7 @@ data class RawStackDiagnostics(
                 "srPhase=$superResolutionPhaseBinCount/$superResolutionPhaseBinTotal " +
                 "srPhaseDist=${superResolutionPhaseBinSamples.joinToString(prefix = "[", postfix = "]")} "
         }.orEmpty()
-        return "HWMF diag mode=$mode frames=$frameCount aligned=$alignedFrameCount " +
+        return "Radiance diag scale=${outputScale.fmt()} frames=$frameCount aligned=$alignedFrameCount " +
             "size=${width}x$height step=$sampleStep " +
             registrationSummary +
             registrationQualitySummary +

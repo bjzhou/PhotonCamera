@@ -48,7 +48,7 @@ data class CameraPreset(
     }
 
     fun withSupportedCaptureCombination(): CameraPreset {
-        val resolvedUseMFSR = useMFSR && !useMFNR && !useHdrComposition
+        val resolvedUseMFSR = useMFSR && !useMFNR && (useRaw || !useHdrComposition)
         return if (resolvedUseMFSR == useMFSR) {
             this
         } else {

@@ -201,6 +201,7 @@
     <string name="settings_multi_frame_count">多幀降噪幀數</string>
     <string name="settings_multi_frame_count_description">YUV 多幀降噪使用的幀數（幀數越多降噪越明顯，但處理也越慢）。</string>
     <string name="settings_use_super_resolution">多幀超分</string>
+    <string name="settings_super_resolution_scale">輸出倍率：%1$.2f×</string>
     <string name="settings_use_live_photo">動態相片 (Live Photo)</string>
     <string name="settings_use_live_photo_description">在拍照時同時錄制一段短影片，讓相片動起來。</string>
     <string name="settings_develop_animation">顯影動畫</string>
@@ -782,7 +783,7 @@
     <string name="settings_raw_blacks_adjustment">黑色</string>
     <string name="settings_raw_whites_adjustment">白色</string>
     <string name="settings_raw_lens_shading_correction">鏡頭陰影校正</string>
-    <string name="settings_raw_lens_shading_correction_description">RAW 顯影時應用鏡頭陰影增益圖，包括 RAW 多幀和 RAW HDR 處理。</string>
+    <string name="settings_raw_lens_shading_correction_description">RAW 顯影時應用鏡頭陰影增益圖，包括 RAW 多幀處理。</string>
     <string name="settings_export_dng_with_raw_export">匯出 RAW 時同時匯出 DNG</string>
     <string name="settings_export_dng_with_raw_export_description">匯出 RAW 相片時，同時將對應的原始 DNG 檔案匯出到系統相簿。</string>
     <string name="settings_raw_black_level_correction">黑電平校正</string>

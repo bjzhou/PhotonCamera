@@ -2,7 +2,7 @@
 
 本文记录项目在真实 Android 设备上确认过的 GLES 驱动限制。修改 compute shader、image
 load/store、纹理格式或 accumulator 架构前必须复查本文，并在目标设备上运行
-`GlesRawStackerShaderTest`。不能仅凭 GLES 版本号或桌面 GLSL 编译结果判断移动端可用性。
+`GlesRawRadianceStackerShaderTest`。不能仅凭 GLES 版本号或桌面 GLSL 编译结果判断移动端可用性。
 
 ## PMA110
 
@@ -38,14 +38,6 @@ compute invocation 只访问唯一像素、没有跨 invocation 竞争，该格�
 - `layout(r32ui) uimage2D`
 - `GL_READ_WRITE + GL_R32UI`
 - 使用 `packHalf2x16` / `unpackHalf2x16` 在一个 texel 中保存两个 half
-
-RAW base accumulator 使用两张 `R32UI`：
-
-1. `weightedValue + weight`
-2. `squareSum + clipMass`
-
-总显存仍为 8 B/像素，与单张 `RGBA16F` 相同，但不需要两张 `RGBA16F` ping-pong。
-MFSR accumulator 只保存 `weightedValue + weight`，使用一张 `R32UI`，为 4 B/输出像素。
 
 所有读取 accumulator 的 fragment/compute shader 必须使用 `usampler2D`，取出 `uint` 后再
 调用 `unpackHalf2x16`。禁止把 `R32UI` texture 绑定给普通 `sampler2D`。
@@ -156,7 +148,7 @@ RGB 中增加 `vec3(detail)`，否则后续 WB 会把边缘的正负高频变成
 - `GL_READ_WRITE` accumulator dispatch
 - `R32UI` imageLoad/imageStore
 - `usampler2D` normalize
-- MFNR 与 MFSR 两种模式
+- Radiance 输出倍率 `1.0`、非整数倍率（建议 `1.5`）与 `2.0`
 - Radiance VGN reference、semantic seed/resolve、clear、accumulate、reference-base capture 与
   normalize pass
 - Radiance VGN chroma array capture、YCCD seed、color-noise 1/2/3、三组四向 IIR、error/filter、
@@ -176,7 +168,7 @@ Radiance 的噪声与色差一致性必须继续按传感器通道以及 `R-G`�
 使亮度与色差边缘保持同一位置；否则合法但更宽的色差过渡仍会形成局部绿/品红色边。
 
 桌面静态检查和 Kotlin 编译不能替代真机验证。新增格式前应优先扩展
-`app/src/androidTest/java/com/hinnka/mycamera/processor/GlesRawStackerShaderTest.kt`，让测试实际
+`app/src/androidTest/java/com/hinnka/mycamera/processor/GlesRawRadianceStackerShaderTest.kt`，让测试实际
 dispatch 对应 pass，而不只编译 program。
 
 ## vivo V2242A / Mali-G715-Immortalis MC11
@@ -208,7 +200,7 @@ FP16 最大有限值 `65504`，因而先产生 `Inf`，再进入色度降噪的 
 - 完全饱和高光变成纯绿色；
 - 高光边缘出现不规则绿色过渡带；
 - 切换渲染引擎后，同一位置可能变成黑色，因为不同 shader 对非有限值的最终表现不同；
-- 问题只出现在 HDR LinearRaw 路径，仍走 CFA 输入的 MFNR/MFSR 不受影响。
+- 问题只出现在 HDR LinearRaw 路径，仍走 CFA 输入的 RAW Radiance 不受影响。
 
 `highp` 声明、把输入从 `GL_RGB16UI` 改成 `GL_RGBA16UI`，均不能消除该问题。后者只改变
 纹理像素布局，错误的数值转换仍然存在。

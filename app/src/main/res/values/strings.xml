@@ -203,6 +203,7 @@
     <string name="settings_multi_frame_count">Multi-Frame Denoise Count</string>
     <string name="settings_multi_frame_count_description">Number of frames used for YUV multi-frame denoise (more frames reduce noise more, but take longer).</string>
     <string name="settings_use_super_resolution">Multi-Frame Super Resolution</string>
+    <string name="settings_super_resolution_scale">Output scale: %1$.2f×</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capture a short video clip along with your photo for a dynamic live photo effect.</string>
     <string name="settings_develop_animation">Develop Animation</string>
@@ -766,7 +767,7 @@
     <string name="settings_raw_blacks_adjustment">Blacks</string>
     <string name="settings_raw_whites_adjustment">Whites</string>
     <string name="settings_raw_lens_shading_correction">Lens Shading Correction</string>
-    <string name="settings_raw_lens_shading_correction_description">Apply lens shading gain maps during RAW development, including RAW multi-frame and RAW HDR processing.</string>
+    <string name="settings_raw_lens_shading_correction_description">Apply lens shading gain maps during RAW development, including RAW multi-frame processing.</string>
     <string name="settings_export_dng_with_raw_export">Export DNG with RAW photos</string>
     <string name="settings_export_dng_with_raw_export_description">When exporting a RAW photo, also export its original DNG file to the system gallery.</string>
     <string name="settings_raw_black_level_correction">Black Level Correction</string>

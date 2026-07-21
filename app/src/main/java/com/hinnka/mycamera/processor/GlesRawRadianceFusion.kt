@@ -238,7 +238,7 @@ internal fun planRadianceLongAdmission(
  * One optional one-third-exposure frame is identified and reserved for the dedicated
  * highlight-reconstruction stage. Tagged long exposures are also isolated and planned against
  * the nearest accepted normal anchor. They enter Radiance RGB through an exposure-normalized,
- * noise-weighted auxiliary path and may not participate in the normal MFNR/MFSR frame cluster.
+ * noise-weighted auxiliary path and may not participate in the normal Radiance frame cluster.
  *
  * The reconstruction algorithm is independent of output scale: every accepted RAW frame
  * contributes a wide-kernel denoise estimate and a narrow-kernel detail estimate in the
@@ -262,7 +262,7 @@ class GlesRawRadianceFusion(
     private val debugConfig: RawStackDebugConfig = RawStackDebugConfig.Disabled,
     private val fusionTuning: RawRadianceFusionTuning = RawRadianceFusionTuning(),
 ) {
-    private val outputScale = outputScale.coerceIn(1f, 2f)
+    private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
     fun processFrames(frames: List<RawStackFrame>): RawStackResult? {
         if (frames.isEmpty()) return null
@@ -348,12 +348,13 @@ class GlesRawRadianceFusion(
             }
         }
 
-        val tuning = RawStackTuningResolver.resolve(
-            mode = RawStackMode.MFSR,
-            frameCount = exposurePlan.normalIndices.size,
-            superResolutionScale = outputScale,
+        val tuning = RawStackTuningProfile(
+            requestedFrameCount = exposurePlan.normalIndices.size,
+            superResolution = RawStackSuperResolutionTuning(
+                outputScale = outputScale,
+            ),
         )
-        return GlesRawStacker(
+        return GlesRawRadianceStacker(
             width = width,
             height = height,
             cfaPattern = cfaPattern,
@@ -367,7 +368,6 @@ class GlesRawRadianceFusion(
             lensShadingHeight = lensShadingHeight,
             tuning = tuning,
             debugConfig = debugConfig,
-            fusionPipeline = RawFusionPipeline.RADIANCE_RGB,
             radianceFusionTuning = fusionTuning,
         ).processFrames(
             frames = fusionFrames,
@@ -446,11 +446,6 @@ class GlesRawRadianceFusion(
     companion object {
         private const val TAG = "GlesRawRadianceFusion"
     }
-}
-
-enum class RawFusionPipeline {
-    LEGACY_CFA,
-    RADIANCE_RGB,
 }
 
 /**

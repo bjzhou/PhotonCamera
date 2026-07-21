@@ -462,17 +462,13 @@ class Camera2Controller(private val context: Context) {
     private fun resolveImageReaderMaxImages(): Int {
         val currentState = _state.value
         val multiFrameCount = MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
+        val usesYuvHdrBracket = currentState.useHdrComposition &&
+            (!currentState.useRaw || !isRawSupported)
         val requestedImages = when {
-            currentState.useHdrComposition && currentState.useMFNR ->
-                maxOf(
-                    multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT,
-                    HdrBracketConfig.rawReferenceFrameCount()
-                )
-
-            currentState.useHdrComposition && currentState.useMFSR ->
+            usesYuvHdrBracket && currentState.isMultiFrameEnabled ->
                 multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT
 
-            currentState.useMFNR || currentState.useMFSR ->
+            currentState.isMultiFrameEnabled ->
                 MultiFrameConfig.captureFrameCount(multiFrameCount)
 
             else -> BURST_CAPTURE_BATCH_SIZE
@@ -486,7 +482,7 @@ class Camera2Controller(private val context: Context) {
             currentState.burstCapturing -> BURST_CAPTURE_BATCH_SIZE
             currentState.hdrBracketCapturing -> currentState.hdrBracketFrameCount
                 .coerceAtLeast(HDR_BRACKET_BASE_CAPTURE_COUNT)
-            currentState.useMFNR || currentState.useMFSR ->
+            currentState.isMultiFrameEnabled ->
                 MultiFrameConfig.captureFrameCount(currentState.multiFrameCount)
 
             else -> 1
@@ -1511,8 +1507,7 @@ class Camera2Controller(private val context: Context) {
                             val rawImage = when {
                                 state.value.burstCapturing -> reader.acquireNextImage()
                                 state.value.hdrBracketCapturing -> reader.acquireNextImage()
-                                state.value.useMFNR -> reader.acquireNextImage()
-                                state.value.useMFSR -> reader.acquireNextImage()
+                                state.value.isMultiFrameEnabled -> reader.acquireNextImage()
                                 else -> reader.acquireLatestImage()
                             }
                             val image = trackImage(rawImage)
@@ -3290,7 +3285,7 @@ class Camera2Controller(private val context: Context) {
     private fun applyImageQualitySettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
         try {
             val currentState = _state.value
-            val isBurst = currentState.useMFNR || currentState.useMFSR
+            val isBurst = currentState.isMultiFrameEnabled
             val effectiveEdgeLevel = if (isBurst && edgeLevel == 2) 1 else edgeLevel
             val edgeMode = when (effectiveEdgeLevel) {
                 0 -> CaptureRequest.EDGE_MODE_OFF
@@ -5026,11 +5021,12 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(showGrid = show)
     }
 
-    fun setUseMFNR(useMultiFrame: Boolean) {
+    fun setMultiFrameOutputScale(outputScale: Float?) {
         val currentState = _state.value
+        val normalizedScale = outputScale?.let(MultiFrameConfig::normalizeOutputScale)
         _state.value = currentState.copy(
-            useMFNR = useMultiFrame,
-            multiFrameCount = if (useMultiFrame) {
+            multiFrameOutputScale = normalizedScale,
+            multiFrameCount = if (normalizedScale != null) {
                 MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
             } else {
                 currentState.multiFrameCount
@@ -5040,18 +5036,6 @@ class Camera2Controller(private val context: Context) {
 
     fun setUseHdrComposition(useHdrComposition: Boolean) {
         _state.value = _state.value.copy(useHdrComposition = useHdrComposition)
-    }
-
-    fun setUseMFSR(useSuperResolution: Boolean) {
-        val currentState = _state.value
-        _state.value = currentState.copy(
-            useMFSR = useSuperResolution,
-            multiFrameCount = if (useSuperResolution) {
-                MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
-            } else {
-                currentState.multiFrameCount
-            },
-        )
     }
 
     fun setUseMultipleExposure(useMultipleExposure: Boolean) {
@@ -5117,7 +5101,7 @@ class Camera2Controller(private val context: Context) {
             // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
             // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
             val currentState = _state.value
-            if (currentState.useMFNR || currentState.useMFSR) {
+            if (currentState.isMultiFrameEnabled) {
                 burstGyroRecorder.start(cameraHandler)
             }
             val needsPrecapture = currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE
@@ -5146,40 +5130,6 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    fun captureHdrBracket(zeroEvFrameCount: Int? = null) {
-        val handler = cameraHandler
-        if (handler != null && Looper.myLooper() != handler.looper) {
-            handler.post {
-                captureHdrBracket(zeroEvFrameCount)
-            }
-            return
-        }
-        if (_state.value.captureMode != CaptureMode.PHOTO) {
-            onHdrBracketCaptureFailed?.invoke()
-            return
-        }
-        val device = cameraDevice
-        val reader = imageReader
-        val session = captureSession
-        if (device == null || reader == null || session == null) {
-            onHdrBracketCaptureFailed?.invoke()
-            return
-        }
-        val baseExposureResult = lastCaptureResult
-        lastCaptureResult = null
-        if (_state.value.useMFNR || _state.value.useMFSR) {
-            burstGyroRecorder.start(cameraHandler)
-        }
-        performHdrBracketCapture(
-            device = device,
-            reader = reader,
-            session = session,
-            zeroEvFrameCount = zeroEvFrameCount ?: resolveHdrBracketZeroEvFrameCount(_state.value),
-            playShutterSound = true,
-            baseExposureResult = baseExposureResult
-        )
-    }
-
     private fun performHdrBracketCapture(
         device: CameraDevice,
         reader: ImageReader,
@@ -5188,16 +5138,12 @@ class Camera2Controller(private val context: Context) {
         playShutterSound: Boolean,
         baseExposureResult: CaptureResult?
     ) {
-        val isRawCapture = isRawCaptureReader(reader)
         val currentState = _state.value
         val normalizedZeroEvFrameCount = zeroEvFrameCount.coerceIn(
             0,
             MultiFrameConfig.MAX_FRAME_COUNT
         )
-        val evOffsets = buildHdrBracketEvOffsets(
-            zeroEvFrameCount = normalizedZeroEvFrameCount,
-            isRawCapture = isRawCapture,
-        )
+        val evOffsets = buildHdrBracketEvOffsets(normalizedZeroEvFrameCount)
         val hdrFrameCount = evOffsets.size
         _state.value = _state.value.copy(
             isCapturing = true,
@@ -5218,8 +5164,8 @@ class Camera2Controller(private val context: Context) {
                     applyBaseCameraSettings(
                         builder = this,
                         isCapture = true,
-                        isRawCapture = isRawCapture,
-                        disableZslForHdrCapture = !isRawCapture
+                        isRawCapture = false,
+                        disableZslForHdrCapture = true
                     )
                     applyHdrBracketExposure(this, currentState, evOffset, manualBaseExposure)
                     set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
@@ -5233,7 +5179,7 @@ class Camera2Controller(private val context: Context) {
                         state = currentState,
                         baseResult = baseExposureResult,
                         lockExposure = false,
-                        isRawCapture = isRawCapture,
+                        isRawCapture = false,
                     )
                     PLog.d(TAG, "HDR bracket request[$index]: ev=$evOffset, manual=${manualBaseExposure != null}")
                 }.build()
@@ -5307,25 +5253,9 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun buildHdrBracketEvOffsets(
-        zeroEvFrameCount: Int,
-        isRawCapture: Boolean,
-    ): List<Float> {
-        val sideEv = if (isRawCapture) {
-            HdrBracketConfig.RAW_SIDE_EV
-        } else {
-            HdrBracketConfig.YUV_SIDE_EV
-        }
+    private fun buildHdrBracketEvOffsets(zeroEvFrameCount: Int): List<Float> {
+        val sideEv = HdrBracketConfig.YUV_SIDE_EV
         val zeroCount = zeroEvFrameCount.coerceAtLeast(1)
-        if (isRawCapture) {
-            val normalFrameCount = zeroEvFrameCount.coerceAtLeast(HdrBracketConfig.RAW_REFERENCE_FRAME_COUNT - 1)
-            return buildList {
-                add(-sideEv)
-                repeat(normalFrameCount) {
-                    add(0f)
-                }
-            }
-        }
         return buildList {
             add(0f)
             add(sideEv)
@@ -5477,7 +5407,7 @@ class Camera2Controller(private val context: Context) {
         lockExposure: Boolean,
         isRawCapture: Boolean,
     ) {
-        if (!state.useMFNR && !state.useMFSR) return
+        if (!state.isMultiFrameEnabled) return
 
         if (lockExposure) {
             builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
@@ -5730,15 +5660,15 @@ class Camera2Controller(private val context: Context) {
     private fun shouldUseDefaultHdrBracketCapture(state: CameraState, isRawCapture: Boolean): Boolean {
         return state.captureMode == CaptureMode.PHOTO &&
                 state.useHdrComposition &&
+                !isRawCapture &&
                 !state.burstCapturing &&
                 !state.hdrBracketCapturing &&
                 !state.useMultipleExposure &&
-                !state.useLivePhoto &&
-                (isRawCapture || !state.useRaw || !isRawSupported)
+                !state.useLivePhoto
     }
 
     private fun resolveHdrBracketZeroEvFrameCount(state: CameraState): Int {
-        return if (state.useMFNR || state.useMFSR) {
+        return if (state.isMultiFrameEnabled) {
             MultiFrameConfig.normalizeFrameCount(state.multiFrameCount)
         } else {
             0
@@ -5760,7 +5690,7 @@ class Camera2Controller(private val context: Context) {
                     onHdrBracketCaptureFailed?.invoke()
                     return
                 }
-                PLog.d(TAG, "Default HDR bracket capture, raw=$isRawCapture")
+                PLog.d(TAG, "Default YUV HDR bracket capture")
                 performHdrBracketCapture(
                     device = device,
                     reader = reader,
@@ -5841,7 +5771,7 @@ class Camera2Controller(private val context: Context) {
                 )
             }
 
-            if (currentState.useMFNR || currentState.useMFSR) {
+            if (currentState.isMultiFrameEnabled) {
                 // Burst Mode
                 val requestedFrameCount = currentState.multiFrameCount
                 val frameCount = MultiFrameConfig.normalizeFrameCount(requestedFrameCount)

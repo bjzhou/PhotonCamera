@@ -82,6 +82,7 @@
     <string name="settings_multi_frame_count">Nombre d\'images</string>
     <string name="settings_multi_frame_count_description">Nombre d\'images pour le stacking multi-images (plus d\'images = meilleure qualité mais plus lent).</string>
     <string name="settings_use_super_resolution">Super Résolution</string>
+    <string name="settings_super_resolution_scale">Échelle de sortie : %1$.2f×</string>
     <string name="settings_use_live_photo">Live Photo</string>
     <string name="settings_use_live_photo_description">Capturez un court clip vidéo avec votre photo pour un effet Live Photo dynamique.</string>
     <string name="settings_use_gpu_acceleration">Accélération GPU</string>

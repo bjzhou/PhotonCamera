@@ -31,10 +31,8 @@ import com.hinnka.mycamera.lut.applyEffectsToVideoFile
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.MultiFrameStacker
-import com.hinnka.mycamera.processor.RawHdrStackFrame
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackBufferLayout
-import com.hinnka.mycamera.processor.RawStackResult
 import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrame
 import com.hinnka.mycamera.processor.YuvHdrStackFrameRole
@@ -81,7 +79,6 @@ import kotlin.io.deleteRecursively
 import kotlin.io.extension
 import kotlin.io.inputStream
 import kotlin.io.walkBottomUp
-import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 import kotlin.use
@@ -116,13 +113,6 @@ object GalleryManager {
     private const val HDR_BRACKET_HIGH_INDEX = 1
     private const val HDR_BRACKET_LOW_INDEX = 2
     private const val HDR_ROLE_MEASURED_PRODUCT_MIN_SPREAD = 1.10f
-
-    private data class RawHdrStackCandidate(
-        val image: SafeImage,
-        val captureResult: CaptureResult,
-        val exposureProduct: Double,
-        val index: Int,
-    )
 
     private data class YuvHdrFrameSelection(
         val indexedProducts: Map<Int, Float>,
@@ -2214,42 +2204,6 @@ object GalleryManager {
         composeAverageBitmap(getMultipleExposureFrameFiles(context, sessionId), null)
     }
 
-    private fun buildRawHdrStackCandidates(
-        images: List<SafeImage>,
-        captureResults: List<CaptureResult?>,
-        fallbackResult: CaptureResult,
-    ): List<RawHdrStackCandidate> {
-        return images.mapIndexed { index, image ->
-            val result = captureResults.getOrNull(index) ?: fallbackResult
-            RawHdrStackCandidate(
-                image = image,
-                captureResult = result,
-                exposureProduct = rawExposureProduct(result),
-                index = index,
-            )
-        }
-    }
-
-    private fun selectRawHdrStackFrames(
-        candidates: List<RawHdrStackCandidate>,
-    ): Pair<RawHdrStackCandidate, List<RawHdrStackCandidate>>? {
-        if (candidates.size < HdrBracketConfig.RAW_REFERENCE_FRAME_COUNT) return null
-        val shortCandidate = candidates.minByOrNull { it.exposureProduct } ?: return null
-        val normalCandidates = candidates
-            .filter { candidate ->
-                candidate.index != shortCandidate.index &&
-                    candidate.exposureProduct > shortCandidate.exposureProduct * 1.05
-            }
-            .sortedBy { it.index }
-        if (normalCandidates.isEmpty()) return null
-        PLog.d(
-            TAG,
-            "RAW HDR stack frame selection: short=${shortCandidate.index}:${shortCandidate.exposureProduct}, " +
-                    "normal=${normalCandidates.joinToString { "${it.index}:${it.exposureProduct}" }}"
-        )
-        return shortCandidate to normalCandidates
-    }
-
     suspend fun composeHdrBracketPhoto(
         images: List<SafeImage>,
         captureResults: List<CaptureResult?> = emptyList(),
@@ -2714,7 +2668,7 @@ object GalleryManager {
                 )
             }
 
-            var currentUseSuperResolution = useSuperResolution
+            val currentUseSuperResolution = useSuperResolution
             val applyRawLensShading = resolveRawLensShadingCorrectionEnabled(context, metadata)
             val effectiveRawStackFrames = if (rawStackFrames.size == images.size &&
                 rawStackFrames.indices.all { rawStackFrames[it].image === images[it] }
@@ -2733,12 +2687,10 @@ object GalleryManager {
                     )
                 }
             }
-            var rawStackResult = MultiFrameStacker.processBurstRaw(
+            val rawStackResult = MultiFrameStacker.processBurstRaw(
                 frames = effectiveRawStackFrames,
                 cfaPattern = stackCfaPattern,
-                enableSuperResolution = currentUseSuperResolution,
-                superResolutionScale = superResolutionScale,
-                useGpuAcceleration = useGpuAcceleration,
+                outputScale = if (currentUseSuperResolution) superResolutionScale else 1f,
                 masterBlackLevel = stackBlackLevel,
                 whiteLevel = stackWhiteLevel,
                 whiteBalanceGains = rawMetadata.whiteBalanceGains,
@@ -3120,245 +3072,6 @@ object GalleryManager {
         }
     }
 
-    suspend fun saveRawHdrBracketPhoto(
-        context: Context,
-        photoId: String,
-        images: List<SafeImage>,
-        captureResults: List<CaptureResult?>,
-        zeroEvFrameCount: Int = (images.size - 2).coerceAtLeast(1),
-        rotation: Int,
-        aspectRatio: AspectRatio,
-        characteristics: CameraCharacteristics,
-        lowExposureCaptureResult: CaptureResult,
-        shouldAutoSave: Boolean = true,
-        photoProcessor: PhotoProcessor,
-        sharpeningValue: Float,
-        noiseReductionValue: Float,
-        chromaNoiseReductionValue: Float,
-        photoQuality: Int = 95,
-        useGpuAcceleration: Boolean = true,
-        exposureBias: Float? = null,
-        exportDngWithRawExport: Boolean = false,
-        capturePreviewThumbnail: Bitmap? = null,
-    ): Boolean = withContext(Dispatchers.IO) {
-        var rawHdrStackResult: RawStackResult? = null
-        val imagesToClose = images.toMutableSet()
-
-        fun closeImagesNow(targets: Iterable<SafeImage>) {
-            targets.forEach { image ->
-                if (imagesToClose.remove(image)) {
-                    image.close()
-                }
-            }
-        }
-
-        fun closeRemainingImages() {
-            val remaining = imagesToClose.toList()
-            imagesToClose.clear()
-            remaining.forEach { it.close() }
-        }
-
-        try {
-            if (images.size < HdrBracketConfig.RAW_REFERENCE_FRAME_COUNT) {
-                PLog.w(
-                    TAG,
-                    "RAW HDR bracket requires ${HdrBracketConfig.RAW_REFERENCE_FRAME_COUNT} images, got ${images.size}"
-                )
-                closeRemainingImages()
-                return@withContext false
-            }
-
-            val photoDir = getPhotoDir(context, photoId, true)
-            val dngFile = File(photoDir, DNG_FILE)
-            val metadata = loadMetadata(context, photoId) ?: run {
-                closeRemainingImages()
-                return@withContext false
-            }
-            val rawHdrStackSelection = selectRawHdrStackFrames(
-                candidates = buildRawHdrStackCandidates(
-                    images = images,
-                    captureResults = captureResults,
-                    fallbackResult = lowExposureCaptureResult,
-                )
-            ) ?: run {
-                PLog.e(TAG, "RAW HDR stack frame selection failed; fallback fusion is disabled")
-                closeRemainingImages()
-                return@withContext false
-            }
-            val (shortCandidate, normalCandidates) = rawHdrStackSelection
-            val normalReferenceCandidate = normalCandidates.first()
-
-            // The fused Bayer buffer is normalized to the short-exposure domain, so keep using
-            // that frame for stack calibration. Public capture metadata, however, describes the
-            // intended 0EV photo and must come from a normal-exposure reference frame.
-            val rawMetadataImage = shortCandidate.image
-            val rawMetadataResult = shortCandidate.captureResult
-
-            val rawMetadata = RawMetadata.create(
-                rawMetadataImage.width,
-                rawMetadataImage.height,
-                characteristics,
-                rawMetadataResult,
-                exposureBias,
-                RawDemosaicProcessor.getInstance().getRawColorSpace()
-            )
-            val stackBlackLevel = RawProcessor.resolveBlackLevelForMode(
-                defaultBlackLevel = rawMetadata.blackLevel,
-                blackLevelMode = metadata.rawBlackLevelMode,
-                customBlackLevel = metadata.rawCustomBlackLevel
-            )
-            if (!rawMetadata.blackLevel.contentEquals(stackBlackLevel)) {
-                PLog.d(
-                    TAG,
-                    "RAW HDR black level override mode=${metadata.rawBlackLevelMode} value=${stackBlackLevel.joinToString()}"
-                )
-            }
-            val stackWhiteLevel = RawProcessor.resolveWhiteLevelForMode(
-                defaultWhiteLevel = rawMetadata.whiteLevel,
-                whiteLevelMode = metadata.rawWhiteLevelMode,
-                customWhiteLevel = metadata.rawCustomWhiteLevel
-            ).toInt()
-            if (stackWhiteLevel != rawMetadata.whiteLevel.toInt()) {
-                PLog.d(TAG, "RAW HDR white level override mode=${metadata.rawWhiteLevelMode} value=$stackWhiteLevel")
-            }
-            val stackCfaPattern = RawProcessor.resolveCfaPatternForMode(
-                defaultCfaPattern = rawMetadata.cfaPattern,
-                cfaCorrectionMode = metadata.rawCfaCorrectionMode
-            )
-            if (stackCfaPattern != rawMetadata.cfaPattern) {
-                PLog.d(
-                    TAG,
-                    "RAW HDR CFA override mode=${metadata.rawCfaCorrectionMode} cfa=${rawMetadata.cfaPattern}->$stackCfaPattern"
-                )
-            }
-
-            run {
-                if (!useGpuAcceleration) {
-                    PLog.w(TAG, "RAW HDR denoise requires GLES stacker; ignoring disabled GPU acceleration setting")
-                }
-                rawHdrStackResult = MultiFrameStacker.processHdrBurstRaw(
-                    shortFrame = RawHdrStackFrame(
-                        image = shortCandidate.image,
-                        exposureProduct = shortCandidate.exposureProduct,
-                    ),
-                    normalFrames = normalCandidates.map { candidate ->
-                        RawHdrStackFrame(
-                            image = candidate.image,
-                            exposureProduct = candidate.exposureProduct,
-                        )
-                    },
-                    cfaPattern = stackCfaPattern,
-                    useGpuAcceleration = true,
-                    masterBlackLevel = stackBlackLevel,
-                    whiteLevel = stackWhiteLevel,
-                    whiteBalanceGains = rawMetadata.whiteBalanceGains,
-                    noiseModel = rawMetadata.noiseProfile,
-                    rawNoiseModel = RawNoiseModel.fromCamera2NoiseProfile(rawMetadata.channelNoiseProfile),
-                    lensShading = rawMetadata.lensShadingMap,
-                    lensShadingWidth = rawMetadata.lensShadingMapWidth,
-                    lensShadingHeight = rawMetadata.lensShadingMapHeight,
-                    applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(context, metadata),
-                )
-                closeImagesNow(images)
-
-                val stackResult = rawHdrStackResult ?: run {
-                    PLog.e(TAG, "Failed to stack RAW HDR short/normal frames")
-                    return@withContext false
-                }
-                val fusedBayerBuffer = stackResult.fusedBayerBuffer ?: return@withContext false
-                val rawHdrSourceBaselineExposureEv = calculateRawHdrDngBaselineExposureEv(
-                    referenceProduct = normalReferenceCandidate.exposureProduct,
-                    baseProduct = shortCandidate.exposureProduct,
-                )
-                PLog.d(
-                    TAG,
-                    "RAW HDR stack DNG source baseline exposure: ${rawHdrSourceBaselineExposureEv}EV, " +
-                            "outputDomain=short, normalReference=${normalReferenceCandidate.exposureProduct}, " +
-                            "short=${shortCandidate.exposureProduct}"
-                )
-                val stackedMetadata = metadata.withNormalizedRawLevelCorrectionsCleared("RAW HDR stack")
-                val stackRawMetadata = rawMetadata.copy(
-                    cfaPattern = stackCfaPattern,
-                    blackLevel = stackBlackLevel,
-                    whiteLevel = stackWhiteLevel.toFloat(),
-                )
-                val dngWritten = try {
-                    trySaveStackedRawDng(
-                        context = context,
-                        photoId = photoId,
-                        dngFile = dngFile,
-                        fusedBayerBuffer = fusedBayerBuffer,
-                        width = stackResult.width,
-                        height = stackResult.height,
-                        rawMetadata = stackRawMetadata,
-                        stackBlackLevel = stackResult.blackLevel,
-                        stackWhiteLevel = stackWhiteLevel,
-                        isNormalizedSensorData = true,
-                        characteristics = characteristics,
-                        captureResult = shortCandidate.captureResult,
-                        captureMetadataResult = normalReferenceCandidate.captureResult,
-                        rotation = rotation,
-                        aspectRatio = aspectRatio,
-                        capturePreviewThumbnail = capturePreviewThumbnail,
-                        thumbnail = null,
-                        metadata = stackedMetadata,
-                        shouldAutoSave = shouldAutoSave,
-                        exportDngWithRawExport = exportDngWithRawExport,
-                        baselineExposureEv = rawHdrSourceBaselineExposureEv,
-                        profileGainTableMap = null,
-                        profileToneMapMode = RawProfileToneMapMode.Default,
-                        imageLayout = stackResult.bufferLayout.toDngImageLayout(),
-                        compression = stackResult.bufferLayout.toDngCompression(),
-                        inputRowStepSamples = stackResult.inputRowStepSamples,
-                        inputColStepSamples = stackResult.inputColStepSamples,
-                    )
-                } finally {
-                    stackResult.fusedBayerBuffer = null
-                    rawHdrStackResult = null
-                    if (stackResult.fusedBayerUsesNativeAllocator) {
-                        LargeDirectBuffer.free(fusedBayerBuffer)
-                        PLog.d(TAG, "Released RAW HDR stacked linear RGB buffer")
-                    }
-                }
-                if (!dngWritten) {
-                    PLog.e(TAG, "Failed to persist RAW HDR DNG before rendering preview")
-                    return@withContext false
-                }
-
-                renderRawDngPhotoOutputs(
-                    context = context,
-                    photoId = photoId,
-                    dngFile = dngFile,
-                    aspectRatio = aspectRatio,
-                    metadata = stackedMetadata,
-                    rotation = rotation,
-                    exposureBias = exposureBias,
-                    photoProcessor = photoProcessor,
-                    sharpeningValue = sharpeningValue,
-                    noiseReductionValue = noiseReductionValue,
-                    chromaNoiseReductionValue = chromaNoiseReductionValue,
-                    photoQuality = photoQuality,
-                    shouldAutoSave = shouldAutoSave,
-                    capturePreviewThumbnail = capturePreviewThumbnail
-                )
-                PLog.d(TAG, "RAW HDR denoise DNG saved and rendered: $photoId")
-                return@withContext true
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save RAW HDR bracket photo", e)
-            false
-        } finally {
-            rawHdrStackResult?.let { stack ->
-                val buffer = stack.fusedBayerBuffer
-                stack.fusedBayerBuffer = null
-                if (stack.fusedBayerUsesNativeAllocator) {
-                    LargeDirectBuffer.free(buffer)
-                }
-            }
-            closeRemainingImages()
-        }
-    }
-
     private fun MediaMetadata.withNormalizedRawLevelCorrectionsCleared(source: String): MediaMetadata {
         val hasLevelOverride = rawBlackLevelMode != null ||
                 rawCustomBlackLevel != null ||
@@ -3377,36 +3090,6 @@ object GalleryManager {
             rawWhiteLevelMode = null,
             rawCustomWhiteLevel = null
         )
-    }
-
-    private fun calculateRawHdrDngBaselineExposureEv(
-        referenceProduct: Double,
-        baseProduct: Double,
-    ): Float {
-        if (!referenceProduct.isFinite() || referenceProduct <= 0.0 ||
-            !baseProduct.isFinite() || baseProduct <= 0.0
-        ) {
-            return HdrBracketConfig.RAW_SIDE_EV
-        }
-        val baselineExposureEv = if (baseProduct < referenceProduct) {
-            (ln(referenceProduct / baseProduct) / ln(2.0)).toFloat()
-        } else {
-            0f
-        }.coerceIn(0f, 8f)
-        PLog.d(
-            TAG,
-            "RAW HDR DNG baseline exposure: ${baselineExposureEv}EV, " +
-                    "referenceProduct=$referenceProduct, baseProduct=$baseProduct"
-        )
-        return baselineExposureEv
-    }
-
-    private fun rawExposureProduct(captureResult: CaptureResult): Double {
-        val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY)?.coerceAtLeast(1) ?: 1
-        val exposureTime = captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.coerceAtLeast(1L) ?: 1L
-        val postRawBoost = (captureResult.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST) ?: 100)
-            .coerceAtLeast(1) / 100.0
-        return iso.toDouble() * exposureTime.toDouble() * postRawBoost
     }
 
     private suspend fun renderRawDngPhotoOutputs(

@@ -37,6 +37,7 @@ import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
+import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -120,6 +121,8 @@ fun CameraTopSheet(
     onMFNRToggle: (Boolean) -> Unit,
     useMFSR: Boolean,
     onMFSRToggle: (Boolean) -> Unit,
+    superResolutionScale: Float,
+    onSuperResolutionScaleChange: (Float) -> Unit,
     useHdrComposition: Boolean,
     onHdrCompositionToggle: (Boolean) -> Unit,
     useMultipleExposure: Boolean,
@@ -131,6 +134,11 @@ fun CameraTopSheet(
     var showRawSheet by rememberSaveable { mutableStateOf(false) }
     var showNaturalLightWarning by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
+    var superResolutionScaleDraft by remember { mutableFloatStateOf(superResolutionScale) }
+
+    LaunchedEffect(superResolutionScale) {
+        superResolutionScaleDraft = superResolutionScale.coerceIn(1f, 2f)
+    }
 
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
@@ -250,6 +258,38 @@ fun CameraTopSheet(
                         onCheckedChange = onHdrCompositionToggle,
                         modifier = Modifier.weight(1f)
                     )
+                }
+
+                if (useMFSR && useRaw) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.settings_super_resolution_scale,
+                                superResolutionScaleDraft,
+                            ),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            modifier = Modifier.width(112.dp),
+                        )
+                        CustomSlider(
+                            value = superResolutionScaleDraft,
+                            onValueChange = { superResolutionScaleDraft = it.coerceIn(1f, 2f) },
+                            onValueChangeFinished = {
+                                onSuperResolutionScaleChange(superResolutionScaleDraft)
+                            },
+                            onDoubleTap = {
+                                superResolutionScaleDraft = 1.5f
+                                onSuperResolutionScaleChange(1.5f)
+                            },
+                            valueRange = 1f..2f,
+                            modifier = Modifier.weight(1f),
+                            activeTrackColor = Color(0xFFFF6B35),
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
