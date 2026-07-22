@@ -2295,37 +2295,39 @@ fun SettingsScreen(
                             onClick = { openExternalUrl(context, communityGroupUrl) }
                         )
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
+                        if (!isGoogleFlavor) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
 
-                        NavigationSettingItem(
-                            title = stringResource(R.string.settings_donation),
-                            description = stringResource(R.string.settings_donation_description),
-                            onClick = {
-                                val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
-                                val alipayUrl =
-                                    "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
-                                        java.net.URLEncoder.encode(
-                                            qrCodeUrl,
-                                            "UTF-8"
-                                        )
-                                    }"
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
-                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                try {
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
-                                    webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            NavigationSettingItem(
+                                title = stringResource(R.string.settings_donation),
+                                description = stringResource(R.string.settings_donation_description),
+                                onClick = {
+                                    val qrCodeUrl = "https://qr.alipay.com/fkx103287mz2sqvs1esdh30"
+                                    val alipayUrl =
+                                        "alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=${
+                                            java.net.URLEncoder.encode(
+                                                qrCodeUrl,
+                                                "UTF-8"
+                                            )
+                                        }"
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(alipayUrl))
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     try {
-                                        context.startActivity(webIntent)
-                                    } catch (e2: Exception) {
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(qrCodeUrl))
+                                        webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        try {
+                                            context.startActivity(webIntent)
+                                        } catch (e2: Exception) {
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
