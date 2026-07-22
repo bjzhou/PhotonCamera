@@ -2,44 +2,78 @@ package com.hinnka.mycamera.processor
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RawRadianceHighlightAlignmentSupportTest {
+    private val highlightRequirements = RawRadianceHighlightAdmissionRequirements(
+        minimumEligibleTiles = 1,
+        minimumEligibleCoverage = 0.20f,
+    )
+
     @Test
-    fun acceptsSparseButSpatiallyDistributedValidatedFlow() {
-        assertTrue(
-            hasRadianceHighlightAlignmentSupport(
-                validTileCount = 166,
-                coveredQuadrants = 3,
-                minimumValidTiles = 16,
-                minimumQuadrants = 2,
+    fun acceptsSupportInsideSmallLocalizedHighlight() {
+        val admission = planRadianceHighlightAdmission(
+            evidence = RawRadianceHighlightAdmissionEvidence(
+                eligibleTileCount = 5,
+                supportedTileCount = 2,
             ),
+            requirements = highlightRequirements,
         )
+
+        assertTrue(admission.accepted)
+        assertEquals(0.4f, admission.eligibleCoverage, 0f)
     }
 
     @Test
-    fun rejectsTooFewValidatedCorrespondences() {
-        assertFalse(
-            hasRadianceHighlightAlignmentSupport(
-                validTileCount = 15,
-                coveredQuadrants = 4,
-                minimumValidTiles = 16,
-                minimumQuadrants = 2,
+    fun rejectsGoodWholeFrameFlowWhenHighlightItselfIsUnsupported() {
+        val admission = planRadianceHighlightAdmission(
+            evidence = RawRadianceHighlightAdmissionEvidence(
+                eligibleTileCount = 5,
+                supportedTileCount = 0,
             ),
+            requirements = highlightRequirements,
         )
+
+        assertFalse(admission.accepted)
+        assertEquals(0f, admission.eligibleCoverage, 0f)
     }
 
     @Test
-    fun rejectsSpatiallyConcentratedCorrespondences() {
-        assertFalse(
-            hasRadianceHighlightAlignmentSupport(
-                validTileCount = 166,
-                coveredQuadrants = 1,
-                minimumValidTiles = 16,
-                minimumQuadrants = 2,
+    fun rejectsWhenEligibleCoverageIsTooSparse() {
+        val admission = planRadianceHighlightAdmission(
+            evidence = RawRadianceHighlightAdmissionEvidence(
+                eligibleTileCount = 10,
+                supportedTileCount = 1,
             ),
+            requirements = highlightRequirements,
         )
+
+        assertFalse(admission.accepted)
+        assertEquals(0.1f, admission.eligibleCoverage, 0f)
+    }
+
+    @Test
+    fun fallsBackToNextTimestampRankedAcceptedAnchor() {
+        val selected = selectRadianceHighlightAnchor(
+            candidateIndices = intArrayOf(3, 2, 1, 0),
+            frameCount = 4,
+            acceptedFrameIndices = setOf(0, 1),
+        )
+
+        assertEquals(1, selected)
+    }
+
+    @Test
+    fun rejectsHighlightWhenNoNormalAnchorSurvived() {
+        val selected = selectRadianceHighlightAnchor(
+            candidateIndices = intArrayOf(2, 1),
+            frameCount = 3,
+            acceptedFrameIndices = setOf(0),
+        )
+
+        assertNull(selected)
     }
 
     @Test

@@ -23,7 +23,12 @@ class GlesRawRadianceFusionShadersTest {
         assertTrue(propagation.contains("sampleValue.a * support"))
         assertTrue(propagation.contains("variance"))
         assertTrue(propagation.contains("uGuideProxy"))
-        assertTrue(propagation.contains("min(centerGuide.g, neighborGuide.g) < 0.5"))
+        assertTrue(propagation.contains("uAllowInvalidGuidePropagation"))
+        assertTrue(propagation.contains("mix(0.35, 1.0"))
+        assertTrue(
+            RawRadianceFusionTuning().highlightFlowPropagationPasses <
+                RawRadianceFusionTuning().longFlowPropagationPasses,
+        )
         assertTrue(
             composition.contains("referenceToAnchorFlow.rg + anchorToShortFlow.rg"),
         )
@@ -36,21 +41,37 @@ class GlesRawRadianceFusionShadersTest {
     }
 
     @Test
-    fun highlightCompositionUsesOneSharedMaskAndShortExposureOutputDomain() {
+    fun highlightCompositionUsesLocalEvidenceAndShortExposureOutputDomain() {
         val shader = GlesRawRadianceFusionShaders.normalize(
             showRejections = false,
             reconstructHighlights = true,
         )
 
-        assertTrue(shader.contains("shortNotClipped * shortHasSignal * highlightFlowConfidence"))
+        assertTrue(shader.contains("uniform sampler2D uHighlightSupport"))
         assertTrue(shader.contains("uniform highp usampler2D uReferenceRaw"))
-        assertTrue(shader.contains("float normalPeak = referenceRawPeak(referenceRawPosition)"))
-        assertTrue(shader.contains("float coreShortSelection = saturatedCore * step(0.5, shortReliability)"))
+        assertTrue(shader.contains("HighlightRawStats shortRaw"))
+        assertTrue(shader.contains("noiseAwareClipProbability"))
+        assertTrue(shader.contains("normalizedPhotometricResidual"))
+        assertTrue(shader.contains("pixelPhotometricConfidence * localSupport.b"))
+        assertTrue(shader.contains("uCalculationGains * uCalculationGains"))
+        assertTrue(shader.contains("uHighlightCoreReliabilityMinimum"))
         assertTrue(shader.contains("float shoulderBlend = (1.0 - saturatedCore)"))
         assertTrue(shader.contains("uHighlightFlowFullConfidence"))
         assertTrue(shader.contains("vec3 normalInShortDomain = rgb /"))
         assertTrue(shader.contains("mix(normalInShortDomain, highlightRgb, highlightWeight)"))
         assertFalse(shader.contains("vec3 highlightWeight"))
+        assertFalse(shader.contains("step(0.5, shortReliability)"))
+    }
+
+    @Test
+    fun highlightSupportSeparatesNeedValidityPhotometryAndGeometry() {
+        val shader = GlesRadianceHighlightShaders.buildSupport
+
+        assertTrue(shader.contains("normalNeedSum"))
+        assertTrue(shader.contains("shortValiditySum"))
+        assertTrue(shader.contains("normalizedResidual"))
+        assertTrue(shader.contains("referenceSample.a + shortSample.a"))
+        assertTrue(shader.contains("clamp(flow.a, 0.0, 1.0)"))
     }
 
     @Test
@@ -321,6 +342,11 @@ class GlesRawRadianceFusionShadersTest {
             ),
             "fragment" to GlesRawRadianceFusionShaders.longEligibility,
             "fragment" to GlesRawRadianceFusionShaders.normalize(showRejections = false),
+            "fragment" to GlesRadianceHighlightShaders.buildSupport,
+            "fragment" to GlesRawRadianceFusionShaders.normalize(
+                showRejections = false,
+                reconstructHighlights = true,
+            ),
         )
         sources.forEach { (stage, source) ->
             val sourceFile = File.createTempFile("radiance-long-", ".$stage")

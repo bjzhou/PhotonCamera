@@ -420,18 +420,15 @@ class Camera2Controller(private val context: Context) {
     ): CapturedFrameMetadata? {
         val exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return null
         val sensitivityIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return null
-        val postRawBoost = result
-            .get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)
-            ?.coerceAtLeast(1)
-            ?: 100
+        val exposureProduct = RawExposureMath.productOrNull(exposureTimeNs, sensitivityIso)
+            ?: return null
         val channelNoiseProfile = captureChannelNoiseProfile(result)
         return CapturedFrameMetadata(
             sensorTimestampNs = sensorTimestampNs,
             frameNumber = result.frameNumber,
             exposureTimeNs = exposureTimeNs,
             sensitivityIso = sensitivityIso,
-            exposureProduct = exposureTimeNs.toDouble() * sensitivityIso.toDouble() *
-                (postRawBoost.toDouble() / 100.0),
+            exposureProduct = exposureProduct,
             focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: Float.NaN,
             lensState = result.get(CaptureResult.LENS_STATE),
             rollingShutterSkewNs = result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
@@ -6582,10 +6579,6 @@ class Camera2Controller(private val context: Context) {
             val sensorTimestampNs = frameResult?.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
             val exposureTimeNs = frameResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
             val sensitivityIso = frameResult?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
-            val postRawBoost = frameResult
-                ?.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)
-                ?.coerceAtLeast(1)
-                ?: 100
             val frozenMetadata = pendingFrameMetadata.remove(image.timestamp)
             val frameMetadata = if (image.format == ImageFormat.RAW_SENSOR && frameResult != null) {
                 CapturedFrameMetadata(
@@ -6593,8 +6586,10 @@ class Camera2Controller(private val context: Context) {
                     frameNumber = frozenMetadata?.frameNumber ?: result?.frameNumber ?: -1L,
                     exposureTimeNs = exposureTimeNs,
                     sensitivityIso = sensitivityIso,
-                    exposureProduct = exposureTimeNs.toDouble() * sensitivityIso.toDouble() *
-                        (postRawBoost.toDouble() / 100.0),
+                    exposureProduct = RawExposureMath.productOrNull(
+                        exposureTimeNs,
+                        sensitivityIso,
+                    ) ?: frozenMetadata?.exposureProduct ?: 0.0,
                     focusDistanceDiopters = frameResult
                         .get(CaptureResult.LENS_FOCUS_DISTANCE)
                         ?: Float.NaN,

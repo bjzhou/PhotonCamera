@@ -5563,15 +5563,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun captureExposureProduct(result: CaptureResult): Double? {
-        val exposureTime = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-            ?.takeIf { it > 0L }
-            ?: return null
-        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
-            ?.takeIf { it > 0 }
-            ?: return null
-        val postRawBoost = (result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST) ?: 100)
-            .coerceAtLeast(1) / 100.0
-        return exposureTime.toDouble() * iso.toDouble() * postRawBoost
+        return RawExposureMath.productOrNull(
+            exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+            sensitivityIso = result.get(CaptureResult.SENSOR_SENSITIVITY),
+        )
     }
 
     private fun rebuildHdrMetadataCaptureInfo(
