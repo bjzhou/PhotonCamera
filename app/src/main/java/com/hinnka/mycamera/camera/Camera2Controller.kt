@@ -1224,7 +1224,17 @@ class Camera2Controller(private val context: Context) {
         // 确保在权限已授予后才发现相机（延迟初始化）
         if (_state.value.availableCameras.isEmpty()) {
             PLog.i(TAG, "首次打开相机，开始发现可用摄像头")
-            discoverCameras()
+            try {
+                discoverCameras()
+            } catch (error: Exception) {
+                handleCameraOpenFailure(
+                    cameraId = "",
+                    errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
+                    message = "摄像头列表加载失败",
+                    error = error
+                )
+                return
+            }
         }
 
         val cameraId = _state.value.currentCameraId
@@ -1233,7 +1243,12 @@ class Camera2Controller(private val context: Context) {
         val targetZoomRatioByMain = getTargetZoomRatioByMain(_state.value, selectedCamera)
         val captureMode = _state.value.captureMode
         if (cameraId.isEmpty()) {
-            PLog.e(TAG, "No camera ID set")
+            handleCameraOpenFailure(
+                cameraId = cameraId,
+                errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
+                message = "未发现可用摄像头",
+                error = IllegalStateException("Camera discovery returned no available camera")
+            )
             return
         }
 
@@ -1577,6 +1592,9 @@ class Camera2Controller(private val context: Context) {
                     }
                     PLog.d(TAG, "Camera opened: ${camera.id}")
                     cameraDevice = camera
+                    if (restartCameraForRawCaptureOutputMismatch("camera opened")) {
+                        return
+                    }
                     createPreviewSession(openGeneration = openGeneration)
                 }
 
@@ -2282,6 +2300,42 @@ class Camera2Controller(private val context: Context) {
 
     private fun isRawCaptureReader(reader: ImageReader?): Boolean {
         return reader?.imageFormat == ImageFormat.RAW_SENSOR
+    }
+
+    /**
+     * RAW is an ImageReader/session-level choice. If the desired state changes after an
+     * ImageReader has already been created, changing [CameraState.useRaw] alone leaves the
+     * active capture output in the old format.
+     *
+     * This check also runs from CameraDevice.onOpened so a preference restored while the
+     * initial camera open is in flight is applied before the first preview session starts.
+     */
+    private fun restartCameraForRawCaptureOutputMismatch(reason: String): Boolean {
+        val currentState = _state.value
+        if (currentState.captureMode != CaptureMode.PHOTO) return false
+
+        val currentReader = imageReader ?: return false
+        val expectsRawOutput = currentState.useRaw && isRawSupported
+        val hasRawOutput = isRawCaptureReader(currentReader)
+        if (expectsRawOutput == hasRawOutput) return false
+
+        val surfaceTexture = previewSurfaceTexture ?: return false
+        if (cameraDevice == null) {
+            PLog.d(
+                TAG,
+                "RAW capture output update is waiting for camera open: " +
+                        "reason=$reason, expectedRaw=$expectsRawOutput, actualRaw=$hasRawOutput"
+            )
+            return false
+        }
+
+        PLog.i(
+            TAG,
+            "Restarting camera for RAW capture output update: " +
+                    "reason=$reason, expectedRaw=$expectsRawOutput, actualRaw=$hasRawOutput"
+        )
+        openCamera(surfaceTexture)
+        return true
     }
 
 // ==================== 统一参数配置 ====================
@@ -3533,9 +3587,23 @@ class Camera2Controller(private val context: Context) {
     /**
      * 设置是否使用 RAW 格式拍照
      */
-    fun setUseRaw(enabled: Boolean) {
+    fun setUseRaw(
+        enabled: Boolean,
+        reconfigureCaptureOutputIfNeeded: Boolean = true
+    ) {
         _state.value = _state.value.copy(useRaw = enabled)
         PLog.d(TAG, "RAW 格式拍照: $enabled")
+
+        if (!reconfigureCaptureOutputIfNeeded) return
+
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                restartCameraForRawCaptureOutputMismatch("RAW setting changed")
+            }
+            return
+        }
+        restartCameraForRawCaptureOutputMismatch("RAW setting changed")
     }
 
     fun setRawMinShutterSpeedNs(value: Long) {

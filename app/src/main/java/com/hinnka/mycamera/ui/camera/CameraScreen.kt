@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.SurfaceTexture
 import android.os.Environment
 import android.provider.Settings
 import android.view.WindowManager
@@ -203,6 +204,7 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    val isCameraInitialized by viewModel.isInitialized.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
@@ -316,8 +318,19 @@ fun CameraScreen(
         }
     }
 
-    // 标记相机是否已打开
-    var cameraOpened by remember { mutableStateOf(false) }
+    // Surface may become ready while persisted camera settings are still being restored.
+    // Retain the exact instance and open only after initialization has completed.
+    var previewSurfaceTexture by remember { mutableStateOf<SurfaceTexture?>(null) }
+
+    LaunchedEffect(
+        isCameraInitialized,
+        previewSurfaceTexture,
+        state.availableCameras.isNotEmpty()
+    ) {
+        val surfaceTexture = previewSurfaceTexture ?: return@LaunchedEffect
+        if (!isCameraInitialized) return@LaunchedEffect
+        viewModel.openCamera(surfaceTexture)
+    }
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
@@ -1011,12 +1024,13 @@ fun CameraScreen(
                         focusSuccess = state.focusSuccess,
                         meteringMode = state.meteringMode,
                         onSurfaceTextureReady = { surfaceTexture ->
-                            viewModel.openCamera(surfaceTexture)
-                            cameraOpened = true
+                            previewSurfaceTexture = surfaceTexture
                         },
                         onSurfaceDestroyed = { surfaceTexture ->
+                            if (previewSurfaceTexture === surfaceTexture) {
+                                previewSurfaceTexture = null
+                            }
                             viewModel.closeCamera(surfaceTexture)
-                            cameraOpened = false
                         },
                         onTap = { x, y, w, h ->
                             if (state.isFocusLocked) {

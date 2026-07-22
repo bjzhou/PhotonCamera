@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -58,6 +59,7 @@ fun ZoomControlBarVerticel(
     val currentCameraIdState by rememberUpdatedState(currentCameraId)
 
     val currentCamera = availableCameras.find { it.cameraId == currentCameraId }
+    val isCameraReady = currentCamera != null
 
     // 获取当前相机信息
     val mainCamera =
@@ -146,7 +148,8 @@ fun ZoomControlBarVerticel(
         modifier = modifier
             .padding(8.dp)
             .width(32.dp)
-            .pointerInput(minZoom, maxZoom, zoomStops) {
+            .pointerInput(isCameraReady, minZoom, maxZoom, zoomStops) {
+                if (!isCameraReady) return@pointerInput
                 var dragAccumulated = 0f
                 detectVerticalDragGestures(
                     onDragStart = {
@@ -249,7 +252,13 @@ fun ZoomControlBarVerticel(
                 .padding(vertical = if (isContinuousZooming) 0.dp else 40.dp),
             contentAlignment = Alignment.Center
         ) {
-            if (isContinuousZooming) {
+            if (!isCameraReady) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = Color(0xFFFFD700),
+                    strokeWidth = 2.dp
+                )
+            } else if (isContinuousZooming) {
                 ZoomContinuousRulerVertical(
                     zoomRatio = internalZoomRatio,
                     minZoom = minZoom,

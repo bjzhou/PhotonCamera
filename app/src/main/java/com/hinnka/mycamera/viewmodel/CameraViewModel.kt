@@ -648,7 +648,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (update.useRaw != null || desiredUseRaw != prefs.useRaw) {
-            cameraController.setUseRaw(desiredUseRaw)
+            cameraController.setUseRaw(
+                enabled = desiredUseRaw,
+                // This transaction already performs the required reopen below. Avoid a
+                // duplicate restart, but still let same-value calls repair a stale output.
+                reconfigureCaptureOutputIfNeeded = !needsCameraReopen
+            )
         }
         if (update.useJpgMax != null || update.useRawMax != null ||
             desiredMultiFrameOutputScale != currentState.multiFrameOutputScale

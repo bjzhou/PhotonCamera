@@ -1683,7 +1683,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         )
 
         // 测光和直方图（按需）
-        if (meteringEnabled && videoRecorder?.isRecording() != true) {
+        if (fboId == 0 && meteringEnabled && videoRecorder?.isRecording() != true) {
             runMeteringInternal()
         }
 
@@ -2939,6 +2939,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             }
 
             // 2. 读取像素
+            // drawInternal 中的附加 pass 可能改变 framebuffer；读回必须以本次请求的
+            // capture FBO 为唯一来源，不能依赖调用链遗留的 GL 绑定状态。
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, captureFboId)
+            GLES30.glViewport(0, 0, targetWidth, targetHeight)
             val pixelSize = targetWidth * targetHeight * 4
             if (pboId == 0) {
                 val pbos = IntArray(1)
