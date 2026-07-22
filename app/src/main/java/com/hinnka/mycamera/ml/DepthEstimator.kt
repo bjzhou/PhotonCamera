@@ -2,6 +2,9 @@ package com.hinnka.mycamera.ml
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
@@ -150,6 +153,7 @@ class DepthEstimator(
             return null
         }
 
+        var modelInputBitmap: Bitmap? = null
         try {
             // 1. Get input/output metadata
             val inputTensor = interpreter!!.getInputTensor(0)
@@ -158,13 +162,15 @@ class DepthEstimator(
             val outputDataType = outputTensor.dataType()
 
             // 2. Preprocess the input image
+            val preparedInput = prepareModelInputBitmap(inputBitmap)
+            modelInputBitmap = preparedInput
             val inputUsesLargeDirectAllocator = modelAssetName == MODEL_DEPTH_ANYTHING
             val inputBuffer = if (inputUsesLargeDirectAllocator) {
-                createDepthAnythingInputBuffer(inputBitmap, inputDataType)
+                createDepthAnythingInputBuffer(preparedInput, inputDataType)
             } else {
                 val imageProcessor = buildImageProcessor()
                 var tensorImage = TensorImage(inputDataType)
-                tensorImage.load(inputBitmap)
+                tensorImage.load(preparedInput)
                 tensorImage = imageProcessor.process(tensorImage)
                 tensorImage.buffer
             }
@@ -206,6 +212,36 @@ class DepthEstimator(
         } catch (e: Exception) {
             PLog.e(TAG, "Error during depth estimation: $modelAssetName", e)
             return null
+        } finally {
+            modelInputBitmap?.let { bitmap ->
+                if (bitmap !== inputBitmap && !bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+        }
+    }
+
+    /**
+     * Depth models consume a small, display-referred RGB guide. Convert and resize
+     * in one Canvas draw so RGBA_F16 captures never create a full-resolution
+     * ARGB_8888 intermediate bitmap.
+     */
+    private fun prepareModelInputBitmap(inputBitmap: Bitmap): Bitmap {
+        if (
+            inputBitmap.config == Bitmap.Config.ARGB_8888 &&
+            inputBitmap.width == inputWidth &&
+            inputBitmap.height == inputHeight
+        ) {
+            return inputBitmap
+        }
+
+        return Bitmap.createBitmap(inputWidth, inputHeight, Bitmap.Config.ARGB_8888).also { output ->
+            Canvas(output).drawBitmap(
+                inputBitmap,
+                null,
+                Rect(0, 0, inputWidth, inputHeight),
+                Paint(Paint.FILTER_BITMAP_FLAG),
+            )
         }
     }
 
@@ -315,7 +351,7 @@ class DepthEstimator(
 
         val range = max - min
         val finalRange = if (range <= 0f) 1f else range // avoid division by zero
-        PLog.d(TAG, "Depth output range: asset=$modelAssetName min=$min max=$max range=$range valid=$validCount")
+//        PLog.d(TAG, "Depth output range: asset=$modelAssetName min=$min max=$max range=$range valid=$validCount")
 
         val pixels = IntArray(width * height)
         val limit = minOf(outputArray.size, pixels.size)

@@ -222,6 +222,42 @@ class PhotoProcessor(
         return null
     }
 
+    /**
+     * Builds the SDR-backed HDR source from an in-memory capture result that has
+     * already received computational bokeh. This keeps detail-HDR generation and
+     * export on the same pixels without running the full-resolution bokeh pass again.
+     */
+    suspend fun prepareUltraHdrSourceFromProcessedSdr(
+        context: Context,
+        photoId: String,
+        processedSdr: Bitmap,
+        metadata: MediaMetadata,
+        sharpening: Float = 0f,
+        noiseReduction: Float = 0f,
+        chromaNoiseReduction: Float = 0f,
+    ): GainmapSourceSet? {
+        if (!metadata.manualHdrEffectEnabled) return null
+
+        val sdrBase = processBitmap(
+            context = context,
+            photoId = photoId,
+            input = processedSdr,
+            metadata = metadata,
+            sharpening = sharpening,
+            noiseReduction = noiseReduction,
+            chromaNoiseReduction = chromaNoiseReduction,
+            useComputationalAperture = false,
+            applyFrameWatermark = false,
+        )
+        return GainmapSourceSet(
+            sdrBase = sdrBase,
+            hdrReference = null,
+            sourceKind = SourceKind.SDR_BITMAP,
+            confidence = 0.35f,
+            displayHdrSdrRatio = readDisplayHdrSdrRatio(),
+        )
+    }
+
     private fun readDisplayHdrSdrRatio(): Float = GalleryManager.hdrSdrRatio
 
     suspend fun prepareUltraHdrSourceFromRawResult(
@@ -233,6 +269,7 @@ class PhotoProcessor(
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
         applyMirror: Boolean = false,
+        preparedSdrBitmap: Bitmap? = null,
     ): GainmapSourceSet? = withContext(Dispatchers.IO) {
         val displayHdrSdrRatio = readDisplayHdrSdrRatio()
 
@@ -241,27 +278,32 @@ class PhotoProcessor(
             fallbackTarget = BaselineColorCorrectionTarget.RAW
         )
 
-        var sdrBitmap = rawResult.sdrBitmap
+        var sdrBitmap = preparedSdrBitmap ?: rawResult.sdrBitmap
         var hdrReferenceBitmap = normalizeRawHdrReferenceForGainmap(
             rawResult = rawResult,
-            sdrBitmap = sdrBitmap,
+            sdrBitmap = rawResult.sdrBitmap,
             hdrReferenceBitmap = rawResult.hdrReferenceBitmap
         )
 
         if (applyMirror && metadata.isMirrored) {
-            sdrBitmap = BitmapUtils.flipHorizontal(sdrBitmap)
+            if (preparedSdrBitmap == null) {
+                sdrBitmap = BitmapUtils.flipHorizontal(sdrBitmap)
+            }
             hdrReferenceBitmap = hdrReferenceBitmap?.let { BitmapUtils.flipHorizontal(it) }
         }
 
         metadata.computationalAperture?.let { aperture ->
-            sdrBitmap = depthBokehProcessor.applyHighQualityBokeh(
-                context,
-                photoId,
-                sdrBitmap,
-                metadata.focusPointX,
-                metadata.focusPointY,
-                aperture
-            )
+            if (preparedSdrBitmap == null) {
+                sdrBitmap = depthBokehProcessor.applyHighQualityBokeh(
+                    context,
+                    photoId,
+                    sdrBitmap,
+                    metadata.focusPointX,
+                    metadata.focusPointY,
+                    aperture
+                )
+                photoId?.let { id -> GalleryManager.saveBokehPhoto(context, id, sdrBitmap) }
+            }
             hdrReferenceBitmap = hdrReferenceBitmap?.let {
                 depthBokehProcessor.applyHighQualityBokeh(
                     context,
@@ -272,7 +314,6 @@ class PhotoProcessor(
                     aperture
                 )
             }
-            photoId?.let { id -> GalleryManager.saveBokehPhoto(context, id, sdrBitmap) }
         }
 
         val lutStackResult = lutImageProcessor.applyLutStackWithLuminanceGain(

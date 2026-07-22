@@ -719,6 +719,7 @@ object Shaders {
         uniform float uAperture;
         uniform float uFocusDepth;
         uniform vec2 uTexelSize;
+        uniform int uLinearInput;
 
         const float PI = 3.14159265359;
         const float GOLDEN_ANGLE = 2.39996323;
@@ -842,6 +843,50 @@ object Shaders {
             }
 
             fragColor = vec4(finalColor, centerColor.a);
+        }
+    """.trimIndent()
+
+    /**
+     * Full-resolution resolve for the reduced-resolution PSF result. Focused pixels
+     * come directly from the original texture; only defocused regions consume the
+     * filtered bokeh texture.
+     */
+    val BOKEH_COMPOSITE_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uOriginalTexture;
+        uniform sampler2D uBokehTexture;
+        uniform sampler2D uDepthTexture;
+        uniform mat4 uDepthMatrix;
+        uniform float uMaxBlurRadius;
+        uniform float uAperture;
+        uniform float uFocusDepth;
+
+        float computeCoc(float depth) {
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float defocus = pow(gap, 1.1);
+            return clamp(
+                defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)),
+                0.0,
+                uMaxBlurRadius
+            );
+        }
+
+        void main() {
+            vec4 originalColor = texture(uOriginalTexture, vTexCoord);
+            vec3 bokehColor = texture(uBokehTexture, vTexCoord).rgb;
+            vec2 depthUV = clamp(
+                (uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy,
+                0.0,
+                1.0
+            );
+            float coc = computeCoc(texture(uDepthTexture, depthUV).r);
+            float bokehMix = smoothstep(0.2, 1.2, coc);
+            fragColor = vec4(mix(originalColor.rgb, bokehColor, bokehMix), originalColor.a);
         }
     """.trimIndent()
 }

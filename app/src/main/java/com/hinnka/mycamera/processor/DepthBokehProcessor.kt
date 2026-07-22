@@ -53,14 +53,7 @@ class DepthBokehProcessor(context: Context) {
         }
 
         if (depthMap == null) {
-            val depthGuide = ensureArgb8888(originalImage)
-            depthMap = try {
-                SharedDepthEstimator.estimateDepth(appContext, depthGuide)
-            } finally {
-                if (depthGuide !== originalImage && !depthGuide.isRecycled) {
-                    depthGuide.recycle()
-                }
-            }
+            depthMap = SharedDepthEstimator.estimateDepth(appContext, originalImage)
 
             if (depthMap != null && depthFile != null) {
                 try {
@@ -95,18 +88,6 @@ class DepthBokehProcessor(context: Context) {
         }
 
         return result ?: originalImage
-    }
-
-    /**
-     * The depth estimator consumes an 8-bit display-referred guide. The bokeh
-     * renderer itself receives the original bitmap so a linear RGBA_F16 HDR
-     * reference keeps both its encoding and values above 1.0.
-     */
-    private fun ensureArgb8888(bitmap: Bitmap): Bitmap {
-        if (bitmap.config == Bitmap.Config.ARGB_8888) return bitmap
-        PLog.d(TAG, "Converting bitmap from ${bitmap.config} to ARGB_8888 for bokeh processing (${bitmap.width}x${bitmap.height})")
-        val converted = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        return converted ?: bitmap
     }
 
     fun close() = Unit

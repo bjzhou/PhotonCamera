@@ -932,6 +932,7 @@ object GalleryManager {
         preparedUltraHdrSource: GainmapSourceSet? = null,
         preparedGainmapResult: GainmapResult? = null,
         preferHeicExport: Boolean? = null,
+        bitmapComputationalBokehApplied: Boolean = false,
     ): Boolean {
         return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
@@ -1009,9 +1010,14 @@ object GalleryManager {
                     )
                 } else bitmap?.let {
                     photoProcessor.processBitmap(
-                        context, id, bitmap, bitmapPostMetadata,
-                        bitmapSharpeningValue, bitmapNoiseReductionValue, bitmapChromaNoiseReductionValue,
-                        true
+                        context = context,
+                        photoId = id,
+                        input = bitmap,
+                        metadata = bitmapPostMetadata,
+                        sharpening = bitmapSharpeningValue,
+                        noiseReduction = bitmapNoiseReductionValue,
+                        chromaNoiseReduction = bitmapChromaNoiseReductionValue,
+                        useComputationalAperture = !bitmapComputationalBokehApplied,
                     )
                 } ?: photoProcessor.process(
                     context, id, metadata,
@@ -1685,11 +1691,16 @@ object GalleryManager {
         }
     }
 
-    suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: MediaMetadata, bitmap: Bitmap) {
+    private suspend fun renderAndSaveBokehPhoto(
+        context: Context,
+        photoId: String,
+        metadata: MediaMetadata,
+        bitmap: Bitmap,
+    ): Bitmap {
         val aperture = metadata.computationalAperture ?: 0f
         if (aperture <= 0f) {
             getBokehFile(context, photoId).takeIf { it.exists() }?.delete()
-            return
+            return bitmap
         }
         val focusPointX = metadata.focusPointX
         val focusPointY = metadata.focusPointY
@@ -1702,6 +1713,14 @@ object GalleryManager {
             aperture
         )
         saveBokehPhoto(context, photoId, bokeh)
+        return bokeh
+    }
+
+    suspend fun generateBokehPhoto(context: Context, photoId: String, metadata: MediaMetadata, bitmap: Bitmap) {
+        val bokeh = renderAndSaveBokehPhoto(context, photoId, metadata, bitmap)
+        if (bokeh !== bitmap && !bokeh.isRecycled) {
+            bokeh.recycle()
+        }
     }
 
     suspend fun saveYuvPhoto(
@@ -1718,6 +1737,9 @@ object GalleryManager {
         photoQuality: Int = 95
     ) = withContext(Dispatchers.IO) {
         beginHdrWork(photoId)
+        var previewBitmap: Bitmap? = null
+        var bokehBitmap: Bitmap? = null
+        var preparedUltraHdrSource: GainmapSourceSet? = null
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -1735,47 +1757,94 @@ object GalleryManager {
             }
             PLog.d(TAG, "saveYuvPhoto processAndToBitmap took ${nativeProcessElapsed}ms, success=${processedPreview != null}")
 
-            var previewBitmap = processedPreview ?: return@withContext
+            previewBitmap = processedPreview ?: return@withContext
 
             if (metadata.isMirrored) {
-                previewBitmap = BitmapUtils.flipHorizontal(previewBitmap)
+                val sourcePreview = checkNotNull(previewBitmap)
+                val mirroredPreview = BitmapUtils.flipHorizontal(sourcePreview)
+                if (mirroredPreview !== sourcePreview && !sourcePreview.isRecycled) {
+                    sourcePreview.recycle()
+                }
+                previewBitmap = mirroredPreview
             }
 
             if (metadata.usesNaturalLightToneMap()) {
-                val toneMappedPreview = photoProcessor.processCapturePreviewToneMap(previewBitmap, metadata)
-                if (toneMappedPreview !== previewBitmap && !previewBitmap.isRecycled) {
-                    previewBitmap.recycle()
+                val sourcePreview = checkNotNull(previewBitmap)
+                val toneMappedPreview = photoProcessor.processCapturePreviewToneMap(sourcePreview, metadata)
+                if (toneMappedPreview !== sourcePreview && !sourcePreview.isRecycled) {
+                    sourcePreview.recycle()
                 }
                 previewBitmap = toneMappedPreview
             }
-            val originalFile = writeInternalOriginalPhoto(photoDir, previewBitmap, photoQuality) ?: return@withContext
+            val originalFile = writeInternalOriginalPhoto(photoDir, checkNotNull(previewBitmap), photoQuality)
+                ?: return@withContext
             PLog.d(TAG, "saveYuvPhoto internal original saved=${originalFile.name}")
-            generateBokehPhoto(context, photoId, metadata, previewBitmap)
-            queueDetailHdrCacheBuild(
+            bokehBitmap = renderAndSaveBokehPhoto(context, photoId, metadata, checkNotNull(previewBitmap))
+
+            preparedUltraHdrSource = photoProcessor.prepareUltraHdrSourceFromProcessedSdr(
                 context = context,
                 photoId = photoId,
+                processedSdr = checkNotNull(bokehBitmap),
                 metadata = metadata,
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = chromaNoiseReductionValue
+                chromaNoiseReduction = chromaNoiseReductionValue,
             )
+            val preparedGainmapResult = preparedUltraHdrSource?.let { source ->
+                gainmapProducer.build(source, HdrGainmapStrength.coerce(metadata.hdrEffectStrength))
+            }
+            if (preparedUltraHdrSource != null) {
+                PLog.d(TAG, "saveYuvPhoto reusing one in-memory bokeh/HDR source: $photoId")
+                buildDetailHdrCache(
+                    context = context,
+                    photoId = photoId,
+                    metadata = metadata,
+                    sharpening = sharpeningValue,
+                    noiseReduction = noiseReductionValue,
+                    chromaNoiseReduction = chromaNoiseReductionValue,
+                    preparedUltraHdrSource = preparedUltraHdrSource,
+                    preparedGainmapResult = preparedGainmapResult,
+                )
+            } else {
+                deleteDetailHdrFile(context, photoId)
+            }
 //                updateThumbnail(context, photoId, photoProcessor, metadata)
             if (shouldAutoSave) {
                 exportPhoto(
-                    context,
-                    photoId,
-                    null,
-                    photoProcessor,
-                    metadata,
-                    sharpeningValue,
-                    noiseReductionValue,
-                    chromaNoiseReductionValue,
-                    photoQuality
+                    context = context,
+                    id = photoId,
+                    bitmap = bokehBitmap,
+                    photoProcessor = photoProcessor,
+                    metadata = metadata,
+                    sharpeningValue = sharpeningValue,
+                    noiseReductionValue = noiseReductionValue,
+                    chromaNoiseReductionValue = chromaNoiseReductionValue,
+                    photoQuality = photoQuality,
+                    preparedUltraHdrSource = preparedUltraHdrSource,
+                    preparedGainmapResult = preparedGainmapResult,
+                    bitmapComputationalBokehApplied = true,
                 )
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
         } finally {
+            preparedUltraHdrSource?.hdrReference?.bitmap?.let { bitmap ->
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+            preparedUltraHdrSource?.lutLuminanceGainMap?.bitmap?.let { bitmap ->
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+            preparedUltraHdrSource?.sdrBase?.let { bitmap ->
+                if (bitmap !== bokehBitmap && bitmap !== previewBitmap && !bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+            bokehBitmap?.let { bitmap ->
+                if (bitmap !== previewBitmap && !bitmap.isRecycled) bitmap.recycle()
+            }
+            previewBitmap?.let { bitmap ->
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
             endHdrWork(photoId)
         }
     }
@@ -1938,7 +2007,7 @@ object GalleryManager {
             }
             tempFile.renameTo(photoFile)
             saveMetadata(context, photoId, updatedMetadata)
-            generateBokehPhoto(context, photoId, updatedMetadata, bitmap)
+            val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
             val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {
                 photoProcessor.prepareUltraHdrSourceFromRawResult(
                     context = context,
@@ -1948,7 +2017,8 @@ object GalleryManager {
                     sharpening = sharpeningValue,
                     noiseReduction = noiseReductionValue,
                     chromaNoiseReduction = chromaNoiseReductionValue,
-                    applyMirror = true
+                    applyMirror = true,
+                    preparedSdrBitmap = bokehBitmap,
                 )
             } else {
                 null
@@ -2001,9 +2071,12 @@ object GalleryManager {
                 }
             }
             preparedUltraHdrSource?.sdrBase?.let {
-                if (it !== bitmap && !it.isRecycled) {
+                if (it !== bitmap && it !== bokehBitmap && !it.isRecycled) {
                     it.recycle()
                 }
+            }
+            if (bokehBitmap !== bitmap && !bokehBitmap.isRecycled) {
+                bokehBitmap.recycle()
             }
             if (!bitmap.isRecycled) {
                 bitmap.recycle()
@@ -2986,7 +3059,7 @@ object GalleryManager {
             }
             tempFile.renameTo(photoFile)
             saveMetadata(context, photoId, updatedMetadata)
-            generateBokehPhoto(context, photoId, updatedMetadata, bitmap)
+            val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
 
             val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {
                 photoProcessor.prepareUltraHdrSourceFromRawResult(
@@ -2997,7 +3070,8 @@ object GalleryManager {
                     sharpening = sharpeningValue,
                     noiseReduction = noiseReductionValue,
                     chromaNoiseReduction = chromaNoiseReductionValue,
-                    applyMirror = true
+                    applyMirror = true,
+                    preparedSdrBitmap = bokehBitmap,
                 )
             } else {
                 null
@@ -3052,9 +3126,12 @@ object GalleryManager {
                 }
             }
             preparedUltraHdrSource?.sdrBase?.let {
-                if (it !== bitmap && !it.isRecycled) {
+                if (it !== bitmap && it !== bokehBitmap && !it.isRecycled) {
                     it.recycle()
                 }
+            }
+            if (bokehBitmap !== bitmap && !bokehBitmap.isRecycled) {
+                bokehBitmap.recycle()
             }
             if (!bitmap.isRecycled) {
                 bitmap.recycle()
@@ -3166,7 +3243,7 @@ object GalleryManager {
         }
         tempFile.renameTo(photoFile)
         saveMetadata(context, photoId, updatedMetadata)
-        generateBokehPhoto(context, photoId, updatedMetadata, bitmap)
+        val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
 
         val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {
             photoProcessor.prepareUltraHdrSourceFromRawResult(
@@ -3177,7 +3254,8 @@ object GalleryManager {
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
-                applyMirror = true
+                applyMirror = true,
+                preparedSdrBitmap = bokehBitmap,
             )
         } else {
             null
@@ -3231,9 +3309,12 @@ object GalleryManager {
             }
         }
         preparedUltraHdrSource?.sdrBase?.let {
-            if (it !== bitmap && !it.isRecycled) {
+            if (it !== bitmap && it !== bokehBitmap && !it.isRecycled) {
                 it.recycle()
             }
+        }
+        if (bokehBitmap !== bitmap && !bokehBitmap.isRecycled) {
+            bokehBitmap.recycle()
         }
         if (!bitmap.isRecycled) {
             bitmap.recycle()
