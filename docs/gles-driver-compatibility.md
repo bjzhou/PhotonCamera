@@ -205,7 +205,7 @@ dispatch 对应 pass，而不只编译 program。
 - GPU：ARM Mali-G715-Immortalis MC11
 - GLES：OpenGL ES 3.2，驱动 `v1.r38p1`
 
-### `uint16` 直接转浮点再归一化会在饱和值产生非有限值
+### fragment sampler 中的 `uint16` 直接转浮点会在饱和值产生非有限值
 
 HDR 输出使用三通道 16-bit LinearRaw。应用重新打开 DNG 时，先把 `GL_RGB16UI` 输入转换到
 `RGBA16F` 线性工作纹理。以下看似符合 GLSL 语义的写法在该驱动上不能使用：
@@ -229,9 +229,9 @@ FP16 最大有限值 `65504`，因而先产生 `Inf`，再进入色度降噪的 
 `highp` 声明、把输入从 `GL_RGB16UI` 改成 `GL_RGBA16UI`，均不能消除该问题。后者只改变
 纹理像素布局，错误的数值转换仍然存在。
 
-### 当前兼容策略
+### 不能让低字节直接乘 `1/65535`
 
-在整数域先拆分高、低 8 bit，使每次整数转浮点的输入都不超过 255，再分别归一化：
+曾在整数域拆分高、低 8 bit，使每次整数转浮点的输入都不超过 255：
 
 ```glsl
 uvec3 sample16 = texture(uLinearRawTexture, vTexCoord).rgb;
@@ -242,8 +242,49 @@ vec3 rgb =
     vec3(low8) * (1.0 / 65535.0);
 ```
 
-这样在驱动错误地降低中间精度时仍不会溢出，并保留完整的 16-bit 输入关系；最终写入
-`RGBA16F` 时只发生目标格式本来就需要的 half-float 量化。
+这个写法避免了 `65535` 转 FP16 的溢出，但并没有消除错误的 FP16 lowering：
+`1.0 / 65535.0` 小于 FP16 最小正规数。会 flush FP16 次正规数的实现可能把整个低 8 bit
+贡献变成 0，实际输出退化为每通道只剩高 8 bit。经过白平衡、CCM 和 tone mapping 后，
+外观不是均匀的普通 8-bit banding，而是暗部大面积绿色/青色等高线、彩色色阶和边缘色带。
+
+### `unpackUnorm2x16` 也不能作为故障驱动的最终路径
+
+逐通道调用 `unpackUnorm2x16(value).x` 在规范上成立，但目标故障驱动仍表现出低位色阶断裂，
+不能用它替代已经证实异常的整数归一化路径。也不能把两个通道拼进同一个 `uint` 后一次
+解包；`G << 16` 曾被 fragment 编译器按 mediump 截断，使 G 接近 0、整幅图变红/品红。
+
+### 当前兼容策略
+
+首次 LinearRaw 转换采用 Phocus Android 的 UInt16 格式转换模型：输入必须先成为
+`RGBA16UI` image，随后由 compute shader 通过 `uimage2D/imageLoad` 读取，并写入
+`RGBA16F` image：
+
+```glsl
+layout(rgba16ui, binding = 0) readonly uniform highp uimage2D inTex;
+layout(rgba16f, binding = 1) writeonly uniform highp image2D outTex;
+
+void main() {
+    ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+    uvec4 sample16 = imageLoad(inTex, position);
+    imageStore(outTex, position, vec4(sample16) / 65535.0);
+}
+```
+
+来源是 `research/phocus_glsl/00_common_io/formatConvertU16ToHalfFloat_0x3078b02.comp`。
+它与失败路径的关键区别不是归一化公式，而是 integer texture 的访问模型：不再使用
+fragment sampler，也不使用 `unpackUnorm2x16`，而是让 compute image load/store 完成格式转换。
+
+三通道 DNG 必须先按规范使用
+`GL_RGB_INTEGER + GL_UNSIGNED_SHORT + GL_RGB16UI` 上传。`GL_RGB_INTEGER` 与
+`GL_RGBA16UI` 不是 ES 允许的 `format/type/internalFormat` 组合，不能依赖驱动隐式补 Alpha。
+同时 GLSL ES 没有 `rgb16ui` image layout qualifier，所以不能把 `RGB16UI` 直接绑定给
+Phocus shader。
+
+为此，三通道路径先运行一个只含整数操作的 compute pass：通过 `usampler2D/texelFetch`
+读取 `RGB16UI`，写成 `uvec4(rgb, 65535u)` 的 `RGBA16UI`。扩展按 128 行条带执行，随后每个
+条带立即交给 Phocus image-load shader 写入最终全尺寸 `RGBA16F`。这样没有 CPU 逐像素处理，
+也不会为高分辨率 DNG 常驻一整帧额外的 `RGBA16UI` 临时纹理。原本就是 `RGBA16UI` 的
+GPU-resident Radiance 输出则跳过扩展，直接走 Phocus 转换。
 
 不能在色度降噪、色彩转换或输出 pass 末尾用 `isnan`/`isinf` 替换颜色来掩盖该错误。
 非有限值必须在首次整数归一化时从源头消除，否则后续的邻域计算已经受到污染。
@@ -264,7 +305,8 @@ vec3 rgb =
 相关 shader 修改至少应在目标 Mali 设备上覆盖：
 
 - `0`、普通中间值、`65504`、`65505`、`65535`；
-- 整数纹理采样到 `RGBA16F` 的实际 draw 和 readback，而不只是 shader compile/link；
+- 相邻低字节值，例如 `0/1`、`255/256`、`256/257`，确认低 8 bit 没有被冲掉；
+- `RGB16UI → RGBA16UI → RGBA16F` 的实际 dispatch 和 readback，而不只是 shader compile/link；
 - 首次浮点转换后的有限值检查；
 - 后续包含通道相减的色度降噪；
 - 不同 RAW 渲染引擎的高光输出。
@@ -274,8 +316,9 @@ vec3 rgb =
 - 不根据 `GL_MAX_TEXTURE_SIZE` 推断 image load/store 格式支持。
 - 不根据 write-only image 可用推断同格式 read/write image 也可用。
 - 不以增加补偿 pass 掩盖驱动格式错误；应选择驱动明确支持的存储格式和访问模型。
-- 16-bit 整数归一化到 half-float 工作纹理时，应保证整数转浮点的每个中间值都在 FP16
-  有限范围内；不要假设先转换 `65535`、再乘归一化系数在所有移动驱动上都安全。
+- 16-bit 整数归一化到 half-float 工作纹理时，优先复用已在量产移动端验证的
+  `uimage2D/imageLoad → imageStore` 访问模型；不能假设 sampler、bit-unpack 与 image load
+  在故障驱动上具有相同的编译和精度行为。
 - 同一异常区域随渲染引擎变化呈现绿、黑或其他颜色时，应优先在引擎之前逐 pass 检查
   `NaN`/`Inf`，不能据最终颜色反推某个 CFA 通道损坏。
 - 每个新增 image format 都需要在代表设备上验证 compile、bind、dispatch 和后续采样。

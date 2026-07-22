@@ -205,6 +205,7 @@ class RawDemosaicProcessor {
         private const val RCD_PQ_READ_BINDING = 4
         private const val RCD_VH_DIR_BINDING = 4
         private const val CAPTURE_PROGRAM_PREWARM_LONG_EDGE = 256
+        private const val LINEAR_RAW_RGB_EXPANSION_ROWS = 128
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MIN_WB_GAIN = 1e-3f
         private const val RCD_HIGHLIGHT_RECONSTRUCTION_MAX_WB_GAIN = 64.0f
         // PASS_3 needs 16 pixels, and the following color-noise stages consume another
@@ -388,9 +389,10 @@ class RawDemosaicProcessor {
             // These two full-resolution working textures remain attached to the persistent RAW
             // renderer and are reused by capture. Only their allocation belongs in prewarm.
             setupFullResFramebuffer(captureWidth, captureHeight)
-            renderLinearRawRgbToFramebuffer(
+            renderLinearRawRgbToTexture(
                 sourceTextureId = linearRawTexture,
-                targetFramebufferId = demosaicFramebufferId,
+                sourceSamplesPerPixel = 4,
+                targetTextureId = demosaicTextureId,
                 width = programSize.width,
                 height = programSize.height,
             )
@@ -614,6 +616,7 @@ class RawDemosaicProcessor {
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
+    private var linearRawRgbExpandProgram = 0
     private var filmicHrMaskProgram = 0
     private var filmicHrInpaintNoiseProgram = 0
     private var filmicHrInitReconstructProgram = 0
@@ -1800,9 +1803,10 @@ class RawDemosaicProcessor {
 
             // 4. 第一步：全分辨率处理 (Linear CCM / RCD Compute Shader Demosaic)
             if (actualSamplesPerPixel in 3..4) {
-                renderLinearRawRgbToFramebuffer(
+                renderLinearRawRgbToTexture(
                     sourceTextureId = rawTextureId,
-                    targetFramebufferId = demosaicFramebufferId,
+                    sourceSamplesPerPixel = actualSamplesPerPixel,
+                    targetTextureId = demosaicTextureId,
                     width = actualWidth,
                     height = actualHeight
                 )
@@ -2920,14 +2924,16 @@ class RawDemosaicProcessor {
             initShaderProgram()
             if (sharpenProgram == 0 || passthroughProgram == 0 ||
                 chromaDenoiseGuideProgram == 0 || chromaDenoiseProgram == 0 ||
-                linearRcdProgram == 0 || linearRawRgbProgram == 0
+                linearRcdProgram == 0 || linearRawRgbProgram == 0 ||
+                linearRawRgbExpandProgram == 0
             ) {
                 PLog.e(
                     TAG, "Critical shader programs failed to compile or link. " +
                             "sharpen=$sharpenProgram pass=$passthroughProgram " +
                             "chromaGuide=$chromaDenoiseGuideProgram " +
                             "chromaDenoise=$chromaDenoiseProgram " +
-                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram"
+                            "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram " +
+                            "linearRawRgbExpand=$linearRawRgbExpandProgram"
                 )
                 return false
             }
@@ -3273,27 +3279,56 @@ class RawDemosaicProcessor {
         }
     """.trimIndent()
 
-    private val FRAGMENT_SHADER_LINEAR_RAW_RGB = """
-        #version 300 es
+    private val COMPUTE_SHADER_LINEAR_RAW_RGB = """
+        #version 310 es
         precision highp float;
-        precision highp usampler2D;
+        precision highp int;
+        precision highp image2D;
+        precision highp uimage2D;
 
-        in vec2 vTexCoord;
-        out vec4 fragColor;
-
-        uniform usampler2D uLinearRawTexture;
+        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uLinearRawInput;
+        layout(rgba16f, binding = 1) writeonly uniform highp image2D uLinearRawOutput;
+        uniform int uOutputY;
+        uniform int uRowCount;
 
         void main() {
-            uvec3 sample16 = texture(uLinearRawTexture, vTexCoord).rgb;
-            // Keep the integer-to-float conversion below the FP16 finite limit. Some Mali
-            // compilers lower the direct uint16 conversion before the normalization multiply;
-            // 65535 then becomes Inf and opponent-color processing turns Inf - Inf into NaN.
-            uvec3 high8 = sample16 >> 8u;
-            uvec3 low8 = sample16 & uvec3(255u);
-            vec3 rgb =
-                vec3(high8) * (256.0 / 65535.0) +
-                vec3(low8) * (1.0 / 65535.0);
-            fragColor = vec4(rgb, 1.0);
+            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 inputSize = imageSize(uLinearRawInput);
+            ivec2 outputPosition = ivec2(position.x, position.y + uOutputY);
+            ivec2 outputSize = imageSize(uLinearRawOutput);
+            if (position.x >= inputSize.x || position.y >= uRowCount ||
+                any(greaterThanEqual(outputPosition, outputSize))) return;
+            uvec4 sample16 = imageLoad(uLinearRawInput, position);
+            imageStore(uLinearRawOutput, outputPosition, vec4(sample16) / 65535.0);
+        }
+    """.trimIndent()
+
+    /**
+     * RGB16UI cannot be bound to a GLSL image because ES exposes no rgb16ui image qualifier.
+     * Expand a bounded strip into RGBA16UI using integer-only texture fetches, then let the
+     * Phocus image-load shader perform the only integer-to-float conversion.
+     */
+    private val COMPUTE_SHADER_LINEAR_RAW_RGB_EXPAND = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        precision highp usampler2D;
+        precision highp uimage2D;
+
+        layout(local_size_x = 16, local_size_y = 16) in;
+        uniform highp usampler2D uLinearRawRgbInput;
+        layout(rgba16ui, binding = 0) writeonly uniform highp uimage2D uLinearRawRgbaOutput;
+        uniform int uSourceY;
+        uniform int uRowCount;
+
+        void main() {
+            ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 inputSize = textureSize(uLinearRawRgbInput, 0);
+            if (position.x >= inputSize.x || position.y >= uRowCount) return;
+            ivec2 sourcePosition = ivec2(position.x, position.y + uSourceY);
+            uvec3 rgb = texelFetch(uLinearRawRgbInput, sourcePosition, 0).rgb;
+            imageStore(uLinearRawRgbaOutput, position, uvec4(rgb, 65535u));
         }
     """.trimIndent()
 
@@ -3390,10 +3425,13 @@ class RawDemosaicProcessor {
             }
             GLES30.glDeleteShader(fShaderLinearRcd)
         }
-        linearRawRgbProgram = linkFragmentProgram(
-            vShader,
-            FRAGMENT_SHADER_LINEAR_RAW_RGB,
-            "linearRawRgb"
+        linearRawRgbProgram = compileComputeProgram(
+            COMPUTE_SHADER_LINEAR_RAW_RGB,
+            "LinearRawRgbToFloat"
+        )
+        linearRawRgbExpandProgram = compileComputeProgram(
+            COMPUTE_SHADER_LINEAR_RAW_RGB_EXPAND,
+            "LinearRawRgbExpand"
         )
         warpRectilinearProgram = linkFragmentProgram(
             vShader,
@@ -4698,6 +4736,8 @@ class RawDemosaicProcessor {
         val rowLength = rowStride / bytesPerPixel
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowLength)
+        // Only the combinations listed by the ES texture-upload table are legal. RGB16UI is
+        // expanded into image-load-compatible RGBA16UI later by an integer-only compute pass.
         val internalFormat = if (samplesPerPixel == 4) GLES30.GL_RGBA16UI else GLES30.GL_RGB16UI
         val format = if (samplesPerPixel == 4) GLES30.GL_RGBA_INTEGER else GLES30.GL_RGB_INTEGER
         GLES30.glTexImage2D(
@@ -4715,30 +4755,196 @@ class RawDemosaicProcessor {
         checkGlError("uploadLinearRawRgbTextureFromBuffer samplesPerPixel=$samplesPerPixel")
     }
 
-    private fun renderLinearRawRgbToFramebuffer(
+    private fun renderLinearRawRgbToTexture(
         sourceTextureId: Int,
-        targetFramebufferId: Int,
+        sourceSamplesPerPixel: Int,
+        targetTextureId: Int,
         width: Int,
         height: Int
     ) {
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glUseProgram(linearRawRgbProgram)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(linearRawRgbProgram, "uLinearRawTexture"), 0)
-        val identityMatrix = FloatArray(16)
-        GlMatrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(linearRawRgbProgram, "uTexMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
+        require(sourceSamplesPerPixel == 3 || sourceSamplesPerPixel == 4) {
+            "LinearRaw rendering requires RGB or RGBA, got $sourceSamplesPerPixel samples"
+        }
+        if (sourceSamplesPerPixel == 4) {
+            dispatchLinearRawUint16ToFloat(
+                sourceTextureId = sourceTextureId,
+                targetTextureId = targetTextureId,
+                outputY = 0,
+                rowCount = height,
+                width = width,
+            )
+            finishLinearRawUint16ToFloat()
+            checkGlError("renderLinearRawRgbToTexture RGBA16UI")
+            return
+        }
+
+        val expansionHeight = minOf(height, LINEAR_RAW_RGB_EXPANSION_ROWS)
+        val expandedTexture = IntArray(1)
+        GLES30.glGenTextures(1, expandedTexture, 0)
+        val expandedTextureId = expandedTexture[0]
+        try {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, expandedTextureId)
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MIN_FILTER,
+                GLES30.GL_NEAREST,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MAG_FILTER,
+                GLES30.GL_NEAREST,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_WRAP_S,
+                GLES30.GL_CLAMP_TO_EDGE,
+            )
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_WRAP_T,
+                GLES30.GL_CLAMP_TO_EDGE,
+            )
+            GLES30.glTexStorage2D(
+                GLES30.GL_TEXTURE_2D,
+                1,
+                GLES30.GL_RGBA16UI,
+                width,
+                expansionHeight,
+            )
+
+            var sourceY = 0
+            while (sourceY < height) {
+                val rowCount = minOf(expansionHeight, height - sourceY)
+                dispatchLinearRawRgbExpansion(
+                    sourceTextureId = sourceTextureId,
+                    targetTextureId = expandedTextureId,
+                    sourceY = sourceY,
+                    rowCount = rowCount,
+                    width = width,
+                )
+                GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+                dispatchLinearRawUint16ToFloat(
+                    sourceTextureId = expandedTextureId,
+                    targetTextureId = targetTextureId,
+                    outputY = sourceY,
+                    rowCount = rowCount,
+                    width = width,
+                )
+                GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+                sourceY += rowCount
+            }
+            finishLinearRawUint16ToFloat()
+            checkGlError("renderLinearRawRgbToTexture RGB16UI")
+        } finally {
+            GLES31.glBindImageTexture(
+                0,
+                0,
+                0,
+                false,
+                0,
+                GLES31.GL_READ_ONLY,
+                GLES31.GL_RGBA16UI,
+            )
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            GLES30.glDeleteTextures(1, expandedTexture, 0)
+        }
+    }
+
+    private fun dispatchLinearRawRgbExpansion(
+        sourceTextureId: Int,
+        targetTextureId: Int,
+        sourceY: Int,
+        rowCount: Int,
+        width: Int,
+    ) {
+        GLES31.glUseProgram(linearRawRgbExpandProgram)
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, sourceTextureId)
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(linearRawRgbExpandProgram, "uLinearRawRgbInput"),
+            0,
         )
-        drawQuad(linearRawRgbProgram)
-        GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
-        checkGlError("renderLinearRawRgbToFramebuffer")
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(linearRawRgbExpandProgram, "uSourceY"),
+            sourceY,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(linearRawRgbExpandProgram, "uRowCount"),
+            rowCount,
+        )
+        GLES31.glBindImageTexture(
+            0,
+            targetTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES31.GL_RGBA16UI,
+        )
+        GLES31.glDispatchCompute((width + 15) / 16, (rowCount + 15) / 16, 1)
+    }
+
+    private fun dispatchLinearRawUint16ToFloat(
+        sourceTextureId: Int,
+        targetTextureId: Int,
+        outputY: Int,
+        rowCount: Int,
+        width: Int,
+    ) {
+        GLES31.glUseProgram(linearRawRgbProgram)
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(linearRawRgbProgram, "uOutputY"),
+            outputY,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(linearRawRgbProgram, "uRowCount"),
+            rowCount,
+        )
+        GLES31.glBindImageTexture(
+            0,
+            sourceTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES31.GL_RGBA16UI
+        )
+        GLES31.glBindImageTexture(
+            1,
+            targetTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES31.GL_RGBA16F
+        )
+        GLES31.glDispatchCompute((width + 15) / 16, (rowCount + 15) / 16, 1)
+    }
+
+    private fun finishLinearRawUint16ToFloat() {
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT
+        )
+        GLES31.glBindImageTexture(
+            0,
+            0,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES31.GL_RGBA16UI
+        )
+        GLES31.glBindImageTexture(
+            1,
+            0,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES31.GL_RGBA16F
+        )
     }
 
     internal fun createFramebufferForTexture(textureId: Int, label: String): Int {
@@ -5968,6 +6174,17 @@ class RawDemosaicProcessor {
     }
 
     private fun logGlResourceLimits() {
+        val vendor = GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()
+        val renderer = GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()
+        val version = GLES30.glGetString(GLES30.GL_VERSION).orEmpty()
+        val shadingLanguageVersion =
+            GLES30.glGetString(GLES30.GL_SHADING_LANGUAGE_VERSION).orEmpty()
+        PLog.i(
+            TAG,
+            "GL device: vendor=$vendor renderer=$renderer version=$version " +
+                "glsl=$shadingLanguageVersion linearRawDecode=phocus-uimage-load"
+        )
+
         val value = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_IMAGE_UNITS, value, 0)
         val textureImageUnits = value[0]
@@ -9256,6 +9473,7 @@ class RawDemosaicProcessor {
         if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
         if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)
         if (linearRawRgbProgram != 0) GLES31.glDeleteProgram(linearRawRgbProgram)
+        if (linearRawRgbExpandProgram != 0) GLES31.glDeleteProgram(linearRawRgbExpandProgram)
         // darktable denoiseprofile compute programs
         if (denoisePreconditionV2Program != 0) GLES31.glDeleteProgram(denoisePreconditionV2Program)
         if (denoiseNlmInitProgram != 0) GLES31.glDeleteProgram(denoiseNlmInitProgram)
