@@ -1083,6 +1083,7 @@ class RawDemosaicProcessor {
                 rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 rawDcpId = null,
+                dcpRenderPlan = input.meteringRenderPlan,
                 spectralFilmStock = null,
                 spectralFilmPrint = null,
                 rawRenderingEngine = RawRenderingEngine.AdobeCurve,

@@ -344,17 +344,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRenderImmediately: Boolean,
         callback: (Bitmap?) -> Unit
     ) {
-        renderer.onPreviewFrameCaptured = { bitmap ->
-            // 在主线程回调
-            post {
-                callback(bitmap)
-            }
-        }
         queueEvent {
+            val onCaptured: (Bitmap) -> Unit = { bitmap ->
+                // 在主线程回调
+                post {
+                    callback(bitmap)
+                }
+            }
             if (maxLongEdge != null) {
-                renderer.capturePreviewFrame(maxLongEdge, source)
+                renderer.capturePreviewFrame(maxLongEdge, source, onCaptured)
             } else {
-                renderer.capturePreviewFrame(source = source)
+                renderer.capturePreviewFrame(source = source, onCaptured = onCaptured)
             }
             if (requestRenderImmediately) {
                 requestRender()

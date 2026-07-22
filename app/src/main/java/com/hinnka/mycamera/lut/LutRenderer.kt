@@ -18,6 +18,7 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecorder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -64,6 +65,13 @@ class LutRenderer : GLSurfaceView.Renderer {
         val cropRect: FloatArray,
         val mvpMatrix: FloatArray,
         val treatSourceAsHlgInput: Boolean
+    )
+
+    private data class PreviewCaptureRequest(
+        val width: Int,
+        val height: Int,
+        val source: PreviewCaptureSource,
+        val onCaptured: (Bitmap) -> Unit
     )
 
     // 纹理 ID
@@ -444,7 +452,6 @@ class LutRenderer : GLSurfaceView.Renderer {
     // 回调
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
     var onRequestRender: (() -> Unit)? = null
-    var onPreviewFrameCaptured: ((Bitmap) -> Unit)? = null
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
     var onHighlightPointUpdated: ((Float, Float) -> Unit)? = null
@@ -458,13 +465,12 @@ class LutRenderer : GLSurfaceView.Renderer {
     private var videoRenderStatsWindowStartMs: Long = 0L
     private var videoRenderStatsFrames: Int = 0
 
-    // 预览帧捕获标志
-    private var shouldCapturePreview = false
+    // 预览帧捕获请求仅在 GL 线程中写入和消费。
+    private val pendingPreviewCaptureRequests = ArrayDeque<PreviewCaptureRequest>()
     private var captureWidth = 512
     private var captureHeight = 512
     private var captureAspectRatio = 0f
     private var captureMaxLongEdge = DEFAULT_PREVIEW_CAPTURE_MAX_LONG_EDGE
-    private var pendingPreviewCaptureSource = PreviewCaptureSource.FinalDisplay
     private var lastCaptureWidth = 0
     private var lastCaptureHeight = 0
 
@@ -1510,32 +1516,20 @@ class LutRenderer : GLSurfaceView.Renderer {
             val finalDisplayWidth = viewportWidth
             val finalDisplayHeight = viewportHeight
             val needsHdfCompositeForSampling = postProcessEffectEnabled
-            if (shouldCapturePreview) {
-                shouldCapturePreview = false
-                when (consumePendingPreviewCaptureSource()) {
-                    PreviewCaptureSource.Original -> captureOriginalPreviewFrameInternal(rawPreviewSource)
-
-                    PreviewCaptureSource.FinalDisplay -> capturePreviewFrameInternal(
-                        sourceTextureId = finalDisplayTextureId,
-                        sourceWidth = finalDisplayWidth,
-                        sourceHeight = finalDisplayHeight,
-                        compositeWithHdf = needsHdfCompositeForSampling
-                    )
-                }
-            }
+            capturePendingPreviewFrames(
+                rawPreviewSource = rawPreviewSource,
+                finalDisplayTextureId = finalDisplayTextureId,
+                finalDisplayWidth = finalDisplayWidth,
+                finalDisplayHeight = finalDisplayHeight,
+                compositeFinalDisplay = needsHdfCompositeForSampling
+            )
             if (meteringEnabled && activeVideoRecorder == null) {
-                // Metering must observe the same LUT-free source used by Original preview
-                // capture. Feeding finalDisplayTextureId here makes the current user-selected
-                // 3D LUT part of the exposure loop and therefore biases the captured RAW.
-                if (rawPreviewSource != null) {
-                    runMeteringInternal(
-                        sourceTextureId = rawPreviewSource.textureId,
-                        sourceWidth = viewportWidth,
-                        sourceHeight = viewportHeight,
-                    )
-                } else {
-                    runMeteringInternal()
-                }
+                runMeteringInternal(
+                    sourceTextureId = finalDisplayTextureId,
+                    sourceWidth = finalDisplayWidth,
+                    sourceHeight = finalDisplayHeight,
+                    compositeWithHdf = needsHdfCompositeForSampling
+                )
             }
         } else {
             // 直接渲染到屏幕
@@ -1544,6 +1538,13 @@ class LutRenderer : GLSurfaceView.Renderer {
                 width = viewportWidth,
                 height = viewportHeight,
                 suppressBaselineLayer = suppressBaselineLayerForVideoLog
+            )
+            capturePendingPreviewFrames(
+                rawPreviewSource = null,
+                finalDisplayTextureId = null,
+                finalDisplayWidth = viewportWidth,
+                finalDisplayHeight = viewportHeight,
+                compositeFinalDisplay = false
             )
         }
     }
@@ -1680,16 +1681,6 @@ class LutRenderer : GLSurfaceView.Renderer {
             enableVideoLog = enableVideoLog,
             treatSourceAsHlgInput = treatSourceAsHlgInput
         )
-
-        // 捕获预览帧（如果需要）
-        if (fboId == 0 && shouldCapturePreview) {
-            shouldCapturePreview = false
-            when (consumePendingPreviewCaptureSource()) {
-                PreviewCaptureSource.Original -> captureOriginalPreviewFrameInternal(rawPreviewSource = null)
-
-                PreviewCaptureSource.FinalDisplay -> capturePreviewFrameInternal()
-            }
-        }
 
         // 测光和直方图（按需）
         if (meteringEnabled && videoRecorder?.isRecording() != true) {
@@ -2422,7 +2413,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun initCaptureFbo() {
+    private fun initCaptureFbo(width: Int, height: Int) {
         if (captureFboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(captureFboId), 0)
             captureFboId = 0
@@ -2443,7 +2434,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, captureTextureId)
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA,
-            captureWidth, captureHeight, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+            width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
         )
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -2857,18 +2848,45 @@ class LutRenderer : GLSurfaceView.Renderer {
      */
     fun capturePreviewFrame(
         maxLongEdge: Int = DEFAULT_PREVIEW_CAPTURE_MAX_LONG_EDGE,
-        source: PreviewCaptureSource = PreviewCaptureSource.FinalDisplay
+        source: PreviewCaptureSource = PreviewCaptureSource.FinalDisplay,
+        onCaptured: (Bitmap) -> Unit
     ) {
         captureMaxLongEdge = maxLongEdge.coerceAtLeast(1)
-        pendingPreviewCaptureSource = source
         updateCaptureSize()
-        shouldCapturePreview = true
+        pendingPreviewCaptureRequests.addLast(
+            PreviewCaptureRequest(
+                width = captureWidth,
+                height = captureHeight,
+                source = source,
+                onCaptured = onCaptured
+            )
+        )
     }
 
-    private fun consumePendingPreviewCaptureSource(): PreviewCaptureSource {
-        val source = pendingPreviewCaptureSource
-        pendingPreviewCaptureSource = PreviewCaptureSource.FinalDisplay
-        return source
+    private fun capturePendingPreviewFrames(
+        rawPreviewSource: PreviewSourceOverride?,
+        finalDisplayTextureId: Int?,
+        finalDisplayWidth: Int,
+        finalDisplayHeight: Int,
+        compositeFinalDisplay: Boolean
+    ) {
+        while (pendingPreviewCaptureRequests.isNotEmpty()) {
+            val request = pendingPreviewCaptureRequests.removeFirst()
+            when (request.source) {
+                PreviewCaptureSource.Original -> captureOriginalPreviewFrameInternal(
+                    request = request,
+                    rawPreviewSource = rawPreviewSource
+                )
+
+                PreviewCaptureSource.FinalDisplay -> capturePreviewFrameInternal(
+                    request = request,
+                    sourceTextureId = finalDisplayTextureId,
+                    sourceWidth = finalDisplayWidth,
+                    sourceHeight = finalDisplayHeight,
+                    compositeWithHdf = compositeFinalDisplay
+                )
+            }
+        }
     }
 
     /**
@@ -2876,6 +2894,7 @@ class LutRenderer : GLSurfaceView.Renderer {
      * 必须在 GL 线程中调用
      */
     private fun capturePreviewFrameInternal(
+        request: PreviewCaptureRequest,
         sourceTextureId: Int? = null,
         sourceWidth: Int = viewportWidth,
         sourceHeight: Int = viewportHeight,
@@ -2883,42 +2902,44 @@ class LutRenderer : GLSurfaceView.Renderer {
         suppressColorLayers: Boolean = false
     ) {
         try {
-            if (captureWidth != lastCaptureWidth || captureHeight != lastCaptureHeight) {
-                initCaptureFbo()
-                lastCaptureWidth = captureWidth
-                lastCaptureHeight = captureHeight
+            val targetWidth = request.width
+            val targetHeight = request.height
+            if (targetWidth != lastCaptureWidth || targetHeight != lastCaptureHeight) {
+                initCaptureFbo(targetWidth, targetHeight)
+                lastCaptureWidth = targetWidth
+                lastCaptureHeight = targetHeight
             }
 
             if (sourceTextureId != null && sourceTextureId != 0) {
                 if (compositeWithHdf) {
-                    drawPostProcessEffects(captureFboId, captureWidth, captureHeight, sourceTextureId)
+                    drawPostProcessEffects(captureFboId, targetWidth, targetHeight, sourceTextureId)
                 } else {
                     drawFboToScreen(
                         fboId = captureFboId,
-                        width = captureWidth,
-                        height = captureHeight,
+                        width = targetWidth,
+                        height = targetHeight,
                         sourceTextureId = sourceTextureId,
                         targetMvpMatrix = buildTextureMvpMatrix(
                             sourceWidth = sourceWidth,
                             sourceHeight = sourceHeight,
-                            targetWidth = captureWidth,
-                            targetHeight = captureHeight
+                            targetWidth = targetWidth,
+                            targetHeight = targetHeight
                         )
                     )
                 }
             } else {
                 drawInternal(
                     fboId = captureFboId,
-                    width = captureWidth,
-                    height = captureHeight,
-                    targetMvpMatrix = buildMvpMatrix(captureWidth, captureHeight),
+                    width = targetWidth,
+                    height = targetHeight,
+                    targetMvpMatrix = buildMvpMatrix(targetWidth, targetHeight),
                     suppressBaselineLayer = suppressColorLayers,
                     suppressCreativeLayer = suppressColorLayers
                 )
             }
 
             // 2. 读取像素
-            val pixelSize = captureWidth * captureHeight * 4
+            val pixelSize = targetWidth * targetHeight * 4
             if (pboId == 0) {
                 val pbos = IntArray(1)
                 GLES30.glGenBuffers(1, pbos, 0)
@@ -2927,7 +2948,7 @@ class LutRenderer : GLSurfaceView.Renderer {
 
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
             GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
-            GLES30.glReadPixels(0, 0, captureWidth, captureHeight, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+            GLES30.glReadPixels(0, 0, targetWidth, targetHeight, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
 
             val mappedBuffer = GLES30.glMapBufferRange(
                 GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
@@ -2938,16 +2959,16 @@ class LutRenderer : GLSurfaceView.Renderer {
                 return
             }
 
-            val bitmap = Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
+            val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
             bitmap.copyPixelsFromBuffer(mappedBuffer)
             GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
 
             // 翻转 Y 轴并返回
             val matrix = android.graphics.Matrix()
             matrix.preScale(1f, -1f)
-            val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, captureWidth, captureHeight, matrix, false)
+            val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, targetWidth, targetHeight, matrix, false)
             bitmap.recycle()
-            onPreviewFrameCaptured?.invoke(finalBitmap)
+            request.onCaptured(finalBitmap)
 
             // 3. 恢复环境
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
@@ -2959,9 +2980,13 @@ class LutRenderer : GLSurfaceView.Renderer {
         }
     }
 
-    private fun captureOriginalPreviewFrameInternal(rawPreviewSource: PreviewSourceOverride?) {
+    private fun captureOriginalPreviewFrameInternal(
+        request: PreviewCaptureRequest,
+        rawPreviewSource: PreviewSourceOverride?
+    ) {
         if (rawPreviewSource != null) {
             capturePreviewFrameInternal(
+                request = request,
                 sourceTextureId = rawPreviewSource.textureId,
                 sourceWidth = viewportWidth,
                 sourceHeight = viewportHeight,
@@ -2970,7 +2995,10 @@ class LutRenderer : GLSurfaceView.Renderer {
             return
         }
 
-        capturePreviewFrameInternal(suppressColorLayers = true)
+        capturePreviewFrameInternal(
+            request = request,
+            suppressColorLayers = true
+        )
     }
 
     private var lastRunMeteringTime = 0L

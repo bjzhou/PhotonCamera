@@ -3,12 +3,9 @@ package com.hinnka.mycamera.raw
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
-import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.utils.PLog
-import java.io.File
-import java.io.FileOutputStream
 import kotlin.math.max
 
 internal data class RawExposurePreviewFrame(
@@ -27,7 +24,6 @@ internal data class RawExposurePreviewFrame(
 internal object RawViewfinderExposureMatcher {
     private const val TAG = "RawViewfinderExposureMatcher"
     private const val PREVIEW_LONG_EDGE = 256
-    private const val DIAGNOSTIC_DIRECTORY = "raw_viewfinder_exposure_match"
 
     private data class ViewfinderReference(
         val analysis: RawViewfinderExposureMath.Reference,
@@ -60,7 +56,6 @@ internal object RawViewfinderExposureMatcher {
                 height = it.analysis.height,
                 solve = { renderSample ->
                     solve(
-                        context = context,
                         reference = it,
                         renderSample = renderSample,
                     )
@@ -114,130 +109,11 @@ internal object RawViewfinderExposureMatcher {
     }
 
     private fun solve(
-        context: Context,
         reference: ViewfinderReference,
         renderSample: (Float) -> RawExposurePreviewFrame?,
     ): Float? {
-        val solvedExposureEv = RawViewfinderExposureMath.solve { exposureEv ->
+        return RawViewfinderExposureMath.solve { exposureEv ->
             evaluate(reference.analysis, exposureEv, renderSample(exposureEv))
-        }
-        if (BuildConfig.DEBUG && solvedExposureEv != null) {
-            val solvedFrame = renderSample(solvedExposureEv)
-            if (solvedFrame != null &&
-                solvedFrame.width == reference.frame.width &&
-                solvedFrame.height == reference.frame.height
-            ) {
-                saveDiagnosticFrames(
-                    context = context,
-                    reference = reference,
-                    candidate = solvedFrame,
-                    solvedExposureEv = solvedExposureEv,
-                )
-            } else {
-                PLog.w(
-                    TAG,
-                    "RAW viewfinder diagnostic skipped: solved candidate frame is unavailable " +
-                        "exposureEv=$solvedExposureEv " +
-                        "reference=${reference.frame.width}x${reference.frame.height} " +
-                        "candidate=${solvedFrame?.let { "${it.width}x${it.height}" } ?: "null"}",
-                )
-            }
-        }
-        return solvedExposureEv
-    }
-
-    private fun saveDiagnosticFrames(
-        context: Context,
-        reference: ViewfinderReference,
-        candidate: RawExposurePreviewFrame,
-        solvedExposureEv: Float,
-    ) {
-        val rootDirectory = File(context.cacheDir, DIAGNOSTIC_DIRECTORY)
-        if (!rootDirectory.exists() && !rootDirectory.mkdirs()) {
-            PLog.w(TAG, "Unable to create RAW viewfinder diagnostic directory: $rootDirectory")
-            return
-        }
-        val directory = File(rootDirectory, System.currentTimeMillis().toString())
-        if (!directory.mkdirs()) {
-            PLog.w(TAG, "Unable to create RAW viewfinder capture directory: $directory")
-            return
-        }
-        val referenceFile = File(directory, "reference.png")
-        val candidateFile = File(directory, "candidate.png")
-        val referenceRoiFile = File(directory, "reference_roi.png")
-        val candidateRoiFile = File(directory, "candidate_roi.png")
-        val bounds = Rect(
-            reference.analysis.left,
-            reference.analysis.top,
-            reference.analysis.right,
-            reference.analysis.bottom,
-        )
-        val referenceBitmap = Bitmap.createBitmap(
-            reference.frame.argbPixels,
-            reference.frame.width,
-            reference.frame.height,
-            Bitmap.Config.ARGB_8888,
-        )
-        val candidateBitmap = Bitmap.createBitmap(
-            candidate.argbPixels,
-            candidate.width,
-            candidate.height,
-            Bitmap.Config.ARGB_8888,
-        )
-        var referenceRoiBitmap: Bitmap? = null
-        var candidateRoiBitmap: Bitmap? = null
-        try {
-            val referenceRoi = Bitmap.createBitmap(
-                referenceBitmap,
-                bounds.left,
-                bounds.top,
-                bounds.width(),
-                bounds.height(),
-            )
-            val candidateRoi = Bitmap.createBitmap(
-                candidateBitmap,
-                bounds.left,
-                bounds.top,
-                bounds.width(),
-                bounds.height(),
-            )
-            referenceRoiBitmap = referenceRoi
-            candidateRoiBitmap = candidateRoi
-            val saved = listOf(
-                writePng(referenceBitmap, referenceFile),
-                writePng(candidateBitmap, candidateFile),
-                writePng(referenceRoi, referenceRoiFile),
-                writePng(candidateRoi, candidateRoiFile),
-            ).all { it }
-            if (saved) {
-                PLog.i(
-                    TAG,
-                    "RAW viewfinder diagnostic saved: exposureEv=$solvedExposureEv " +
-                        "size=${candidate.width}x${candidate.height} roi=$bounds " +
-                        "reference=${referenceFile.absolutePath} " +
-                        "candidate=${candidateFile.absolutePath} " +
-                        "referenceRoi=${referenceRoiFile.absolutePath} " +
-                        "candidateRoi=${candidateRoiFile.absolutePath}",
-                )
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save RAW viewfinder diagnostic frames", e)
-        } finally {
-            referenceRoiBitmap?.recycle()
-            candidateRoiBitmap?.recycle()
-            referenceBitmap.recycle()
-            candidateBitmap.recycle()
-        }
-    }
-
-    private fun writePng(bitmap: Bitmap, file: File): Boolean {
-        return try {
-            FileOutputStream(file, false).use { output ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-            }
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to write RAW viewfinder diagnostic PNG: $file", e)
-            false
         }
     }
 
@@ -255,10 +131,12 @@ internal object RawViewfinderExposureMatcher {
             width = frame.width,
             height = frame.height,
         ) ?: return null
+        val meteringLog2Error = match.meanBrightnessLog2Error
         PLog.d(
             TAG,
                 "RAW viewfinder sample: exposureEv=$exposureEv " +
-                "matchLog2Error=${match.matchLog2Error} " +
+                "meteringLog2Error=$meteringLog2Error " +
+                "quantileBlendLog2Error=${match.matchLog2Error} " +
                 "shadowPriorityTrimmedLog2Error=${match.toneWeightedLog2Error} " +
                 "linearArithmeticMeanLog2Error=${match.linearArithmeticMeanLog2Error} " +
                 "linearLogAverageLog2Error=${match.linearLogAverageLog2Error} " +
@@ -278,7 +156,7 @@ internal object RawViewfinderExposureMatcher {
                 "candidatePerceptualBrightnessMean=" +
                 "${match.candidatePerceptualBrightnessMean}"
         )
-        return match.matchLog2Error
+        return meteringLog2Error
     }
 
     private data class Size(val width: Int, val height: Int)

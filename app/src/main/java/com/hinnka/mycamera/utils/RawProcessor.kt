@@ -20,7 +20,9 @@ import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
+import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.toAdobeDefaultMeteringPlan
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -110,23 +112,19 @@ object RawProcessor {
         rotation: Int,
         profilePreparation: RawDngProfilePreparation,
     ): RawMetadata {
-        val dngWhiteBalance = resolveDngWriterWhiteBalance(captureResult)
         val dngChannelNoise = resolveDngWriterNoiseProfile(captureResult)
-        val metadata = RawMetadata.create(
+        val metadata = buildAdobeDngColorMetadata(
             width = width,
             height = height,
             characteristics = characteristics,
             captureResult = captureResult,
             userExposureCompensation = baseMetadata.exposureBias,
-            colorSpace = com.hinnka.mycamera.raw.ColorSpace.ProPhoto,
         )
         return metadata.copy(
             width = width,
             height = height,
             blackLevel = floatArrayOf(0f, 0f, 0f, 0f),
             whiteLevel = 65535f,
-            whiteBalanceGains = dngWhiteBalance,
-            preMul = dngWhiteBalance.copyOf(),
             lensShadingMap = null,
             lensShadingMapWidth = 0,
             lensShadingMapHeight = 0,
@@ -145,6 +143,28 @@ object RawProcessor {
             frameCount = 1,
             rotation = rotation,
             profileGainTableMap = profilePreparation.profileGainTableMap,
+        )
+    }
+
+    /** Color metadata shared by capture-time metering and the reopened Adobe/default DNG render. */
+    private fun buildAdobeDngColorMetadata(
+        width: Int,
+        height: Int,
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+        userExposureCompensation: Float? = null,
+    ): RawMetadata {
+        val dngWhiteBalance = resolveDngWriterWhiteBalance(captureResult)
+        return RawMetadata.create(
+            width = width,
+            height = height,
+            characteristics = characteristics,
+            captureResult = captureResult,
+            userExposureCompensation = userExposureCompensation,
+            colorSpace = RawRenderingEngine.AdobeCurve.workingColorSpace,
+        ).copy(
+            whiteBalanceGains = dngWhiteBalance,
+            preMul = dngWhiteBalance.copyOf(),
         )
     }
 
@@ -469,7 +489,6 @@ object RawProcessor {
         height: Int,
         characteristics: CameraCharacteristics,
         captureResult: CaptureResult,
-        captureMetadataResult: CaptureResult? = null,
         cfaPattern: Int = RawMetadata.CFA_RGGB,
         blackLevel: FloatArray = floatArrayOf(0f, 0f, 0f, 0f),
         whiteLevel: Int = 65535,
@@ -513,11 +532,11 @@ object RawProcessor {
         } else {
             resolvedWhiteLevel.toFloat()
         }
-        val statsMetadata = RawMetadata.create(
+        val statsMetadata = buildAdobeDngColorMetadata(
             width = width,
             height = height,
             characteristics = characteristics,
-            captureResult = captureMetadataResult ?: captureResult,
+            captureResult = captureResult,
         ).copy(
             width = width,
             height = height,
@@ -527,6 +546,24 @@ object RawProcessor {
             baselineExposure = sourceBaselineExposureEv,
             defaultCrop = defaultCrop,
         )
+        val embeddedDngColorPlan = SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
+            characteristics = characteristics,
+            metadata = statsMetadata,
+            imageLayout = imageLayout,
+            profileGainTableMap = null,
+            profileToneCurve = null,
+        )
+        if (embeddedDngColorPlan == null) {
+            PLog.e(TAG, "Unable to resolve the DNG color plan for RAW capture-profile preparation")
+            return null
+        }
+        // Metering has one fixed Adobe/default tone pipeline. Reuse only the DNG color solution;
+        // layout-specific DNG black-render tags and embedded profile curves must not alter it.
+        val meteringRenderPlan = embeddedDngColorPlan.toAdobeDefaultMeteringPlan()
+        val captureProfileMetadata = statsMetadata.copy(
+            colorCorrectionMatrix = meteringRenderPlan.colorCorrectionMatrix.copyOf(),
+            cameraWhite = meteringRenderPlan.cameraWhite.copyOf(),
+        )
         val captureProfile = options.captureProfilePreparer?.prepare(
             com.hinnka.mycamera.raw.RawDngCaptureProfileInput(
                 rawData = rawBuffer.duplicate().order(ByteOrder.nativeOrder()),
@@ -534,7 +571,8 @@ object RawProcessor {
                 height = height,
                 rowStride = inputRowStrideBytes,
                 samplesPerPixel = inputSamplesPerPixel,
-                metadata = statsMetadata.copy(profileGainTableMap = null),
+                metadata = captureProfileMetadata.copy(profileGainTableMap = null),
+                meteringRenderPlan = meteringRenderPlan,
                 gpuLinearRgbSource = gpuLinearRgbSource,
             )
         )
@@ -641,7 +679,6 @@ object RawProcessor {
                 height = height,
                 characteristics = characteristics,
                 captureResult = captureResult,
-                captureMetadataResult = captureMetadataResult,
                 cfaPattern = cfaPattern,
                 blackLevel = blackLevel,
                 whiteLevel = whiteLevel,
