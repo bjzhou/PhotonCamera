@@ -25,6 +25,15 @@ class RawViewfinderExposureMathTest {
         assertNotNull(match)
         val expected = log2(srgbCode(0.36f) / srgbCode(0.18f))
         assertEquals(expected, match!!.matchLog2Error, 0.001f)
+        assertEquals(
+            match.linearArithmeticMeanLog2Error,
+            match.linearLogAverageLog2Error,
+            0.001f,
+        )
+        assertEquals(expected, match.meanBrightnessLog2Error, 0.001f)
+        assertEquals(expected, match.perceptualLogAverageLog2Error, 0.001f)
+        assertEquals(expected, match.p50Log2Error, 0.001f)
+        assertTrue(match.linearArithmeticMeanLog2Error > match.meanBrightnessLog2Error)
         assertTrue(match.matchLog2Error > 0f)
     }
 
@@ -107,7 +116,7 @@ class RawViewfinderExposureMathTest {
     }
 
     @Test
-    fun opposingTonalShiftsStillProduceOverallBrightnessError() {
+    fun opposingTonalShiftsPreferDarkAndMidtoneAppearance() {
         val width = 10
         val height = 10
         val referencePixels = IntArray(width * height) { index ->
@@ -127,12 +136,96 @@ class RawViewfinderExposureMathTest {
 
         assertNotNull(match)
         assertTrue(match!!.quantileSpreadLog2 > 0.75f)
-        assertTrue(match.matchLog2Error.isFinite())
-        val expected = log2(
+        val expectedMeanError = log2(
             match.candidatePerceptualBrightnessMean /
                 match.referencePerceptualBrightnessMean
         )
-        assertEquals(expected, match.matchLog2Error, 0.001f)
+        assertEquals(expectedMeanError, match.meanBrightnessLog2Error, 0.001f)
+        assertTrue("Brighter highlights should raise the global mean", expectedMeanError > 0f)
+        assertEquals(
+            0.70f * match.quantileTrimmedMeanLog2Error +
+                0.30f * match.meanBrightnessLog2Error,
+            match.matchLog2Error,
+            0.0001f,
+        )
+        assertTrue(
+            "Dark and midtone deficits should control the exposure target",
+            match.matchLog2Error < 0f,
+        )
+        assertTrue(match.toneWeightedLog2Error < match.matchLog2Error)
+    }
+
+    @Test
+    fun isolatedDeepShadowMismatchCannotControlOverallExposure() {
+        val width = 16
+        val height = 10
+        val darkEnd = width * height / 4
+        val highlightStart = width * height * 3 / 4
+        val referencePixels = IntArray(width * height) { index ->
+            grayscaleArgb(
+                when {
+                    index < darkEnd -> 0.04f
+                    index < highlightStart -> 0.18f
+                    else -> 0.64f
+                }
+            )
+        }
+        val candidatePixels = IntArray(width * height) { index ->
+            grayscaleArgb(
+                when {
+                    index < darkEnd -> 0.001f
+                    index < highlightStart -> 0.18f
+                    else -> 0.64f
+                }
+            )
+        }
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = buildReference(referencePixels, width, height),
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(match)
+        assertTrue(match!!.quantileLog2Errors.first() < -3f)
+        assertEquals(0f, match.toneWeightedLog2Error, 0.001f)
+        assertTrue(match.meanBrightnessLog2Error < 0f)
+        assertTrue(
+            "The full-image guardrail may react, but the crushed tail must not dominate",
+            match.matchLog2Error > -0.05f,
+        )
+    }
+
+    @Test
+    fun solverLiftsDarkAndMidtonesWhenHighlightsConflict() {
+        val width = 16
+        val height = 16
+        val highlightStart = width * height * 3 / 4
+        val referencePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index < highlightStart) 0.08f else 0.64f)
+        }
+        val reference = buildReference(referencePixels, width, height)
+
+        val solvedEv = RawViewfinderExposureMath.solve { exposureEv ->
+            val exposureGain = 2f.pow(exposureEv)
+            val candidatePixels = IntArray(width * height) { index ->
+                val baseLuma = if (index < highlightStart) 0.04f else 0.64f
+                grayscaleArgb(baseLuma * exposureGain)
+            }
+            RawViewfinderExposureMath.evaluate(
+                reference = reference,
+                pixels = candidatePixels,
+                width = width,
+                height = height,
+            )?.matchLog2Error
+        }
+
+        assertNotNull(solvedEv)
+        assertTrue(
+            "The solver should accept brighter highlights to restore the darker majority",
+            solvedEv!! > 0.8f,
+        )
+        assertTrue(solvedEv < 1.2f)
     }
 
     @Test
@@ -177,8 +270,11 @@ class RawViewfinderExposureMathTest {
         }
 
         assertNotNull(solvedEv)
-        assertTrue(solvedEv!! > 1f)
-        assertTrue(solvedEv < 2f)
+        assertTrue(
+            "The darker majority should remain the exposure target after highlights clip",
+            solvedEv!! > 2f,
+        )
+        assertTrue(solvedEv <= MeteringSystem.RAW_EXPOSURE_MAX_EV)
     }
 
     @Test

@@ -1524,12 +1524,18 @@ class LutRenderer : GLSurfaceView.Renderer {
                 }
             }
             if (meteringEnabled && activeVideoRecorder == null) {
-                runMeteringInternal(
-                    sourceTextureId = finalDisplayTextureId,
-                    sourceWidth = finalDisplayWidth,
-                    sourceHeight = finalDisplayHeight,
-                    compositeWithHdf = needsHdfCompositeForSampling
-                )
+                // Metering must observe the same LUT-free source used by Original preview
+                // capture. Feeding finalDisplayTextureId here makes the current user-selected
+                // 3D LUT part of the exposure loop and therefore biases the captured RAW.
+                if (rawPreviewSource != null) {
+                    runMeteringInternal(
+                        sourceTextureId = rawPreviewSource.textureId,
+                        sourceWidth = viewportWidth,
+                        sourceHeight = viewportHeight,
+                    )
+                } else {
+                    runMeteringInternal()
+                }
             }
         } else {
             // 直接渲染到屏幕
@@ -3022,7 +3028,9 @@ class LutRenderer : GLSurfaceView.Renderer {
                     fboId = meteringFboId,
                     width = METERING_SIZE,
                     height = METERING_SIZE,
-                    targetMvpMatrix = buildMvpMatrix(METERING_SIZE, METERING_SIZE)
+                    targetMvpMatrix = buildMvpMatrix(METERING_SIZE, METERING_SIZE),
+                    suppressBaselineLayer = true,
+                    suppressCreativeLayer = true,
                 )
             }
 
