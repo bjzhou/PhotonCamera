@@ -538,17 +538,28 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
-        GLES30.glTexImage2D(
+        // This texture is consumed through glBindImageTexture during prewarm. OpenGL ES 3.1
+        // requires image-bound textures to have immutable storage.
+        GLES30.glTexStorage2D(
             GLES30.GL_TEXTURE_2D,
-            0,
+            1,
             internalFormat,
             width,
             height,
-            0,
-            format,
-            type,
-            pixels,
         )
+        if (pixels != null) {
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+                0,
+                width,
+                height,
+                format,
+                type,
+                pixels,
+            )
+        }
         checkGlError("createCaptureWarmupTexture")
     }
 
@@ -4728,11 +4739,14 @@ class RawDemosaicProcessor {
         require(samplesPerPixel == 3 || samplesPerPixel == 4) {
             "LinearRaw upload requires RGB or RGBX input, got samplesPerPixel=$samplesPerPixel"
         }
-        if (rawTextureId == 0) {
-            val textures = IntArray(1)
-            GLES30.glGenTextures(1, textures, 0)
-            rawTextureId = textures[0]
+        // LinearRaw may be consumed through glBindImageTexture. Recreate it because immutable
+        // texture storage cannot be resized or have its internal format changed in place.
+        if (rawTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(rawTextureId), 0)
         }
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        rawTextureId = textures[0]
 
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
@@ -4749,13 +4763,20 @@ class RawDemosaicProcessor {
         // expanded into image-load-compatible RGBA16UI later by an integer-only compute pass.
         val internalFormat = if (samplesPerPixel == 4) GLES30.GL_RGBA16UI else GLES30.GL_RGB16UI
         val format = if (samplesPerPixel == 4) GLES30.GL_RGBA_INTEGER else GLES30.GL_RGB_INTEGER
-        GLES30.glTexImage2D(
+        GLES30.glTexStorage2D(
             GLES30.GL_TEXTURE_2D,
-            0,
+            1,
             internalFormat,
             width,
             height,
+        )
+        GLES30.glTexSubImage2D(
+            GLES30.GL_TEXTURE_2D,
             0,
+            0,
+            0,
+            width,
+            height,
             format,
             GLES30.GL_UNSIGNED_SHORT,
             buffer

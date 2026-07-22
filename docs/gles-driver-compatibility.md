@@ -274,6 +274,12 @@ void main() {
 它与失败路径的关键区别不是归一化公式，而是 integer texture 的访问模型：不再使用
 fragment sampler，也不使用 `unpackUnorm2x16`，而是让 compute image load/store 完成格式转换。
 
+所有传给 `glBindImageTexture` 的普通 2D texture 必须使用不可变存储。预热纹理和 CPU 上传的
+LinearRaw 纹理均使用 `glTexStorage2D` 分配，再通过 `glTexSubImage2D` 上传内容；不能沿用
+sampler 路径的 `glTexImage2D` 可变存储。否则 ES 3.1 会在 image binding 阶段产生
+`GL_INVALID_OPERATION (1282)`，compute dispatch 也就没有合法的输入 image。错误检查应覆盖
+纹理分配、image binding 和 dispatch，不能用后续 pass 仍能执行来推断预热成功。
+
 三通道 DNG 必须先按规范使用
 `GL_RGB_INTEGER + GL_UNSIGNED_SHORT + GL_RGB16UI` 上传。`GL_RGB_INTEGER` 与
 `GL_RGBA16UI` 不是 ES 允许的 `format/type/internalFormat` 组合，不能依赖驱动隐式补 Alpha。
