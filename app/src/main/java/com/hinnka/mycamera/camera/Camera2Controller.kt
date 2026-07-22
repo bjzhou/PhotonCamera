@@ -100,6 +100,7 @@ class Camera2Controller(private val context: Context) {
         private const val SCENE_CHANGE_FOCUS_DISTANCE_DELTA = 0.2f // 焦距跳变阈值（diopters），对焦锁定后逐帧跟踪
         private const val FOCUS_LOCK_SETTLE_FRAMES = 5        // 对焦锁定后等待镜头稳定的帧数
         private const val SCENE_CHANGE_CONFIRM_FRAMES = 3     // 连续 N 帧检测到变化才确认
+        private const val MULTI_FRAME_AF_LOCK_TIMEOUT_MS = 1_200L
         private const val AI_SUBJECT_RECENT_MS = 1800L
         private const val AI_FOCUS_FALLBACK_FRAMES = 6
         private const val DEFAULT_HYPERFOCAL_FOCAL_LENGTH_MM = 4.0f
@@ -156,6 +157,21 @@ class Camera2Controller(private val context: Context) {
         val usedVendorParameters: Boolean
     )
 
+    private data class PendingMultiFrameFocusCapture(
+        val generation: Long,
+        val device: CameraDevice,
+        val reader: ImageReader,
+        val baseResult: CaptureResult?,
+    )
+
+    private data class MultiFrameFocusSnapshot(
+        val afMode: Int,
+        val focusDistanceDiopters: Float?,
+        val afState: Int?,
+        val lensState: Int?,
+        val source: String,
+    )
+
     private enum class WhiteBalanceControlPath {
         CCT,
         MATRIX,
@@ -182,6 +198,14 @@ class Camera2Controller(private val context: Context) {
     private var pendingCaptureDevice: CameraDevice? = null
     private var pendingCaptureReader: ImageReader? = null
     private var pendingCaptureBaseExposureResult: CaptureResult? = null
+    private var pendingMultiFrameFocusCapture: PendingMultiFrameFocusCapture? = null
+    private var pendingMultiFrameFocusResult: TotalCaptureResult? = null
+    private var activeMultiFrameFocusSnapshot: MultiFrameFocusSnapshot? = null
+    private var multiFrameFocusGeneration = 0L
+    private var multiFrameAfTriggerMode: Int? = null
+    private var multiFrameFocusTimeoutRunnable: Runnable? = null
+    @Volatile
+    private var isCaptureFocusFrozen = false
     // ---------------------
 
     private var cameraDevice: CameraDevice? = null
@@ -522,6 +546,7 @@ class Camera2Controller(private val context: Context) {
                 }
             }
             lastCaptureResult = result
+            processPendingMultiFrameFocusResult(result)
             logVideoCaptureStats(result)
 
             // 处理拍照状态机
@@ -949,6 +974,7 @@ class Camera2Controller(private val context: Context) {
     private fun clearCameraSessionState(reason: String, closeImageReader: Boolean = true) {
         previewSessionGeneration++
         previewUpdateScheduled.set(false)
+        clearMultiFrameFocusState("session cleared: $reason")
         safeCloseCaptureSession(captureSession, reason)
         captureSession = null
         previewRequestBuilder = null
@@ -4335,9 +4361,13 @@ class Camera2Controller(private val context: Context) {
             hyperfocalDistanceMeters = 0f,
             isFocusLocked = false
         )
-        previewRequestBuilder?.apply {
-            applyFocusSettings(this, _state.value)
-            updatePreview()
+        if (!isCaptureFocusFrozen) {
+            previewRequestBuilder?.apply {
+                applyFocusSettings(this, _state.value)
+                updatePreview()
+            }
+        } else {
+            PLog.d(TAG, "Auto-focus mode update deferred until multi-frame capture completes")
         }
     }
 
@@ -4357,11 +4387,13 @@ class Camera2Controller(private val context: Context) {
             isFocusLocked = false
         )
 
-        if (!_state.value.isAutoFocus) {
+        if (!_state.value.isAutoFocus && !isCaptureFocusFrozen) {
             previewRequestBuilder?.apply {
                 applyFocusSettings(this, _state.value)
                 updatePreview()
             }
+        } else if (isCaptureFocusFrozen) {
+            PLog.d(TAG, "Manual focus-distance update deferred until multi-frame capture completes")
         }
     }
 
@@ -4416,7 +4448,7 @@ class Camera2Controller(private val context: Context) {
             isFocusLocked = false
         )
 
-        if (updatePreview) {
+        if (updatePreview && !isCaptureFocusFrozen) {
             previewRequestBuilder?.apply {
                 applyFocusSettings(this, _state.value)
                 updatePreview()
@@ -4448,7 +4480,7 @@ class Camera2Controller(private val context: Context) {
             isFocusLocked = false
         )
 
-        if (updatePreview) {
+        if (updatePreview && !isCaptureFocusFrozen) {
             previewRequestBuilder?.apply {
                 applyFocusSettings(this, _state.value)
                 updatePreview()
@@ -4531,6 +4563,10 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun restoreContinuousAf() {
+        if (isCaptureFocusFrozen) {
+            PLog.d(TAG, "Continuous AF restore deferred while multi-frame focus is frozen")
+            return
+        }
         isFocusLockedWaitingForSceneChange = false
         sceneChangeFrameCount = 0
         focusLockedReferenceIso = 0
@@ -4613,6 +4649,17 @@ class Camera2Controller(private val context: Context) {
         source: FocusPointSource = FocusPointSource.AI,
         lockFocus: Boolean = false,
     ) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                focusOnNormalizedPoint(normX, normY, source, lockFocus)
+            }
+            return
+        }
+        if (isCaptureFocusFrozen || _state.value.isCapturing) {
+            PLog.d(TAG, "Ignoring focus update while capture focus is frozen: source=$source")
+            return
+        }
         val openCameraId = getCurrentOpenCameraId()
         if (openCameraId.isEmpty()) return
 
@@ -4710,10 +4757,11 @@ class Camera2Controller(private val context: Context) {
                     set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(aeRegion))
                 }
                 val afMode = CaptureRequest.CONTROL_AF_MODE_AUTO
-                set(CaptureRequest.CONTROL_AF_MODE, afMode)
-                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 _state.value = _state.value.copy(currentAfMode = afMode)
-                updatePreview()
+                if (!submitOneShotAfTrigger(afMode, "point focus")) {
+                    PLog.w(TAG, "Unable to submit point-focus AF trigger")
+                    _state.value = _state.value.copy(isFocusing = false, focusSuccess = false)
+                }
             }
 
             // 对焦后通过场景变化检测自动恢复连续对焦（不再使用固定延迟）
@@ -5054,6 +5102,248 @@ class Camera2Controller(private val context: Context) {
 
 // ==================== 拍照 ====================
 
+    private fun prepareMultiFrameFocusForCapture(
+        device: CameraDevice,
+        reader: ImageReader,
+        baseResult: CaptureResult?,
+    ) {
+        isCaptureFocusFrozen = true
+        val currentState = _state.value
+        val currentAfMode = baseResult?.get(CaptureResult.CONTROL_AF_MODE)
+            ?: previewRequestBuilder?.get(CaptureRequest.CONTROL_AF_MODE)
+            ?: resolveAutoFocusMode(currentState.captureMode)
+        val focusDistance = resolveValidFocusDistance(baseResult, currentState)
+
+        if (!currentState.isAutoFocus || !supportsAfTrigger(currentAfMode)) {
+            val snapshotAfMode = if (!currentState.isAutoFocus &&
+                availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)
+            ) {
+                CaptureRequest.CONTROL_AF_MODE_OFF
+            } else {
+                currentAfMode
+            }
+            val snapshotFocusDistance = if (!currentState.isAutoFocus) {
+                currentState.focusDistance.takeIf { it.isFinite() && it >= 0f }
+            } else {
+                focusDistance
+            }
+            activeMultiFrameFocusSnapshot = MultiFrameFocusSnapshot(
+                afMode = snapshotAfMode,
+                focusDistanceDiopters = snapshotFocusDistance,
+                afState = baseResult?.get(CaptureResult.CONTROL_AF_STATE),
+                lensState = baseResult?.get(CaptureResult.LENS_STATE),
+                source = if (currentState.isAutoFocus) "non_trigger_af_mode" else "manual_focus",
+            )
+            PLog.i(
+                TAG,
+                "Multi-frame focus ready without AF trigger: mode=$snapshotAfMode " +
+                    "focus=$snapshotFocusDistance source=${activeMultiFrameFocusSnapshot?.source}",
+            )
+            continueCaptureAfterFocusPreparation(device, reader, baseResult)
+            return
+        }
+
+        val afState = baseResult?.get(CaptureResult.CONTROL_AF_STATE)
+        val lensState = baseResult?.get(CaptureResult.LENS_STATE)
+        if (MultiFrameFocusLockPolicy.isReadyForCapture(afState, lensState)) {
+            activeMultiFrameFocusSnapshot = createMultiFrameFocusSnapshot(
+                result = baseResult,
+                fallbackAfMode = currentAfMode,
+                source = "existing_af_lock",
+            )
+            PLog.i(
+                TAG,
+                "Multi-frame focus reused existing lock: mode=$currentAfMode afState=$afState " +
+                    "lensState=$lensState focus=$focusDistance",
+            )
+            continueCaptureAfterFocusPreparation(device, reader, baseResult)
+            return
+        }
+
+        val generation = ++multiFrameFocusGeneration
+        val pending = PendingMultiFrameFocusCapture(
+            generation = generation,
+            device = device,
+            reader = reader,
+            baseResult = baseResult,
+        )
+        pendingMultiFrameFocusCapture = pending
+        pendingMultiFrameFocusResult = null
+        multiFrameAfTriggerMode = currentAfMode
+
+        if (!submitOneShotAfTrigger(currentAfMode, "multi-frame capture")) {
+            PLog.w(TAG, "Unable to submit multi-frame AF lock; using a fixed-focus fallback")
+            completePendingMultiFrameFocusWithFallback(pending, "trigger_submission_failed")
+            return
+        }
+
+        PLog.i(
+            TAG,
+            "Waiting for multi-frame AF lock: generation=$generation mode=$currentAfMode " +
+                "initialAfState=$afState initialLensState=$lensState focus=$focusDistance",
+        )
+        val timeout = Runnable {
+            val activePending = pendingMultiFrameFocusCapture
+            if (activePending?.generation != generation) return@Runnable
+            PLog.w(
+                TAG,
+                "Multi-frame AF lock timed out after ${MULTI_FRAME_AF_LOCK_TIMEOUT_MS}ms: " +
+                    "generation=$generation",
+            )
+            completePendingMultiFrameFocusWithFallback(activePending, "af_lock_timeout")
+        }
+        multiFrameFocusTimeoutRunnable = timeout
+        cameraHandler?.postDelayed(timeout, MULTI_FRAME_AF_LOCK_TIMEOUT_MS)
+    }
+
+    private fun supportsAfTrigger(afMode: Int): Boolean {
+        return afMode == CaptureRequest.CONTROL_AF_MODE_AUTO ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_MACRO ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+            afMode == CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+    }
+
+    private fun resolveValidFocusDistance(result: CaptureResult?, state: CameraState): Float? {
+        val resultDistance = result?.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            ?.takeIf { it.isFinite() && it >= 0f }
+        if (resultDistance != null) return resultDistance
+        return if (!state.isAutoFocus) {
+            state.focusDistance.takeIf { it.isFinite() && it >= 0f }
+        } else {
+            null
+        }
+    }
+
+    private fun createMultiFrameFocusSnapshot(
+        result: CaptureResult?,
+        fallbackAfMode: Int,
+        source: String,
+    ): MultiFrameFocusSnapshot {
+        return MultiFrameFocusSnapshot(
+            afMode = result?.get(CaptureResult.CONTROL_AF_MODE) ?: fallbackAfMode,
+            focusDistanceDiopters = resolveValidFocusDistance(result, _state.value),
+            afState = result?.get(CaptureResult.CONTROL_AF_STATE),
+            lensState = result?.get(CaptureResult.LENS_STATE),
+            source = source,
+        )
+    }
+
+    private fun submitOneShotAfTrigger(afMode: Int, reason: String): Boolean {
+        val session = captureSession ?: return false
+        val builder = previewRequestBuilder ?: return false
+        var submitted = false
+        try {
+            builder.set(CaptureRequest.CONTROL_AF_MODE, afMode)
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+            session.capture(builder.build(), previewCallback, cameraHandler)
+            submitted = true
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to submit one-shot AF trigger for $reason", e)
+        } finally {
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+        }
+
+        if (submitted) {
+            try {
+                session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            } catch (e: Exception) {
+                // The one-shot request is already queued and its callback can still complete the lock.
+                PLog.w(TAG, "Unable to resume IDLE repeating request after $reason AF trigger", e)
+            }
+        }
+        return submitted
+    }
+
+    private fun processPendingMultiFrameFocusResult(result: TotalCaptureResult) {
+        val pending = pendingMultiFrameFocusCapture ?: return
+        pendingMultiFrameFocusResult = result
+        val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+        val lensState = result.get(CaptureResult.LENS_STATE)
+        val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+        PLog.d(
+            TAG,
+            "Multi-frame AF observation: generation=${pending.generation} afState=$afState " +
+                "lensState=$lensState focus=$focusDistance frame=${result.frameNumber}",
+        )
+        if (!MultiFrameFocusLockPolicy.isReadyForCapture(afState, lensState)) return
+
+        activeMultiFrameFocusSnapshot = createMultiFrameFocusSnapshot(
+            result = result,
+            fallbackAfMode = multiFrameAfTriggerMode ?: resolveAutoFocusMode(_state.value.captureMode),
+            source = if (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
+                "af_focused_locked"
+            } else {
+                "af_not_focused_locked"
+            },
+        )
+        clearPendingMultiFrameFocusPreparation()
+        PLog.i(
+            TAG,
+            "Multi-frame AF locked: mode=${activeMultiFrameFocusSnapshot?.afMode} " +
+                "afState=$afState lensState=$lensState focus=$focusDistance frame=${result.frameNumber}",
+        )
+        continueCaptureAfterFocusPreparation(pending.device, pending.reader, result)
+    }
+
+    private fun completePendingMultiFrameFocusWithFallback(
+        pending: PendingMultiFrameFocusCapture,
+        reason: String,
+    ) {
+        val result = pendingMultiFrameFocusResult ?: pending.baseResult
+        val focusDistance = resolveValidFocusDistance(result, _state.value)
+        val fallbackMode = when {
+            availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF) && focusDistance != null ->
+                CaptureRequest.CONTROL_AF_MODE_OFF
+
+            availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) ->
+                CaptureRequest.CONTROL_AF_MODE_AUTO
+
+            else -> multiFrameAfTriggerMode ?: resolveAutoFocusMode(_state.value.captureMode)
+        }
+        activeMultiFrameFocusSnapshot = createMultiFrameFocusSnapshot(
+            result = result,
+            fallbackAfMode = fallbackMode,
+            source = reason,
+        ).copy(afMode = fallbackMode)
+        clearPendingMultiFrameFocusPreparation()
+        PLog.w(
+            TAG,
+            "Multi-frame focus fallback: reason=$reason mode=$fallbackMode focus=$focusDistance " +
+                "afState=${activeMultiFrameFocusSnapshot?.afState} " +
+                "lensState=${activeMultiFrameFocusSnapshot?.lensState}",
+        )
+        continueCaptureAfterFocusPreparation(pending.device, pending.reader, result)
+    }
+
+    private fun clearPendingMultiFrameFocusPreparation() {
+        multiFrameFocusTimeoutRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        multiFrameFocusTimeoutRunnable = null
+        pendingMultiFrameFocusCapture = null
+        pendingMultiFrameFocusResult = null
+    }
+
+    private fun continueCaptureAfterFocusPreparation(
+        device: CameraDevice,
+        reader: ImageReader,
+        baseExposureResult: CaptureResult?,
+    ) {
+        val currentState = _state.value
+        val needsPrecapture = currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+            currentState.isIsoAuto &&
+            currentState.isShutterSpeedAuto
+
+        if (needsPrecapture) {
+            pendingCaptureDevice = device
+            pendingCaptureReader = reader
+            pendingCaptureBaseExposureResult = baseExposureResult
+            PLog.d(TAG, "启动状态机拍照流程")
+            runPrecaptureSequence()
+        } else {
+            PLog.d(TAG, "直接拍照")
+            performCapture(device, reader, baseExposureResult)
+        }
+    }
+
     /**
      * 拍照
      */
@@ -5066,6 +5356,10 @@ class Camera2Controller(private val context: Context) {
             return
         }
         if (_state.value.captureMode != CaptureMode.PHOTO) return
+        if (_state.value.isCapturing) {
+            PLog.d(TAG, "Ignoring capture request while a capture is already active")
+            return
+        }
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
 
@@ -5091,30 +5385,17 @@ class Camera2Controller(private val context: Context) {
             val currentState = _state.value
             if (currentState.isMultiFrameEnabled) {
                 burstGyroRecorder.start(cameraHandler)
+                prepareMultiFrameFocusForCapture(device, reader, baseExposureResult)
+                return
             }
-            val needsPrecapture = currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE
-                    && currentState.isIsoAuto
-                    && currentState.isShutterSpeedAuto
-
-            if (needsPrecapture) {
-                // 缓存拍照所需的参数，供状态机使用
-                pendingCaptureDevice = device
-                pendingCaptureReader = reader
-                pendingCaptureBaseExposureResult = baseExposureResult
-
-                PLog.d(TAG, "启动状态机拍照流程")
-                runPrecaptureSequence()
-            } else {
-                // 其他情况（手动曝光、手电筒模式、不使用闪光灯）：直接拍照
-                PLog.d(TAG, "直接拍照")
-                performCapture(device, reader, baseExposureResult)
-            }
+            continueCaptureAfterFocusPreparation(device, reader, baseExposureResult)
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to capture", e)
             PLog.e(TAG, "拍照失败", e)
             _state.value = _state.value.copy(isCapturing = false)
             burstGyroRecorder.stop()
+            clearMultiFrameFocusState("capture setup failure")
         }
     }
 
@@ -5173,6 +5454,7 @@ class Camera2Controller(private val context: Context) {
                 }.build()
             }
 
+            var hdrFrameCaptureFailed = false
             session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureStarted(
                     session: CameraCaptureSession,
@@ -5202,12 +5484,25 @@ class Camera2Controller(private val context: Context) {
                     super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
                     PLog.d(TAG, "HDR bracket sequence completed")
                     burstGyroRecorder.stop()
+                    if (hdrFrameCaptureFailed) {
+                        _state.value = _state.value.copy(
+                            isCapturing = false,
+                            hdrBracketCapturing = false,
+                            hdrBracketFrameCount = 0,
+                        )
+                        onHdrBracketCaptureFailed?.invoke()
+                    }
                     resetPreviewAfterCapture()
                 }
 
                 override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
                     burstGyroRecorder.stop()
                     PLog.w(TAG, "HDR bracket sequence aborted")
+                    _state.value = _state.value.copy(
+                        isCapturing = false,
+                        hdrBracketCapturing = false,
+                        hdrBracketFrameCount = 0,
+                    )
                     onHdrBracketCaptureFailed?.invoke()
                     resetPreviewAfterCapture()
                 }
@@ -5218,14 +5513,7 @@ class Camera2Controller(private val context: Context) {
                     failure: CaptureFailure
                 ) {
                     PLog.e(TAG, "HDR bracket capture failed: ${failure.reason}")
-                    _state.value = _state.value.copy(
-                        isCapturing = false,
-                        hdrBracketCapturing = false,
-                        hdrBracketFrameCount = 0
-                    )
-                    burstGyroRecorder.stop()
-                    onHdrBracketCaptureFailed?.invoke()
-                    resetPreviewAfterCapture()
+                    hdrFrameCaptureFailed = true
                 }
             }, cameraHandler)
         } catch (e: Exception) {
@@ -5300,10 +5588,15 @@ class Camera2Controller(private val context: Context) {
         val actualShutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
         val actualCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)
         val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+        val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
+        val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+        val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+        val lensState = result.get(CaptureResult.LENS_STATE)
         PLog.d(
             TAG,
             "HDR bracket result[$requestIndex]: ISO=$actualIso, shutter=$actualShutter, " +
-                    "aeComp=$actualCompensation, aeMode=$aeMode"
+                    "aeComp=$actualCompensation, aeMode=$aeMode, afMode=$afMode, " +
+                    "afState=$afState, focus=$focusDistance, lensState=$lensState"
         )
     }
 
@@ -5424,18 +5717,17 @@ class Camera2Controller(private val context: Context) {
             builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
         }
 
-        val lockedFocusDistance = baseResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
-            ?: builder.get(CaptureRequest.LENS_FOCUS_DISTANCE)
-        when {
-            availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF) && lockedFocusDistance != null -> {
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, lockedFocusDistance)
-            }
-
-            availableAfModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) -> {
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+        val focusSnapshot = activeMultiFrameFocusSnapshot ?: createMultiFrameFocusSnapshot(
+            result = baseResult,
+            fallbackAfMode = builder.get(CaptureRequest.CONTROL_AF_MODE)
+                ?: resolveAutoFocusMode(state.captureMode),
+            source = "request_build_fallback",
+        )
+        builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+        builder.set(CaptureRequest.CONTROL_AF_MODE, focusSnapshot.afMode)
+        if (focusSnapshot.afMode == CaptureRequest.CONTROL_AF_MODE_OFF) {
+            focusSnapshot.focusDistanceDiopters?.let {
+                builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, it)
             }
         }
 
@@ -5446,7 +5738,9 @@ class Camera2Controller(private val context: Context) {
                     "iso=${builder.get(CaptureRequest.SENSOR_SENSITIVITY)} " +
                     "shutter=${builder.get(CaptureRequest.SENSOR_EXPOSURE_TIME)} " +
                     "af=${builder.get(CaptureRequest.CONTROL_AF_MODE)} " +
-                    "focus=${builder.get(CaptureRequest.LENS_FOCUS_DISTANCE)}"
+                    "focus=${focusSnapshot.focusDistanceDiopters} " +
+                    "afState=${focusSnapshot.afState} lensState=${focusSnapshot.lensState} " +
+                    "focusSource=${focusSnapshot.source}"
         )
     }
 
@@ -5804,6 +6098,7 @@ class Camera2Controller(private val context: Context) {
                         "total=${requests.size}",
                 )
 
+                var completedCaptureCount = 0
                 session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
                     override fun onCaptureStarted(
                         session: CameraCaptureSession,
@@ -5822,6 +6117,7 @@ class Camera2Controller(private val context: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult
                     ) {
+                        completedCaptureCount++
                         val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
                             ?: pendingCaptureStartedTimestamps[result.frameNumber]
                         if (isRawCapture) processOrBufferCaptureResult(result)
@@ -5831,9 +6127,15 @@ class Camera2Controller(private val context: Context) {
                         }
                         val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
                         val actualShutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                        val actualAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
+                        val actualAfState = result.get(CaptureResult.CONTROL_AF_STATE)
+                        val actualFocusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                        val actualLensState = result.get(CaptureResult.LENS_STATE)
                         PLog.d(
                             TAG,
                             "Capture completed role=$role ISO=$actualIso shutter=$actualShutter, " +
+                                "afMode=$actualAfMode afState=$actualAfState " +
+                                "focus=$actualFocusDistance lensState=$actualLensState, " +
                                 "result buffered (timestamp: $timestamp). " +
                                 "Pending images: ${pendingImages.size}, Pending results: ${pendingResults.size}"
                         )
@@ -5847,12 +6149,16 @@ class Camera2Controller(private val context: Context) {
                         super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
                         PLog.d(TAG, "Burst sequence completed")
                         burstGyroRecorder.stop()
+                        if (completedCaptureCount == 0) {
+                            _state.value = _state.value.copy(isCapturing = false)
+                        }
                         resetPreviewAfterCapture()
                     }
 
                     override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
                         burstGyroRecorder.stop()
                         PLog.w(TAG, "Burst capture sequence aborted")
+                        _state.value = _state.value.copy(isCapturing = false)
                         resetPreviewAfterCapture()
                     }
 
@@ -5862,9 +6168,6 @@ class Camera2Controller(private val context: Context) {
                         failure: CaptureFailure
                     ) {
                         PLog.e(TAG, "Burst Capture failed: ${failure.reason}")
-                        _state.value = _state.value.copy(isCapturing = false)
-                        burstGyroRecorder.stop()
-                        resetPreviewAfterCapture()
                     }
                 }, cameraHandler)
 
@@ -5936,20 +6239,30 @@ class Camera2Controller(private val context: Context) {
         val device = cameraDevice
         val session = captureSession
         val builder = previewRequestBuilder
+        val afTriggerModeToCancel = multiFrameAfTriggerMode
 
         if (device == null || session == null || builder == null) {
             PLog.v(TAG, "resetPreviewAfterCapture: camera not ready, skipping")
+            clearMultiFrameFocusState("preview unavailable after capture")
             return
         }
 
         try {
-            applyBaseCameraSettings(builder, isCapture = false)
-
+            if (afTriggerModeToCancel != null) {
+                builder.set(CaptureRequest.CONTROL_AF_MODE, afTriggerModeToCancel)
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
+            } else {
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+            }
             builder.set(
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL
             )
             session.capture(builder.build(), null, cameraHandler)
+
+            clearMultiFrameFocusState("capture sequence finished")
+            applyBaseCameraSettings(builder, isCapture = false)
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
             builder.set(
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
@@ -5957,6 +6270,22 @@ class Camera2Controller(private val context: Context) {
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to reset preview", e)
+            clearMultiFrameFocusState("preview reset failure")
+        }
+    }
+
+    private fun clearMultiFrameFocusState(reason: String) {
+        val hadFocusState = isCaptureFocusFrozen ||
+            pendingMultiFrameFocusCapture != null ||
+            activeMultiFrameFocusSnapshot != null ||
+            multiFrameAfTriggerMode != null
+        multiFrameFocusGeneration++
+        clearPendingMultiFrameFocusPreparation()
+        activeMultiFrameFocusSnapshot = null
+        multiFrameAfTriggerMode = null
+        isCaptureFocusFrozen = false
+        if (hadFocusState) {
+            PLog.i(TAG, "Multi-frame focus state released: reason=$reason")
         }
     }
 

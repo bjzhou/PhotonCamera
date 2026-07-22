@@ -3673,7 +3673,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleAiFocusInputUpdate(bitmap: Bitmap) {
         if (isAiFocusBusy) return
-        if (!state.value.isAutoFocus || state.value.isFocusing) return
+        if (state.value.isCapturing || !state.value.isAutoFocus || state.value.isFocusing) return
         cameraController.previewAiFocusProcessor.targetMode = aiFocusTargetMode.value
         cameraController.previewAiFocusProcessor.scoreThreshold = aiFocusScoreThreshold.value
         cameraController.previewAiFocusProcessor.onFocusTarget = { target ->
@@ -3684,7 +3684,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ) {
                     return@launch
                 }
-                if (!state.value.isAutoFocus || state.value.isFocusing) return@launch
+                if (currentState.isCapturing || !currentState.isAutoFocus || currentState.isFocusing) {
+                    return@launch
+                }
                 cameraController.focusOnNormalizedPoint(target.x, target.y)
             }
         }
@@ -3693,6 +3695,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         cameraController.previewAiFocusProcessor.onTargetLost = {
             viewModelScope.launch(Dispatchers.Main) {
+                if (state.value.isCapturing) return@launch
                 cameraController.cancelSubjectFocus("ai_target_lost")
             }
         }
