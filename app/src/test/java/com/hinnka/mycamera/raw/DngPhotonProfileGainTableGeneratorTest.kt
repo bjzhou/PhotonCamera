@@ -160,11 +160,13 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun localPlansUseBoundedSContrast() {
+    fun localPlansUseBoundedSContrastAndHighlightRecovery() {
         val plan = photonPlan(3f)
         val cellPlans = requireNotNull(plan.photonPlan).cellPlans
         assertTrue(cellPlans.all { it.contrastExponent in 1f..1.18f })
+        assertTrue(cellPlans.all { it.highlightRecovery in 0f..0.42f })
         assertTrue(cellPlans.any { it.contrastExponent > 1.01f })
+        assertTrue(cellPlans.all { it.highlightRecovery == 0f })
     }
 
     @Test
@@ -182,6 +184,126 @@ class DngPhotonProfileGainTableGeneratorTest {
         )
         val cellPlans = requireNotNull(maximumContrast.photonPlan).cellPlans
         assertTrue(cellPlans.all { it.contrastExponent in 1f..1.18f })
+        assertTrue(cellPlans.all { it.highlightRecovery in 0f..0.42f })
+    }
+
+    @Test
+    fun locallyBrightBroadHighlightsRecoverShoulderSeparationWithoutMovingAnchors() {
+        val grid = DngHdrProfileGainTableGenerator.gridSizeFor(WIDTH, HEIGHT)
+        val brightStart = grid[0] / 2
+        val plan = photonPlanByCell(baselineExposureEv = 3f) { cell ->
+            val x = cell % grid[0]
+            if (x >= brightStart) {
+                Stats(
+                    p10 = 0.16f,
+                    p50 = 0.46f,
+                    p90 = 0.78f,
+                    p98 = 0.94f,
+                    p999 = 0.99f,
+                    highlightFraction = 0.82f,
+                )
+            } else {
+                Stats(
+                    p10 = 0.015f,
+                    p50 = 0.07f,
+                    p90 = 0.18f,
+                    p98 = 0.28f,
+                    p999 = 0.42f,
+                    highlightFraction = 0.02f,
+                )
+            }
+        }
+        val photonPlan = requireNotNull(plan.photonPlan)
+        val brightCell = brightStart + grid[0] * (grid[1] / 2)
+        val cellPlan = photonPlan.cellPlans[brightCell]
+        assertTrue("recovery=${cellPlan.highlightRecovery}", cellPlan.highlightRecovery > 0.10f)
+
+        val gains = DngHdrProfileGainTableCpuReference.generate(plan)
+        val withoutRecoveryPlan = plan.copy(
+            photonPlan = photonPlan.copy(
+                cellPlans = photonPlan.cellPlans.copyOf().also { cellPlans ->
+                    cellPlans[brightCell] = cellPlan.copy(highlightRecovery = 0f)
+                }
+            )
+        )
+        val gainsWithoutRecovery = DngHdrProfileGainTableCpuReference.generate(
+            withoutRecoveryPlan
+        )
+        val shoulderInput = 1.25f
+        val recoveredOutput = samplePhysicalOutput(
+            plan,
+            gains,
+            cell = brightCell,
+            exposedInput = shoulderInput,
+        )
+        val unrecoveredOutput = samplePhysicalOutput(
+            withoutRecoveryPlan,
+            gainsWithoutRecovery,
+            cell = brightCell,
+            exposedInput = shoulderInput,
+        )
+        assertTrue(
+            "recovered=$recoveredOutput unrecovered=$unrecoveredOutput",
+            recoveredOutput < unrecoveredOutput - 0.015f,
+        )
+        val recoveredSpan = samplePhysicalOutput(
+            plan,
+            gains,
+            cell = brightCell,
+            exposedInput = 1.6f,
+        ) - samplePhysicalOutput(
+            plan,
+            gains,
+            cell = brightCell,
+            exposedInput = 0.8f,
+        )
+        val unrecoveredSpan = samplePhysicalOutput(
+            withoutRecoveryPlan,
+            gainsWithoutRecovery,
+            cell = brightCell,
+            exposedInput = 1.6f,
+        ) - samplePhysicalOutput(
+            withoutRecoveryPlan,
+            gainsWithoutRecovery,
+            cell = brightCell,
+            exposedInput = 0.8f,
+        )
+        assertTrue(
+            "recoveredSpan=$recoveredSpan unrecoveredSpan=$unrecoveredSpan",
+            recoveredSpan >= 0.95f * unrecoveredSpan,
+        )
+        assertEquals(
+            photonPlan.pivotOutput,
+            samplePhysicalOutput(
+                plan,
+                gains,
+                cell = brightCell,
+                exposedInput = photonPlan.exposedPivot,
+            ),
+            2e-3f,
+        )
+        assertEquals(
+            photonPlan.endpointOutput,
+            samplePhysicalOutput(
+                plan,
+                gains,
+                cell = brightCell,
+                exposedInput = photonPlan.exposureGain,
+            ),
+            2e-5f,
+        )
+        var previousOutput = 0f
+        repeat(plan.pointCount) { point ->
+            val tableInput = tableInput(point, plan.pointCount)
+            val sourceInput = tableInput.pow(1f / plan.gamma)
+            val exposedInput = photonPlan.exposureGain * sourceInput
+            val output = exposedInput * gains[brightCell * plan.pointCount + point]
+            assertTrue(
+                "bright-cell reversal at point=$point output=$output previous=$previousOutput",
+                output + 2e-5f >= previousOutput,
+            )
+            previousOutput = output
+        }
     }
 
     @Test
@@ -202,6 +324,11 @@ class DngPhotonProfileGainTableGeneratorTest {
     private fun photonPlan(
         baselineExposureEv: Float,
         stats: Stats = Stats(),
+    ): HdrProfileGainTablePlan = photonPlanByCell(baselineExposureEv) { stats }
+
+    private fun photonPlanByCell(
+        baselineExposureEv: Float,
+        statsForCell: (Int) -> Stats,
     ): HdrProfileGainTablePlan {
         val grid = DngHdrProfileGainTableGenerator.gridSizeFor(WIDTH, HEIGHT)
         val cellCount = grid[0] * grid[1]
@@ -209,6 +336,7 @@ class DngPhotonProfileGainTableGeneratorTest {
             cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
         )
         repeat(cellCount) { cell ->
+            val stats = statsForCell(cell)
             val offset = cell * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
             packed[offset] = stats.p10
             packed[offset + 1] = stats.p50

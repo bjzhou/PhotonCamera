@@ -21,6 +21,9 @@ internal object DngPhotonProfileGainTableGenerator {
     private const val LOW_CURVE_LIFT = 1.50f
     private const val MAX_LOCAL_CONTRAST = 0.18f
     private const val MAX_LOCAL_CONTRAST_EXPONENT = 1.18f
+    private const val MAX_LOCAL_HIGHLIGHT_RECOVERY = 0.42f
+    private const val LOCAL_LEVEL_EPS = 0.006f
+    private const val RECOVERY_EDGE_SIGMA_EV = 0.75f
 
     // Invert the exact LUT used by the renderer so PGTM + ProfileToneCurve, as a pair,
     // places exposed 18% gray at +1.1 EV.
@@ -139,7 +142,10 @@ internal object DngPhotonProfileGainTableGenerator {
         noiseSlope: Float,
         noiseOffset: Float,
     ): Array<PhotonPgtmCellPlan> {
-        val rawStrength = FloatArray(cells.size) { index ->
+        val cellLevelEv = FloatArray(cells.size) { index ->
+            log2((cells[index] ?: global).p50 + LOCAL_LEVEL_EPS)
+        }
+        val rawContrast = FloatArray(cells.size) { index ->
             val cell = cells[index] ?: global
             val signal = cell.p50.coerceAtLeast(0f)
             val variance = max(noiseSlope * signal + noiseOffset, 1e-12f)
@@ -147,21 +153,54 @@ internal object DngPhotonProfileGainTableGenerator {
             val snrGate = smoothStep(3f, 16f, snr)
             val rangeEv = log2((cell.p90 + 0.006f) / (cell.p10 + 0.006f))
             val lowContrastOpportunity = 1f - smoothStep(2.5f, 6f, rangeEv)
-            val highlightGate = 1f - 0.80f * smoothStep(
+            // Highlight-rich cells still need texture separation. Reducing this to 20% made
+            // foliage and architecture behind a bright window collapse into one pale band.
+            val highlightDetailGate = 1f - 0.35f * smoothStep(
                 0.08f,
                 0.55f,
                 cell.highlightFraction,
             )
-            ((0.08f + 0.10f * lowContrastOpportunity) * snrGate * highlightGate)
+            ((0.08f + 0.10f * lowContrastOpportunity) * snrGate * highlightDetailGate)
                 .coerceIn(0f, MAX_LOCAL_CONTRAST)
         }
-        val smoothedContrast = smoothScalarField(rawStrength, grid)
+        val rawHighlightRecovery = FloatArray(cells.size) { index ->
+            val cell = cells[index] ?: global
+            val signal = cell.p50.coerceAtLeast(0f)
+            val variance = max(noiseSlope * signal + noiseOffset, 1e-12f)
+            val snr = signal / sqrt(variance)
+            val snrGate = smoothStep(3f, 16f, snr)
+            val medianOffsetEv = log2(
+                (cell.p50 + LOCAL_LEVEL_EPS) / (global.p50 + LOCAL_LEVEL_EPS)
+            )
+            val upperOffsetEv = log2(
+                (cell.p90 + LOCAL_LEVEL_EPS) / (global.p90 + LOCAL_LEVEL_EPS)
+            )
+            val brightRegion = smoothStep(
+                0.20f,
+                1.25f,
+                max(medianOffsetEv, 0.5f * upperOffsetEv),
+            )
+            val highlightOccupancy = smoothStep(0.08f, 0.65f, cell.highlightFraction)
+            (MAX_LOCAL_HIGHLIGHT_RECOVERY * brightRegion * highlightOccupancy * snrGate)
+                .coerceIn(0f, MAX_LOCAL_HIGHLIGHT_RECOVERY)
+        }
+        val smoothedContrast = smoothScalarField(rawContrast, grid)
+        // Bilateral weighting prevents the recovery field from spilling across a strong window
+        // boundary. The DNG renderer supplies the final continuous interpolation between cells.
+        val smoothedHighlightRecovery = smoothScalarField(
+            source = rawHighlightRecovery,
+            grid = grid,
+            guide = cellLevelEv,
+            edgeSigma = RECOVERY_EDGE_SIGMA_EV,
+        )
         return Array(cells.size) { index ->
             val contrastExponent = (
                 1f + smoothedContrast[index].coerceIn(0f, MAX_LOCAL_CONTRAST)
                 ).coerceIn(1f, MAX_LOCAL_CONTRAST_EXPONENT)
             PhotonPgtmCellPlan(
                 contrastExponent = contrastExponent,
+                highlightRecovery = smoothedHighlightRecovery[index]
+                    .coerceIn(0f, MAX_LOCAL_HIGHLIGHT_RECOVERY),
             )
         }
     }
@@ -169,6 +208,8 @@ internal object DngPhotonProfileGainTableGenerator {
     private fun smoothScalarField(
         source: FloatArray,
         grid: HdrPgtmGrid,
+        guide: FloatArray? = null,
+        edgeSigma: Float = 1f,
     ): FloatArray = FloatArray(source.size) { index ->
         val x = index % grid.mapPointsH
         val y = index / grid.mapPointsH
@@ -183,11 +224,21 @@ internal object DngPhotonProfileGainTableGenerator {
                     dx == 0 || dy == 0 -> 2f
                     else -> 1f
                 }
-                weightedSum += source[yy * grid.mapPointsH + xx] * weight
-                weightSum += weight
+                val neighbor = yy * grid.mapPointsH + xx
+                val edgeWeight = if (guide == null) {
+                    1f
+                } else {
+                    exp(
+                        (-kotlin.math.abs(guide[neighbor] - guide[index]) /
+                            edgeSigma.coerceAtLeast(SOURCE_EPS)).toDouble()
+                    ).toFloat()
+                }
+                val combinedWeight = weight * edgeWeight
+                weightedSum += source[neighbor] * combinedWeight
+                weightSum += combinedWeight
             }
         }
-        weightedSum / weightSum
+        weightedSum / weightSum.coerceAtLeast(SOURCE_EPS)
     }
 
     /**
@@ -261,7 +312,10 @@ internal data class PhotonPgtmPlan(
         require(shoulderParameter.isFinite())
         require(minTableGain > 0f && maxTableGain >= minTableGain)
         val invalidCell = cellPlans.indexOfFirst { cellPlan ->
-            !cellPlan.contrastExponent.isFinite() || cellPlan.contrastExponent !in 1f..1.18f
+            !cellPlan.contrastExponent.isFinite() ||
+                cellPlan.contrastExponent !in 1f..1.18f ||
+                !cellPlan.highlightRecovery.isFinite() ||
+                cellPlan.highlightRecovery !in 0f..0.42f
         }
         require(invalidCell < 0) {
             "Invalid Photon PGTM cell[$invalidCell]=${cellPlans.getOrNull(invalidCell)} " +
@@ -272,4 +326,5 @@ internal data class PhotonPgtmPlan(
 
 internal data class PhotonPgtmCellPlan(
     val contrastExponent: Float,
+    val highlightRecovery: Float,
 )

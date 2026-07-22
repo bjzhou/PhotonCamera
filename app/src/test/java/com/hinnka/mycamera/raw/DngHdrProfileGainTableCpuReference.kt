@@ -72,6 +72,7 @@ internal object DngHdrProfileGainTableCpuReference {
                 val warpedInput = localContrastWarp(
                     exposedInput = exposedInput,
                     contrastExponent = cellPlan.contrastExponent,
+                    highlightRecovery = cellPlan.highlightRecovery,
                     photonPlan = photonPlan,
                 )
                 val output = globalCurve(warpedInput, photonPlan)
@@ -107,6 +108,7 @@ internal object DngHdrProfileGainTableCpuReference {
     private fun localContrastWarp(
         exposedInput: Float,
         contrastExponent: Float,
+        highlightRecovery: Float,
         photonPlan: PhotonPgtmPlan,
     ): Float {
         val pivot = photonPlan.exposedPivot
@@ -116,9 +118,12 @@ internal object DngHdrProfileGainTableCpuReference {
             pivot * normalized.pow(contrastExponent)
         } else {
             val normalized = (
-                (endpoint - exposedInput) / max(endpoint - pivot, CURVE_EPS)
+                (exposedInput - pivot) / max(endpoint - pivot, CURVE_EPS)
                 ).coerceIn(0f, 1f)
-            endpoint - (endpoint - pivot) * normalized.pow(contrastExponent)
+            val contrasted = 1f - (1f - normalized).pow(contrastExponent)
+            val recovered = contrasted -
+                highlightRecovery * contrasted * (1f - contrasted)
+            pivot + (endpoint - pivot) * recovered.coerceIn(0f, 1f)
         }
     }
 

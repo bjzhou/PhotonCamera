@@ -2439,7 +2439,7 @@ class RawDemosaicProcessor {
 
             val curvePlanFloatCount = when (plan.curveModel) {
                 HdrPgtmCurveModel.GOOGLE -> cellCount * 3
-                HdrPgtmCurveModel.PHOTON -> cellCount
+                HdrPgtmCurveModel.PHOTON -> cellCount * 2
             }
             val curvePlanBuffer = ByteBuffer.allocateDirect(
                 curvePlanFloatCount * Float.SIZE_BYTES
@@ -2460,6 +2460,7 @@ class RawDemosaicProcessor {
                     val photonPlan = requireNotNull(plan.photonPlan)
                     photonPlan.cellPlans.forEach { cellPlan ->
                         curvePlanBuffer.put(cellPlan.contrastExponent)
+                        curvePlanBuffer.put(cellPlan.highlightRecovery)
                     }
                 }
             }
@@ -2606,11 +2607,19 @@ class RawDemosaicProcessor {
             val curvesGpuReadyNs = System.nanoTime()
             val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
             val photonSummary = plan.photonPlan?.let { photonPlan ->
+                val recoveryMean = photonPlan.cellPlans
+                    .sumOf { it.highlightRecovery.toDouble() } /
+                    photonPlan.cellPlans.size.coerceAtLeast(1)
+                val recoveryMax = photonPlan.cellPlans.maxOfOrNull {
+                    it.highlightRecovery
+                } ?: 0f
                 " photonBaselineGain=${photonPlan.exposureGain} " +
                     "photonPivotSource=${photonPlan.sourcePivot} " +
                     "photonFixedGray=${photonPlan.usesFixedGray} " +
                     "photonGamma=${plan.gamma} " +
-                    "photonEndpoint=${photonPlan.endpointOutput} "
+                    "photonEndpoint=${photonPlan.endpointOutput} " +
+                    "photonRecoveryMean=$recoveryMean " +
+                    "photonRecoveryMax=$recoveryMax "
             }.orEmpty()
             PLog.d(
                 TAG,

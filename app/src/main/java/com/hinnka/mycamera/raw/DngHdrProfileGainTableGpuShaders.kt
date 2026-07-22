@@ -402,7 +402,11 @@ internal object DngHdrProfileGainTableGpuShaders {
             return clamp(min(enter, exit), 0.0, 1.0);
         }
 
-        float localContrastWarp(float exposedInput, float contrastExponent) {
+        float localContrastWarp(
+            float exposedInput,
+            float contrastExponent,
+            float highlightRecovery
+        ) {
             float endpoint = max(uExposureGain, uExposedPivot + CURVE_EPS);
             if (exposedInput <= uExposedPivot) {
                 float normalized = clamp(
@@ -413,13 +417,19 @@ internal object DngHdrProfileGainTableGpuShaders {
                 return uExposedPivot * pow(normalized, contrastExponent);
             }
             float normalized = clamp(
-                (endpoint - exposedInput) /
+                (exposedInput - uExposedPivot) /
                     max(endpoint - uExposedPivot, CURVE_EPS),
                 0.0,
                 1.0
             );
-            return endpoint -
-                (endpoint - uExposedPivot) * pow(normalized, contrastExponent);
+            float contrasted = 1.0 - pow(1.0 - normalized, contrastExponent);
+            // Move the crowded shoulder midrange down while preserving both the gray pivot and
+            // source-white endpoint. k < 1 keeps this quadratic warp strictly monotonic and its
+            // finite endpoint slope avoids amplifying clipped/noisy samples.
+            float recovered = contrasted -
+                highlightRecovery * contrasted * (1.0 - contrasted);
+            return uExposedPivot +
+                (endpoint - uExposedPivot) * clamp(recovered, 0.0, 1.0);
         }
 
         float lowCurve(float exposedInput) {
@@ -460,7 +470,9 @@ internal object DngHdrProfileGainTableGpuShaders {
             int cellIndex = int(gl_GlobalInvocationID.x);
             if (cellIndex >= uCellCount) return;
 
-            float contrastExponent = clamp(curvePlans[cellIndex], 1.0, 1.18);
+            int planOffset = cellIndex * 2;
+            float contrastExponent = clamp(curvePlans[planOffset], 1.0, 1.18);
+            float highlightRecovery = clamp(curvePlans[planOffset + 1], 0.0, 1.0);
             float previousFinalOutput = 0.0;
             int outputOffset = cellIndex * uPointCount;
             for (int point = 0; point < uPointCount; ++point) {
@@ -469,7 +481,11 @@ internal object DngHdrProfileGainTableGpuShaders {
                     : float(point) / float(uPointCount);
                 float sourceInput = pow(max(tableInput, 0.0), 1.0 / uMapGamma);
                 float exposedInput = uExposureGain * sourceInput;
-                float warpedInput = localContrastWarp(exposedInput, contrastExponent);
+                float warpedInput = localContrastWarp(
+                    exposedInput,
+                    contrastExponent,
+                    highlightRecovery
+                );
                 float mappedOutput = globalCurve(warpedInput);
                 float trueGain = exposedInput <= CURVE_EPS
                     ? clamp(uLowSlope, uMinTableGain, uMaxTableGain)
