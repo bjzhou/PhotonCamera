@@ -464,6 +464,9 @@
     <string name="settings_log_viewer">Log Viewer</string>
     <string name="settings_log_viewer_description">View and export app logs for diagnostics</string>
     <string name="logs">Logs</string>
+    <string name="log_download">Download logs</string>
+    <string name="log_download_success">Saved to Downloads as %1$s</string>
+    <string name="log_download_failed">Failed to download logs</string>
 
     <!-- Filter/Frame Management -->
     <string name="settings_section_management">Content Management</string>

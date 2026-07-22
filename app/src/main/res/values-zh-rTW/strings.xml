@@ -459,6 +459,9 @@
     <string name="settings_log_viewer">日志收集</string>
     <string name="settings_log_viewer_description">查看和匯出應用日志，用于問題診斷</string>
     <string name="logs">日志</string>
+    <string name="log_download">下載日誌</string>
+    <string name="log_download_success">日誌已下載至 Downloads：%1$s</string>
+    <string name="log_download_failed">日誌下載失敗</string>
 
     <!-- 濾鏡/邊框管理 -->
     <string name="settings_section_management">內容管理</string>
