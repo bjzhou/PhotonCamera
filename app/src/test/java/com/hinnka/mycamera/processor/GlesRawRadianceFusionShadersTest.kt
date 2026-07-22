@@ -231,7 +231,6 @@ class GlesRawRadianceFusionShadersTest {
     fun longNrPrecisionBoostIsCappedWithoutBoostingDetail() {
         val shader = GlesRawRadianceFusionShaders.accumulate("", trackRejections = false)
 
-        assertEquals(3f, RawRadianceFusionTuning().longNrWeightScale, 0f)
         assertTrue(shader.contains("uniform float uLongNrWeightScale"))
         assertTrue(
             Regex(

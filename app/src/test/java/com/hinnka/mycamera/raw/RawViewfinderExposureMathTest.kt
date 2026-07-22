@@ -5,12 +5,13 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
 class RawViewfinderExposureMathTest {
     @Test
-    fun displayLinearLogRatioTracksOneStopForUnclippedMidtones() {
+    fun meanPerceptualBrightnessTracksDisplayedMidtoneDifference() {
         val referencePixels = grayscalePixels(8, 8, linearLuma = 0.18f)
         val reference = buildReference(referencePixels, 8, 8)
 
@@ -22,18 +23,50 @@ class RawViewfinderExposureMathTest {
         )
 
         assertNotNull(match)
-        assertEquals(1f, match!!.matchLog2Error, 0.02f)
+        val expected = log2(srgbCode(0.36f) / srgbCode(0.18f))
+        assertEquals(expected, match!!.matchLog2Error, 0.001f)
+        assertTrue(match.matchLog2Error > 0f)
     }
 
     @Test
-    fun clippedReferencePixelsNeverEnterCandidateSampleSet() {
+    fun solverRecoversOneStopAcrossMixedToneDistribution() {
+        val width = 16
+        val height = 16
+        val lumas = floatArrayOf(0.02f, 0.05f, 0.10f, 0.20f)
+        val referencePixels = IntArray(width * height) { index ->
+            grayscaleArgb(lumas[index % lumas.size])
+        }
+        val targetPixels = IntArray(width * height) { index ->
+            grayscaleArgb(lumas[index % lumas.size] * 2f)
+        }
+        val reference = buildReference(targetPixels, width, height)
+
+        val solvedEv = RawViewfinderExposureMath.solve { exposureEv ->
+            val exposureGain = 2f.pow(exposureEv)
+            val candidatePixels = IntArray(width * height) { index ->
+                grayscaleArgb(lumas[index % lumas.size] * exposureGain)
+            }
+            RawViewfinderExposureMath.evaluate(
+                reference = reference,
+                pixels = candidatePixels,
+                width = width,
+                height = height,
+            )?.matchLog2Error
+        }
+
+        assertNotNull(solvedEv)
+        assertEquals(1f, solvedEv!!, 0.03f)
+    }
+
+    @Test
+    fun displayedEndpointsRemainPartOfOverallBrightness() {
         val width = 10
         val height = 10
         val referencePixels = grayscalePixels(width, height, linearLuma = 0.18f)
         for (index in 0 until 20) referencePixels[index] = grayscaleArgb(0f)
         for (index in 20 until 40) referencePixels[index] = grayscaleArgb(1f)
         val reference = buildReference(referencePixels, width, height)
-        assertEquals(60, reference.sampleCount)
+        assertEquals(100, reference.sampleCount)
 
         val candidatePixels = grayscalePixels(width, height, linearLuma = 0.36f)
         for (index in 0 until 20) candidatePixels[index] = grayscaleArgb(1f)
@@ -46,20 +79,20 @@ class RawViewfinderExposureMathTest {
         )
 
         assertNotNull(match)
-        assertEquals(60, match!!.sampleCount)
-        assertEquals(1f, match.matchLog2Error, 0.02f)
+        assertEquals(100, match!!.referenceSampleCount)
+        assertEquals(100, match.candidateSampleCount)
+        assertTrue(match.matchLog2Error > 0f)
     }
 
     @Test
-    fun candidateClippingInsideReferenceSampleSetRemainsAVisibleError() {
-        val width = 8
-        val height = 8
-        val referencePixels = grayscalePixels(width, height, linearLuma = 0.18f)
-        val reference = buildReference(referencePixels, width, height)
-        val candidatePixels = grayscalePixels(width, height, linearLuma = 0.36f)
-        for (index in 0 until candidatePixels.size / 2) {
-            candidatePixels[index] = grayscaleArgb(0f)
+    fun spatiallyRearrangedBrightnessDistributionStillMatches() {
+        val width = 10
+        val height = 10
+        val referencePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index < 40) 0.04f else 0.32f)
         }
+        val reference = buildReference(referencePixels, width, height)
+        val candidatePixels = referencePixels.reversedArray()
 
         val match = RawViewfinderExposureMath.evaluate(
             reference = reference,
@@ -69,16 +102,47 @@ class RawViewfinderExposureMathTest {
         )
 
         assertNotNull(match)
-        assertTrue(match!!.matchLog2Error < -1f)
+        assertEquals(0f, match!!.matchLog2Error, 0.001f)
+        assertEquals(0f, match.quantileSpreadLog2, 0.001f)
     }
 
     @Test
-    fun crushedShadowsDoNotDriveHighContrastSceneTowardOverexposure() {
-        val width = 8
-        val height = 8
+    fun opposingTonalShiftsStillProduceOverallBrightnessError() {
+        val width = 10
+        val height = 10
+        val referencePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index < 60) 0.08f else 0.24f)
+        }
+        val candidatePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index < 60) 0.04f else 0.48f)
+        }
+        val reference = buildReference(referencePixels, width, height)
+
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(match)
+        assertTrue(match!!.quantileSpreadLog2 > 0.75f)
+        assertTrue(match.matchLog2Error.isFinite())
+        val expected = log2(
+            match.candidatePerceptualBrightnessMean /
+                match.referencePerceptualBrightnessMean
+        )
+        assertEquals(expected, match.matchLog2Error, 0.001f)
+    }
+
+    @Test
+    fun largeDarkAreaContributesToOverallPerceivedBrightness() {
+        val width = 16
+        val height = 16
         val referencePixels = grayscalePixels(width, height, linearLuma = 0.01f)
         val candidatePixels = grayscalePixels(width, height, linearLuma = 0.001f)
-        for (index in 48 until referencePixels.size) {
+        val highlightStart = referencePixels.size * 3 / 4
+        for (index in highlightStart until referencePixels.size) {
             referencePixels[index] = grayscaleArgb(0.64f)
             candidatePixels[index] = grayscaleArgb(0.64f)
         }
@@ -92,8 +156,7 @@ class RawViewfinderExposureMathTest {
         )
 
         assertNotNull(match)
-        assertEquals(0f, match!!.medianLog2Error, 0.001f)
-        assertEquals(0f, match.matchLog2Error, 0.1f)
+        assertTrue(match!!.matchLog2Error < 0f)
 
         val solvedEv = RawViewfinderExposureMath.solve { exposureEv ->
             val exposureGain = 2f.pow(exposureEv)
@@ -102,7 +165,7 @@ class RawViewfinderExposureMathTest {
                 height,
                 linearLuma = 0.001f * exposureGain,
             )
-            for (index in 48 until renderedPixels.size) {
+            for (index in highlightStart until renderedPixels.size) {
                 renderedPixels[index] = grayscaleArgb(0.64f * exposureGain)
             }
             RawViewfinderExposureMath.evaluate(
@@ -114,17 +177,58 @@ class RawViewfinderExposureMathTest {
         }
 
         assertNotNull(solvedEv)
-        assertEquals(0f, solvedEv!!, 0.15f)
+        assertTrue(solvedEv!! > 1f)
+        assertTrue(solvedEv < 2f)
     }
 
     @Test
-    fun referenceWithOnlyClippedPixelsIsRejected() {
+    fun referenceWithBlackAndWhiteEndpointsHasDefinedBrightness() {
         val pixels = IntArray(64) { index ->
             if (index % 2 == 0) grayscaleArgb(0f) else grayscaleArgb(1f)
         }
 
         val reference = RawViewfinderExposureMath.buildReference(
             pixels = pixels,
+            width = 8,
+            height = 8,
+            left = 0,
+            top = 0,
+            right = 8,
+            bottom = 8,
+        )
+
+        assertNotNull(reference)
+        assertEquals(0.5f, reference!!.perceptualBrightnessMean, 0.001f)
+    }
+
+    @Test
+    fun candidateWithBlackAndWhiteEndpointsHasDefinedBrightness() {
+        val width = 8
+        val height = 8
+        val reference = buildReference(
+            grayscalePixels(width, height, linearLuma = 0.18f),
+            width,
+            height,
+        )
+        val candidatePixels = IntArray(width * height) { index ->
+            if (index % 2 == 0) grayscaleArgb(0f) else grayscaleArgb(1f)
+        }
+
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(match)
+        assertEquals(0.5f, match!!.candidatePerceptualBrightnessMean, 0.001f)
+    }
+
+    @Test
+    fun fullyTransparentReferenceIsUnavailable() {
+        val reference = RawViewfinderExposureMath.buildReference(
+            pixels = IntArray(64),
             width = 8,
             height = 8,
             left = 0,
@@ -217,5 +321,13 @@ class RawViewfinderExposureMathTest {
             1.055f * clamped.pow(1f / 2.4f) - 0.055f
         }
         return (srgb * 255f).roundToInt().coerceIn(0, 255)
+    }
+
+    private fun srgbCode(linearLuma: Float): Float {
+        return linearToSrgbByte(linearLuma) / 255f
+    }
+
+    private fun log2(value: Float): Float {
+        return (ln(value.toDouble()) / ln(2.0)).toFloat()
     }
 }

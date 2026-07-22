@@ -9,19 +9,29 @@ import kotlin.math.pow
  *
  * Both inputs are tone-mapped 8-bit sRGB previews. Converting their surviving code values back
  * to display-linear light does not recover scene-linear RAW data; it only makes the logarithmic
- * ratio describe a ratio of displayed light. Reference pixels clipped near black or white are
- * excluded once and the same fixed sample set is used for every rendered candidate. Errors are
- * weighted by the reference pixel's perceptual brightness so large dark regions cannot dominate
- * a high-contrast scene merely because the logarithmic domain expands their residuals.
+ * ratio describe a ratio of displayed light. Overall exposure is matched from the mean perceived
+ * brightness of the same fixed image area, including displayed black and white endpoints. This
+ * remains defined when local tone mapping changes the shape of the tonal distribution and does not
+ * require pixel correspondence. Quantile shifts are retained only as diagnostics for that shape.
  */
 internal object RawViewfinderExposureMath {
-    private const val DISPLAY_LINEAR_LUMA_FLOOR = 0.001f
-    private const val REFERENCE_CLIP_LOW_LUMA = 0.002f
-    private const val REFERENCE_CLIP_HIGH_LUMA = 0.995f
-    private const val MIN_REFERENCE_SAMPLE_COUNT = 32
-    private const val TRIM_LOW_FRACTION = 0.25f
-    private const val TRIM_HIGH_FRACTION = 0.75f
-    private const val MEDIAN_WEIGHT = 0.55f
+    private const val PERCEPTUAL_BRIGHTNESS_FLOOR = 1f / 255f
+    private const val MIN_SAMPLE_COUNT = 32
+    private const val QUANTILE_TRIM_LOW_FRACTION = 0.15f
+    private const val QUANTILE_TRIM_HIGH_FRACTION = 0.85f
+    private const val QUANTILE_SPREAD_LOW_FRACTION = 0.15f
+    private const val QUANTILE_SPREAD_HIGH_FRACTION = 0.85f
+
+    private val MATCH_QUANTILES = floatArrayOf(
+        0.20f,
+        0.30f,
+        0.40f,
+        0.50f,
+        0.60f,
+        0.70f,
+        0.80f,
+    )
+    private val MATCH_QUANTILE_WEIGHTS = floatArrayOf(1f, 2f, 3f, 4f, 3f, 2f, 1f)
 
     private const val MAX_SOLVE_STEPS = 4
     private const val MATCH_LOG2_TOLERANCE = 0.05f
@@ -37,26 +47,39 @@ internal object RawViewfinderExposureMath {
     data class Reference(
         val width: Int,
         val height: Int,
-        val pixelIndices: IntArray,
-        val targetLog2DisplayLinearLumas: FloatArray,
-        val perceptualWeights: FloatArray,
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int,
+        val targetLog2PerceptualBrightness: Float,
+        val targetQuantileLog2Lumas: FloatArray,
+        val sampleCount: Int,
+        val perceptualBrightnessMean: Float,
     ) {
         init {
-            require(pixelIndices.size == targetLog2DisplayLinearLumas.size)
-            require(pixelIndices.size == perceptualWeights.size)
-            require(perceptualWeights.all { it.isFinite() && it > 0f })
+            require(targetLog2PerceptualBrightness.isFinite())
+            require(targetQuantileLog2Lumas.size == MATCH_QUANTILES.size)
+            require(targetQuantileLog2Lumas.all { it.isFinite() })
+            require(sampleCount >= MIN_SAMPLE_COUNT)
+            require(perceptualBrightnessMean.isFinite() && perceptualBrightnessMean >= 0f)
         }
-
-        val sampleCount: Int
-            get() = pixelIndices.size
     }
 
     data class MatchResult(
         val matchLog2Error: Float,
-        val medianLog2Error: Float,
-        val trimmedMeanLog2Error: Float,
+        val quantileMedianLog2Error: Float,
+        val quantileTrimmedMeanLog2Error: Float,
+        val quantileSpreadLog2: Float,
+        val referenceSampleCount: Int,
+        val candidateSampleCount: Int,
+        val referencePerceptualBrightnessMean: Float,
+        val candidatePerceptualBrightnessMean: Float,
+    )
+
+    private data class LumaDistribution(
+        val sortedLog2PerceptualBrightness: FloatArray,
+        val perceptualBrightnessMean: Float,
         val sampleCount: Int,
-        val perceptualWeightSum: Float,
     )
 
     private data class SolverSample(
@@ -80,33 +103,30 @@ internal object RawViewfinderExposureMath {
         val safeBottom = bottom.coerceIn(safeTop, height)
         if (safeLeft >= safeRight || safeTop >= safeBottom) return null
 
-        val capacity = (safeRight - safeLeft) * (safeBottom - safeTop)
-        val pixelIndices = IntArray(capacity)
-        val targetLogLumas = FloatArray(capacity)
-        val perceptualWeights = FloatArray(capacity)
-        var sampleCount = 0
-        for (y in safeTop until safeBottom) {
-            for (x in safeLeft until safeRight) {
-                val pixelIndex = y * width + x
-                val targetLuma = displayLinearLuma(pixels[pixelIndex]) ?: continue
-                if (targetLuma <= REFERENCE_CLIP_LOW_LUMA ||
-                    targetLuma >= REFERENCE_CLIP_HIGH_LUMA
-                ) {
-                    continue
-                }
-                pixelIndices[sampleCount] = pixelIndex
-                targetLogLumas[sampleCount] = log2(targetLuma)
-                perceptualWeights[sampleCount] = linearToSrgb(targetLuma)
-                sampleCount++
-            }
-        }
-        if (sampleCount < MIN_REFERENCE_SAMPLE_COUNT) return null
+        val distribution = buildDistribution(
+            pixels = pixels,
+            width = width,
+            left = safeLeft,
+            top = safeTop,
+            right = safeRight,
+            bottom = safeBottom,
+        ) ?: return null
+        if (distribution.sampleCount < MIN_SAMPLE_COUNT) return null
         return Reference(
             width = width,
             height = height,
-            pixelIndices = pixelIndices.copyOf(sampleCount),
-            targetLog2DisplayLinearLumas = targetLogLumas.copyOf(sampleCount),
-            perceptualWeights = perceptualWeights.copyOf(sampleCount),
+            left = safeLeft,
+            top = safeTop,
+            right = safeRight,
+            bottom = safeBottom,
+            targetLog2PerceptualBrightness = log2(
+                distribution.perceptualBrightnessMean.coerceAtLeast(
+                    PERCEPTUAL_BRIGHTNESS_FLOOR
+                )
+            ),
+            targetQuantileLog2Lumas = distribution.quantiles(),
+            sampleCount = distribution.sampleCount,
+            perceptualBrightnessMean = distribution.perceptualBrightnessMean,
         )
     }
 
@@ -119,43 +139,119 @@ internal object RawViewfinderExposureMath {
         if (width != reference.width ||
             height != reference.height ||
             pixels.size < width * height ||
-            reference.sampleCount < MIN_REFERENCE_SAMPLE_COUNT
+            reference.sampleCount < MIN_SAMPLE_COUNT
         ) {
             return null
         }
 
-        val log2Errors = FloatArray(reference.sampleCount)
-        val perceptualWeights = reference.perceptualWeights.copyOf()
-        for (sampleIndex in reference.pixelIndices.indices) {
-            val pixelIndex = reference.pixelIndices[sampleIndex]
-            val renderedLuma = displayLinearLuma(pixels[pixelIndex])
-                ?.coerceAtLeast(DISPLAY_LINEAR_LUMA_FLOOR)
-                ?: DISPLAY_LINEAR_LUMA_FLOOR
-            log2Errors[sampleIndex] =
-                log2(renderedLuma) - reference.targetLog2DisplayLinearLumas[sampleIndex]
+        val distribution = buildDistribution(
+            pixels = pixels,
+            width = width,
+            left = reference.left,
+            top = reference.top,
+            right = reference.right,
+            bottom = reference.bottom,
+        ) ?: return null
+        val candidateQuantiles = distribution.quantiles()
+        val meanBrightnessError = log2(
+            distribution.perceptualBrightnessMean.coerceAtLeast(PERCEPTUAL_BRIGHTNESS_FLOOR)
+        ) - reference.targetLog2PerceptualBrightness
+        val quantileErrors = FloatArray(MATCH_QUANTILES.size) { index ->
+            candidateQuantiles[index] - reference.targetQuantileLog2Lumas[index]
         }
-        sortPairsByFirst(log2Errors, perceptualWeights)
-
-        var weightSum = 0.0
-        for (weight in perceptualWeights) weightSum += weight.toDouble()
-        if (!weightSum.isFinite() || weightSum <= 0.0) return null
-        val median = weightedMedian(log2Errors, perceptualWeights, weightSum)
+        val quantileWeights = MATCH_QUANTILE_WEIGHTS.copyOf()
+        sortPairsByFirst(quantileErrors, quantileWeights)
+        val quantileWeightSum = quantileWeights.sumOf { it.toDouble() }
+        val median = weightedMedian(quantileErrors, quantileWeights, quantileWeightSum)
         val trimmedMean = weightedTrimmedMean(
-            sortedValues = log2Errors,
-            sortedWeights = perceptualWeights,
-            weightSum = weightSum,
-            lowFraction = TRIM_LOW_FRACTION,
-            highFraction = TRIM_HIGH_FRACTION,
+            sortedValues = quantileErrors,
+            sortedWeights = quantileWeights,
+            weightSum = quantileWeightSum,
+            lowFraction = QUANTILE_TRIM_LOW_FRACTION,
+            highFraction = QUANTILE_TRIM_HIGH_FRACTION,
         )
-        val matchError = median * MEDIAN_WEIGHT + trimmedMean * (1f - MEDIAN_WEIGHT)
-        if (!matchError.isFinite()) return null
+        val spreadLow = weightedQuantile(
+            quantileErrors,
+            quantileWeights,
+            quantileWeightSum,
+            QUANTILE_SPREAD_LOW_FRACTION,
+        )
+        val spreadHigh = weightedQuantile(
+            quantileErrors,
+            quantileWeights,
+            quantileWeightSum,
+            QUANTILE_SPREAD_HIGH_FRACTION,
+        )
+        val quantileSpread = (spreadHigh - spreadLow).coerceAtLeast(0f)
+        if (!meanBrightnessError.isFinite() ||
+            !median.isFinite() ||
+            !trimmedMean.isFinite() ||
+            !quantileSpread.isFinite()
+        ) {
+            return null
+        }
         return MatchResult(
-            matchLog2Error = matchError,
-            medianLog2Error = median,
-            trimmedMeanLog2Error = trimmedMean,
-            sampleCount = reference.sampleCount,
-            perceptualWeightSum = weightSum.toFloat(),
+            matchLog2Error = meanBrightnessError,
+            quantileMedianLog2Error = median,
+            quantileTrimmedMeanLog2Error = trimmedMean,
+            quantileSpreadLog2 = quantileSpread,
+            referenceSampleCount = reference.sampleCount,
+            candidateSampleCount = distribution.sampleCount,
+            referencePerceptualBrightnessMean = reference.perceptualBrightnessMean,
+            candidatePerceptualBrightnessMean = distribution.perceptualBrightnessMean,
         )
+    }
+
+    private fun buildDistribution(
+        pixels: IntArray,
+        width: Int,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+    ): LumaDistribution? {
+        val capacity = (right - left) * (bottom - top)
+        if (capacity <= 0) return null
+        val log2PerceptualBrightness = FloatArray(capacity)
+        var sampleCount = 0
+        var perceptualBrightnessSum = 0.0
+        for (y in top until bottom) {
+            for (x in left until right) {
+                val luma = displayLinearLuma(pixels[y * width + x]) ?: continue
+                val perceptualBrightness = linearToSrgb(luma)
+                perceptualBrightnessSum += perceptualBrightness.toDouble()
+                log2PerceptualBrightness[sampleCount] = log2(
+                    perceptualBrightness.coerceAtLeast(PERCEPTUAL_BRIGHTNESS_FLOOR)
+                )
+                sampleCount++
+            }
+        }
+        if (sampleCount < MIN_SAMPLE_COUNT) return null
+        val sortedBrightness = log2PerceptualBrightness.copyOf(sampleCount)
+        sortedBrightness.sort()
+        val perceptualBrightnessMean = (perceptualBrightnessSum / sampleCount).toFloat()
+        if (!perceptualBrightnessMean.isFinite()) return null
+        return LumaDistribution(
+            sortedLog2PerceptualBrightness = sortedBrightness,
+            perceptualBrightnessMean = perceptualBrightnessMean,
+            sampleCount = sampleCount,
+        )
+    }
+
+    private fun LumaDistribution.quantiles(): FloatArray {
+        return FloatArray(MATCH_QUANTILES.size) { index ->
+            unweightedQuantile(sortedLog2PerceptualBrightness, MATCH_QUANTILES[index])
+        }
+    }
+
+    private fun unweightedQuantile(sortedValues: FloatArray, quantile: Float): Float {
+        if (sortedValues.size == 1) return sortedValues[0]
+        val position = quantile.coerceIn(0f, 1f) * sortedValues.lastIndex
+        val lowerIndex = position.toInt().coerceIn(0, sortedValues.lastIndex)
+        val upperIndex = (lowerIndex + 1).coerceAtMost(sortedValues.lastIndex)
+        val fraction = position - lowerIndex
+        return sortedValues[lowerIndex] * (1f - fraction) +
+            sortedValues[upperIndex] * fraction
     }
 
     /**
@@ -277,8 +373,15 @@ internal object RawViewfinderExposureMath {
         sortedValues: FloatArray,
         sortedWeights: FloatArray,
         weightSum: Double,
+    ): Float = weightedQuantile(sortedValues, sortedWeights, weightSum, 0.5f)
+
+    private fun weightedQuantile(
+        sortedValues: FloatArray,
+        sortedWeights: FloatArray,
+        weightSum: Double,
+        quantile: Float,
     ): Float {
-        val targetWeight = weightSum * 0.5
+        val targetWeight = weightSum * quantile.coerceIn(0f, 1f)
         val boundaryTolerance = maxOf(1e-12, weightSum * 1e-9)
         var cumulativeWeight = 0.0
         for (index in sortedValues.indices) {

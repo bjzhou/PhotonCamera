@@ -117,10 +117,15 @@ internal object RawViewfinderExposureMatcher {
             TAG,
             "RAW viewfinder sample: exposureEv=$exposureEv " +
                 "matchLog2Error=${match.matchLog2Error} " +
-                "medianLog2Error=${match.medianLog2Error} " +
-                "trimmedMeanLog2Error=${match.trimmedMeanLog2Error} " +
-                "sampleCount=${match.sampleCount} " +
-                "perceptualWeightSum=${match.perceptualWeightSum}"
+                "quantileMedianLog2Error=${match.quantileMedianLog2Error} " +
+                "quantileTrimmedMeanLog2Error=${match.quantileTrimmedMeanLog2Error} " +
+                "quantileSpreadLog2=${match.quantileSpreadLog2} " +
+                "referenceSampleCount=${match.referenceSampleCount} " +
+                "candidateSampleCount=${match.candidateSampleCount} " +
+                "referencePerceptualBrightnessMean=" +
+                "${match.referencePerceptualBrightnessMean} " +
+                "candidatePerceptualBrightnessMean=" +
+                "${match.candidatePerceptualBrightnessMean}"
         )
         return match.matchLog2Error
     }
