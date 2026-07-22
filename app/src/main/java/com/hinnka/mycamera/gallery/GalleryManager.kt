@@ -936,13 +936,31 @@ object GalleryManager {
     ): Boolean {
         return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
+            var quickShotSourceBitmap: Bitmap? = null
             try {
                 val shouldPreferHeic = preferHeicExport
                     ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
                         ?.useHeicExport ?: false)
                 val exportDestination = resolvePhotoExportDestination(context)
+                quickShotSourceBitmap = if (
+                    bitmap == null &&
+                    metadata.captureMode == "quick_shot" &&
+                    getOriginalImageFile(context, id) == null
+                ) {
+                    metadata.sourceUri
+                        ?.let(Uri::parse)
+                        ?.let { sourceUri -> loadBitmap(context, sourceUri) }
+                        .also { sourceBitmap ->
+                            if (sourceBitmap == null && !metadata.sourceUri.isNullOrBlank()) {
+                                PLog.w(TAG, "Unable to load quick-shot source for export: ${metadata.sourceUri}")
+                            }
+                        }
+                } else {
+                    null
+                }
+                val exportInputBitmap = bitmap ?: quickShotSourceBitmap
 
-                if (!shouldPreferHeic && bitmap == null && canReuseEmbeddedGainmap(metadata)) {
+                if (!shouldPreferHeic && exportInputBitmap == null && canReuseEmbeddedGainmap(metadata)) {
                     val embeddedBitmap = loadOriginalBitmap(context, id)
                     if (embeddedBitmap != null && hasBitmapGainmap(embeddedBitmap)) {
                         PLog.d(TAG, "Reusing embedded gainmap for export: $id")
@@ -1008,11 +1026,11 @@ object GalleryManager {
                         context, id, metadata,
                         sharpeningValue, noiseReductionValue, chromaNoiseReductionValue
                     )
-                } else bitmap?.let {
+                } else exportInputBitmap?.let {
                     photoProcessor.processBitmap(
                         context = context,
                         photoId = id,
-                        input = bitmap,
+                        input = exportInputBitmap,
                         metadata = bitmapPostMetadata,
                         sharpening = bitmapSharpeningValue,
                         noiseReduction = bitmapNoiseReductionValue,
@@ -1231,6 +1249,7 @@ object GalleryManager {
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to export photo", e)
             } finally {
+                quickShotSourceBitmap?.takeUnless { it.isRecycled }?.recycle()
                 tempExportFile.delete()
             }
 
