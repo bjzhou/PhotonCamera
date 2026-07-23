@@ -540,6 +540,8 @@
     <string name="favorite">Favorites</string>
     <string name="add_to_favorites">Add to Favorites</string>
     <string name="remove_from_favorites">Remove from Favorites</string>
+    <string name="favorite_empty_title">No favorites yet</string>
+    <string name="favorite_empty_message">Tap the star on a filter to find it here.</string>
     <string name="built_in">Built-in</string>
     <string name="custom">Custom</string>
     <string name="uncategorized">Uncategorized</string>

@@ -530,6 +530,8 @@
     <string name="favorite">收藏</string>
     <string name="add_to_favorites">加入收藏</string>
     <string name="remove_from_favorites">取消收藏</string>
+    <string name="favorite_empty_title">暂无收藏</string>
+    <string name="favorite_empty_message">点击滤镜上的星标，即可将它添加到这里。</string>
     <string name="built_in">内置</string>
     <string name="custom">自定义</string>
     <string name="uncategorized">未分类</string>

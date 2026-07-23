@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -621,6 +622,55 @@ fun FilterManagementScreen(
                         LaunchedEffect(result) {
                             kotlinx.coroutines.delay(3000)
                             importResult = null
+                        }
+                    }
+                }
+                if (
+                    categories.getOrNull(currentTabIndex) == favoriteText &&
+                    filteredLutList.isEmpty()
+                ) {
+                    item(key = "favorite_empty_state") {
+                        Box(
+                            modifier = Modifier
+                                .fillParentMaxSize()
+                                .padding(horizontal = 24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .background(
+                                            color = Color(0xFFFF6B35).copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(36.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.StarBorder,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF6B35),
+                                        modifier = Modifier.size(34.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Text(
+                                    text = stringResource(R.string.favorite_empty_title),
+                                    color = Color.White,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = stringResource(R.string.favorite_empty_message),
+                                    color = Color.White.copy(alpha = 0.55f),
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
