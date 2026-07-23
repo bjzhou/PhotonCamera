@@ -64,6 +64,16 @@ data class RawMetadata(
      */
     val cameraWhite: FloatArray = floatArrayOf(1f, 1f, 1f),
 
+    /** DNG color-spec/Camera2 matrices解出的实测白点色度坐标。 */
+    val whitePointXy: FloatArray? = null,
+
+    /** 由 [whitePointXy] 按 DNG SDK Robertson 表计算的相关色温。 */
+    val colorTemperature: Float? = null,
+
+    /** RAW 元数据中的原始制造商与型号；不用于猜测 HNCS profile。 */
+    val cameraMake: String? = null,
+    val cameraModel: String? = null,
+
     /**
      * 镜头阴影校正图（Gain Map）
      * 这是一个 4xNxM 的数组，N 和 M 是网格尺寸
@@ -270,6 +280,8 @@ data class RawMetadata(
             // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
             val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, captureResult, colorSpace)
             val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, captureResult)
+            val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, captureResult)
+            val colorTemperature = whitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
 
             // 6. 获取镜头阴影校正
             val shadingMap = captureResult.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
@@ -313,6 +325,8 @@ data class RawMetadata(
                 preMul = whiteBalanceGains.copyOf(),
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 cameraWhite = cameraWhite,
+                whitePointXy = whitePointXy,
+                colorTemperature = colorTemperature,
                 lensShadingMap = lensShadingMap,
                 lensShadingMapWidth = shadingWidth,
                 lensShadingMapHeight = shadingHeight,
@@ -504,6 +518,40 @@ data class RawMetadata(
                 calibrationIlluminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0,
                 whiteBalanceGains = whiteBalanceGains
             ) ?: floatArrayOf(1f, 1f, 1f)
+        }
+
+        private fun computeWhiteXyFromCharacteristics(
+            characteristics: CameraCharacteristics,
+            captureResult: CaptureResult
+        ): FloatArray? {
+            val wbGains = captureResult.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                ?: return null
+            return DngSdkColorSpec.computeWhiteXy(
+                colorMatrix1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_COLOR_TRANSFORM1
+                )?.let(::extractCCM),
+                colorMatrix2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_COLOR_TRANSFORM2
+                )?.let(::extractCCM),
+                forwardMatrix1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_FORWARD_MATRIX1
+                )?.let(::extractCCM),
+                forwardMatrix2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_FORWARD_MATRIX2
+                )?.let(::extractCCM),
+                calibrationIlluminant1 = characteristics.get(
+                    CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1
+                ) ?: 0,
+                calibrationIlluminant2 = characteristics.get(
+                    CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2
+                )?.toInt() ?: 0,
+                whiteBalanceGains = floatArrayOf(
+                    wbGains.red,
+                    wbGains.greenEven,
+                    wbGains.greenOdd,
+                    wbGains.blue
+                )
+            )
         }
 
         /**

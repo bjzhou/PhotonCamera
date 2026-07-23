@@ -43,7 +43,25 @@ enum class RawRenderingEngine(
         defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
         exposureCompensationDomain = RawExposureCompensationDomain.Linear
     ),
+    HncsCcm(
+        shaderId = 5,
+        workingColorSpace = ColorSpace.HNCS,
+        defaultExposureCompensationEv = 0f,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
+    HncsLut(
+        shaderId = 6,
+        workingColorSpace = ColorSpace.HNCS,
+        defaultExposureCompensationEv = 0f,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
     ;
+
+    val isHncs: Boolean
+        get() = this == HncsCcm || this == HncsLut
+
+    val usesHncsColorMap: Boolean
+        get() = this == HncsLut
 
     companion object {
         fun fromPersistedName(

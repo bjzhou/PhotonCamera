@@ -16,6 +16,7 @@ internal object LutShaderMappings {
             ColorSpace.ARRI4 -> 3
             ColorSpace.AppleLog2 -> 4
             ColorSpace.ProPhoto -> 0
+            ColorSpace.HNCS -> 0
             ColorSpace.S_GAMUT3_CINE -> 5
             ColorSpace.ACES_AP1 -> 6
             ColorSpace.VGamut -> 7

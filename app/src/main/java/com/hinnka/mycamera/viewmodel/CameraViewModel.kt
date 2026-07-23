@@ -51,6 +51,7 @@ import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.model.EffectParams
@@ -164,6 +165,8 @@ private data class PresetMatchSnapshot(
     val frameId: String?,
     val rawDcpId: String?,
     val rawDcpIdsByLens: Map<String, String?>,
+    val rawHncsProfileId: String?,
+    val rawHncsRenderIntent: HncsRenderIntent,
     val rawRenderingEngine: RawRenderingEngine,
     val rawGooglePixelToneMap: Boolean,
     val rawOppoMasterToneMap: Boolean,
@@ -188,6 +191,10 @@ private data class PresetMatchSnapshot(
             frameId == preset.frameId &&
             rawDcpId == preset.rawDcpId &&
             rawDcpIdsByLens == preset.rawDcpIdsByLens &&
+            rawHncsProfileId == preset.rawHncsProfileId &&
+            rawHncsRenderIntent == HncsRenderIntent.fromPersistedValue(
+                preset.rawHncsRenderIntent
+            ) &&
             rawRenderingEngine == RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine) &&
             rawGooglePixelToneMap == preset.rawGooglePixelToneMap &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
@@ -214,6 +221,18 @@ private data class PresetMatchSnapshot(
             if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
             if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
                 add("rawDcpIdsByLens current=$rawDcpIdsByLens preset=${preset.rawDcpIdsByLens}")
+            }
+            if (rawHncsProfileId != preset.rawHncsProfileId) {
+                add("rawHncsProfileId current=$rawHncsProfileId preset=${preset.rawHncsProfileId}")
+            }
+            val presetHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                preset.rawHncsRenderIntent
+            )
+            if (rawHncsRenderIntent != presetHncsRenderIntent) {
+                add(
+                    "rawHncsRenderIntent current=$rawHncsRenderIntent " +
+                        "preset=$presetHncsRenderIntent"
+                )
             }
             if (rawRenderingEngine != presetRawRenderingEngine) {
                 add("rawRenderingEngine current=$rawRenderingEngine preset=$presetRawRenderingEngine")
@@ -292,6 +311,8 @@ private data class CameraFeatureUpdate(
     val frameId: SettingValue<String?>? = null,
     val rawDcpId: SettingValue<String?>? = null,
     val rawDcpIdsByLens: SettingValue<Map<String, String?>>? = null,
+    val rawHncsProfileId: SettingValue<String?>? = null,
+    val rawHncsRenderIntent: SettingValue<HncsRenderIntent>? = null,
     val rawRenderingEngine: SettingValue<RawRenderingEngine>? = null,
     val rawGooglePixelToneMap: SettingValue<Boolean>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
@@ -416,6 +437,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             frameId = saved.frameId,
                             rawDcpId = saved.rawDcpId,
                             rawDcpIdsByLens = saved.rawDcpIdsByLens,
+                            rawHncsProfileId = saved.rawHncsProfileId,
+                            rawHncsRenderIntent = saved.rawHncsRenderIntent,
                             rawRenderingEngine = saved.rawRenderingEngine,
                             rawGooglePixelToneMap = saved.rawGooglePixelToneMap,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
@@ -479,6 +502,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
             rawDcpIdsByLens = userPreferences.value.rawDcpIdsByLens,
+            rawHncsProfileId = rawHncsProfileId.value,
+            rawHncsRenderIntent = rawHncsRenderIntent.value.assetValue,
             rawRenderingEngine = rawRenderingEngine.value.name,
             rawGooglePixelToneMap = rawToneMappingParameters.value.useGooglePixelToneMap,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
@@ -553,6 +578,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             frameId = SettingValue(this?.frameId),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
+            rawHncsProfileId = SettingValue(this?.rawHncsProfileId),
+            rawHncsRenderIntent = SettingValue(
+                HncsRenderIntent.fromPersistedValue(this?.rawHncsRenderIntent)
+            ),
             rawRenderingEngine = SettingValue(RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)),
             rawGooglePixelToneMap = SettingValue(this?.rawGooglePixelToneMap ?: false),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
@@ -723,6 +752,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 frameId = update.frameId?.let { PreferenceUpdateValue(it.value) },
                 rawDcpId = update.rawDcpId?.let { PreferenceUpdateValue(it.value) },
                 rawDcpIdsByLens = update.rawDcpIdsByLens?.let { PreferenceUpdateValue(it.value) },
+                rawHncsProfileId = update.rawHncsProfileId?.let {
+                    PreferenceUpdateValue(it.value)
+                },
+                rawHncsRenderIntent = update.rawHncsRenderIntent?.let {
+                    PreferenceUpdateValue(it.value)
+                },
                 rawRenderingEngine = if (update.rawRenderingEngine != null ||
                     desiredRawRenderingEngine != prefs.rawRenderingEngine
                 ) {
@@ -922,6 +957,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
             rawDcpIdsByLens = rawDcpIdsByLens.value,
+            rawHncsProfileId = rawHncsProfileId.value,
+            rawHncsRenderIntent = rawHncsRenderIntent.value,
             rawRenderingEngine = rawRenderingEngine.value,
             rawGooglePixelToneMap = rawToneMappingParameters.value.useGooglePixelToneMap,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
@@ -947,6 +984,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             frameId = prefs.frameId,
             rawDcpId = prefs.rawDcpId,
             rawDcpIdsByLens = prefs.rawDcpIdsByLens,
+            rawHncsProfileId = prefs.rawHncsProfileId,
+            rawHncsRenderIntent = prefs.rawHncsRenderIntent,
             rawRenderingEngine = prefs.rawRenderingEngine,
             rawGooglePixelToneMap = prefs.rawToneMappingParameters.useGooglePixelToneMap,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
@@ -1114,6 +1153,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawDcpIdsByLens: StateFlow<Map<String, String?>> = userPreferencesRepository.userPreferences
         .map { it.rawDcpIdsByLens }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+    val rawHncsProfileId: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.rawHncsProfileId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val rawHncsRenderIntent: StateFlow<HncsRenderIntent> =
+        userPreferencesRepository.userPreferences
+            .map { it.rawHncsRenderIntent }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, HncsRenderIntent.Standard)
     val rawExposureCompensation: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { it.rawExposureCompensation }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
@@ -1903,6 +1949,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setRawHncsProfileId(profileId: String?) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawHncsProfileId = SettingValue(profileId))
+            )
+        }
+    }
+
+    fun setRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
+        viewModelScope.launch {
+            applyCameraFeatureUpdate(
+                CameraFeatureUpdate(rawHncsRenderIntent = SettingValue(renderIntent))
+            )
+        }
+    }
+
     fun setRawBaselineLutId(lutId: String?) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
@@ -2141,6 +2203,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (rawCaptureEnabled) {
                     runCatching {
                         RawDemosaicProcessor.getInstance().prewarmCapturePipeline(
+                            getApplication<Application>().applicationContext,
                             prefs.rawRenderingEngine,
                             prefs.rawToneMappingParameters
                                 .normalized()
@@ -2303,6 +2366,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             chromaNoiseReduction = chromaNoiseReductionValue,
             captureNoiseReductionLevel = state.value.nrLevel,
             rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
+            rawHncsProfileId = userPrefs?.rawHncsProfileId,
+            rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
+                ?: HncsRenderIntent.Standard,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
             rawAutoExposure = effectiveRawAutoExposure,
             rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -4727,6 +4793,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 chromaNoiseReduction = chromaNoiseReductionValue,
                 captureNoiseReductionLevel = state.value.nrLevel,
                 rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
+                rawHncsProfileId = userPrefs?.rawHncsProfileId,
+                rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
+                    ?: HncsRenderIntent.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -4897,6 +4966,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 chromaNoiseReduction = chromaNoiseReductionValue,
                 captureNoiseReductionLevel = currentState.nrLevel,
                 rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
+                rawHncsProfileId = userPrefs?.rawHncsProfileId,
+                rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
+                    ?: HncsRenderIntent.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -5042,6 +5114,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     chromaNoiseReduction = chromaNoiseReductionValue,
                     captureNoiseReductionLevel = currentState.nrLevel,
                     rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
+                    rawHncsProfileId = userPrefs?.rawHncsProfileId,
+                    rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
+                        ?: HncsRenderIntent.Standard,
                     rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                     rawAutoExposure = effectiveRawAutoExposure,
                     rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -5275,6 +5350,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 chromaNoiseReduction = chromaNoiseReductionValue,
                 captureNoiseReductionLevel = state.value.nrLevel,
                 rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
+                rawHncsProfileId = userPrefs?.rawHncsProfileId,
+                rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
+                    ?: HncsRenderIntent.Standard,
                 rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
                 rawAutoExposure = effectiveRawAutoExposure,
                 rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,
@@ -5703,6 +5781,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             chromaNoiseReduction = chromaNoiseReductionValue,
             captureNoiseReductionLevel = state.value.nrLevel,
             rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
+            rawHncsProfileId = userPrefs?.rawHncsProfileId,
+            rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
+                ?: HncsRenderIntent.Standard,
             rawExposureCompensation = userPrefs?.rawExposureCompensation ?: 0f,
             rawAutoExposure = effectiveRawAutoExposure,
             rawHighlightsAdjustment = userPrefs?.rawHighlightsAdjustment ?: 0f,

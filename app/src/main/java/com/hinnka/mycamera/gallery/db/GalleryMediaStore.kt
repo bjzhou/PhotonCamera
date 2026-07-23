@@ -14,6 +14,7 @@ import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.PLog
@@ -229,6 +230,8 @@ object GalleryMediaStore {
             rawAutoWhiteBalanceEstimate = metadata.rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = metadata.rawLensShadingCorrectionEnabled,
             rawDcpId = metadata.rawDcpId,
+            rawHncsProfileId = metadata.rawHncsProfileId,
+            rawHncsRenderIntent = metadata.rawHncsRenderIntent.assetValue,
             rawColorEngine = metadata.rawRenderingEngine.name,
             rawAgxBlackRelativeExposure = metadata.rawToneMappingParameters.agxBlackRelativeExposure,
             rawAgxWhiteRelativeExposure = metadata.rawToneMappingParameters.agxWhiteRelativeExposure,
@@ -411,6 +414,8 @@ object GalleryMediaStore {
             rawAutoWhiteBalanceEstimate = rawAutoWhiteBalanceEstimate,
             rawLensShadingCorrectionEnabled = rawLensShadingCorrectionEnabled,
             rawDcpId = rawDcpId,
+            rawHncsProfileId = rawHncsProfileId,
+            rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(rawHncsRenderIntent),
             rawRenderingEngine = RawRenderingEngine.fromPersistedName(
                 rawColorEngine,
                 fallback = RawRenderingEngine.AdobeCurve

@@ -3,6 +3,7 @@ package com.hinnka.mycamera.model
 import androidx.annotation.Keep
 import com.google.gson.Gson
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 
 /**
@@ -23,6 +24,8 @@ data class CameraPreset(
     // Quick RAW 功能
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
     val rawGooglePixelToneMap: Boolean = false,
     val rawOppoMasterToneMap: Boolean = false,
@@ -87,6 +90,10 @@ data class CameraPreset(
             .withoutLegacyHdf()
             .copy(
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
+                rawHncsProfileId = rawHncsProfileId?.takeIf(String::isNotBlank),
+                rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                    rawHncsRenderIntent
+                ).assetValue,
                 rawGooglePixelToneMap = rawGooglePixelToneMap && !rawOppoMasterToneMap && !rawPhotonPgtmToneMap,
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawPhotonPgtmToneMap = rawPhotonPgtmToneMap && !rawOppoMasterToneMap

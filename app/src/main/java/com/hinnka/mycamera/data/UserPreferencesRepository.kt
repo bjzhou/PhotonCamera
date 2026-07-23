@@ -21,6 +21,7 @@ import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -107,6 +108,8 @@ data class UserPreferences(
     val phantomBaselineLutId: String? = null,
     val rawDcpId: String? = null,
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val rawNlmNoiseFactor: Float = 0f,
@@ -265,6 +268,8 @@ data class CameraFeaturePreferencesUpdate(
     val frameId: PreferenceUpdateValue<String?>? = null,
     val rawDcpId: PreferenceUpdateValue<String?>? = null,
     val rawDcpIdsByLens: PreferenceUpdateValue<Map<String, String?>>? = null,
+    val rawHncsProfileId: PreferenceUpdateValue<String?>? = null,
+    val rawHncsRenderIntent: PreferenceUpdateValue<HncsRenderIntent>? = null,
     val rawRenderingEngine: PreferenceUpdateValue<RawRenderingEngine>? = null,
     val rawToneMappingParameters: PreferenceUpdateValue<RawToneMappingParameters>? = null,
     val rawSpectralFilmStock: PreferenceUpdateValue<String?>? = null,
@@ -295,6 +300,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_BASELINE_LUT_CONFIGURED_KEY = booleanPreferencesKey("raw_baseline_lut_configured")
         private val RAW_DCP_ID_KEY = stringPreferencesKey("raw_dcp_id")
         private val RAW_DCP_IDS_BY_LENS_KEY = stringPreferencesKey("raw_dcp_ids_by_lens")
+        private val RAW_HNCS_PROFILE_ID_KEY = stringPreferencesKey("raw_hncs_profile_id")
+        private val RAW_HNCS_RENDER_INTENT_KEY = stringPreferencesKey("raw_hncs_render_intent")
         private val RAW_COLOR_ENGINE_KEY = stringPreferencesKey("raw_color_engine")
         private val RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_agx_black_relative_exposure")
         private val RAW_AGX_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_agx_white_relative_exposure")
@@ -489,6 +496,10 @@ class UserPreferencesRepository(private val context: Context) {
                 rawBaselineLutConfigured = rawBaselineLutConfigured,
                 rawDcpId = preferences[RAW_DCP_ID_KEY],
                 rawDcpIdsByLens = parseNullableStringMap(preferences[RAW_DCP_IDS_BY_LENS_KEY]),
+                rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
+                rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                    preferences[RAW_HNCS_RENDER_INTENT_KEY]
+                ),
                 rawRenderingEngine = RawRenderingEngine.fromPersistedName(preferences[RAW_COLOR_ENGINE_KEY]),
                 rawToneMappingParameters = RawToneMappingParameters(
                     agxBlackRelativeExposure = preferences[RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY]
@@ -982,6 +993,22 @@ class UserPreferencesRepository(private val context: Context) {
             } else {
                 preferences[RAW_DCP_IDS_BY_LENS_KEY] = serializeNullableStringMap(normalized)
             }
+        }
+    }
+
+    suspend fun saveRawHncsProfileId(profileId: String?) {
+        context.dataStore.edit { preferences ->
+            if (profileId.isNullOrBlank()) {
+                preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
+            } else {
+                preferences[RAW_HNCS_PROFILE_ID_KEY] = profileId
+            }
+        }
+    }
+
+    suspend fun saveRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_HNCS_RENDER_INTENT_KEY] = renderIntent.assetValue
         }
     }
 
@@ -2100,6 +2127,16 @@ class UserPreferencesRepository(private val context: Context) {
                 } else {
                     preferences[RAW_DCP_IDS_BY_LENS_KEY] = serializeNullableStringMap(normalized)
                 }
+            }
+            update.rawHncsProfileId?.let {
+                if (it.value.isNullOrBlank()) {
+                    preferences.remove(RAW_HNCS_PROFILE_ID_KEY)
+                } else {
+                    preferences[RAW_HNCS_PROFILE_ID_KEY] = it.value
+                }
+            }
+            update.rawHncsRenderIntent?.let {
+                preferences[RAW_HNCS_RENDER_INTENT_KEY] = it.value.assetValue
             }
             update.rawRenderingEngine?.let {
                 preferences[RAW_COLOR_ENGINE_KEY] = it.value.name

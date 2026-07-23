@@ -57,6 +57,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.RecipeScope
@@ -119,6 +120,8 @@ private data class PreviewRenderSignature(
     val editRawCustomWhiteLevel: Float,
     val editRawCfaCorrectionMode: String,
     val editRawDcpId: String?,
+    val editRawHncsProfileId: String?,
+    val editRawHncsRenderIntent: String,
     val editRawRenderingEngine: String,
     val editRawBaselineLutId: String?,
     val editRawBaselineRecipeParams: ColorRecipeParams?,
@@ -204,6 +207,8 @@ fun GalleryEditScreen(
     val editRawCustomWhiteLevel by viewModel.editRawCustomWhiteLevel.collectAsState()
     val editRawCfaCorrectionMode by viewModel.editRawCfaCorrectionMode.collectAsState()
     val editRawDcpId by viewModel.editRawDcpId.collectAsState()
+    val editRawHncsProfileId by viewModel.editRawHncsProfileId.collectAsState()
+    val editRawHncsRenderIntent by viewModel.editRawHncsRenderIntent.collectAsState()
     val editRawBaselineLutId by viewModel.editRawBaselineLutId.collectAsState()
     val editRawBaselineRecipeParams by viewModel.editRawBaselineRecipeParams.collectAsState()
     val editRawColorEngine by viewModel.editRawRenderingEngine.collectAsState()
@@ -214,6 +219,9 @@ fun GalleryEditScreen(
     val editRawSpectralFilmMDensityGain by viewModel.editRawSpectralFilmMDensityGain.collectAsState()
     val editRawSpectralFilmYDensityGain by viewModel.editRawSpectralFilmYDensityGain.collectAsState()
     val availableDcps = viewModel.availableDcps
+    val availableHncsProfiles = remember(context) {
+        HncsProfileManager(context.applicationContext).getAvailableProfiles()
+    }
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
     val editFocusX by viewModel.editFocusPointX.collectAsState()
@@ -276,6 +284,10 @@ fun GalleryEditScreen(
             editRawCustomWhiteLevel = if (fast || rawDevelopIsBaked) 0f else editRawCustomWhiteLevel,
             editRawCfaCorrectionMode = if (fast || rawDevelopIsBaked) "" else editRawCfaCorrectionMode,
             editRawDcpId = if (fast || rawDevelopIsBaked) null else editRawDcpId,
+            editRawHncsProfileId =
+                if (fast || rawDevelopIsBaked) null else editRawHncsProfileId,
+            editRawHncsRenderIntent =
+                if (fast || rawDevelopIsBaked) "" else editRawHncsRenderIntent.assetValue,
             editRawRenderingEngine = if (fast || rawDevelopIsBaked) "" else editRawColorEngine.name,
             // RAW develop controls above are baked into original.jpg, while baseline color
             // correction is still applied by PhotoProcessor to that bitmap preview.
@@ -1170,6 +1182,25 @@ fun GalleryEditScreen(
                                                 if (success && isDeletingSelectedDcp) {
                                                     requestRawPreviewRefresh()
                                                 }
+                                            }
+                                        },
+                                        selectedHncsProfileId = editRawHncsProfileId,
+                                        selectedHncsRenderIntent = editRawHncsRenderIntent,
+                                        availableHncsProfiles = availableHncsProfiles,
+                                        onSelectHncsProfile = { profileId ->
+                                            viewModel.saveRawHncsProfileSelection(
+                                                currentEditSourcePhoto,
+                                                profileId
+                                            ) {
+                                                requestRawPreviewRefresh()
+                                            }
+                                        },
+                                        onSelectHncsRenderIntent = { renderIntent ->
+                                            viewModel.saveRawHncsRenderIntent(
+                                                currentEditSourcePhoto,
+                                                renderIntent
+                                            ) {
+                                                requestRawPreviewRefresh()
                                             }
                                         },
                                         onRawExposureCompensationChange = {

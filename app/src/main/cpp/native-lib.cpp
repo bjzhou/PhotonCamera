@@ -1767,7 +1767,8 @@ static Matrix3x3 computeXYZD50ToGamut(float xr, float yr, float xg, float yg,
 // path applies the wrong PCS/white-point assumptions to proprietary RAWs.
 static bool computeLibRawCameraToXyzD50(const LibRaw &rawProcessor,
                                         const float wb[4],
-                                        Matrix3x3 &cameraToXyzD50) {
+                                        Matrix3x3 &cameraToXyzD50,
+                                        std::array<float, 2> *outWhiteXy = nullptr) {
   Matrix3x3 cameraToSrgb;
   Matrix3x3 xyzToCamera;
   for (int row = 0; row < 3; ++row) {
@@ -1790,6 +1791,19 @@ static bool computeLibRawCameraToXyzD50(const LibRaw &rawProcessor,
   const float blue = wb[2] > 0.0f && std::isfinite(wb[2]) ? wb[2] : 1.0f;
   const Matrix3x3 wbMatrix =
       diagonalMatrix3x3({red, (greenEven + greenOdd) * 0.5f, blue});
+  if (outWhiteXy) {
+    const float green = std::max((greenEven + greenOdd) * 0.5f, 1e-6f);
+    const std::array<float, 3> cameraNeutral = {
+        green / std::max(red, 1e-6f),
+        1.0f,
+        green / std::max(blue, 1e-6f),
+    };
+    const std::array<float, 3> whiteXyz =
+        multiplyMatrixVector(xyzToCamera.invert(), cameraNeutral);
+    if (!xyzToXy(whiteXyz, *outWhiteXy)) {
+      return false;
+    }
+  }
 
   Matrix3x3 srgbToXyzD65;
   const float srgbToXyzD65Values[9] = {
@@ -3231,7 +3245,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[FIIFF[FII[FFIJF[I[I[F[FLandroid/graphics/Bitmap;)V");
+                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[FLandroid/graphics/Bitmap;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -3335,7 +3349,10 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
        analogBalance[1], analogBalance[2]);
 
   Matrix3x3 camToXYZ = Matrix3x3::identity();
-  std::array<float, 2> sdkWhiteXy = {0.3457f, 0.3585f};
+  std::array<float, 2> sdkWhiteXy = {
+      std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::quiet_NaN(),
+  };
   const float cameraGreen =
       std::max((wb[1] + (wb[3] > 0.0f ? wb[3] : wb[1])) * 0.5f, 1e-6f);
   std::array<float, 3> sdkCameraWhite = {
@@ -3360,7 +3377,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
          sdkWhiteXy[0], sdkWhiteXy[1], sdkCameraWhite[0],
          sdkCameraWhite[1], sdkCameraWhite[2]);
   } else if (!isDngInput &&
-             computeLibRawCameraToXyzD50(RawProcessor, wb, camToXYZ)) {
+             computeLibRawCameraToXyzD50(RawProcessor, wb, camToXYZ,
+                                         &sdkWhiteXy)) {
     hasSdkMatrix = true;
     LOGI("Using LibRaw rgb_cam path for non-DNG RAW: dngVersion=%u",
          RawProcessor.imgdata.idata.dng_version);
@@ -3374,6 +3392,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
               xyzToCam, true, identity, false, identity, false, identity,
               false, 21, 0, wb, identity, identity, unityAnalog, camToXYZ,
               &fallbackWhiteXy, &sdkCameraWhite)) {
+        sdkWhiteXy = fallbackWhiteXy;
         LOGI("Using %s fallback via DNG ColorMatrix path: whiteXY=%f,%f",
              sourceName, fallbackWhiteXy[0], fallbackWhiteXy[1]);
         return true;
@@ -3445,6 +3464,10 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   env->SetFloatArrayRegion(colorMatrixArray, 0, 9, finalCCM.m);
   jfloatArray cameraWhiteArray = env->NewFloatArray(3);
   env->SetFloatArrayRegion(cameraWhiteArray, 0, 3, sdkCameraWhite.data());
+  jfloatArray whitePointXyArray = env->NewFloatArray(2);
+  env->SetFloatArrayRegion(whitePointXyArray, 0, 2, sdkWhiteXy.data());
+  jstring cameraMake = env->NewStringUTF(RawProcessor.imgdata.idata.make);
+  jstring cameraModel = env->NewStringUTF(RawProcessor.imgdata.idata.model);
 
   LOGI("finalCCM: %f, %f, %f, %f, %f, %f, %f, %f, %f", finalCCM.m[0],
        finalCCM.m[1], finalCCM.m[2], finalCCM.m[3], finalCCM.m[4],
@@ -3532,7 +3555,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jobject dngData = env->NewObject(
       dngDataClass, constructor, rawDataBuffer, width, height, rowStride,
       samplesPerPixel, whiteLevel, blackLevelArray, preMulArray, wbArray,
-      colorMatrixArray, cameraWhiteArray, cfaPattern, ed.rotation,
+      colorMatrixArray, cameraWhiteArray, whitePointXyArray, cameraMake,
+      cameraModel, cfaPattern, ed.rotation,
       baselineExposure, shadowScale, exportedLscArray, exportedLscWidth,
       exportedLscHeight,
       exportedLscGridArray, exposureBias, iso,

@@ -4,6 +4,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
 
@@ -63,6 +64,10 @@ internal object CameraPresetJsonCodec {
             frameId = obj.stringOrNull("frameId"),
             rawDcpId = obj.stringOrNull("rawDcpId"),
             rawDcpIdsByLens = parseRawDcpIdsByLens(obj.get("rawDcpIdsByLens")),
+            rawHncsProfileId = obj.stringOrNull("rawHncsProfileId"),
+            rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                obj.stringOrNull("rawHncsRenderIntent")
+            ).assetValue,
             rawRenderingEngine = parseRawRenderingEngine(
                 obj.stringOrNull("rawRenderingEngine") ?: obj.stringOrNull("rawColorEngine")
             ),

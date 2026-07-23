@@ -35,6 +35,7 @@ import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -355,6 +356,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var editRawCfaCorrectionMode = MutableStateFlow(RawCfaCorrection.MODE_DEFAULT)
         private set
     var editRawDcpId = MutableStateFlow<String?>(null)
+        private set
+    var editRawHncsProfileId = MutableStateFlow<String?>(null)
+        private set
+    var editRawHncsRenderIntent = MutableStateFlow(HncsRenderIntent.Standard)
         private set
     var editRawBaselineLutId = MutableStateFlow<String?>(null)
         private set
@@ -1302,6 +1307,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawCustomWhiteLevel.value = m.rawCustomWhiteLevel ?: 0f
             editRawCfaCorrectionMode.value = m.rawCfaCorrectionMode ?: RawCfaCorrection.MODE_DEFAULT
             editRawDcpId.value = m.rawDcpId
+            editRawHncsProfileId.value = m.rawHncsProfileId
+            editRawHncsRenderIntent.value = m.rawHncsRenderIntent
             editRawRenderingEngine.value = m.rawRenderingEngine
             editRawToneMappingParameters.value = m.rawToneMappingParameters
             editRawSpectralFilmStock.value = m.spectralFilmStock ?: "kodak_portra_400"
@@ -1899,6 +1906,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             
             if (!targetPhoto.isVideo) {
                 editRawDcpId.value = metadata.rawDcpId
+                editRawHncsProfileId.value = metadata.rawHncsProfileId
+                editRawHncsRenderIntent.value = metadata.rawHncsRenderIntent
                 editRawBaselineLutId.value = metadata.baselineLutId
                 editRawRenderingEngine.value = metadata.rawRenderingEngine
                 editRawToneMappingParameters.value = metadata.rawToneMappingParameters
@@ -1957,6 +1966,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawCfaCorrectionMode.value = RawCfaCorrection.MODE_DEFAULT
                 editRawDROMode.value = "OFF"
                 editRawDcpId.value = null
+                editRawHncsProfileId.value = null
+                editRawHncsRenderIntent.value = HncsRenderIntent.Standard
                 editRawBaselineLutId.value = null
                 editRawRenderingEngine.value = RawRenderingEngine.AdobeCurve
                 editRawToneMappingParameters.value = RawToneMappingParameters.DEFAULT
@@ -2065,6 +2076,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawCfaCorrectionMode.value = RawCfaCorrection.MODE_DEFAULT
         editRawDROMode.value = "OFF"
         editRawDcpId.value = null
+        editRawHncsProfileId.value = null
+        editRawHncsRenderIntent.value = HncsRenderIntent.Standard
         editRawBaselineLutId.value = null
         editRawRenderingEngine.value = RawRenderingEngine.AdobeCurve
         editRawToneMappingParameters.value = RawToneMappingParameters.DEFAULT
@@ -2204,6 +2217,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val customWhiteLevel = editRawCustomWhiteLevel.value
         val cfaCorrectionMode = editRawCfaCorrectionMode.value
         val dcpId = editRawDcpId.value
+        val hncsProfileId = editRawHncsProfileId.value
+        val hncsRenderIntent = editRawHncsRenderIntent.value
         val baselineLutId = editRawBaselineLutId.value
         val rawColorEngine = editRawRenderingEngine.value
         val rawToneMappingParameters = editRawToneMappingParameters.value.normalized()
@@ -2240,6 +2255,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     rawCfaCorrectionMode = cfaCorrectionMode,
                     droMode = droMode,
                     rawDcpId = dcpId,
+                    rawHncsProfileId = hncsProfileId,
+                    rawHncsRenderIntent = hncsRenderIntent,
                     baselineTarget = baselineLutId?.let { BaselineColorCorrectionTarget.RAW },
                     baselineLutId = baselineLutId,
                     baselineColorRecipeParams = baselineRecipeParams,
@@ -2386,6 +2403,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveRawDcpSelection(mediaData: MediaData, dcpId: String?, onComplete: ((Boolean) -> Unit)? = null) {
         editRawDcpId.value = dcpId
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
+    fun saveRawHncsProfileSelection(
+        mediaData: MediaData,
+        profileId: String?,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawHncsProfileId.value = profileId
+        persistRawEditMetadata(mediaData, onComplete)
+    }
+
+    fun saveRawHncsRenderIntent(
+        mediaData: MediaData,
+        renderIntent: HncsRenderIntent,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        editRawHncsRenderIntent.value = renderIntent
         persistRawEditMetadata(mediaData, onComplete)
     }
 
@@ -2666,6 +2701,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawCustomWhiteLevel = editRawCustomWhiteLevel.value,
                         rawCfaCorrectionMode = editRawCfaCorrectionMode.value,
                         rawDcpId = editRawDcpId.value,
+                        rawHncsProfileId = editRawHncsProfileId.value,
+                        rawHncsRenderIntent = editRawHncsRenderIntent.value,
                         baselineTarget = editRawBaselineLutId.value?.let { BaselineColorCorrectionTarget.RAW },
                         baselineLutId = editRawBaselineLutId.value,
                         baselineColorRecipeParams = editRawBaselineLutId.value?.let {
@@ -3006,6 +3043,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         rawCustomWhiteLevel = editRawCustomWhiteLevel.value,
                         rawCfaCorrectionMode = editRawCfaCorrectionMode.value,
                         rawDcpId = editRawDcpId.value,
+                        rawHncsProfileId = editRawHncsProfileId.value,
+                        rawHncsRenderIntent = editRawHncsRenderIntent.value,
                         baselineTarget = rawBaselineLutId?.let { BaselineColorCorrectionTarget.RAW },
                         baselineLutId = rawBaselineLutId,
                         baselineColorRecipeParams = rawBaselineRecipeParams,

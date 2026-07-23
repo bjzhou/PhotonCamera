@@ -14,6 +14,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import org.json.JSONObject
@@ -39,7 +40,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 24,
+    val version: Int = 26,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -64,6 +65,8 @@ data class MediaMetadata(
     val rawAutoWhiteBalanceEstimate: Boolean? = null,
     val rawLensShadingCorrectionEnabled: Boolean? = null,
     val rawDcpId: String? = null,
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val cameraId: String? = null,
@@ -314,6 +317,18 @@ data class MediaMetadata(
                     rawAutoWhiteBalanceEstimate = if (obj.isNull("rawAutoWhiteBalanceEstimate")) null else obj.optBoolean("rawAutoWhiteBalanceEstimate"),
                     rawLensShadingCorrectionEnabled = if (obj.isNull("rawLensShadingCorrectionEnabled")) null else obj.optBoolean("rawLensShadingCorrectionEnabled"),
                     rawDcpId = if (obj.isNull("rawDcpId")) null else obj.optString("rawDcpId"),
+                    rawHncsProfileId = if (obj.isNull("rawHncsProfileId")) {
+                        null
+                    } else {
+                        obj.optString("rawHncsProfileId")
+                    },
+                    rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
+                        if (obj.isNull("rawHncsRenderIntent")) {
+                            null
+                        } else {
+                            obj.optString("rawHncsRenderIntent")
+                        }
+                    ),
                     rawRenderingEngine = RawRenderingEngine.fromPersistedName(
                         if (obj.isNull("rawColorEngine")) null else obj.optString("rawColorEngine"),
                         fallback = RawRenderingEngine.AdobeCurve

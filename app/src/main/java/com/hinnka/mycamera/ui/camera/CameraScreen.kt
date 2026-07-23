@@ -70,6 +70,7 @@ import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.SpectralFilmSelection
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
@@ -239,6 +240,8 @@ fun CameraScreen(
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
+    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
+    val rawHncsRenderIntent by viewModel.rawHncsRenderIntent.collectAsState()
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
@@ -252,6 +255,9 @@ fun CameraScreen(
     val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
     val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
     val naturalLightEnabled by viewModel.naturalLightEnabled.collectAsState()
+    val availableHncsProfiles = remember(context) {
+        HncsProfileManager(context.applicationContext).getAvailableProfiles()
+    }
     val naturalLightWarningShown by viewModel.naturalLightWarningShown.collectAsState()
     val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
@@ -1456,6 +1462,9 @@ fun CameraScreen(
             rawDcpIdsByLens = rawDcpIdsByLens,
             rawDcpLensOptions = rawDcpLensOptions(state.availableCameras),
             availableDcps = viewModel.availableDcps,
+            rawHncsProfileId = rawHncsProfileId,
+            rawHncsRenderIntent = rawHncsRenderIntent,
+            availableHncsProfiles = availableHncsProfiles,
             rawBaselineLutId = rawBaselineLutId,
             availableLuts = viewModel.availableLutList,
             previewThumbnail = viewModel.previewThumbnail,
@@ -1472,6 +1481,8 @@ fun CameraScreen(
             rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
+            onRawHncsProfileChange = { viewModel.setRawHncsProfileId(it) },
+            onRawHncsRenderIntentChange = { viewModel.setRawHncsRenderIntent(it) },
             onImportRawDcp = { dcpImportLauncher.launch("*/*") },
             onDeleteRawDcp = { dcp ->
                 viewModel.deleteRawDcp(dcp.id) { success ->

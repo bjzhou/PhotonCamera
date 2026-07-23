@@ -113,6 +113,14 @@ object RawShaders {
                 includeAdobeProfilePipeline = false,
                 includeShadowsHighlights = includeShadowsHighlights
             )
+
+            RawRenderingEngine.HncsCcm,
+            RawRenderingEngine.HncsLut -> combinedFragmentShader(
+                engineUniforms = HNCS_COMBINED_UNIFORMS,
+                engineFunctions = HNCS_COMBINED_FUNCTIONS,
+                includeAdobeProfilePipeline = false,
+                includeShadowsHighlights = includeShadowsHighlights
+            )
         }
     }
 
@@ -199,6 +207,7 @@ object RawShaders {
         return """
         #version 300 es
         precision highp float;
+        precision highp int;
         $sampler3DPrecision
         
         in vec2 vTexCoord;
@@ -274,7 +283,9 @@ object RawShaders {
             color = applyEngineTone(color);
             $shadowsHighlightsApply
             color = applyBlackWhiteLevels(color);
-            color = linearToSrgb(color);
+            // Engine tone and adjustment passes have a linear-RGB output contract.
+            // RawSrgbPassShaders performs the single display encoding after all
+            // linear-domain adjustments are complete.
             fragColor = vec4(color, 1.0);
         }
     """.trimIndent()
@@ -347,6 +358,24 @@ object RawShaders {
         uniform sampler3D uSpectralFilmTexture;
         uniform mat3 uOutputTransform;
         uniform int uSpectralFilmSize;
+    """.trimIndent()
+
+    private val HNCS_COMBINED_UNIFORMS = """
+        uniform sampler2D uHncsColorMapTexture;
+        uniform sampler2D uHncsCurveTexture;
+        uniform int uHncsColorMapEnabled;
+        uniform ivec2 uHncsColorMapSize;
+        uniform vec3 uHncsColorMapGrid;
+        uniform mat3 uHncsRgbToYcc;
+        uniform mat3 uHncsYccToRgb;
+        uniform vec2 uHncsGrayThresholds;
+        uniform vec4 uHncsLowLightDesaturation;
+        uniform float uHncsFilmCurveGain;
+        uniform int uHncsGammaFilterEnabled;
+        uniform float uHncsGamma;
+        uniform float uHncsHdrMaxGain;
+        uniform float uHncsHdrRgbLimit;
+        uniform int uHncsDiagnosticStage;
     """.trimIndent()
 
     private val CURVE_COMBINED_FUNCTIONS = """
@@ -691,6 +720,160 @@ object RawShaders {
         vec3 applyEngineTone(vec3 color) {
             color = applyAdobeCurve(color);
             return uOutputTransform * color;
+        }
+    """.trimIndent()
+
+    /**
+     * Phocus HNCS color-correction and default film-curve path.
+     *
+     * The camera matrix is applied by the linear RAW pass. HNCS resolves to
+     * companding=2; a RAW without an explicit maker FilmCurve tag resolves to
+     * type=6. The exact 65,536-entry curve comes from the original Phocus
+     * CGradationManager. Phocus still constructs the later Gradation stage and
+     * conditionally constructs SelectiveColor, but both require real
+     * CImageCorrection/user tables. With no such tables in a PhotonCamera RAW
+     * render plan, non-identity versions of those stages are not synthesized.
+     */
+    private val HNCS_COMBINED_FUNCTIONS = """
+        const float HNCS_EPSILON = 0.000001;
+        const float HNCS_CURVE_SAMPLE_COUNT = 65536.0;
+        const vec2 HNCS_CURVE_TEXTURE_DIMENSIONS = vec2(256.0, 256.0);
+
+        vec2 hncsFetchColorMap(ivec2 point) {
+            return texelFetch(uHncsColorMapTexture, point, 0).rg;
+        }
+
+        vec2 hncsSampleColorMap(vec2 grid) {
+            vec2 maximum = vec2(uHncsColorMapSize - ivec2(1));
+            grid = clamp(grid, vec2(0.0), maximum);
+            ivec2 lower = ivec2(floor(grid));
+            vec2 fraction = fract(grid);
+            lower = clamp(
+                lower,
+                ivec2(0),
+                uHncsColorMapSize - ivec2(2)
+            );
+            ivec2 upper = lower + ivec2(1);
+            vec2 row0 = mix(
+                hncsFetchColorMap(ivec2(lower.x, lower.y)),
+                hncsFetchColorMap(ivec2(upper.x, lower.y)),
+                fraction.x
+            );
+            vec2 row1 = mix(
+                hncsFetchColorMap(ivec2(lower.x, upper.y)),
+                hncsFetchColorMap(ivec2(upper.x, upper.y)),
+                fraction.x
+            );
+            return mix(row0, row1, fraction.y);
+        }
+
+        float hncsColorMapWeight(vec3 source, float luma) {
+            float grayWeight = 1.0;
+            float grayRange = uHncsGrayThresholds.y - uHncsGrayThresholds.x;
+            float average = (source.r + source.g + source.b) / 3.0;
+            if (grayRange > HNCS_EPSILON && abs(average) > HNCS_EPSILON) {
+                vec3 distanceFromAverage = abs(source - vec3(average));
+                float relativeDistance =
+                    max(distanceFromAverage.r, max(distanceFromAverage.g, distanceFromAverage.b)) /
+                    abs(average);
+                grayWeight = clamp(
+                    (relativeDistance - uHncsGrayThresholds.x) / grayRange,
+                    0.0,
+                    1.0
+                );
+            }
+
+            float luma16 = luma * 65535.0;
+            if (luma16 < uHncsLowLightDesaturation.x) {
+                float lowLightWeight =
+                    uHncsLowLightDesaturation.y * luma16 * luma16 +
+                    uHncsLowLightDesaturation.z * luma16 +
+                    uHncsLowLightDesaturation.w;
+                grayWeight = min(grayWeight, lowLightWeight);
+            }
+            return clamp(grayWeight, 0.0, 1.0);
+        }
+
+        vec3 hncsApplyCameraColorMap(vec3 color) {
+            if (uHncsColorMapEnabled == 0 ||
+                uHncsColorMapSize.x < 2 ||
+                uHncsColorMapSize.y < 2) {
+                return color;
+            }
+            // ColorCorrectAll clamps camera-domain input before its input matrix.
+            // This pass receives the already transformed HNCS value, so applying
+            // a second [0,1] clamp here would incorrectly destroy matrix overrange.
+            vec3 source = color;
+            vec3 ycc = uHncsRgbToYcc * source;
+            if (!(ycc.x > HNCS_EPSILON)) {
+                return source;
+            }
+            vec2 position =
+                uHncsColorMapGrid.z * ycc.yz / ycc.x -
+                uHncsColorMapGrid.xy;
+            vec2 mapped = hncsSampleColorMap(position);
+            float colorMapWeight = hncsColorMapWeight(source, ycc.x);
+            vec2 normalizedChroma =
+                mapped * ycc.x * colorMapWeight / uHncsColorMapGrid.z;
+            return uHncsYccToRgb * vec3(ycc.x, normalizedChroma);
+        }
+
+        float hncsSampleFilmCurve(float value) {
+            // Match Phocus filmCurveShader: keep the 65,536-entry index in highp
+            // floating point and sample at normalized texel centers. A mediump
+            // fragment integer cannot represent 65,535/65,536 on every GLES
+            // driver and collapses the lookup to the zero sample.
+            float sampleIndex = clamp(
+                floor(value * HNCS_CURVE_SAMPLE_COUNT),
+                0.0,
+                HNCS_CURVE_SAMPLE_COUNT - 1.0
+            );
+            vec2 coordinate = vec2(
+                0.5 + floor(mod(sampleIndex, HNCS_CURVE_TEXTURE_DIMENSIONS.x)),
+                0.5 + floor(sampleIndex / HNCS_CURVE_TEXTURE_DIMENSIONS.x)
+            ) / HNCS_CURVE_TEXTURE_DIMENSIONS;
+            return texture(
+                uHncsCurveTexture,
+                coordinate
+            ).r;
+        }
+
+        vec3 hncsApplyFilmCurve(vec3 color) {
+            float gain = max(uHncsFilmCurveGain, HNCS_EPSILON);
+            vec3 source = max(color, vec3(0.0)) / gain;
+            return vec3(
+                hncsSampleFilmCurve(source.r),
+                hncsSampleFilmCurve(source.g),
+                hncsSampleFilmCurve(source.b)
+            );
+        }
+
+        vec3 hncsGammaEncode(vec3 color) {
+            return pow(
+                max(color * uHncsHdrMaxGain, vec3(0.0)),
+                vec3(1.0 / uHncsGamma)
+            ) / uHncsHdrRgbLimit;
+        }
+
+        vec3 applyEngineTone(vec3 color) {
+            if (uHncsDiagnosticStage == 1) {
+                return color;
+            }
+            color = hncsApplyCameraColorMap(color);
+            if (uHncsDiagnosticStage == 2) {
+                return color;
+            }
+            color = hncsApplyFilmCurve(color);
+            if (uHncsDiagnosticStage == 3) {
+                return color;
+            }
+            if (uHncsGammaFilterEnabled != 0) {
+                color = hncsGammaEncode(color);
+            }
+            if (uHncsDiagnosticStage == 4) {
+                return color;
+            }
+            return color;
         }
     """.trimIndent()
 

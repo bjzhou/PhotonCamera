@@ -118,6 +118,7 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
+import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
@@ -313,6 +314,8 @@ fun SettingsScreen(
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
+    val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
+    val rawHncsRenderIntent by viewModel.rawHncsRenderIntent.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
     val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
@@ -439,6 +442,9 @@ fun SettingsScreen(
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+    val availableHncsProfiles = remember(context) {
+        HncsProfileManager(context.applicationContext).getAvailableProfiles()
+    }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
     val isHeicExportSupported = remember { HeicExportEncoder.isSupported }
@@ -1741,6 +1747,11 @@ fun SettingsScreen(
                         showRawMaxOutputScaleControl = true,
                         rawMaxOutputScale = rawMaxOutputScale,
                         onRawMaxOutputScaleChange = viewModel::setRawMaxOutputScale,
+                        selectedHncsProfileId = rawHncsProfileId,
+                        selectedHncsRenderIntent = rawHncsRenderIntent,
+                        availableHncsProfiles = availableHncsProfiles,
+                        onSelectHncsProfile = viewModel::setRawHncsProfileId,
+                        onSelectHncsRenderIntent = viewModel::setRawHncsRenderIntent,
                         contentMode = RawEditPanelContentMode.FULL
                     )
 

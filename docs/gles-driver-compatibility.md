@@ -388,3 +388,29 @@ GPU-resident Radiance 输出则跳过扩展，直接走 Phocus 转换。
 
 研究证据与公式分析见
 [`research/phocus_glsl/04_color_tone/README.md`](../research/phocus_glsl/04_color_tone/README.md)。
+
+### HNCS Cb/Y–Cr/Y 色度表与 Film Curve
+
+HNCS 引擎遵循上述显式尺寸原则。Phocus 二维相机色度表固定为 105×89，尺寸、边界和
+`DivFactor` 均由 profile 显式传给 shader。色度表上传为 `RGBA16F sampler2D`，只使用
+`texelFetch` 并在 shader 中完成双线性插值：
+
+- 不依赖驱动或资源文件设置的线性过滤状态；
+- 避免部分移动驱动对 `RG16F` 纹理格式组合支持不一致；
+- 不声明 `RGBA16F image2D`，也不使用 `imageLoad/imageStore`；
+- 不把 sampler opaque type 作为用户函数参数。
+
+Film Curve Type 0 是从 Phocus 公式生成的固定 65,536 点数据，物理布局为 256×256，
+按原程序的整数索引规则读取，不使用插值，也不需要查询纹理尺寸。Gradation、
+Selective Color、Highlight 等没有真实 profile 数据的表或参数不上传，不能用 identity
+纹理或经验常量补齐。
+
+HNCS 纹理首次创建时必须先切换到专用纹理单元，不能继承照片输入使用的 `GL_TEXTURE0`。
+`glBindTexture` 的绑定属于当前 active texture unit；若资源上传留在 unit 0，会把
+`uInputTexture` 从 RAW 图像替换成 256×256 Film Curve，造成首帧黑屏/错误图像，而同一资源
+缓存后的第二帧又可能正常。引擎绘制前还应显式重绑 unit 0 与输入图像，使首次和缓存渲染具有
+相同状态，不能依赖 helper 的调用顺序或遗留 active unit。
+
+新增 HNCS profile 后，至少在目标 Mali、Adreno 和可用的 PowerVR/IMG 设备上验证 shader
+compile/link、纹理上传、边界四点采样、灰轴以及 LUT 网格外的 clamp。完整 profile 契约见
+[`docs/hncs-rendering-engine.md`](hncs-rendering-engine.md)。

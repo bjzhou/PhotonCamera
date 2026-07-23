@@ -75,6 +75,21 @@ enum class ColorSpace(
         0.065000f, -0.080500f,
         0.312700f, 0.329000f
     ),
+    /**
+     * Phocus HNCS working basis.
+     *
+     * Chromaticities are derived from the recovered
+     * CRawColorCorrection::GetColorSpaceChangeMatrix RGB-to-XYZ(D50) matrix
+     * [0.79767, 0.13519, 0.03134; 0.28804, 0.71188, 0.00009;
+     * 0, 0, 0.82491]. The separate enum identity prevents an HNCS camera map
+     * from being evaluated in an unrelated ProPhoto processing contract.
+     */
+    HNCS(
+        0.734699f, 0.265301f,
+        0.159597f, 0.840403f,
+        0.036598f, 0.000105f,
+        0.345704f, 0.358540f
+    ),
 ;
 
     val primaries: FloatArray

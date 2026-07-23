@@ -12,6 +12,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
 import androidx.core.graphics.createBitmap
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.data.ContentRepository
@@ -154,6 +155,17 @@ class RawDemosaicProcessor {
             preMul = preMul,
             colorCorrectionMatrix = colorCorrectionMatrix,
             cameraWhite = cameraWhite,
+            whitePointXy = dngRawData.whitePointXy
+                .takeIf { it.size >= 2 && it.take(2).all(Float::isFinite) }
+                ?.copyOf(2)
+                ?: baseMetadata?.whitePointXy,
+            colorTemperature = DngSdkColorSpec.colorTemperatureForXy(
+                dngRawData.whitePointXy
+            ) ?: baseMetadata?.colorTemperature,
+            cameraMake = dngRawData.cameraMake.takeIf(String::isNotBlank)
+                ?: baseMetadata?.cameraMake,
+            cameraModel = dngRawData.cameraModel.takeIf(String::isNotBlank)
+                ?: baseMetadata?.cameraModel,
             lensShadingMap = dngRawData.lensShadingMap,
             lensShadingMapWidth = dngRawData.lensShadingMapWidth,
             lensShadingMapHeight = dngRawData.lensShadingMapHeight,
@@ -273,6 +285,7 @@ class RawDemosaicProcessor {
 
     /** Prepares the persistent RAW renderer and first-use capture passes during camera idle time. */
     suspend fun prewarmCapturePipeline(
+        context: Context,
         colorEngine: RawRenderingEngine,
         profileToneMapMode: RawProfileToneMapMode,
         captureWidth: Int,
@@ -301,6 +314,7 @@ class RawDemosaicProcessor {
             currentCoroutineContext().ensureActive()
             val renderEngineReady = runCatching {
                 prewarmRenderEnginePass(
+                    context = context.applicationContext,
                     colorEngine = colorEngine,
                     captureWidth = warmupWidth,
                     captureHeight = warmupHeight,
@@ -420,6 +434,7 @@ class RawDemosaicProcessor {
                 outputBounds = Rect(0, 0, programSize.width, programSize.height),
                 outputRotation = 0,
                 spectralFilmLut = null,
+                hncsRenderPlan = null,
                 colorEngine = RawRenderingEngine.AdobeCurve,
                 outputWorkingColorSpace = ColorSpace.ProPhoto,
                 profileToEngineTransform = identity,
@@ -486,12 +501,20 @@ class RawDemosaicProcessor {
     }
 
     private fun prewarmRenderEnginePass(
+        context: Context,
         colorEngine: RawRenderingEngine,
         captureWidth: Int,
         captureHeight: Int,
         inputTextureId: Int,
     ): Boolean {
         check(inputTextureId != 0) { "Full-resolution RAW warmup input is unavailable" }
+        val warmupColorEngine = if (colorEngine == RawRenderingEngine.HncsLut) {
+            // Both HNCS branches share one shader source. A camera LUT cannot be
+            // selected before capture metadata/profile selection exists.
+            RawRenderingEngine.HncsCcm
+        } else {
+            colorEngine
+        }
         val programSize = resolveLongEdgePreviewSize(
             captureWidth,
             captureHeight,
@@ -500,25 +523,45 @@ class RawDemosaicProcessor {
         // Allocate the render targets at capture size because these objects remain reusable, but
         // draw only a small viewport: full-frame tone mapping is real capture work, not prewarm.
         setupEngineToneFramebuffer(captureWidth, captureHeight)
+        val outputTransform = computeWorkingToOutputTransform(
+            warmupColorEngine.workingColorSpace,
+            ColorSpace.SRGB,
+        )
         val engineToneReady = renderEngineTonePass(
             inputTextureId = inputTextureId,
             dcpRenderPlan = null,
             applyDcpHueSatMap = false,
             spectralFilmLut = null,
-            colorEngine = colorEngine,
+            hncsRenderPlan = if (warmupColorEngine.isHncs) {
+                HncsProfileManager(context).createCcmRenderPlan()
+            } else {
+                null
+            },
+            colorEngine = warmupColorEngine,
             profileToEngineTransform = identityMatrix3x3(),
             profileExposureUniforms = ProfileExposureUniforms.NEUTRAL,
             rawToneMappingParameters = RawToneMappingParameters.DEFAULT,
-            outputTransform = computeWorkingToOutputTransform(
-                colorEngine.workingColorSpace,
-                ColorSpace.SRGB,
-            ),
+            outputTransform = outputTransform,
             viewportWidth = programSize.width,
             viewportHeight = programSize.height,
         )
+        val srgbInputTextureId = if (engineToneReady && warmupColorEngine.isHncs) {
+            setupAdjustmentFramebuffer(captureWidth, captureHeight)
+            val outputReady = renderHncsOutputLinearPass(
+                inputTextureId = engineToneTextureId,
+                outputTransform = outputTransform,
+                targetFramebufferId = adjustmentFramebufferId,
+                viewportWidth = programSize.width,
+                viewportHeight = programSize.height,
+            )
+            if (!outputReady) return false
+            adjustmentTextureId
+        } else {
+            engineToneTextureId
+        }
         setupCombinedFramebuffer(captureWidth, captureHeight)
         return engineToneReady && renderSrgbPass(
-            inputTextureId = engineToneTextureId,
+            inputTextureId = srgbInputTextureId,
             viewportWidth = programSize.width,
             viewportHeight = programSize.height,
         )
@@ -598,6 +641,7 @@ class RawDemosaicProcessor {
 
     // GL 资源
     private val engineTonePrograms = IntArray(RawRenderingEngine.entries.size)
+    private var hncsOutputLinearProgram = 0
     private var adjustmentProgram = 0
     private var srgbProgram = 0
     private var sharpenProgram = 0
@@ -696,6 +740,10 @@ class RawDemosaicProcessor {
     private var dcpLookTableTextureId = 0
     private var spectralFilmTextureId = 0
     private var spectralFilmTextureKey: String? = null
+    private var hncsColorMapTextureId = 0
+    private var hncsCurveTextureId = 0
+    private var hncsColorMapTextureKey: String? = null
+    private var hncsCurveTextureKey: String? = null
     private var dummyDcp3DTextureId = 0
     private var dummyDcpToneCurveTextureId = 0
 
@@ -918,6 +966,8 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawHncsProfileId: String? = null,
+        rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -956,6 +1006,8 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawHncsProfileId = rawHncsProfileId,
+                rawHncsRenderIntent = rawHncsRenderIntent,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -997,6 +1049,8 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawHncsProfileId: String? = null,
+        rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1034,6 +1088,8 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawHncsProfileId = rawHncsProfileId,
+                rawHncsRenderIntent = rawHncsRenderIntent,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1127,6 +1183,8 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawHncsProfileId: String? = null,
+        rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1165,6 +1223,8 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawHncsProfileId = rawHncsProfileId,
+                rawHncsRenderIntent = rawHncsRenderIntent,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1219,6 +1279,8 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawHncsProfileId: String? = null,
+        rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         embeddedDngRenderPlan: DcpRenderPlan,
         spectralFilmStock: String? = null,
@@ -1297,6 +1359,8 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
+                rawHncsProfileId = rawHncsProfileId,
+                rawHncsRenderIntent = rawHncsRenderIntent,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1346,6 +1410,8 @@ class RawDemosaicProcessor {
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
+        rawHncsProfileId: String? = null,
+        rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1394,7 +1460,11 @@ class RawDemosaicProcessor {
         var dngWarpRectilinear: FloatArray? = null
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
-        val profileWorkingColorSpace = ColorSpace.ProPhoto
+        val profileWorkingColorSpace = if (requestedColorEngine.isHncs) {
+            ColorSpace.HNCS
+        } else {
+            ColorSpace.ProPhoto
+        }
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
 
         if (dngFile != null) {
@@ -1506,6 +1576,28 @@ class RawDemosaicProcessor {
             } else {
                 null
             }
+        val hncsRenderPlan = when (requestedColorEngine) {
+            RawRenderingEngine.HncsCcm ->
+                HncsProfileManager(context.applicationContext).createCcmRenderPlan()
+
+            RawRenderingEngine.HncsLut ->
+                HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
+                    colorTemperature = actualMetadata.colorTemperature,
+                    requestedProfileId = rawHncsProfileId,
+                    renderIntent = rawHncsRenderIntent
+                )
+
+            else -> null
+        }
+        if (requestedColorEngine.isHncs && hncsRenderPlan == null) {
+            PLog.e(
+                TAG,
+                "HNCS rendering rejected: branch=$requestedColorEngine " +
+                    "profile=$rawHncsProfileId intent=${rawHncsRenderIntent.assetValue} " +
+                    "cct=${actualMetadata.colorTemperature}"
+            )
+            return@withContext null
+        }
         val colorEngine = when {
             requestedColorEngine == RawRenderingEngine.Spektrafilm && spektrafilmLut == null -> {
                 PLog.w(TAG, "SpectralFilm LUT unavailable, falling back to AdobeCurve")
@@ -1785,14 +1877,32 @@ class RawDemosaicProcessor {
             profileWorkingColorSpace,
             ColorSpace.SRGB,
         )
-        val linearColorCorrectionMatrix = resolveLinearColorCorrectionMatrix(
-            metadata = actualMetadata,
-            dcpRenderPlan = activeDcpRenderPlan
-        )
+        val linearColorCorrectionMatrix =
+            if (colorEngine.usesHncsColorMap) {
+                requireNotNull(hncsRenderPlan?.cameraToHncsMatrix) {
+                    "HNCS LUT branch requires its source camera matrix"
+                }
+            } else {
+                resolveLinearColorCorrectionMatrix(
+                    metadata = actualMetadata,
+                    dcpRenderPlan = activeDcpRenderPlan
+                )
+            }
         val linearCameraWhite = resolveLinearCameraWhite(
             metadata = actualMetadata,
             dcpRenderPlan = activeDcpRenderPlan
         )
+        if (colorEngine.isHncs) {
+            PLog.i(
+                TAG,
+                "HNCS pipeline: branch=${if (colorEngine.usesHncsColorMap) "CbYCrY_LUT" else "CCM"} " +
+                    "profile=${hncsRenderPlan?.profileId} cct=${hncsRenderPlan?.colorTemperature} " +
+                    "source=${hncsRenderPlan?.sourceFile} " +
+                    "sha256=${hncsRenderPlan?.sourceSha256} profileSpace=$profileWorkingColorSpace " +
+                    "cameraMatrix=${if (colorEngine.usesHncsColorMap) "profile-M*diag(v)-to-HNCS" else "raw-metadata"} " +
+                    "profileNeutralGains=${hncsRenderPlan?.profileNeutralGains?.contentToString()}"
+            )
+        }
         logRawDcpPipeline(
             metadata = actualMetadata,
             profilePlanSource = profilePlanSource,
@@ -1829,7 +1939,7 @@ class RawDemosaicProcessor {
                 PLog.d(
                     TAG,
                     "LinearRaw input prepared on GPU: ${actualWidth}x${actualHeight} " +
-                        "samplesPerPixel=$actualSamplesPerPixel rowStride=$actualRowStride"
+                    "samplesPerPixel=$actualSamplesPerPixel rowStride=$actualRowStride"
                 )
             } else {
                 // darktable feeds Filmic after the raw highlight reconstruction module;
@@ -1861,6 +1971,15 @@ class RawDemosaicProcessor {
                         highlightReconstructionEnabled = rawDomainHighlightReconstructionEnabled,
                     )
                 }
+            }
+            if (colorEngine.isHncs) {
+                logHncsFramebufferStats(
+                    stage = "camera-rgb-input",
+                    framebufferId = demosaicFramebufferId,
+                    width = actualWidth,
+                    height = actualHeight,
+                    readType = GLES30.GL_HALF_FLOAT,
+                )
             }
             dngWarpRectilinear?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }?.let { warps ->
                 var appliedWarpCount = 0
@@ -1918,6 +2037,7 @@ class RawDemosaicProcessor {
                         outputBounds = bounds,
                         outputRotation = actualRotation,
                         spectralFilmLut = spektrafilmLut,
+                        hncsRenderPlan = hncsRenderPlan,
                         colorEngine = colorEngine,
                         outputWorkingColorSpace = engineWorkingColorSpace,
                         profileToEngineTransform = profileToEngineTransform,
@@ -2068,6 +2188,15 @@ class RawDemosaicProcessor {
                 denoiseValue = denoiseValue,
             )
             val denoiseProfileTextureId = gfTexId[1]
+            if (colorEngine.isHncs) {
+                logHncsFramebufferStats(
+                    stage = "camera-rgb-after-denoise",
+                    framebufferId = gfFboId[1],
+                    width = actualWidth,
+                    height = actualHeight,
+                    readType = GLES30.GL_HALF_FLOAT,
+                )
+            }
 
             // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. Linear-domain
             // engines apply the same EV as an exact 2^EV gain in this ProPhoto/RIMM pass.
@@ -2106,6 +2235,15 @@ class RawDemosaicProcessor {
 
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             checkGlError("After LinearRcdPass Swap")
+            if (colorEngine.isHncs) {
+                logHncsFramebufferStats(
+                    stage = "hncs-linear-after-ccm",
+                    framebufferId = demosaicFramebufferId,
+                    width = actualWidth,
+                    height = actualHeight,
+                    readType = GLES30.GL_HALF_FLOAT,
+                )
+            }
             // LinearRcdPass has consumed the camera-RGB NLM result. The post-CCM pipeline uses
             // the full-resolution ping-pong textures, so both denoiseprofile textures can go.
             releaseDenoiseProfileFramebuffers()
@@ -2165,6 +2303,7 @@ class RawDemosaicProcessor {
                 applyDcpHueSatMap = false,
                 profileExposureUniforms = combinedProfileExposureUniforms,
                 spectralFilmLut = spektrafilmLut,
+                hncsRenderPlan = hncsRenderPlan,
                 colorEngine = colorEngine,
                 outputWorkingColorSpace = engineWorkingColorSpace,
                 profileToEngineTransform = combinedProfileToEngineTransform,
@@ -2186,6 +2325,15 @@ class RawDemosaicProcessor {
             val sharpenStart = System.currentTimeMillis()
             renderSharpenPass(actualMetadata, sharpeningValue, combinedTextureId)
             PLog.d(TAG, "Sharpen Pass took: ${System.currentTimeMillis() - sharpenStart}ms")
+            if (colorEngine.isHncs) {
+                logHncsFramebufferStats(
+                    stage = "srgb-after-sharpen",
+                    framebufferId = sharpenFramebufferId,
+                    width = actualWidth,
+                    height = actualHeight,
+                    readType = GLES30.GL_UNSIGNED_BYTE,
+                )
+            }
             // combinedTextureId 已被 sharpenPass 消费，提前释放
             if (combinedTextureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(combinedTextureId), 0)
@@ -2210,6 +2358,15 @@ class RawDemosaicProcessor {
                 sourceTextureForOutput
             )
             PLog.d(TAG, "Output Pass took: ${System.currentTimeMillis() - outputStart}ms")
+            if (colorEngine.isHncs) {
+                logHncsFramebufferStats(
+                    stage = "final-output",
+                    framebufferId = outputFramebufferId,
+                    width = finalWidth,
+                    height = finalHeight,
+                    readType = GLES30.GL_HALF_FLOAT,
+                )
+            }
             // sharpenTextureId 已被 outputPass 消费，在 readPixels 前释放以降低峰值内存
             if (sharpenTextureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(sharpenTextureId), 0)
@@ -3996,6 +4153,22 @@ class RawDemosaicProcessor {
         )
         if (vShader != 0) GLES30.glDeleteShader(vShader)
         return adjustmentProgram
+    }
+
+    private fun getOrCreateHncsOutputLinearProgram(): Int {
+        if (hncsOutputLinearProgram != 0) return hncsOutputLinearProgram
+        val vShader = compileShader(
+            GLES30.GL_VERTEX_SHADER,
+            RawShaders.VERTEX_SHADER,
+            "hncsOutputLinearVertex"
+        )
+        hncsOutputLinearProgram = linkFragmentProgram(
+            vShader,
+            HncsOutputLinearPassShaders.FRAGMENT_SHADER,
+            "hncsOutputLinear"
+        )
+        if (vShader != 0) GLES30.glDeleteShader(vShader)
+        return hncsOutputLinearProgram
     }
 
     private fun getOrCreateSrgbProgram(): Int {
@@ -7342,6 +7515,14 @@ class RawDemosaicProcessor {
             combinedTextureId,
             0
         )
+        requireFramebufferComplete(
+            label = "Combined",
+            framebufferId = combinedFramebufferId,
+            textureId = combinedTextureId,
+            width = width,
+            height = height,
+            internalFormat = "RGBA8",
+        )
         checkGlError("setupCombinedFramebuffer")
     }
 
@@ -7376,6 +7557,14 @@ class RawDemosaicProcessor {
             engineToneTextureId,
             0
         )
+        requireFramebufferComplete(
+            label = "EngineTone",
+            framebufferId = engineToneFramebufferId,
+            textureId = engineToneTextureId,
+            width = width,
+            height = height,
+            internalFormat = "RGBA16F",
+        )
         checkGlError("setupEngineToneFramebuffer")
     }
 
@@ -7409,6 +7598,14 @@ class RawDemosaicProcessor {
             GLES30.GL_TEXTURE_2D,
             adjustmentTextureId,
             0
+        )
+        requireFramebufferComplete(
+            label = "Adjustment",
+            framebufferId = adjustmentFramebufferId,
+            textureId = adjustmentTextureId,
+            width = width,
+            height = height,
+            internalFormat = "RGBA16F",
         )
         checkGlError("setupAdjustmentFramebuffer")
     }
@@ -7625,6 +7822,14 @@ class RawDemosaicProcessor {
             sharpenTextureId,
             0
         )
+        requireFramebufferComplete(
+            label = "Sharpen",
+            framebufferId = sharpenFramebufferId,
+            textureId = sharpenTextureId,
+            width = width,
+            height = height,
+            internalFormat = "RGBA8",
+        )
         checkGlError("setupSharpenFramebuffer")
     }
 
@@ -7662,6 +7867,14 @@ class RawDemosaicProcessor {
             GLES30.GL_TEXTURE_2D,
             outputTextureId,
             0
+        )
+        requireFramebufferComplete(
+            label = "Output",
+            framebufferId = outputFramebufferId,
+            textureId = outputTextureId,
+            width = width,
+            height = height,
+            internalFormat = "RGBA16F",
         )
         checkGlError("setupOutputFramebuffer")
     }
@@ -8093,13 +8306,216 @@ class RawDemosaicProcessor {
         checkGlError("bindSpectralFilmCombinedResource")
     }
 
+    private fun uploadHncsRgbaTexture(
+        existingTextureId: Int,
+        width: Int,
+        height: Int,
+        values: FloatArray
+    ): Int {
+        require(width > 0 && height > 0 && values.size == width * height * 4) {
+            "Invalid HNCS RGBA texture payload: ${width}x$height values=${values.size}"
+        }
+        val textureId = if (existingTextureId != 0) {
+            existingTextureId
+        } else {
+            IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
+        }
+        val buffer = ByteBuffer.allocateDirect(values.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .apply {
+                put(values)
+                position(0)
+            }
+        // Resource creation must never inherit GL_TEXTURE0 from the image-input binding.
+        // On the first HNCS render this upload otherwise replaces uInputTexture with the
+        // 256x256 film-curve texture; cached renders then behave differently.
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_MIN_FILTER,
+            GLES30.GL_NEAREST
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_MAG_FILTER,
+            GLES30.GL_NEAREST
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_WRAP_S,
+            GLES30.GL_CLAMP_TO_EDGE
+        )
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D,
+            GLES30.GL_TEXTURE_WRAP_T,
+            GLES30.GL_CLAMP_TO_EDGE
+        )
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_RGBA16F,
+            width,
+            height,
+            0,
+            GLES30.GL_RGBA,
+            GLES30.GL_FLOAT,
+            buffer
+        )
+        checkGlError("uploadHncsRgbaTexture")
+        return textureId
+    }
+
+    private fun ensureHncsTextures(renderPlan: HncsRenderPlan) {
+        val filmCurveKey = buildString {
+            append(renderPlan.filmCurveAssetPath)
+            append('|')
+            append(renderPlan.filmCurveAssetSha256)
+        }
+        var uploaded = false
+        if (hncsCurveTextureKey != filmCurveKey || hncsCurveTextureId == 0) {
+            hncsCurveTextureId = uploadHncsRgbaTexture(
+                existingTextureId = hncsCurveTextureId,
+                width = HncsProfileManager.CURVE_TEXTURE_EDGE,
+                height = HncsProfileManager.CURVE_TEXTURE_EDGE,
+                values = renderPlan.filmCurveTexture
+            )
+            hncsCurveTextureKey = filmCurveKey
+            uploaded = true
+        }
+        renderPlan.colorMap?.takeIf(HncsColorMap::isValid)?.let { colorMap ->
+            if (hncsColorMapTextureKey != renderPlan.sourceKey ||
+                hncsColorMapTextureId == 0
+            ) {
+                val rgba = FloatArray(colorMap.width * colorMap.height * 4)
+                var sourceIndex = 0
+                var targetIndex = 0
+                while (sourceIndex < colorMap.values.size) {
+                    rgba[targetIndex++] = colorMap.values[sourceIndex++]
+                    rgba[targetIndex++] = colorMap.values[sourceIndex++]
+                    rgba[targetIndex++] = 0f
+                    rgba[targetIndex++] = 1f
+                }
+                hncsColorMapTextureId = uploadHncsRgbaTexture(
+                    existingTextureId = hncsColorMapTextureId,
+                    width = colorMap.width,
+                    height = colorMap.height,
+                    values = rgba
+                )
+                hncsColorMapTextureKey = renderPlan.sourceKey
+                uploaded = true
+            }
+        }
+        if (uploaded) {
+            PLog.d(
+                TAG,
+                "HNCS resources uploaded: profile=${renderPlan.profileId} " +
+                    "map=${renderPlan.colorMap?.let { "${it.width}x${it.height}" } ?: "none"} " +
+                    "curves=${HncsProfileManager.CURVE_SAMPLE_COUNT}"
+            )
+        }
+    }
+
+    private fun bindHncsCombinedResources(
+        program: Int,
+        renderPlan: HncsRenderPlan,
+        applyColorMap: Boolean
+    ) {
+        ensureHncsTextures(renderPlan)
+        val colorMap = renderPlan.colorMap?.takeIf {
+            applyColorMap && it.isValid && hncsColorMapTextureId != 0
+        }
+        require(!applyColorMap || colorMap != null) {
+            "HNCS LUT branch requires an uploaded, validated color map"
+        }
+        require(hncsCurveTextureId != 0) {
+            "HNCS film curve texture was not uploaded"
+        }
+
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHncsColorMapTexture"), 2)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uHncsCurveTexture"), 3)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(
+            GLES30.GL_TEXTURE_2D,
+            if (colorMap != null) hncsColorMapTextureId else hncsCurveTextureId
+        )
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, hncsCurveTextureId)
+
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uHncsColorMapEnabled"),
+            if (colorMap != null) 1 else 0
+        )
+        GLES30.glUniform2i(
+            GLES30.glGetUniformLocation(program, "uHncsColorMapSize"),
+            colorMap?.width ?: 1,
+            colorMap?.height ?: 1
+        )
+        GLES30.glUniform3f(
+            GLES30.glGetUniformLocation(program, "uHncsColorMapGrid"),
+            colorMap?.cbStart ?: 0f,
+            colorMap?.crStart ?: 0f,
+            colorMap?.divFactor ?: 1f
+        )
+
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uHncsRgbToYcc"),
+            1,
+            false,
+            transposeMatrix3x3(renderPlan.rgbToYccMatrix),
+            0
+        )
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uHncsYccToRgb"),
+            1,
+            false,
+            transposeMatrix3x3(renderPlan.yccToRgbMatrix),
+            0
+        )
+        GLES30.glUniform2fv(
+            GLES30.glGetUniformLocation(program, "uHncsGrayThresholds"),
+            1,
+            renderPlan.colorCorrection.grayThresholds,
+            0
+        )
+        GLES30.glUniform4fv(
+            GLES30.glGetUniformLocation(program, "uHncsLowLightDesaturation"),
+            1,
+            renderPlan.colorCorrection.lowLightDesaturation,
+            0
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uHncsFilmCurveGain"),
+            renderPlan.filmCurveGain
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uHncsGammaFilterEnabled"),
+            if (renderPlan.gamma.filterEnabled) 1 else 0
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uHncsGamma"),
+            renderPlan.gamma.gamma
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uHncsHdrMaxGain"),
+            renderPlan.gamma.hdrMaxGain
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uHncsHdrRgbLimit"),
+            renderPlan.gamma.hdrRgbLimit
+        )
+        checkGlError("bindHncsCombinedResources")
+    }
+
     /**
      * RAW tone processing coordinator.
      *
      * Pass order:
-     * 1. engine tone pass: linear RAW working RGB -> linear output RGB
-     * 2. optional adjustment pass: shadows/highlights + black/white levels in linear output RGB
-     * 3. sRGB pass: linear output RGB -> sRGB encoded RGBA8 for sharpen/output
+     * 1. engine tone pass
+     * 2. HNCS only: decode FilmCurve companding + HNCS -> linear output RGB
+     * 3. optional adjustment pass: shadows/highlights + black/white levels in linear output RGB
+     * 4. sRGB pass: linear output RGB -> sRGB encoded RGBA8 for sharpen/output
      */
     private fun renderCombinedPass(
         metadata: RawMetadata,
@@ -8107,6 +8523,7 @@ class RawDemosaicProcessor {
         dcpRenderPlan: DcpRenderPlan? = null,
         applyDcpHueSatMap: Boolean = true,
         spectralFilmLut: SpectralFilmLut? = null,
+        hncsRenderPlan: HncsRenderPlan? = null,
         colorEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
         outputWorkingColorSpace: ColorSpace = ColorSpace.ProPhoto,
         profileToEngineTransform: FloatArray = identityMatrix3x3(),
@@ -8125,6 +8542,7 @@ class RawDemosaicProcessor {
                 dcpRenderPlan = dcpRenderPlan,
                 applyDcpHueSatMap = applyDcpHueSatMap,
                 spectralFilmLut = spectralFilmLut,
+                hncsRenderPlan = hncsRenderPlan,
                 colorEngine = colorEngine,
                 profileToEngineTransform = profileToEngineTransform,
                 profileExposureUniforms = profileExposureUniforms,
@@ -8136,6 +8554,42 @@ class RawDemosaicProcessor {
         ) {
             return false
         }
+        if (colorEngine.isHncs) {
+            logHncsFramebufferStats(
+                stage = if (hncsRenderPlan?.gamma?.filterEnabled == true) {
+                    "hncs-after-optional-gamma-filter"
+                } else {
+                    "hncs-after-film-curve-gamma-filter-skipped"
+                },
+                framebufferId = engineToneFramebufferId,
+                width = viewportWidth,
+                height = viewportHeight,
+                readType = GLES30.GL_HALF_FLOAT,
+            )
+        }
+
+        var linearOutputTextureId = engineToneTextureId
+        if (colorEngine.isHncs) {
+            setupAdjustmentFramebuffer(viewportWidth, viewportHeight)
+            if (!renderHncsOutputLinearPass(
+                    inputTextureId = engineToneTextureId,
+                    outputTransform = outputTransform,
+                    targetFramebufferId = adjustmentFramebufferId,
+                    viewportWidth = viewportWidth,
+                    viewportHeight = viewportHeight,
+                )
+            ) {
+                return false
+            }
+            linearOutputTextureId = adjustmentTextureId
+            logHncsFramebufferStats(
+                stage = "linear-srgb-after-hncs-colorspaceconvert",
+                framebufferId = adjustmentFramebufferId,
+                width = viewportWidth,
+                height = viewportHeight,
+                readType = GLES30.GL_HALF_FLOAT,
+            )
+        }
 
         val srgbInputTextureId = if (needsAdjustmentPass(
                 shadowsHighlightsParams = shadowsHighlightsParams,
@@ -8143,29 +8597,110 @@ class RawDemosaicProcessor {
                 rawWhitesAdjustment = rawWhitesAdjustment
             )
         ) {
-            setupAdjustmentFramebuffer(viewportWidth, viewportHeight)
+            val adjustmentTargetFramebufferId = if (colorEngine.isHncs) {
+                engineToneFramebufferId
+            } else {
+                setupAdjustmentFramebuffer(viewportWidth, viewportHeight)
+                adjustmentFramebufferId
+            }
             if (!renderAdjustmentPass(
-                    inputTextureId = engineToneTextureId,
+                    inputTextureId = linearOutputTextureId,
                     shadowsHighlightsParams = shadowsHighlightsParams,
                     rawBlacksAdjustment = rawBlacksAdjustment,
                     rawWhitesAdjustment = rawWhitesAdjustment,
+                    targetFramebufferId = adjustmentTargetFramebufferId,
                     viewportWidth = viewportWidth,
                     viewportHeight = viewportHeight
                 )
             ) {
                 return false
             }
-            adjustmentTextureId
+            if (colorEngine.isHncs) {
+                logHncsFramebufferStats(
+                    stage = "hncs-after-adjustments",
+                    framebufferId = adjustmentTargetFramebufferId,
+                    width = viewportWidth,
+                    height = viewportHeight,
+                    readType = GLES30.GL_HALF_FLOAT,
+                )
+            }
+            if (colorEngine.isHncs) engineToneTextureId else adjustmentTextureId
         } else {
-            engineToneTextureId
+            linearOutputTextureId
         }
 
         setupCombinedFramebuffer(viewportWidth, viewportHeight)
-        return renderSrgbPass(
+        val srgbRendered = renderSrgbPass(
             inputTextureId = srgbInputTextureId,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight
         )
+        if (srgbRendered && colorEngine.isHncs) {
+            logHncsFramebufferStats(
+                stage = "srgb-after-encode",
+                framebufferId = combinedFramebufferId,
+                width = viewportWidth,
+                height = viewportHeight,
+                readType = GLES30.GL_UNSIGNED_BYTE,
+            )
+        }
+        return srgbRendered
+    }
+
+    /**
+     * Matches the SDR branch of Phocus colorspaceconvert:
+     * Gamma22_EOTF -> source RGB to XYZ -> Bradford -> XYZ to destination RGB.
+     *
+     * [outputTransform] already contains the three linear matrix operations, so
+     * this pass keeps their original order while avoiding an unnecessary XYZ
+     * intermediate.
+     */
+    private fun renderHncsOutputLinearPass(
+        inputTextureId: Int,
+        outputTransform: FloatArray,
+        targetFramebufferId: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+    ): Boolean {
+        val program = getOrCreateHncsOutputLinearProgram()
+        if (program == 0) {
+            PLog.e(TAG, "Unable to create HNCS colorspaceconvert program")
+            return false
+        }
+
+        GLES30.glUseProgram(program)
+        checkGlError("renderHncsOutputLinearPass glUseProgram")
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
+        checkGlError("renderHncsOutputLinearPass glBindFramebuffer")
+        GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uHncsToLinearOutput"),
+            1,
+            false,
+            transposeMatrix3x3(outputTransform),
+            0,
+        )
+        bindIdentityTexMatrix(program)
+
+        if (BuildConfig.DEBUG) {
+            val framebufferStatus = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            PLog.i(
+                TAG,
+                "HNCS_DIAG colorspaceconvert program=$program fbo=$targetFramebufferId " +
+                    "fboStatus=0x${framebufferStatus.toString(16)} " +
+                    "inputTexture=$inputTextureId inputValid=${GLES30.glIsTexture(inputTextureId)} " +
+                    "inputEotf=gamma22 outputEncoding=linear " +
+                    "hncsToLinearOutput=${outputTransform.contentToString()}",
+            )
+        }
+        drawQuad(program)
+        checkGlError("renderHncsOutputLinearPass")
+        return true
     }
 
     private fun renderEngineTonePass(
@@ -8173,6 +8708,7 @@ class RawDemosaicProcessor {
         dcpRenderPlan: DcpRenderPlan?,
         applyDcpHueSatMap: Boolean,
         spectralFilmLut: SpectralFilmLut?,
+        hncsRenderPlan: HncsRenderPlan?,
         colorEngine: RawRenderingEngine,
         profileToEngineTransform: FloatArray,
         profileExposureUniforms: ProfileExposureUniforms,
@@ -8226,19 +8762,91 @@ class RawDemosaicProcessor {
                 program,
                 profileExposureUniforms
             )
+
+            RawRenderingEngine.HncsCcm,
+            RawRenderingEngine.HncsLut -> {
+                bindProfileExposureLinearGainUniform(program, profileExposureUniforms)
+                val renderPlan = requireNotNull(hncsRenderPlan) {
+                    "HNCS engine requires a validated render plan"
+                }
+                bindHncsCombinedResources(
+                    program = program,
+                    renderPlan = renderPlan,
+                    applyColorMap = colorEngine.usesHncsColorMap
+                )
+                logHncsRenderContract(
+                    program = program,
+                    inputTextureId = inputTextureId,
+                    renderPlan = renderPlan,
+                    colorEngine = colorEngine,
+                    profileExposureUniforms = profileExposureUniforms,
+                    profileToEngineTransform = profileToEngineTransform,
+                    outputTransform = outputTransform,
+                    viewportWidth = viewportWidth,
+                    viewportHeight = viewportHeight,
+                )
+            }
         }
 
-        GLES30.glUniformMatrix3fv(
-            GLES30.glGetUniformLocation(program, "uOutputTransform"),
-            1, false, transposeMatrix3x3(outputTransform), 0
-        )
+        if (!colorEngine.isHncs) {
+            GLES30.glUniformMatrix3fv(
+                GLES30.glGetUniformLocation(program, "uOutputTransform"),
+                1,
+                false,
+                transposeMatrix3x3(outputTransform),
+                0,
+            )
+        }
         GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
             1, false, transposeMatrix3x3(profileToEngineTransform), 0
         )
+        val hncsDiagnosticStageLocation = if (colorEngine.isHncs) {
+            GLES30.glGetUniformLocation(program, "uHncsDiagnosticStage")
+        } else {
+            -1
+        }
+        if (hncsDiagnosticStageLocation >= 0) {
+            GLES30.glUniform1i(hncsDiagnosticStageLocation, 0)
+        }
 
         bindIdentityTexMatrix(program)
+        // Resource upload/binding helpers are allowed to change the active texture unit.
+        // Re-establish the image-input contract immediately before drawing so the first
+        // render and cached renders sample the same texture.
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
         checkGlError("renderEngineTonePass matrices")
+        if (BuildConfig.DEBUG && hncsDiagnosticStageLocation >= 0) {
+            val diagnosticStages = arrayOf(
+                1 to "engine-input-after-profile-transform",
+                2 to "engine-after-camera-color-map",
+                3 to "engine-after-film-curve",
+                4 to if (hncsRenderPlan?.gamma?.filterEnabled == true) {
+                    "engine-after-optional-gamma-filter"
+                } else {
+                    "engine-after-gamma-filter-skipped"
+                },
+            )
+            for ((stageIndex, stageName) in diagnosticStages) {
+                GLES30.glUniform1i(hncsDiagnosticStageLocation, stageIndex)
+                GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                drawQuad(program)
+                checkGlError("HNCS diagnostic draw stage=$stageName")
+                logHncsFramebufferStats(
+                    stage = stageName,
+                    framebufferId = engineToneFramebufferId,
+                    width = viewportWidth,
+                    height = viewportHeight,
+                    readType = GLES30.GL_HALF_FLOAT,
+                )
+            }
+            GLES30.glUniform1i(hncsDiagnosticStageLocation, 0)
+            GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        }
         drawQuad(program)
         checkGlError("renderEngineTonePass")
         return true
@@ -8260,6 +8868,7 @@ class RawDemosaicProcessor {
         shadowsHighlightsParams: ShadowsHighlightsParams,
         rawBlacksAdjustment: Float,
         rawWhitesAdjustment: Float,
+        targetFramebufferId: Int = adjustmentFramebufferId,
         viewportWidth: Int,
         viewportHeight: Int
     ): Boolean {
@@ -8271,7 +8880,7 @@ class RawDemosaicProcessor {
 
         GLES30.glUseProgram(program)
         checkGlError("renderAdjustmentPass glUseProgram")
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, adjustmentFramebufferId)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
         checkGlError("renderAdjustmentPass glBindFramebuffer")
         GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -8928,6 +9537,9 @@ class RawDemosaicProcessor {
     }
 
     private fun computeXyzD50ToGamut(colorSpace: ColorSpace): FloatArray? {
+        if (colorSpace == ColorSpace.HNCS) {
+            return invertMatrix3x3(HncsProfileManager.HNCS_RGB_TO_XYZ_D50)
+        }
         val primaries = colorSpace.primaries
         val whitePoint = colorSpace.whitePoint
         if (primaries.size != 6 || whitePoint.size != 2) return null
@@ -9678,6 +10290,7 @@ class RawDemosaicProcessor {
         outputBounds: Rect,
         outputRotation: Int,
         spectralFilmLut: SpectralFilmLut?,
+        hncsRenderPlan: HncsRenderPlan?,
         colorEngine: RawRenderingEngine,
         outputWorkingColorSpace: ColorSpace,
         profileToEngineTransform: FloatArray,
@@ -9808,6 +10421,7 @@ class RawDemosaicProcessor {
                         exposureEv = if (useAdobeSdkExposure) clampedExposureEv else 0f,
                         dcpRenderPlan = dcpRenderPlan,
                         spectralFilmLut = spectralFilmLut,
+                        hncsRenderPlan = hncsRenderPlan,
                         colorEngine = colorEngine,
                         outputWorkingColorSpace = outputWorkingColorSpace,
                         profileToEngineTransform = profileToEngineTransform,
@@ -9903,6 +10517,7 @@ class RawDemosaicProcessor {
         exposureEv: Float,
         dcpRenderPlan: DcpRenderPlan?,
         spectralFilmLut: SpectralFilmLut?,
+        hncsRenderPlan: HncsRenderPlan?,
         colorEngine: RawRenderingEngine,
         outputWorkingColorSpace: ColorSpace,
         profileToEngineTransform: FloatArray,
@@ -9933,6 +10548,7 @@ class RawDemosaicProcessor {
             dcpRenderPlan = dcpRenderPlan,
             applyDcpHueSatMap = false,
             spectralFilmLut = spectralFilmLut,
+            hncsRenderPlan = hncsRenderPlan,
             colorEngine = colorEngine,
             outputWorkingColorSpace = outputWorkingColorSpace,
             profileToEngineTransform = profileToEngineTransform,
@@ -10293,6 +10909,442 @@ class RawDemosaicProcessor {
         }
     }
 
+    private fun requireFramebufferComplete(
+        label: String,
+        framebufferId: Int,
+        textureId: Int,
+        width: Int,
+        height: Int,
+        internalFormat: String,
+    ) {
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            val message =
+                "$label framebuffer incomplete: status=0x${status.toString(16)} " +
+                    "fbo=$framebufferId texture=$textureId size=${width}x$height " +
+                    "format=$internalFormat"
+            PLog.e(TAG, message)
+            throw IllegalStateException(message)
+        }
+        PLog.d(
+            TAG,
+            "RAW_GL target=$label fbo=$framebufferId texture=$textureId " +
+                "size=${width}x$height format=$internalFormat status=complete",
+        )
+    }
+
+    private fun logHncsRenderContract(
+        program: Int,
+        inputTextureId: Int,
+        renderPlan: HncsRenderPlan,
+        colorEngine: RawRenderingEngine,
+        profileExposureUniforms: ProfileExposureUniforms,
+        profileToEngineTransform: FloatArray,
+        outputTransform: FloatArray,
+        viewportWidth: Int,
+        viewportHeight: Int,
+    ) {
+        if (!BuildConfig.DEBUG) return
+        val curve = renderPlan.filmCurveTexture
+        var curveMin = Float.POSITIVE_INFINITY
+        var curveMax = Float.NEGATIVE_INFINITY
+        var curveSum = 0.0
+        var curveFiniteCount = 0
+        for (value in curve) {
+            if (!value.isFinite()) continue
+            curveMin = min(curveMin, value)
+            curveMax = max(curveMax, value)
+            curveSum += value
+            curveFiniteCount++
+        }
+        val curveMean = if (curveFiniteCount > 0) {
+            (curveSum / curveFiniteCount).toFloat()
+        } else {
+            Float.NaN
+        }
+        val curveQuarter = curve.getOrNull(curve.size / 4) ?: Float.NaN
+        val curveMiddle = curve.getOrNull(curve.size / 2) ?: Float.NaN
+        val curveThreeQuarter = curve.getOrNull(curve.size * 3 / 4) ?: Float.NaN
+        val profileNeutralRaw = renderPlan.profileNeutralGains?.takeIf { it.size == 3 }?.let {
+            FloatArray(3) { index -> 1f / it[index] }
+        }
+        val profileNeutralToHncs = profileNeutralRaw?.let { neutral ->
+            renderPlan.cameraToHncsMatrix?.takeIf { it.size == 9 }?.let { matrix ->
+                FloatArray(3) { row ->
+                    matrix[row * 3] * neutral[0] +
+                        matrix[row * 3 + 1] * neutral[1] +
+                        matrix[row * 3 + 2] * neutral[2]
+                }
+            }
+        }
+        val boundTextures = IntArray(4)
+        val textureBinding = IntArray(1)
+        for (unit in boundTextures.indices) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
+            GLES30.glGetIntegerv(GLES30.GL_TEXTURE_BINDING_2D, textureBinding, 0)
+            boundTextures[unit] = textureBinding[0]
+        }
+        val framebufferStatus = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val uniformNames = arrayOf(
+            "uInputTexture",
+            "uProfileExposureLinearGain",
+            "uProfileToEngineTransform",
+            "uHncsColorMapEnabled",
+            "uHncsColorMapTexture",
+            "uHncsCurveTexture",
+            "uHncsFilmCurveGain",
+            "uHncsGammaFilterEnabled",
+            "uHncsGamma",
+            "uHncsHdrMaxGain",
+            "uHncsHdrRgbLimit",
+        )
+        val uniformLocations = uniformNames.joinToString(separator = ",") { name ->
+            "$name=${GLES30.glGetUniformLocation(program, name)}"
+        }
+        PLog.i(
+            TAG,
+            "HNCS_DIAG contract branch=$colorEngine viewport=${viewportWidth}x$viewportHeight " +
+                "program=$program fbo=$engineToneFramebufferId " +
+                "fboStatus=0x${framebufferStatus.toString(16)} " +
+                "inputTexture=$inputTextureId inputValid=${GLES30.glIsTexture(inputTextureId)} " +
+                "curveTexture=$hncsCurveTextureId curveValid=${GLES30.glIsTexture(hncsCurveTextureId)} " +
+                "colorMapTexture=$hncsColorMapTextureId " +
+                "colorMapValid=${hncsColorMapTextureId != 0 && GLES30.glIsTexture(hncsColorMapTextureId)} " +
+                "bound2D=${boundTextures.contentToString()} uniforms={$uniformLocations}",
+        )
+        PLog.i(
+            TAG,
+            "HNCS_DIAG parameters intent=${renderPlan.renderIntent} " +
+                "profile=${renderPlan.profileId} source=${renderPlan.sourceFile} " +
+                "sha256=${renderPlan.sourceSha256} exposureEv=${profileExposureUniforms.exposureEv} " +
+                "exposureGain=${profileExposureUniforms.linearGain} " +
+                "filmCurveType=${renderPlan.filmCurveType} " +
+                "filmCurveCompanding=${renderPlan.filmCurveCompanding} " +
+                "filmCurveAsset=${renderPlan.filmCurveAssetPath} " +
+                "filmCurveAssetSha256=${renderPlan.filmCurveAssetSha256} " +
+                "filmCurveFloatFnv1a64=${renderPlan.filmCurveSourceFloatFnv1a64} " +
+                "filmCurveLibrarySha256=${renderPlan.filmCurveSourceLibrarySha256} " +
+                "filmGain=${renderPlan.filmCurveGain} " +
+                "gammaFilterEnabled=${renderPlan.gamma.filterEnabled} " +
+                "gammaFilterGuard=phocus-default-storedVersion2-flagFalse " +
+                "gamma=${renderPlan.gamma.gamma} " +
+                "hdrMaxGain=${renderPlan.gamma.hdrMaxGain} " +
+                "hdrRgbLimit=${renderPlan.gamma.hdrRgbLimit} " +
+                "curveSamples=${curve.size} curveFinite=$curveFiniteCount " +
+                "curveMin=${formatHncsDiagnosticFloat(curveMin)} " +
+                "curveQ1=${formatHncsDiagnosticFloat(curveQuarter)} " +
+                "curveMedian=${formatHncsDiagnosticFloat(curveMiddle)} " +
+                "curveQ3=${formatHncsDiagnosticFloat(curveThreeQuarter)} " +
+                "curveMax=${formatHncsDiagnosticFloat(curveMax)} " +
+                "curveMean=${formatHncsDiagnosticFloat(curveMean)}",
+        )
+        PLog.i(
+            TAG,
+            "HNCS_DIAG matrices profileToEngine=${profileToEngineTransform.contentToString()} " +
+                "cameraToHncs=${renderPlan.cameraToHncsMatrix?.contentToString()} " +
+                "profileNeutralGains=${renderPlan.profileNeutralGains?.contentToString()} " +
+                "profileNeutralRaw=${profileNeutralRaw?.contentToString()} " +
+                "profileNeutralToHncs=${profileNeutralToHncs?.contentToString()} " +
+                "output=${outputTransform.contentToString()} " +
+                "rgbToYcc=${renderPlan.rgbToYccMatrix.contentToString()} " +
+                "yccToRgb=${renderPlan.yccToRgbMatrix.contentToString()}",
+        )
+        logHncsTextureStats(
+            stage = "gpu-film-curve-texture",
+            textureId = hncsCurveTextureId,
+            width = HncsProfileManager.CURVE_TEXTURE_EDGE,
+            height = HncsProfileManager.CURVE_TEXTURE_EDGE,
+        )
+        renderPlan.colorMap?.takeIf { it.isValid && hncsColorMapTextureId != 0 }?.let { colorMap ->
+            logHncsColorMapContract(colorMap)
+            logHncsTextureStats(
+                stage = "gpu-camera-color-map-texture",
+                textureId = hncsColorMapTextureId,
+                width = colorMap.width,
+                height = colorMap.height,
+            )
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, engineToneFramebufferId)
+        checkGlError("HNCS diagnostic contract")
+    }
+
+    private fun logHncsColorMapContract(colorMap: HncsColorMap) {
+        var cbMin = Float.POSITIVE_INFINITY
+        var cbMax = Float.NEGATIVE_INFINITY
+        var crMin = Float.POSITIVE_INFINITY
+        var crMax = Float.NEGATIVE_INFINITY
+        var cbSum = 0.0
+        var crSum = 0.0
+        var pointCount = 0
+        for (index in colorMap.values.indices step 2) {
+            val cb = colorMap.values[index]
+            val cr = colorMap.values[index + 1]
+            cbMin = min(cbMin, cb)
+            cbMax = max(cbMax, cb)
+            crMin = min(crMin, cr)
+            crMax = max(crMax, cr)
+            cbSum += cb
+            crSum += cr
+            pointCount++
+        }
+        val neutralX = (-colorMap.cbStart).roundToInt()
+        val neutralY = (-colorMap.crStart).roundToInt()
+        val neutralIndex = if (neutralX in 0 until colorMap.width &&
+            neutralY in 0 until colorMap.height
+        ) {
+            (neutralY * colorMap.width + neutralX) * 2
+        } else {
+            -1
+        }
+        val neutralValue = if (neutralIndex >= 0) {
+            floatArrayOf(
+                colorMap.values[neutralIndex],
+                colorMap.values[neutralIndex + 1]
+            ).contentToString()
+        } else {
+            "outside-grid"
+        }
+        PLog.i(
+            TAG,
+            "HNCS_DIAG color-map grid=${colorMap.width}x${colorMap.height} " +
+                "cb=[${colorMap.cbStart},${colorMap.cbEnd}] " +
+                "cr=[${colorMap.crStart},${colorMap.crEnd}] div=${colorMap.divFactor} " +
+                "layout=x:Cb,y:Cr,texel:CbCr " +
+                "cbMin=${formatHncsDiagnosticFloat(cbMin)} " +
+                "cbMean=${formatHncsDiagnosticFloat((cbSum / pointCount).toFloat())} " +
+                "cbMax=${formatHncsDiagnosticFloat(cbMax)} " +
+                "crMin=${formatHncsDiagnosticFloat(crMin)} " +
+                "crMean=${formatHncsDiagnosticFloat((crSum / pointCount).toFloat())} " +
+                "crMax=${formatHncsDiagnosticFloat(crMax)} " +
+                "neutralTexel=[$neutralX,$neutralY]:$neutralValue",
+        )
+    }
+
+    private fun logHncsTextureStats(
+        stage: String,
+        textureId: Int,
+        width: Int,
+        height: Int,
+    ) {
+        val framebuffers = IntArray(1)
+        GLES30.glGenFramebuffers(1, framebuffers, 0)
+        val framebufferId = framebuffers[0]
+        try {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                textureId,
+                0,
+            )
+            logHncsFramebufferStats(
+                stage = stage,
+                framebufferId = framebufferId,
+                width = width,
+                height = height,
+                readType = GLES30.GL_HALF_FLOAT,
+            )
+        } finally {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glDeleteFramebuffers(1, framebuffers, 0)
+        }
+    }
+
+    private fun logHncsFramebufferStats(
+        stage: String,
+        framebufferId: Int,
+        width: Int,
+        height: Int,
+        readType: Int,
+    ) {
+        if (!BuildConfig.DEBUG) return
+        if (framebufferId == 0 || width <= 0 || height <= 0) {
+            PLog.e(
+                TAG,
+                "HNCS_DIAG stage=$stage unavailable fbo=$framebufferId size=${width}x$height",
+            )
+            return
+        }
+        require(readType == GLES30.GL_HALF_FLOAT || readType == GLES30.GL_UNSIGNED_BYTE) {
+            "Unsupported HNCS diagnostic read type: $readType"
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
+        val framebufferStatus = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (framebufferStatus != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            PLog.e(
+                TAG,
+                "HNCS_DIAG stage=$stage framebuffer-incomplete " +
+                    "status=0x${framebufferStatus.toString(16)} fbo=$framebufferId " +
+                    "size=${width}x$height",
+            )
+            return
+        }
+
+        val tileWidth = min(8, width)
+        val tileHeight = min(8, height)
+        val bytesPerComponent = if (readType == GLES30.GL_HALF_FLOAT) 2 else 1
+        val sampleBuffer = ByteBuffer.allocateDirect(
+            tileWidth * tileHeight * 4 * bytesPerComponent,
+        ).order(ByteOrder.nativeOrder())
+        val maximumSamples = 9 * tileWidth * tileHeight
+        val luminances = FloatArray(maximumSamples)
+        val rgbMin = floatArrayOf(
+            Float.POSITIVE_INFINITY,
+            Float.POSITIVE_INFINITY,
+            Float.POSITIVE_INFINITY,
+        )
+        val rgbMax = floatArrayOf(
+            Float.NEGATIVE_INFINITY,
+            Float.NEGATIVE_INFINITY,
+            Float.NEGATIVE_INFINITY,
+        )
+        val rgbSum = DoubleArray(3)
+        var finitePixels = 0
+        var nonFinitePixels = 0
+        var nonBlackPixels = 0
+        var negativePixels = 0
+
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+        for (gridY in 0 until 3) {
+            for (gridX in 0 until 3) {
+                val centerX = width * (gridX * 2 + 1) / 6
+                val centerY = height * (gridY * 2 + 1) / 6
+                val readX = (centerX - tileWidth / 2).coerceIn(0, width - tileWidth)
+                val readY = (centerY - tileHeight / 2).coerceIn(0, height - tileHeight)
+                sampleBuffer.clear()
+                GLES30.glReadPixels(
+                    readX,
+                    readY,
+                    tileWidth,
+                    tileHeight,
+                    GLES30.GL_RGBA,
+                    readType,
+                    sampleBuffer,
+                )
+                val error = GLES30.glGetError()
+                if (error != GLES30.GL_NO_ERROR) {
+                    PLog.e(
+                        TAG,
+                        "HNCS_DIAG stage=$stage readback-failed glError=$error " +
+                            "type=$readType region=$readX,$readY ${tileWidth}x$tileHeight",
+                    )
+                    return
+                }
+                sampleBuffer.position(0)
+                val regionPixels = tileWidth * tileHeight
+                repeat(regionPixels) {
+                    val r: Float
+                    val g: Float
+                    val b: Float
+                    if (readType == GLES30.GL_HALF_FLOAT) {
+                        r = halfFloatToFloat(sampleBuffer.short)
+                        g = halfFloatToFloat(sampleBuffer.short)
+                        b = halfFloatToFloat(sampleBuffer.short)
+                        sampleBuffer.short // Alpha
+                    } else {
+                        r = (sampleBuffer.get().toInt() and 0xff) / 255f
+                        g = (sampleBuffer.get().toInt() and 0xff) / 255f
+                        b = (sampleBuffer.get().toInt() and 0xff) / 255f
+                        sampleBuffer.get() // Alpha
+                    }
+                    if (!r.isFinite() || !g.isFinite() || !b.isFinite()) {
+                        nonFinitePixels++
+                        return@repeat
+                    }
+                    rgbMin[0] = min(rgbMin[0], r)
+                    rgbMin[1] = min(rgbMin[1], g)
+                    rgbMin[2] = min(rgbMin[2], b)
+                    rgbMax[0] = max(rgbMax[0], r)
+                    rgbMax[1] = max(rgbMax[1], g)
+                    rgbMax[2] = max(rgbMax[2], b)
+                    rgbSum[0] += r
+                    rgbSum[1] += g
+                    rgbSum[2] += b
+                    val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
+                    luminances[finitePixels] = luma
+                    finitePixels++
+                    if (max(abs(r), max(abs(g), abs(b))) > 1e-6f) {
+                        nonBlackPixels++
+                    }
+                    if (r < 0f || g < 0f || b < 0f) {
+                        negativePixels++
+                    }
+                }
+            }
+        }
+        if (finitePixels == 0) {
+            PLog.e(
+                TAG,
+                "HNCS_DIAG stage=$stage no-finite-pixels sampleCount=$maximumSamples " +
+                    "nonFinite=$nonFinitePixels",
+            )
+            return
+        }
+        val sortedLuminances = luminances.copyOf(finitePixels)
+        sortedLuminances.sort()
+        fun percentile(fraction: Float): Float {
+            val index = ((finitePixels - 1) * fraction).roundToInt().coerceIn(
+                0,
+                finitePixels - 1,
+            )
+            return sortedLuminances[index]
+        }
+        val rgbMean = FloatArray(3) { channel ->
+            (rgbSum[channel] / finitePixels).toFloat()
+        }
+        PLog.i(
+            TAG,
+            "HNCS_DIAG stage=$stage fbo=$framebufferId size=${width}x$height " +
+                "format=${if (readType == GLES30.GL_HALF_FLOAT) "RGBA16F" else "RGBA8"} " +
+                "sampleCount=$maximumSamples finite=$finitePixels nonFinite=$nonFinitePixels " +
+                "nonBlack=$nonBlackPixels negative=$negativePixels " +
+                "rgbMin=${formatHncsDiagnosticVector(rgbMin)} " +
+                "rgbMean=${formatHncsDiagnosticVector(rgbMean)} " +
+                "rgbMax=${formatHncsDiagnosticVector(rgbMax)} " +
+                "lumaP05=${formatHncsDiagnosticFloat(percentile(0.05f))} " +
+                "lumaP50=${formatHncsDiagnosticFloat(percentile(0.50f))} " +
+                "lumaP95=${formatHncsDiagnosticFloat(percentile(0.95f))}",
+        )
+    }
+
+    private fun halfFloatToFloat(value: Short): Float {
+        val bits = value.toInt() and 0xffff
+        val sign = bits ushr 15
+        val exponent = (bits ushr 10) and 0x1f
+        var mantissa = bits and 0x03ff
+        val floatBits = when (exponent) {
+            0 -> {
+                if (mantissa == 0) {
+                    sign shl 31
+                } else {
+                    var unbiasedExponent = -14
+                    while ((mantissa and 0x0400) == 0) {
+                        mantissa = mantissa shl 1
+                        unbiasedExponent--
+                    }
+                    mantissa = mantissa and 0x03ff
+                    (sign shl 31) or
+                        ((unbiasedExponent + 127) shl 23) or
+                        (mantissa shl 13)
+                }
+            }
+
+            0x1f -> (sign shl 31) or 0x7f800000 or (mantissa shl 13)
+            else -> (sign shl 31) or ((exponent - 15 + 127) shl 23) or (mantissa shl 13)
+        }
+        return Float.fromBits(floatBits)
+    }
+
+    private fun formatHncsDiagnosticFloat(value: Float): String =
+        String.format(Locale.US, "%.6f", value)
+
+    private fun formatHncsDiagnosticVector(values: FloatArray): String =
+        values.joinToString(prefix = "[", postfix = "]", separator = ",") {
+            formatHncsDiagnosticFloat(it)
+        }
+
     /**
      * 释放资源
      */
@@ -10306,6 +11358,10 @@ class RawDemosaicProcessor {
                 GLES30.glDeleteProgram(engineTonePrograms[i])
                 engineTonePrograms[i] = 0
             }
+        }
+        if (hncsOutputLinearProgram != 0) {
+            GLES30.glDeleteProgram(hncsOutputLinearProgram)
+            hncsOutputLinearProgram = 0
         }
         if (adjustmentProgram != 0) GLES30.glDeleteProgram(adjustmentProgram)
         if (srgbProgram != 0) GLES30.glDeleteProgram(srgbProgram)
@@ -10463,6 +11519,16 @@ class RawDemosaicProcessor {
             spectralFilmTextureId = 0
             spectralFilmTextureKey = null
         }
+        if (hncsColorMapTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(hncsColorMapTextureId), 0)
+            hncsColorMapTextureId = 0
+        }
+        if (hncsCurveTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(hncsCurveTextureId), 0)
+            hncsCurveTextureId = 0
+        }
+        hncsColorMapTextureKey = null
+        hncsCurveTextureKey = null
         if (dummyDcp3DTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(dummyDcp3DTextureId), 0)
         if (dummyDcpToneCurveTextureId != 0) GLES30.glDeleteTextures(
             1,

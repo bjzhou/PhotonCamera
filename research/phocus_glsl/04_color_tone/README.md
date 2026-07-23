@@ -11,9 +11,9 @@ Phocus 的 color/tone 不是一个统一的 3D LUT，而是把不同性质的问
 1. **相机表色层**：把 RGB 转为亮度与两条色度轴，以 `Cb/Y`、`Cr/Y` 查询相机和光源相关的
    二维色度 LUT；亮度 `Y` 原样保留。近中性色和低照度像素会降低 LUT 权重，避免噪声与白平衡
    误差被放大。
-2. **基础调性层**：使用 65,536 点、按 256×256 纹理铺放的一维 Film Curve，随后按 Film
-   Curve 类型选择分段高光塑形，并用 Hasselblad power gamma 或逐通道 CIE L* 形式压缩内部
-   线性动态范围。
+2. **基础调性层**：使用 65,536 点的一维 Film Curve，随后按 Film Curve 类型选择分段高光
+   塑形；只有新版 correction 状态与 RAW capability 同时满足条件时，才追加 Hasselblad
+   power gamma 或逐通道 CIE L* companding。
 3. **用户创作层**：RGB/对比度/亮度曲线使用独立的 65,536 点 LUT；选择性色彩则把色相映射到
    三张 65,536 点的一维表，分别控制 Hue、Saturation、Lightness。两者都显式做色相保护。
 4. **交付表色层**：最后才执行工作空间到目标空间的矩阵、白点适配和 Gamma/PQ 编码；预览路径
@@ -28,19 +28,21 @@ flowchart TD
     C --> D["FilmCurve：65,536 点基础响应曲线"]
     D --> E{"特定 FilmCurve 类型？"}
     E -- 是 --> F["HighlightStrength：分段多项式 + HSL 色相保持"]
-    E -- 否 --> G["Gamma：Hasselblad 2.2 或逐通道 L*"]
+    E -- 否 --> G{"新版 correction 且 RAW 支持 Gamma？"}
     F --> G
-    G --> H["Gradation：RGB / Contrast / Luma 曲线组合"]
-    H --> I["MarkHue：仅选色交互预览，可选"]
-    I --> J["SelectiveColor：Hue / Saturation / Lightness 表"]
-    J --> K["Sharpness / Film Grain"]
-    K --> L["Grayscale：可选"]
-    L --> M["HDR / 工作空间到输出空间 / 传递函数"]
+    G -- 是 --> H["Gamma：Hasselblad 2.2 或逐通道 L*"]
+    G -- 否 --> I["Gradation：RGB / Contrast / Luma 曲线组合"]
+    H --> I
+    I --> J["MarkHue：仅选色交互预览，可选"]
+    J --> K["SelectiveColor：Hue / Saturation / Lightness 表"]
+    K --> L["Sharpness / Film Grain"]
+    L --> M["Grayscale：可选"]
+    M --> N["HDR / 工作空间到输出空间 / 传递函数"]
 ```
 
-这条顺序非常关键：**Film Curve 与高光塑形工作在 Gamma 之前，用户 Gradation 和
-Selective Color 工作在 Gamma 之后**。因此不能把全部 LUT 合并后任意换序；曲线所在的数值域、
-高光余量以及色相保护方式都不同。
+这条顺序非常关键：Gamma 是条件节点；它存在时 Film Curve/高光塑形在它之前，
+Gradation/Selective Color 在它之后；它不存在时 Gradation 直接接 Film Curve。不能把全部
+LUT 合并后任意换序。
 
 ## 证据范围与可信度
 
@@ -63,13 +65,13 @@ Selective Color 工作在 Gamma 之后**。因此不能把全部 LUT 合并后�
 
 | 路径 | 宿主入口 | 色彩校正 | Tone 组织 | 典型用途 |
 |---|---|---|---|---|
-| HNCS 主路径 | `CCameraImage::AddHNCSFilters` | `CColorCorrectAllFilter` + [`colorCorrectAll_0x3027dea.frag`](./colorCorrectAll_0x3027dea.frag) | 独立 `CFilmCurveFilter` →可选 Highlight→ Gamma→ Gradation | 完整 RAW 处理 |
+| HNCS 主路径 | `CCameraImage::AddHNCSFilters` | `CColorCorrectAllFilter` + [`colorCorrectAll_0x3027dea.frag`](./colorCorrectAll_0x3027dea.frag) | 独立 `CFilmCurveFilter` →可选 Highlight→可选 Gamma→ Gradation | 完整 RAW 处理 |
 | PostViewer RGB 路径 | `CCameraImage::AddPostViewerRGBFilters`，地址 `0x323f5a4` | 旧式 `CColorCorrectFilter` + [`color_correct_0x303b6ab.comp`](./color_correct_0x303b6ab.comp) | Highlight→ Gamma→ Gradation；Film/线性化的一部分由 ColorCorrection 资源承担 | 后置预览/已有 RGB 输入 |
 | 轻量 OpenGL 包装层 | `ColorCorrectAllFilter`、`FilmCurveFilter`、`HighlightStrengthFilter` 等无 `C` 前缀类 | [`ColorCorrectAll_0x301a79e.frag`](./ColorCorrectAll_0x301a79e.frag) | 对应的大写 shader | 另一套直接纹理渲染接口；包含未闭合功能 |
 
 主路径反汇编中的关键插入点依次为：`CColorCorrectAllFilter` `0x3242524`、
 `CFilmCurveFilter` `0x32425e8`、条件性 `CHighlightStrengthFilter` `0x324285c`、
-`CGammaFilter` `0x3242680`、`CGradationFilter` `0x324271c`、
+条件性 `CGammaFilter` `0x3242680`、`CGradationFilter` `0x324271c`、
 `CSelectiveColorFilter` `0x3242934/0x32429e0`。两个 SelectiveColor 构造点属于互斥分支，
 不是连续应用两次。
 
@@ -95,6 +97,24 @@ neutral vector。导出符号 `CXMLLut::CalculateLUT(int, bool)`、`CColorCorrec
 
 `Std` 与 `Repro` 的差别不仅是色彩风格。旧 compute shader 的 `uIsRepo` 会让 Reproduction
 模式绕过低亮度去饱和逻辑，因此它更接近“保持测量色度”，Standard 则更主动抑制暗部色噪。
+当前 HNCS 主 fragment 没有 `uIsRepo` uniform；主路径中的模式差异首先来自宿主上传的不同
+实测 LUT。不能把旧 compute 路径的分支直接移植成主 fragment 的额外开关。
+
+XML 的 `mlt/mt/mf/mh` 解密后行和为 D50 XYZ 白点，语义是白平衡后的 camera RGB→XYZ(D50)，
+不是 camera RGB→HNCS。使用这些矩阵驱动 HNCS 工作空间时必须再左乘
+`inverse(HNCS_RGB_TO_XYZ_D50)`。`vlt/vt/vf/vh` 也是加密数组：
+`CXMLLut::DecodeFrom` 对它们执行与矩阵相同的 `value × 0.5 + 1.0`，得到 RAW 相机通道
+neutral gain。`CRawColorParams::GetXYZ2RawRGBNeutralizedMatrix` 会把矩阵三列分别乘这三个
+gain 后再求逆。
+
+Phocus 的 `ColorCorrectAll` 输入已经位于 neutralized camera domain；PhotonCamera 的 RCD/VGN
+对外输出则恢复为未白平衡 camera RGB。因此当前集成将 gain 折入输入矩阵：
+
+```text
+M_raw_to_hncs = inverse(M_hncs_to_xyz_d50) · M_profile · diag(v_profile)
+```
+
+这不是额外白平衡补偿，而是两个 demosaic 输出契约之间必须存在的等价变换。
 
 ### 1.2 主算法
 
@@ -130,13 +150,18 @@ neutral vector。导出符号 `CXMLLut::CalculateLUT(int, bool)`、`CColorCorrec
    `d/m` 越小，像素越接近中性轴，二维色度 LUT 的作用越弱。这样能避免灰阶被 LUT 的离散误差
    染色，也会抑制暗部白平衡/噪声偏差。
 
-4. Standard 模式再应用亮度抑制抛物线：
+4. 宿主提供的低亮度去饱和参数再调制权重：
 
    ```text
    w_low(Y) = aY² + bY + c,  Y < Y0
               1,             Y ≥ Y0
    w = max(0, min(w_gray, w_low))
    ```
+
+生产 `CColorCorrectAllFilter::UpdateParameters` 恢复出的完整支持相机默认值为
+`grayLow/grayHigh=0/0` 与 `(Y0,a,b,c)=(2,0,0,1)`。后者恒为 1；前者的零宽区间必须显式处理，
+不能靠 GPU 对除零/NaN 的偶然行为。通用/旧相机路径的灰阈值为 `0.005/0.07`，但低照度多项式
+仍依赖 source-specific 构造参数，不能把这组数值移植到所有相机。
 
 5. LUT 输出乘回亮度，再由输出矩阵重建 RGB：
 
@@ -202,6 +227,11 @@ out[channel] = curve[channel][i]
 
 无 `uGain` 的 [`filmCurve_0x30a3daf.frag`](./filmCurve_0x30a3daf.frag) 属于轻量包装层。
 
+缺少 maker FilmCurve tag 时原始 reader 返回 `filmCurveType=6`；HNCS 工作空间选择
+`companding=2`。当前集成表由原始 `CGradationManager(6,2)` 直接导出，float table
+FNV-1a64 为 `a7fda12f9d03aa3f`。正常非 HDR 路径 `uGain=1`。HDR 动态 gain 仍来自
+source/image correction 状态，不能从 Colormap XML 推导。
+
 ### 2.2 Highlight Strength 是带色相保护的高光分段函数
 
 生产版本是 [`highlightstrength_0x3035fd3.frag`](./highlightstrength_0x3035fd3.frag)。对每个
@@ -237,7 +267,7 @@ T(x) =       P2(x),                     X1 ≤ x < X2
 大写 [`HighlightStrength_0x3019721.frag`](./HighlightStrength_0x3019721.frag) 的分段 `mix`
 方向与生产版本不同，低/高区间行为并不等价；它只应视为另一包装层的实现证据。
 
-### 2.3 Gamma 是内部动态范围 companding，不是输出 ICC 的替代品
+### 2.3 Gamma 是条件性内部 companding，不是输出 ICC 的替代品
 
 [`gamma_hasselblad_0x30776ff.frag`](./gamma_hasselblad_0x30776ff.frag) 执行：
 
@@ -245,7 +275,19 @@ T(x) =       P2(x),                     X1 ≤ x < X2
 out = (in · HDRMaxGain)^(1 / gamma) / HasselbladHdrRgbLimit
 ```
 
-`gamma` 的宿主缺省语义由 `CGammaFilter::HasselbladGamma` 与 shader 常量线索指向 2.2。
+宿主实际上传常量已经恢复：
+
+```text
+gamma = 2.19921875
+HDRMaxGain = 49.261085510253906
+HasselbladHdrRgbLimit = 5.882924556732178
+```
+
+`CCameraImage::AddHNCSFilters` 只有在 `CImageCorrection` stored version 至少为 4、其
+gamma-stage flag 开启且 `sRawDescription` 支持时才构造该 filter。默认
+`CImageCorrection::SetDefaultValues` 明确写入 version 2 并清除 flag，所以默认/第三方 RAW
+不会经过这个 shader。把该 shader 无条件接在 type 6 / companding 2 FilmCurve 后会形成重复
+companding，并显著抬高中间调。
 
 [`gamma_lstar_0x307356f.frag`](./gamma_lstar_0x307356f.frag) 则逐通道应用归一化 L* 曲线：
 
@@ -258,9 +300,9 @@ out = f(in · HDRMaxGain) / HasselbladHdrRgbLimit
 典型 `ε = 216/24389`、`κ = 24389/27` 时两段在约 `0.08` 连续。这里对 R/G/B 分别编码，
 **不是**先求 XYZ/Y 再生成 CIELAB 的 `L*`；它仍是一条 RGB 传递曲线。
 
-两个缩放参数让内部纹理可以用 `[0,1]` 附近的 FP16 保存超过 SDR white 的亮度。后续输出空间
-pass 仍需矩阵与最终 transfer function，不能因为已经经过 Hasselblad Gamma 就直接标记为
-sRGB、Display P3 或 PQ。
+两个缩放参数让内部纹理可以用 `[0,1]` 附近的 FP16 保存超过 SDR white 的亮度。该条件
+filter 实际执行时，后续输出空间 pass 仍需矩阵与最终 transfer function，不能把其输出直接
+标记为 sRGB、Display P3 或 PQ。
 
 ## 3. 用户 Gradation：三组高精度曲线的可组合设计
 
@@ -459,7 +501,7 @@ white/black point 操作。它不具备生产色彩管理的逻辑闭合性，�
 1. `CameraColorProfile`：自有标定数据、光源锚点、render intent、二维色度表和矩阵；
 2. `CameraColorTransform`：线性 RGB ↔ luminance/chroma、近中性色/暗部保护、二维 LUT；
 3. `BaseToneTransform`：内部 headroom、Film Curve、分段 highlight roll-off；
-4. `PerceptualAdjustments`：Gamma 后的 Contrast/Luma/HSL selective 调整；
+4. `PerceptualAdjustments`：FilmCurve/可选 Gamma 后的 Contrast/Luma/HSL selective 调整；
 5. `OutputColorTransform`：工作空间→XYZ→目标空间、白点适配、目标 OETF/PQ；
 6. `DebugOverlays`：MarkHue、gamut/NaN 可视化，与最终交付图完全分离。
 
@@ -483,13 +525,35 @@ HDR headroom 和用户曲线的独立可编辑性。若为实时预览做缓存�
 ## 10. 仍需动态验证的问题
 
 - `EffectiveFilmCurve` 数值 2、4 的公开名称及其 HighlightStrength 参数表；
-- `uGain`、`hrTrunc`、`hrMax`、`HDRMaxGain`、`HasselbladHdrRgbLimit` 在不同机型和输出模式下
-  的实际数值闭环；
-- XML 六张色度 LUT 在 Flash/Tungsten/Low-Tungsten 之间的精确插值规则；
+- 动态 Film Curve `uGain` 与 `hrTrunc/hrMax/inputEV` 在不同机型、HDR 和输出模式下的实际
+  数值闭环；
 - `desatHighLight` 是否只服务某个未导出的 HDR/缩略图分支；
 - `colorspaceconvert` 的 source/destination enum 到具体 profile 的完整映射，以及 sRGB transfer
   枚举未实现时的宿主替代路径；
 - exact-black、负 RGB、LUT 极值在目标 Adreno/Mali/PowerVR 驱动上的实际结果。
+
+## 11. PhotonCamera 集成审计结论
+
+| 原始模块 | 是否需要 | 当前状态 |
+|---|---|---|
+| `colorCorrectAll` 小写生产版 | 需要 | 已接入 105×89 手工双线性、整数 Kelvin 插值、真实矩阵/解密 neutral gain/LUT、gray/low-light 参数；相机域 headroom 保留为待真实宿主值 |
+| `filmcurve` 小写生产版 | 需要 | 已接入原库直接导出的 type=6 / companding=2 真实 65,536 点表与 nearest texel 读取 |
+| `highlightstrength` | 条件需要 | type=6 不需要；type=2/4 缺真实枚举名和宿主参数，不伪造 |
+| `gamma_hasselblad` | 条件需要 | 真实常量和 shader 已接入；默认 correction version=2/flag=false 时严格跳过 |
+| `gamma_lstar` | 条件需要 | 原始选择路径存在，但当前默认状态没有真实选择字段，不启用 |
+| `gradation` | 图结构需要 | 原始图始终构造；非恒等内容依赖真实用户曲线，当前不上传 identity 冒充 |
+| `selectivecolor` | 条件需要 | shader 已审计；缺真实用户 H/S/L 表时不启用 |
+| `mark_hue` | 最终输出不需要 | 仅 Phocus 选色交互 overlay |
+| `desatHighLight` | 未证实需要 | 未发现进入 `AddHNCSFilters` |
+| `colorspaceconvert/customCmm` | 需要等价职责 | 由 PhotonCamera 工作空间矩阵、D50 适配和 sRGB 输出 pass 承担 |
+| `sdr_icc` | HNCS 导出不直接需要 | 属于 PostViewer 固定预览路径 |
+| 大写 `ColorCorrectAll/FilmCurve/HighlightStrength` | 不需要 | 另一套接口且存在未闭合逻辑，不混入主图 |
+| `customColorSpace` | 不需要 | 含调试分屏逻辑，不是生产 CMM |
+| `rgb2Gray*` | HNCS 色彩不需要 | 灰度/打包辅助路径 |
+
+原始 Colormap 与 native 调用图只证明 `Standard/Reproduction` 两个相机色彩意图。未发现
+`Natural/Portrait` 的二维表或 HNCS 分支：“Natural”属于 HNCS 名称，“Portrait”在 Phocus
+资源中是方向/题材语义。它们不应作为虚构 render intent 加入集成。
 
 动态验证应使用逐 pass GPU capture 或在同一 RAW 上导出中间纹理；只比较最终 JPEG 外观无法区分
 Film Curve、Gamma、Gradation 和输出 ICC 的贡献。

@@ -55,6 +55,8 @@ data class GalleryMediaEntity(
     val rawAutoWhiteBalanceEstimate: Boolean?,
     val rawLensShadingCorrectionEnabled: Boolean?,
     val rawDcpId: String?,
+    val rawHncsProfileId: String? = null,
+    val rawHncsRenderIntent: String = "standard",
     val rawColorEngine: String,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,

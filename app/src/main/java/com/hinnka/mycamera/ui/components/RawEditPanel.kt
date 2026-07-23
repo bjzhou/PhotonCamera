@@ -29,6 +29,8 @@ import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsProfileInfo
+import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
@@ -127,6 +129,11 @@ fun RawEditPanel(
     showAutoExposureControl: Boolean = true,
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
+    selectedHncsProfileId: String? = null,
+    selectedHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+    availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
+    onSelectHncsProfile: (String?) -> Unit = {},
+    onSelectHncsRenderIntent: (HncsRenderIntent) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var rawMaxOutputScaleDraft by remember {
@@ -169,6 +176,75 @@ fun RawEditPanel(
             onSelectEngine = onRawColorEngineChange
         )
         Spacer(modifier = Modifier.height(16.dp))
+
+        if (rawRenderingEngine.isHncs) {
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_hncs_color_branch),
+                description = stringResource(R.string.settings_raw_hncs_color_branch_description),
+                levels = listOf(
+                    RawRenderingEngine.HncsCcm.name to
+                        stringResource(R.string.settings_raw_hncs_color_branch_ccm),
+                    RawRenderingEngine.HncsLut.name to
+                        stringResource(R.string.settings_raw_hncs_color_branch_lut)
+                ),
+                currentLevel = rawRenderingEngine.name,
+                onLevelSelected = { persistedName ->
+                    onRawColorEngineChange(
+                        RawRenderingEngine.fromPersistedName(
+                            persistedName,
+                            RawRenderingEngine.HncsCcm
+                        )
+                    )
+                }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            if (rawRenderingEngine == RawRenderingEngine.HncsLut &&
+                availableHncsProfiles.isNotEmpty()
+            ) {
+                RawChoiceSetting(
+                    title = stringResource(R.string.settings_raw_hncs_2d_lut),
+                    description = stringResource(R.string.settings_raw_hncs_profile_description),
+                    levels = availableHncsProfiles.map { profile ->
+                        profile.id to profile.displayName
+                    },
+                    currentLevel = selectedHncsProfileId.orEmpty(),
+                    onLevelSelected = { onSelectHncsProfile(it) }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                val selectedProfile = availableHncsProfiles.firstOrNull {
+                    it.id == selectedHncsProfileId
+                }
+                val supportedIntents = selectedProfile?.intents
+                    ?: availableHncsProfiles.flatMapTo(linkedSetOf()) { it.intents }
+                RawChoiceSetting(
+                    title = stringResource(R.string.settings_raw_hncs_render_intent),
+                    description = stringResource(
+                        R.string.settings_raw_hncs_render_intent_description
+                    ),
+                    levels = HncsRenderIntent.entries
+                        .filter { it in supportedIntents }
+                        .map { intent ->
+                            intent.assetValue to when (intent) {
+                                HncsRenderIntent.Standard -> stringResource(
+                                    R.string.settings_raw_hncs_render_intent_standard
+                                )
+
+                                HncsRenderIntent.Reproduction -> stringResource(
+                                    R.string.settings_raw_hncs_render_intent_reproduction
+                                )
+                            }
+                        },
+                    currentLevel = selectedHncsRenderIntent.assetValue,
+                    onLevelSelected = { persistedValue ->
+                        onSelectHncsRenderIntent(
+                            HncsRenderIntent.fromPersistedValue(persistedValue)
+                        )
+                    }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
 
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
             RawDcpSelector(
@@ -562,7 +638,9 @@ private fun RawToneMappingControls(
     fun formatPower(value: Float): String = String.format("%.2f", value)
 
     when (rawRenderingEngine) {
-        RawRenderingEngine.AdobeCurve -> Unit
+        RawRenderingEngine.AdobeCurve,
+        RawRenderingEngine.HncsCcm,
+        RawRenderingEngine.HncsLut -> Unit
 
         RawRenderingEngine.AgX -> {
             SliderSettingItem(
@@ -898,13 +976,25 @@ private fun RawRenderingEngineSelector(
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                RawRenderingEngine.entries.forEach { engine ->
+                RawRenderingEngine.entries
+                    .filterNot { it == RawRenderingEngine.HncsLut }
+                    .forEach { engine ->
                     RawColorEngineItem(
                         name = rawRenderingEngineName(engine),
                         description = rawColorEngineDescription(engine),
-                        isSelected = selectedEngine == engine,
+                        isSelected = if (engine == RawRenderingEngine.HncsCcm) {
+                            selectedEngine.isHncs
+                        } else {
+                            selectedEngine == engine
+                        },
                         onClick = {
-                            onSelectEngine(engine)
+                            onSelectEngine(
+                                if (engine == RawRenderingEngine.HncsCcm && selectedEngine.isHncs) {
+                                    selectedEngine
+                                } else {
+                                    engine
+                                }
+                            )
                             showSheet = false
                         }
                     )
@@ -923,6 +1013,8 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film)
+        RawRenderingEngine.HncsCcm,
+        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs)
     }
 }
 
@@ -934,6 +1026,8 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.DarktableSigmoid -> stringResource(R.string.settings_raw_color_engine_darktable_sigmoid_description)
         RawRenderingEngine.DarktableFilmic -> stringResource(R.string.settings_raw_color_engine_darktable_filmic_description)
         RawRenderingEngine.Spektrafilm -> stringResource(R.string.settings_raw_color_engine_spectral_film_description)
+        RawRenderingEngine.HncsCcm,
+        RawRenderingEngine.HncsLut -> stringResource(R.string.settings_raw_color_engine_hncs_description)
     }
 }
 
