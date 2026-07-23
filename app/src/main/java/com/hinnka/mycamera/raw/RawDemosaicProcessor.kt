@@ -42,11 +42,13 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import android.opengl.Matrix as GlMatrix
 
@@ -623,7 +625,8 @@ class RawDemosaicProcessor {
     private var quadWriteOutputProgram = 0
     private var pgtmCellStatsProgram = 0
     private var pgtmGoogleGainCurvesProgram = 0
-    private var pgtmPhotonGainCurvesProgram = 0
+    private val pgtmPhotonPrograms =
+        IntArray(DngPhotonLocalToneMapGpuShaders.Pass.entries.size)
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
@@ -1651,6 +1654,7 @@ class RawDemosaicProcessor {
                     ?: actualMetadata.colorCorrectionMatrix,
                 cameraWhite = resolvedDcpRenderPlan?.cameraWhite ?: actualMetadata.cameraWhite,
                 hueSatMap = resolvedDcpRenderPlan?.hueSatMap,
+                warpRectilinear = dngWarpRectilinear,
             )?.takeIf { it.isValid }
             if (generated != null) {
                 profileGainTableMap = generated
@@ -1948,6 +1952,7 @@ class RawDemosaicProcessor {
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         cameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                        warpRectilinear = dngWarpRectilinear,
                     )
                     else -> null
                 }
@@ -2256,6 +2261,7 @@ class RawDemosaicProcessor {
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
         hueSatMap: DcpHueSatMap?,
+        warpRectilinear: FloatArray? = null,
     ): DngProfileGainTableMap? {
         if (rawTextureId == 0 || width <= 0 || height <= 0 ||
             rawTextureWidth <= 0 || rawTextureHeight <= 0 || metadata.whiteLevel <= 0f
@@ -2272,15 +2278,16 @@ class RawDemosaicProcessor {
             RawProfileToneMapMode.GooglePixel -> HdrPgtmCurveModel.GOOGLE
             else -> return null
         }
-        val curveProgram = when (curveModel) {
-            HdrPgtmCurveModel.GOOGLE -> pgtmGoogleGainCurvesProgram
-            HdrPgtmCurveModel.PHOTON -> pgtmPhotonGainCurvesProgram
-        }
-        if (pgtmCellStatsProgram == 0 || curveProgram == 0) {
+        val photonProgramsReady = pgtmPhotonPrograms.all { it != 0 }
+        if (pgtmCellStatsProgram == 0 ||
+            (curveModel == HdrPgtmCurveModel.GOOGLE && pgtmGoogleGainCurvesProgram == 0) ||
+            (curveModel == HdrPgtmCurveModel.PHOTON && !photonProgramsReady)
+        ) {
             PLog.e(
                 TAG,
                 "GPU RAW PGTM programs unavailable: stats=$pgtmCellStatsProgram " +
-                    "model=$curveModel curves=$curveProgram",
+                    "model=$curveModel googleCurves=$pgtmGoogleGainCurvesProgram " +
+                    "photonProgramsReady=$photonProgramsReady",
             )
             return null
         }
@@ -2301,10 +2308,28 @@ class RawDemosaicProcessor {
         val gridWidth = gridSize.getOrElse(0) { 0 }
         val gridHeight = gridSize.getOrElse(1) { 0 }
         if (gridWidth <= 0 || gridHeight <= 0) return null
+        val activeWarpParameters = ArrayList<Float>()
+        warpRectilinear
+            ?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }
+            ?.let { warps ->
+                for (offset in warps.indices step 8) {
+                    val parameters = warps.copyOfRange(offset, offset + 8)
+                    if (isNoOpWarpRectilinear(parameters)) continue
+                    if (!isSafeWarpRectilinear(parameters, rawTextureWidth, rawTextureHeight)) {
+                        continue
+                    }
+                    parameters.forEach { activeWarpParameters += it }
+                }
+            }
 
         val cellCount = gridWidth * gridHeight
         val statsFloatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
-        val bufferIds = IntArray(3)
+        val sampleFloatCount = if (curveModel == HdrPgtmCurveModel.PHOTON) {
+            cellCount * DngPhotonLocalToneMapper.SAMPLES_PER_CELL
+        } else {
+            1
+        }
+        val bufferIds = IntArray(5)
         val totalStartNs = System.nanoTime()
         GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
         try {
@@ -2318,6 +2343,37 @@ class RawDemosaicProcessor {
             )
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, statsBufferId)
 
+            val sampleBufferId = bufferIds[1]
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, sampleBufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                sampleFloatCount * Float.SIZE_BYTES,
+                null,
+                GLES31.GL_DYNAMIC_READ,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, sampleBufferId)
+
+            val warpBufferId = bufferIds[4]
+            val warpBuffer = ByteBuffer.allocateDirect(
+                max(activeWarpParameters.size, 1) * Float.SIZE_BYTES
+            )
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+            if (activeWarpParameters.isEmpty()) {
+                warpBuffer.put(0f)
+            } else {
+                activeWarpParameters.forEach { warpBuffer.put(it) }
+            }
+            warpBuffer.position(0)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, warpBufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                max(activeWarpParameters.size, 1) * Float.SIZE_BYTES,
+                warpBuffer,
+                GLES31.GL_STATIC_DRAW,
+            )
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, warpBufferId)
+
             GLES31.glUseProgram(pgtmCellStatsProgram)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
             GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
@@ -2325,6 +2381,10 @@ class RawDemosaicProcessor {
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uRawTexture"),
                 RCD_RAW_TEXTURE_UNIT,
             )
+            // PGTM is later applied to the demosaicked camera-linear image, whose RAW samples
+            // already include lens-shading correction. Build its statistics in the same domain;
+            // otherwise the local map reintroduces lens vignetting into already-corrected flats.
+            bindLensShadingForProgram(pgtmCellStatsProgram, metadata)
             val activeHueSatMap = hueSatMap?.takeIf { it.isValid }
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
             val hueSatTextureId = activeHueSatMap?.let { map ->
@@ -2397,6 +2457,14 @@ class RawDemosaicProcessor {
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHighlightThreshold"),
                 if (curveModel == HdrPgtmCurveModel.PHOTON) 1f / exposureGain else 0.92f,
             )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uWriteCellSamples"),
+                if (curveModel == HdrPgtmCurveModel.PHOTON) 1 else 0,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uWarpCount"),
+                activeWarpParameters.size / 8,
+            )
             GLES31.glUniform3fv(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uCameraWhite"),
                 1,
@@ -2439,6 +2507,12 @@ class RawDemosaicProcessor {
                 noiseOffset = metadata.noiseProfile.getOrElse(1) { 0f },
                 diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
                 curveModel = curveModel,
+                samplingArea = HdrPgtmSamplingArea(
+                    originH = safeStatsBounds.left.toDouble() / rawTextureWidth,
+                    originV = safeStatsBounds.top.toDouble() / rawTextureHeight,
+                    extentH = safeStatsBounds.width().toDouble() / rawTextureWidth,
+                    extentV = safeStatsBounds.height().toDouble() / rawTextureHeight,
+                ),
             ) ?: return null
             val planReadyNs = System.nanoTime()
             if (plan.cellCount != cellCount) {
@@ -2449,35 +2523,54 @@ class RawDemosaicProcessor {
                 return null
             }
 
-            val curvePlanFloatCount = when (plan.curveModel) {
-                HdrPgtmCurveModel.GOOGLE -> cellCount * 3
-                HdrPgtmCurveModel.PHOTON -> cellCount * 2
+            if (plan.curveModel == HdrPgtmCurveModel.PHOTON) {
+                val localToneMapGpuStartNs = System.nanoTime()
+                val gains = generatePhotonProfileGainCurvesOnGpu(
+                    plan = plan,
+                    sampleBufferId = sampleBufferId,
+                ) ?: return null
+                val localToneMapGpuReadyNs = System.nanoTime()
+                val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains)
+                    ?: return null
+                val photonPlan = requireNotNull(plan.photonPlan)
+                val photonPreToneMapGain = photonPlan.exposureGain *
+                    2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
+                PLog.d(
+                    TAG,
+                    "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
+                        "source=${rawTextureWidth}x$rawTextureHeight " +
+                        "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
+                        "lsc=${lensShadingLogString(metadata)} " +
+                        "warpCount=${activeWarpParameters.size / 8} " +
+                        "photonBaselineGain=${photonPlan.exposureGain} " +
+                        "photonPreToneMapGain=$photonPreToneMapGain " +
+                        "photonLlfLevels=${photonPlan.parameters.localLaplacianIntensityLevels} " +
+                        "photonRangeSigma=${photonPlan.parameters.localLaplacianRangeSigma} " +
+                        "photonBguRangeSigma=${photonPlan.parameters.bilateralRangeSigma} " +
+                        "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
+                        "planCpuMs=${(planReadyNs - statsGpuReadyNs) / 1_000_000.0} " +
+                        "localToneMapGpuMs=" +
+                        "${(localToneMapGpuReadyNs - localToneMapGpuStartNs) / 1_000_000.0} " +
+                        "totalMs=${(localToneMapGpuReadyNs - totalStartNs) / 1_000_000.0}",
+                )
+                return map
             }
+
+            val curveProgram = pgtmGoogleGainCurvesProgram
+            val googlePlan = requireNotNull(plan.googlePlan)
+            val curvePlanFloatCount = cellCount * 3
             val curvePlanBuffer = ByteBuffer.allocateDirect(
                 curvePlanFloatCount * Float.SIZE_BYTES
             )
                 .order(ByteOrder.nativeOrder())
                 .asFloatBuffer()
-            when (plan.curveModel) {
-                HdrPgtmCurveModel.GOOGLE -> {
-                    val googlePlan = requireNotNull(plan.googlePlan)
-                    googlePlan.cellPlans.forEach { cellPlan ->
-                        curvePlanBuffer.put(cellPlan.blackGain)
-                        curvePlanBuffer.put(cellPlan.endpointGain)
-                        curvePlanBuffer.put(cellPlan.shapePower)
-                    }
-                }
-
-                HdrPgtmCurveModel.PHOTON -> {
-                    val photonPlan = requireNotNull(plan.photonPlan)
-                    photonPlan.cellPlans.forEach { cellPlan ->
-                        curvePlanBuffer.put(cellPlan.contrastExponent)
-                        curvePlanBuffer.put(cellPlan.highlightRecovery)
-                    }
-                }
+            googlePlan.cellPlans.forEach { cellPlan ->
+                curvePlanBuffer.put(cellPlan.blackGain)
+                curvePlanBuffer.put(cellPlan.endpointGain)
+                curvePlanBuffer.put(cellPlan.shapePower)
             }
             curvePlanBuffer.position(0)
-            val planBufferId = bufferIds[1]
+            val planBufferId = bufferIds[2]
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, planBufferId)
             GLES31.glBufferData(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
@@ -2488,7 +2581,7 @@ class RawDemosaicProcessor {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, planBufferId)
 
             val gainFloatCount = cellCount * plan.pointCount
-            val gainBufferId = bufferIds[2]
+            val gainBufferId = bufferIds[3]
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, gainBufferId)
             GLES31.glBufferData(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
@@ -2506,84 +2599,35 @@ class RawDemosaicProcessor {
                 GLES31.glGetUniformLocation(curveProgram, "uPointCount"),
                 plan.pointCount,
             )
-            when (plan.curveModel) {
-                HdrPgtmCurveModel.GOOGLE -> {
-                    val googlePlan = requireNotNull(plan.googlePlan)
-                    val parameters = googlePlan.curveParameters
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uInputScale"),
-                        googlePlan.inputScale,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMinTableGain"),
-                        parameters.minTableGain,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMaxTableGain"),
-                        parameters.maxTableGain,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uToeEnd"),
-                        parameters.toeEnd,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uShapeQ"),
-                        parameters.shapeQ,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMinShapePower"),
-                        parameters.minShapePower,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMaxShapePower"),
-                        parameters.maxShapePower,
-                    )
-                }
-
-                HdrPgtmCurveModel.PHOTON -> {
-                    val photonPlan = requireNotNull(plan.photonPlan)
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uExposureGain"),
-                        photonPlan.exposureGain,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMapGamma"),
-                        plan.gamma,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uExposedPivot"),
-                        photonPlan.exposedPivot,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uPivotOutput"),
-                        photonPlan.pivotOutput,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uEndpointOutput"),
-                        photonPlan.endpointOutput,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uLowSlope"),
-                        photonPlan.lowSlope,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uLowCurveLift"),
-                        photonPlan.lowCurveLift,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uShoulderParameter"),
-                        photonPlan.shoulderParameter,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMinTableGain"),
-                        photonPlan.minTableGain,
-                    )
-                    GLES31.glUniform1f(
-                        GLES31.glGetUniformLocation(curveProgram, "uMaxTableGain"),
-                        photonPlan.maxTableGain,
-                    )
-                }
-            }
+            val parameters = googlePlan.curveParameters
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uInputScale"),
+                googlePlan.inputScale,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uMinTableGain"),
+                parameters.minTableGain,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uMaxTableGain"),
+                parameters.maxTableGain,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uToeEnd"),
+                parameters.toeEnd,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uShapeQ"),
+                parameters.shapeQ,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uMinShapePower"),
+                parameters.minShapePower,
+            )
+            GLES31.glUniform1f(
+                GLES31.glGetUniformLocation(curveProgram, "uMaxShapePower"),
+                parameters.maxShapePower,
+            )
             val diagnosticMode = when (plan.diagnosticBand?.mode) {
                 DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
                 DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
@@ -2618,27 +2662,13 @@ class RawDemosaicProcessor {
             ) ?: return null
             val curvesGpuReadyNs = System.nanoTime()
             val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
-            val photonSummary = plan.photonPlan?.let { photonPlan ->
-                val recoveryMean = photonPlan.cellPlans
-                    .sumOf { it.highlightRecovery.toDouble() } /
-                    photonPlan.cellPlans.size.coerceAtLeast(1)
-                val recoveryMax = photonPlan.cellPlans.maxOfOrNull {
-                    it.highlightRecovery
-                } ?: 0f
-                " photonBaselineGain=${photonPlan.exposureGain} " +
-                    "photonPivotSource=${photonPlan.sourcePivot} " +
-                    "photonFixedGray=${photonPlan.usesFixedGray} " +
-                    "photonGamma=${plan.gamma} " +
-                    "photonEndpoint=${photonPlan.endpointOutput} " +
-                    "photonRecoveryMean=$recoveryMean " +
-                    "photonRecoveryMax=$recoveryMax "
-            }.orEmpty()
             PLog.d(
                 TAG,
                 "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
                     "source=${rawTextureWidth}x$rawTextureHeight " +
                     "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
-                    photonSummary +
+                    "lsc=${lensShadingLogString(metadata)} " +
+                    "warpCount=${activeWarpParameters.size / 8} " +
                     "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
                     "planCpuMs=${(planReadyNs - statsGpuReadyNs) / 1_000_000.0} " +
                     "curvesGpuMs=${(curvesGpuReadyNs - curveGpuStartNs) / 1_000_000.0} " +
@@ -2656,9 +2686,818 @@ class RawDemosaicProcessor {
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
             GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, 0)
+            GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_LENS_SHADING_TEXTURE_UNIT)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
             GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
             GLES31.glDeleteBuffers(bufferIds.size, bufferIds, 0)
+        }
+    }
+
+    private fun generatePhotonProfileGainCurvesOnGpu(
+        plan: HdrProfileGainTablePlan,
+        sampleBufferId: Int,
+    ): FloatArray? {
+        val photonPlan = plan.photonPlan ?: return null
+        val parameters = photonPlan.parameters
+        val preToneMapExposureGain = photonPlan.exposureGain *
+            2.0f.pow(parameters.preToneMapExposureBoostEv)
+        val gridWidth = plan.grid.mapPointsH
+        val gridHeight = plan.grid.mapPointsV
+        val sampleWidth = gridWidth * DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
+        val sampleHeight = gridHeight * DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
+        val sampleCount = sampleWidth * sampleHeight
+        val pyramid = PhotonGpuPyramidLayout.create(sampleWidth, sampleHeight)
+        val rangeBinCount = (1f / parameters.bilateralRangeSigma).roundToInt()
+        val rangePlaneCount = rangeBinCount + 2
+        val extendedGridWidth =
+            gridWidth + 2 * DngPhotonLocalToneMapGpuShaders.BGU_FILTER_RADIUS
+        val extendedGridHeight =
+            gridHeight + 2 * DngPhotonLocalToneMapGpuShaders.BGU_FILTER_RADIUS
+        val componentCount = DngPhotonLocalToneMapGpuShaders.BGU_COMPONENT_COUNT
+        val extendedBguFloatCount =
+            extendedGridWidth * extendedGridHeight * rangePlaneCount * componentCount
+        val yBlurFloatCount =
+            extendedGridWidth * gridHeight * rangePlaneCount * componentCount
+        val fittedBguFloatCount =
+            gridWidth * gridHeight * rangePlaneCount * componentCount
+        val coefficientCount = gridWidth * gridHeight * rangePlaneCount
+        val gainFloatCount = plan.cellCount * plan.pointCount
+
+        val sourceBuffer = 0
+        val gaussianBuffer = 1
+        val remappedBuffer = 2
+        val laplacianBuffer = 3
+        val reconstructedBuffer = 4
+        val sourceRangeBuffer = 5
+        val histogramRangeBuffer = 6
+        val histogramBuffer = 7
+        val targetBuffer = 8
+        val bguBufferA = 9
+        val bguBufferB = 10
+        val buffers = IntArray(11)
+        val uniformLocations = HashMap<Int, MutableMap<String, Int>>()
+
+        fun program(pass: DngPhotonLocalToneMapGpuShaders.Pass): Int =
+            pgtmPhotonPrograms[pass.ordinal]
+
+        fun bindStorage(binding: Int, bufferId: Int) {
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, bufferId)
+        }
+
+        fun allocate(bufferId: Int, byteCount: Int, usage: Int = GLES31.GL_DYNAMIC_DRAW) {
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                byteCount,
+                null,
+                usage,
+            )
+        }
+
+        fun uploadTwoInts(bufferId: Int, first: Int, second: Int) {
+            val values = ByteBuffer.allocateDirect(2 * Int.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder())
+            values.putInt(first)
+            values.putInt(second)
+            values.position(0)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
+            GLES31.glBufferData(
+                GLES31.GL_SHADER_STORAGE_BUFFER,
+                2 * Int.SIZE_BYTES,
+                values,
+                GLES31.GL_DYNAMIC_DRAW,
+            )
+        }
+
+        fun uniformLocation(activeProgram: Int, name: String): Int {
+            val locations = uniformLocations.getOrPut(activeProgram) { HashMap() }
+            return locations.getOrPut(name) {
+                GLES31.glGetUniformLocation(activeProgram, name)
+            }
+        }
+
+        fun uniform1i(activeProgram: Int, name: String, value: Int) {
+            GLES31.glUniform1i(uniformLocation(activeProgram, name), value)
+        }
+
+        fun uniform1f(activeProgram: Int, name: String, value: Float) {
+            GLES31.glUniform1f(uniformLocation(activeProgram, name), value)
+        }
+
+        fun uniform2i(activeProgram: Int, name: String, x: Int, y: Int) {
+            GLES31.glUniform2i(uniformLocation(activeProgram, name), x, y)
+        }
+
+        fun dispatch1d(count: Int, localSize: Int) {
+            GLES31.glDispatchCompute((count + localSize - 1) / localSize, 1, 1)
+        }
+
+        fun dispatch2d(width: Int, height: Int, localWidth: Int, localHeight: Int) {
+            GLES31.glDispatchCompute(
+                (width + localWidth - 1) / localWidth,
+                (height + localHeight - 1) / localHeight,
+                1,
+            )
+        }
+
+        fun storageBarrier() {
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
+                    GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+            )
+        }
+
+        fun clearUintBuffer(bufferId: Int, count: Int, value: Int = 0) {
+            val activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.CLEAR_UINT)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, bufferId)
+            uniform1i(activeProgram, "uCount", count)
+            GLES30.glUniform1ui(
+                uniformLocation(activeProgram, "uValue"),
+                value,
+            )
+            dispatch1d(count, 256)
+            storageBarrier()
+        }
+
+        GLES31.glGenBuffers(buffers.size, buffers, 0)
+        try {
+            allocate(buffers[sourceBuffer], sampleCount * Float.SIZE_BYTES)
+            allocate(buffers[gaussianBuffer], pyramid.floatCount * Float.SIZE_BYTES)
+            allocate(buffers[remappedBuffer], pyramid.floatCount * Float.SIZE_BYTES)
+            allocate(buffers[laplacianBuffer], pyramid.floatCount * Float.SIZE_BYTES)
+            allocate(buffers[reconstructedBuffer], pyramid.floatCount * Float.SIZE_BYTES)
+            allocate(buffers[targetBuffer], sampleCount * Float.SIZE_BYTES)
+            uploadTwoInts(
+                buffers[sourceRangeBuffer],
+                Float.MAX_VALUE.toRawBits(),
+                0f.toRawBits(),
+            )
+
+            var activeProgram =
+                program(DngPhotonLocalToneMapGpuShaders.Pass.PREPARE_SOURCE)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, sampleBufferId)
+            bindStorage(1, buffers[sourceBuffer])
+            bindStorage(2, buffers[sourceRangeBuffer])
+            uniform2i(activeProgram, "uGridSize", gridWidth, gridHeight)
+            uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
+            dispatch2d(sampleWidth, sampleHeight, 16, 16)
+            storageBarrier()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.NORMALIZE_LOG)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[sourceBuffer])
+            bindStorage(1, buffers[sourceRangeBuffer])
+            bindStorage(2, buffers[gaussianBuffer])
+            uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
+            uniform1i(activeProgram, "uOutputOffset", pyramid.levels.first().offset)
+            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
+            dispatch2d(sampleWidth, sampleHeight, 16, 16)
+            storageBarrier()
+
+            val sourceRange = readUintStorageBuffer(
+                bufferId = buffers[sourceRangeBuffer],
+                intCount = 2,
+                label = "Photon source range",
+            ) ?: return null
+            val sourceMinimum = Float.fromBits(sourceRange[0])
+            val sourceMaximum = Float.fromBits(sourceRange[1])
+            if (!sourceMinimum.isFinite() || !sourceMaximum.isFinite() ||
+                sourceMinimum < 0f || sourceMaximum < sourceMinimum
+            ) {
+                PLog.e(
+                    TAG,
+                    "Photon source range invalid: $sourceMinimum..$sourceMaximum",
+                )
+                return null
+            }
+            val sourceMinimumLog = ln(
+                preToneMapExposureGain * sourceMinimum +
+                    DngPhotonLocalToneMapper.SOURCE_EPSILON
+            )
+            val sourceMaximumLog = ln(
+                preToneMapExposureGain * sourceMaximum +
+                    DngPhotonLocalToneMapper.SOURCE_EPSILON
+            )
+            if (!sourceMinimumLog.isFinite() || !sourceMaximumLog.isFinite() ||
+                sourceMaximumLog < sourceMinimumLog
+            ) {
+                PLog.e(
+                    TAG,
+                    "Photon source-log range invalid: $sourceMinimumLog..$sourceMaximumLog",
+                )
+                return null
+            }
+            val histogramBinCount =
+                DngPhotonLocalToneMapGpuShaders.HISTOGRAM_BIN_COUNT
+            allocate(buffers[histogramBuffer], histogramBinCount * Int.SIZE_BYTES)
+            uploadTwoInts(
+                buffers[histogramRangeBuffer],
+                floatToOrderedBits(sourceMinimumLog),
+                floatToOrderedBits(sourceMaximumLog),
+            )
+            clearUintBuffer(buffers[histogramBuffer], histogramBinCount)
+            activeProgram = program(
+                DngPhotonLocalToneMapGpuShaders.Pass.LOG_HISTOGRAM
+            )
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[gaussianBuffer])
+            bindStorage(1, buffers[sourceRangeBuffer])
+            bindStorage(2, buffers[histogramRangeBuffer])
+            bindStorage(3, buffers[histogramBuffer])
+            uniform1i(activeProgram, "uCount", sampleCount)
+            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
+            uniform1i(activeProgram, "uBinCount", histogramBinCount)
+            uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
+            dispatch1d(sampleCount, 256)
+            storageBarrier()
+
+            val sourceHistogram = readUintStorageBuffer(
+                bufferId = buffers[histogramBuffer],
+                intCount = histogramBinCount,
+                label = "Photon source-log histogram",
+            ) ?: return null
+            val sourceHistogramCpuStartNs = System.nanoTime()
+            val sourceDistribution = summarizePhotonLogHistogram(
+                histogram = sourceHistogram,
+                rangeMinimum = sourceMinimumLog,
+                rangeMaximum = sourceMaximumLog,
+                percentileClip = parameters.percentileClip,
+                expectedSampleCount = sampleCount,
+                label = "source",
+            ) ?: return null
+            val targetLogDynamicRange =
+                ln(parameters.targetDynamicRange.toDouble()).toFloat()
+            val sourceLogDynamicRange =
+                sourceDistribution.upperLog - sourceDistribution.lowerLog
+            val edgeSlope = if (!sourceLogDynamicRange.isFinite() ||
+                sourceLogDynamicRange <= DngPhotonLocalToneMapper.SOURCE_EPSILON
+            ) {
+                1f
+            } else {
+                min(1f, targetLogDynamicRange / sourceLogDynamicRange)
+            }
+            val sourceHistogramCpuReadyNs = System.nanoTime()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[gaussianBuffer])
+            bindStorage(1, buffers[gaussianBuffer])
+            for (levelIndex in 1 until pyramid.levels.size) {
+                val sourceLevel = pyramid.levels[levelIndex - 1]
+                val destinationLevel = pyramid.levels[levelIndex]
+                uniform2i(
+                    activeProgram,
+                    "uSourceSize",
+                    sourceLevel.width,
+                    sourceLevel.height,
+                )
+                uniform2i(
+                    activeProgram,
+                    "uDestinationSize",
+                    destinationLevel.width,
+                    destinationLevel.height,
+                )
+                uniform1i(activeProgram, "uSourceOffset", sourceLevel.offset)
+                uniform1i(activeProgram, "uDestinationOffset", destinationLevel.offset)
+                dispatch2d(
+                    destinationLevel.width,
+                    destinationLevel.height,
+                    16,
+                    16,
+                )
+                storageBarrier()
+            }
+
+            clearUintBuffer(
+                bufferId = buffers[laplacianBuffer],
+                count = pyramid.floatCount,
+            )
+            val intensityLevels = parameters.localLaplacianIntensityLevels
+            val intensityStep = 1f / (intensityLevels - 1)
+            repeat(intensityLevels) { referenceIndex ->
+                val reference = referenceIndex * intensityStep
+                activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.REMAP)
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[gaussianBuffer])
+                bindStorage(1, buffers[remappedBuffer])
+                bindStorage(2, buffers[sourceRangeBuffer])
+                uniform1i(activeProgram, "uCount", sampleCount)
+                uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
+                uniform1i(
+                    activeProgram,
+                    "uDestinationOffset",
+                    pyramid.levels.first().offset,
+                )
+                uniform1f(activeProgram, "uReference", reference)
+                uniform1f(
+                    activeProgram,
+                    "uRangeSigma",
+                    parameters.localLaplacianRangeSigma,
+                )
+                uniform1f(
+                    activeProgram,
+                    "uDetailExponent",
+                    parameters.localLaplacianDetailExponent,
+                )
+                uniform1f(activeProgram, "uEdgeSlope", edgeSlope)
+                uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
+                dispatch1d(sampleCount, 256)
+                storageBarrier()
+
+                activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[remappedBuffer])
+                bindStorage(1, buffers[remappedBuffer])
+                for (levelIndex in 1 until pyramid.levels.size) {
+                    val sourceLevel = pyramid.levels[levelIndex - 1]
+                    val destinationLevel = pyramid.levels[levelIndex]
+                    uniform2i(
+                        activeProgram,
+                        "uSourceSize",
+                        sourceLevel.width,
+                        sourceLevel.height,
+                    )
+                    uniform2i(
+                        activeProgram,
+                        "uDestinationSize",
+                        destinationLevel.width,
+                        destinationLevel.height,
+                    )
+                    uniform1i(activeProgram, "uSourceOffset", sourceLevel.offset)
+                    uniform1i(
+                        activeProgram,
+                        "uDestinationOffset",
+                        destinationLevel.offset,
+                    )
+                    dispatch2d(
+                        destinationLevel.width,
+                        destinationLevel.height,
+                        16,
+                        16,
+                    )
+                    storageBarrier()
+                }
+
+                activeProgram = program(
+                    DngPhotonLocalToneMapGpuShaders.Pass.ACCUMULATE_LAPLACIAN
+                )
+                GLES31.glUseProgram(activeProgram)
+                bindStorage(0, buffers[gaussianBuffer])
+                bindStorage(1, buffers[remappedBuffer])
+                bindStorage(2, buffers[laplacianBuffer])
+                for (levelIndex in 0 until pyramid.levels.lastIndex) {
+                    val currentLevel = pyramid.levels[levelIndex]
+                    val nextLevel = pyramid.levels[levelIndex + 1]
+                    uniform2i(
+                        activeProgram,
+                        "uCurrentSize",
+                        currentLevel.width,
+                        currentLevel.height,
+                    )
+                    uniform2i(
+                        activeProgram,
+                        "uNextSize",
+                        nextLevel.width,
+                        nextLevel.height,
+                    )
+                    uniform1i(activeProgram, "uGuideOffset", currentLevel.offset)
+                    uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
+                    uniform1i(activeProgram, "uNextOffset", nextLevel.offset)
+                    uniform1i(activeProgram, "uOutputOffset", currentLevel.offset)
+                    uniform1f(activeProgram, "uReference", reference)
+                    uniform1f(activeProgram, "uIntensityStep", intensityStep)
+                    dispatch2d(currentLevel.width, currentLevel.height, 16, 16)
+                }
+                storageBarrier()
+            }
+
+            val coarsestLevel = pyramid.levels.last()
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.COPY_RANGE)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[gaussianBuffer])
+            bindStorage(1, buffers[reconstructedBuffer])
+            uniform1i(activeProgram, "uCount", coarsestLevel.size)
+            uniform1i(activeProgram, "uSourceOffset", coarsestLevel.offset)
+            uniform1i(activeProgram, "uDestinationOffset", coarsestLevel.offset)
+            dispatch1d(coarsestLevel.size, 256)
+            storageBarrier()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.RECONSTRUCT)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[laplacianBuffer])
+            bindStorage(1, buffers[reconstructedBuffer])
+            for (levelIndex in pyramid.levels.lastIndex - 1 downTo 0) {
+                val currentLevel = pyramid.levels[levelIndex]
+                val nextLevel = pyramid.levels[levelIndex + 1]
+                uniform2i(
+                    activeProgram,
+                    "uCurrentSize",
+                    currentLevel.width,
+                    currentLevel.height,
+                )
+                uniform2i(
+                    activeProgram,
+                    "uNextSize",
+                    nextLevel.width,
+                    nextLevel.height,
+                )
+                uniform1i(activeProgram, "uLaplacianOffset", currentLevel.offset)
+                uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
+                uniform1i(activeProgram, "uNextOffset", nextLevel.offset)
+                dispatch2d(currentLevel.width, currentLevel.height, 16, 16)
+                storageBarrier()
+            }
+
+            PLog.d(
+                TAG,
+                "Photon PGTM adaptation: sourceLog=$sourceMinimumLog..$sourceMaximumLog " +
+                    "sourcePercentiles=${sourceDistribution.lowerLog}.." +
+                    "${sourceDistribution.upperLog} sourceMedian=${sourceDistribution.medianLog} " +
+                    "edgeSlope=$edgeSlope " +
+                    "preToneMapExposureBoostEv=${parameters.preToneMapExposureBoostEv} " +
+                    "preToneMapExposureGain=$preToneMapExposureGain " +
+                    "histogramCpuMs=" +
+                    "${(sourceHistogramCpuReadyNs - sourceHistogramCpuStartNs) / 1_000_000.0}",
+            )
+
+            activeProgram = program(
+                DngPhotonLocalToneMapGpuShaders.Pass.FINALIZE_SDR_TARGET
+            )
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[reconstructedBuffer])
+            bindStorage(1, buffers[sourceRangeBuffer])
+            bindStorage(2, buffers[targetBuffer])
+            uniform1i(activeProgram, "uCount", sampleCount)
+            uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
+            uniform1f(
+                activeProgram,
+                "uPreToneMapExposureGain",
+                preToneMapExposureGain,
+            )
+            dispatch1d(sampleCount, 256)
+            storageBarrier()
+
+            allocate(buffers[bguBufferA], extendedBguFloatCount * Float.SIZE_BYTES)
+            allocate(buffers[bguBufferB], extendedBguFloatCount * Float.SIZE_BYTES)
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_HISTOGRAM)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[sourceBuffer])
+            bindStorage(1, buffers[targetBuffer])
+            bindStorage(2, buffers[bguBufferA])
+            uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
+            uniform2i(
+                activeProgram,
+                "uExtendedGridSize",
+                extendedGridWidth,
+                extendedGridHeight,
+            )
+            uniform1i(activeProgram, "uRangeBinCount", rangeBinCount)
+            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
+            uniform1f(
+                activeProgram,
+                "uGuideAlpha",
+                parameters.bilateralGuideCurveAlpha,
+            )
+            uniform1f(
+                activeProgram,
+                "uBaselineExposureGain",
+                photonPlan.exposureGain,
+            )
+            GLES31.glDispatchCompute(extendedGridWidth, extendedGridHeight, 1)
+            storageBarrier()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_Z)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[bguBufferA])
+            bindStorage(1, buffers[bguBufferB])
+            uniform2i(
+                activeProgram,
+                "uGridSize",
+                extendedGridWidth,
+                extendedGridHeight,
+            )
+            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
+            uniform1i(activeProgram, "uElementCount", extendedBguFloatCount)
+            dispatch1d(extendedBguFloatCount, 256)
+            storageBarrier()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_Y)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[bguBufferB])
+            bindStorage(1, buffers[bguBufferA])
+            uniform2i(
+                activeProgram,
+                "uExtendedGridSize",
+                extendedGridWidth,
+                extendedGridHeight,
+            )
+            uniform1i(activeProgram, "uOutputHeight", gridHeight)
+            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
+            uniform1i(activeProgram, "uElementCount", yBlurFloatCount)
+            dispatch1d(yBlurFloatCount, 256)
+            storageBarrier()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_X)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[bguBufferA])
+            bindStorage(1, buffers[bguBufferB])
+            uniform2i(activeProgram, "uOutputGridSize", gridWidth, gridHeight)
+            uniform1i(activeProgram, "uInputWidth", extendedGridWidth)
+            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
+            uniform1i(activeProgram, "uElementCount", fittedBguFloatCount)
+            dispatch1d(fittedBguFloatCount, 256)
+            storageBarrier()
+
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[bguBufferB])
+            bindStorage(1, buffers[bguBufferA])
+            uniform1i(activeProgram, "uCoefficientCount", coefficientCount)
+            uniform1f(
+                activeProgram,
+                "uRegularization",
+                parameters.bilateralRegularization,
+            )
+            uniform1f(
+                activeProgram,
+                "uIdentitySlope",
+                1f,
+            )
+            dispatch1d(coefficientCount, 256)
+            storageBarrier()
+
+            allocate(
+                buffers[bguBufferB],
+                gainFloatCount * Float.SIZE_BYTES,
+                GLES31.GL_DYNAMIC_READ,
+            )
+            activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.GAIN_CURVES)
+            GLES31.glUseProgram(activeProgram)
+            bindStorage(0, buffers[bguBufferA])
+            bindStorage(1, buffers[bguBufferB])
+            uniform1i(activeProgram, "uCellCount", plan.cellCount)
+            uniform1i(activeProgram, "uPointCount", plan.pointCount)
+            uniform1i(activeProgram, "uRangeBinCount", rangeBinCount)
+            uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
+            uniform1f(
+                activeProgram,
+                "uGuideAlpha",
+                parameters.bilateralGuideCurveAlpha,
+            )
+            uniform1f(activeProgram, "uMinTableGain", photonPlan.minTableGain)
+            uniform1f(activeProgram, "uMaxTableGain", photonPlan.maxTableGain)
+            val diagnosticMode = when (plan.diagnosticBand?.mode) {
+                DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
+                DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
+                null -> -1
+            }
+            uniform1i(activeProgram, "uDiagnosticMode", diagnosticMode)
+            uniform1f(
+                activeProgram,
+                "uDiagnosticStart",
+                plan.diagnosticBand?.start ?: 0f,
+            )
+            uniform1f(
+                activeProgram,
+                "uDiagnosticEnd",
+                plan.diagnosticBand?.end ?: 1f,
+            )
+            uniform1f(
+                activeProgram,
+                "uDiagnosticFeather",
+                plan.diagnosticBand?.feather ?: 0f,
+            )
+            dispatch1d(gainFloatCount, 256)
+            storageBarrier()
+
+            checkGlError("generatePhotonProfileGainCurvesOnGpu")
+            val gains = readFloatStorageBuffer(
+                bufferId = buffers[bguBufferB],
+                floatCount = gainFloatCount,
+                label = "Photon PGTM gain curves",
+            ) ?: return null
+            PLog.d(TAG, summarizePhotonGainCurves(plan, gains))
+            return gains
+        } finally {
+            GLES31.glUseProgram(0)
+            repeat(4) { binding ->
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, binding, 0)
+            }
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+            GLES31.glDeleteBuffers(buffers.size, buffers, 0)
+        }
+    }
+
+    /**
+     * Diagnoses the actual GPU-authored DNG table. Output reversals identify an intensity contour;
+     * adjacent range/spatial gain ratios distinguish that from a misplaced spatial grid.
+     */
+    private fun summarizePhotonGainCurves(
+        plan: HdrProfileGainTablePlan,
+        gains: FloatArray,
+    ): String {
+        val photonPlan = requireNotNull(plan.photonPlan)
+        val pointCount = plan.pointCount
+        val gridWidth = plan.grid.mapPointsH
+        val gridHeight = plan.grid.mapPointsV
+        val firstVisiblePoint = max(1, ceil(0.02f * pointCount).toInt())
+        var gainMinimum = Float.POSITIVE_INFINITY
+        var gainMaximum = Float.NEGATIVE_INFINITY
+        var reversalCount = 0
+        var worstOutputDrop = 0f
+        var worstOutputDropCell = -1
+        var worstOutputDropPoint = -1
+        var maximumRangeGainRatio = 1f
+        var maximumRangeGainCell = -1
+        var maximumRangeGainPoint = -1
+        var maximumSpatialGainRatio = 1f
+        var maximumSpatialGainCell = -1
+        var maximumSpatialGainPoint = -1
+
+        fun gainRatio(first: Float, second: Float): Float {
+            val low = min(first, second).coerceAtLeast(1e-12f)
+            return max(first, second) / low
+        }
+
+        repeat(plan.cellCount) { cell ->
+            val curveOffset = cell * pointCount
+            var previousOutput = 0f
+            for (point in 0 until pointCount) {
+                val gain = gains[curveOffset + point]
+                gainMinimum = min(gainMinimum, gain)
+                gainMaximum = max(gainMaximum, gain)
+                val sourceInput = when (point) {
+                    0 -> 0f
+                    pointCount - 1 -> 1f
+                    else -> point.toFloat() / pointCount
+                }
+                val output = photonPlan.exposureGain * sourceInput * gain
+                if (point > 0 && output < previousOutput) {
+                    reversalCount++
+                    val drop = previousOutput - output
+                    if (drop > worstOutputDrop) {
+                        worstOutputDrop = drop
+                        worstOutputDropCell = cell
+                        worstOutputDropPoint = point
+                    }
+                }
+                if (point >= firstVisiblePoint) {
+                    val previousGain = gains[curveOffset + point - 1]
+                    val ratio = gainRatio(previousGain, gain)
+                    if (ratio > maximumRangeGainRatio) {
+                        maximumRangeGainRatio = ratio
+                        maximumRangeGainCell = cell
+                        maximumRangeGainPoint = point
+                    }
+                }
+                previousOutput = output
+            }
+        }
+
+        repeat(gridHeight) { y ->
+            repeat(gridWidth) { x ->
+                val cell = y * gridWidth + x
+                for (point in firstVisiblePoint until pointCount) {
+                    val gain = gains[cell * pointCount + point]
+                    if (x > 0) {
+                        val ratio = gainRatio(
+                            gain,
+                            gains[(cell - 1) * pointCount + point],
+                        )
+                        if (ratio > maximumSpatialGainRatio) {
+                            maximumSpatialGainRatio = ratio
+                            maximumSpatialGainCell = cell
+                            maximumSpatialGainPoint = point
+                        }
+                    }
+                    if (y > 0) {
+                        val ratio = gainRatio(
+                            gain,
+                            gains[(cell - gridWidth) * pointCount + point],
+                        )
+                        if (ratio > maximumSpatialGainRatio) {
+                            maximumSpatialGainRatio = ratio
+                            maximumSpatialGainCell = cell
+                            maximumSpatialGainPoint = point
+                        }
+                    }
+                }
+            }
+        }
+
+        fun ratioToEv(ratio: Float): Float =
+            (ln(ratio.coerceAtLeast(1f).toDouble()) / ln(2.0)).toFloat()
+
+        return "Photon PGTM curve diagnostics: gain=$gainMinimum..$gainMaximum " +
+            "outputReversals=$reversalCount worstOutputDrop=$worstOutputDrop " +
+            "atCell=$worstOutputDropCell point=$worstOutputDropPoint " +
+            "maxRangeGainStep=${ratioToEv(maximumRangeGainRatio)}EV " +
+            "atCell=$maximumRangeGainCell point=$maximumRangeGainPoint " +
+            "maxSpatialNeighborStep=${ratioToEv(maximumSpatialGainRatio)}EV " +
+            "atCell=$maximumSpatialGainCell point=$maximumSpatialGainPoint"
+    }
+
+    private data class PhotonLogHistogramDistribution(
+        val lowerLog: Float,
+        val medianLog: Float,
+        val upperLog: Float,
+    )
+
+    private fun summarizePhotonLogHistogram(
+        histogram: IntArray,
+        rangeMinimum: Float,
+        rangeMaximum: Float,
+        percentileClip: Float,
+        expectedSampleCount: Int,
+        label: String,
+    ): PhotonLogHistogramDistribution? {
+        if (histogram.isEmpty() ||
+            !rangeMinimum.isFinite() ||
+            !rangeMaximum.isFinite() ||
+            rangeMaximum < rangeMinimum
+        ) {
+            PLog.e(TAG, "Photon $label histogram range invalid: $rangeMinimum..$rangeMaximum")
+            return null
+        }
+        val sampleCount = histogram.sumOf { it.toLong() and 0xffff_ffffL }
+        if (sampleCount != expectedSampleCount.toLong()) {
+            PLog.e(
+                TAG,
+                "Photon $label histogram count=$sampleCount expected=$expectedSampleCount",
+            )
+            return null
+        }
+
+        fun valueAtRank(rank: Long): Float {
+            var cumulative = 0L
+            val boundedRank = rank.coerceIn(0L, sampleCount - 1L)
+            for (bin in histogram.indices) {
+                cumulative += histogram[bin].toLong() and 0xffff_ffffL
+                if (cumulative <= boundedRank) continue
+                if (bin == 0) return rangeMinimum
+                if (bin == histogram.lastIndex) return rangeMaximum
+                val coordinate = (bin + 0.5f) / (histogram.size - 1f)
+                return rangeMinimum + coordinate * (rangeMaximum - rangeMinimum)
+            }
+            return rangeMaximum
+        }
+
+        fun percentileLog(quantile: Float): Float {
+            if (sampleCount <= 1L) return rangeMinimum
+            val position =
+                quantile.coerceIn(0f, 1f) * (sampleCount - 1L).toDouble()
+            val lowerRank = floor(position).toLong()
+            val upperRank = min(lowerRank + 1L, sampleCount - 1L)
+            val lowerValue = valueAtRank(lowerRank)
+            val upperValue = valueAtRank(upperRank)
+            val amount = position - lowerRank
+            // lapfilter.m interpolates sorted radiance rather than sorted log-radiance.
+            val radiance = exp(lowerValue.toDouble()) +
+                (exp(upperValue.toDouble()) - exp(lowerValue.toDouble())) * amount
+            return ln(radiance).toFloat()
+        }
+
+        return PhotonLogHistogramDistribution(
+            lowerLog = percentileLog(percentileClip),
+            medianLog = percentileLog(0.5f),
+            upperLog = percentileLog(1f - percentileClip),
+        )
+    }
+
+    private fun floatToOrderedBits(value: Float): Int {
+        val bits = value.toRawBits()
+        return if ((bits and Int.MIN_VALUE) != 0) bits.inv() else bits xor Int.MIN_VALUE
+    }
+
+    private fun readUintStorageBuffer(
+        bufferId: Int,
+        intCount: Int,
+        label: String,
+    ): IntArray? {
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId)
+        val byteCount = intCount * Int.SIZE_BYTES
+        val mapped = GLES31.glMapBufferRange(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            0,
+            byteCount,
+            GLES31.GL_MAP_READ_BIT,
+        ) ?: run {
+            PLog.e(TAG, "$label buffer map failed")
+            return null
+        }
+        return try {
+            val byteBuffer = mapped as? ByteBuffer ?: run {
+                PLog.e(TAG, "$label mapped buffer is not a ByteBuffer")
+                return null
+            }
+            IntArray(intCount).also { values ->
+                byteBuffer.order(ByteOrder.nativeOrder()).asIntBuffer().get(values)
+            }
+        } finally {
+            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
         }
     }
 
@@ -3104,7 +3943,7 @@ class RawDemosaicProcessor {
             TAG,
             "Shader programs created: passthrough=$passthroughProgram " +
                 "pgtmStats=$pgtmCellStatsProgram googlePgtmCurves=$pgtmGoogleGainCurvesProgram " +
-                "photonPgtmCurves=$pgtmPhotonGainCurvesProgram"
+                "photonPgtm=localLaplacianBgu"
         )
     }
 
@@ -3425,11 +4264,13 @@ class RawDemosaicProcessor {
             DngHdrProfileGainTableGpuShaders.GOOGLE_GAIN_CURVES,
             "DNG_GOOGLE_PGTM_GAIN_CURVES",
         )
-        pgtmPhotonGainCurvesProgram = compileComputeProgram(
-            DngHdrProfileGainTableGpuShaders.PHOTON_GAIN_CURVES,
-            "DNG_PHOTON_PGTM_GAIN_CURVES",
-        )
-
+        DngPhotonLocalToneMapGpuShaders.sources.forEachIndexed { index, source ->
+            val pass = DngPhotonLocalToneMapGpuShaders.Pass.entries[index]
+            pgtmPhotonPrograms[index] = compileComputeProgram(
+                source,
+                "DNG_PHOTON_PGTM_${pass.name}",
+            )
+        }
         val fShaderLinearRcd = compileShader(
             GLES30.GL_FRAGMENT_SHADER,
             FRAGMENT_SHADER_LINEAR_RCD,
@@ -9498,8 +10339,9 @@ class RawDemosaicProcessor {
         if (pgtmGoogleGainCurvesProgram != 0) {
             GLES31.glDeleteProgram(pgtmGoogleGainCurvesProgram)
         }
-        if (pgtmPhotonGainCurvesProgram != 0) {
-            GLES31.glDeleteProgram(pgtmPhotonGainCurvesProgram)
+        pgtmPhotonPrograms.forEachIndexed { index, program ->
+            if (program != 0) GLES31.glDeleteProgram(program)
+            pgtmPhotonPrograms[index] = 0
         }
         if (linearRcdProgram != 0) GLES31.glDeleteProgram(linearRcdProgram)
         if (warpRectilinearProgram != 0) GLES31.glDeleteProgram(warpRectilinearProgram)

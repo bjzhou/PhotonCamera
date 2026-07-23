@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.util.Half
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.utils.PLog
 import java.io.File
 import java.io.RandomAccessFile
@@ -134,6 +135,7 @@ data class DngProfileGainTableMap(
          * sent through DNG-only metadata readers.
          */
         fun hasClassicTiffHeader(file: File): Boolean {
+            if (BuildConfig.DEBUG) return false
             if (!file.exists() || file.length() < 8L) return false
             return runCatching {
                 RandomAccessFile(file, "r").use { raf ->

@@ -179,7 +179,36 @@ internal data class HdrPgtmGrid(
     val mapPointsV: Int,
     val mapSpacingH: Double,
     val mapSpacingV: Double,
+    val mapOriginH: Double = 0.0,
+    val mapOriginV: Double = 0.0,
 )
+
+internal data class HdrPgtmSamplingArea(
+    val originH: Double,
+    val originV: Double,
+    val extentH: Double,
+    val extentV: Double,
+) {
+    init {
+        require(originH.isFinite() && originV.isFinite())
+        require(extentH.isFinite() && extentH > 0.0)
+        require(extentV.isFinite() && extentV > 0.0)
+        require(originH >= 0.0 && originV >= 0.0)
+        require(originH + extentH <= 1.0 + COORDINATE_EPS)
+        require(originV + extentV <= 1.0 + COORDINATE_EPS)
+    }
+
+    companion object {
+        val FULL = HdrPgtmSamplingArea(
+            originH = 0.0,
+            originV = 0.0,
+            extentH = 1.0,
+            extentV = 1.0,
+        )
+
+        private const val COORDINATE_EPS = 1e-9
+    }
+}
 
 internal data class HdrPgtmCellStats(
     val p10: Float,

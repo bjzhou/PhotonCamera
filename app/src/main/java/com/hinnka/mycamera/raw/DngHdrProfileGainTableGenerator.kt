@@ -69,6 +69,7 @@ internal object DngHdrProfileGainTableGenerator {
         tablePointCount: Int = TABLE_POINTS,
         diagnosticBand: DiagnosticBand? = null,
         curveModel: HdrPgtmCurveModel = HdrPgtmCurveModel.GOOGLE,
+        samplingArea: HdrPgtmSamplingArea = HdrPgtmSamplingArea.FULL,
     ): HdrProfileGainTablePlan? {
         if (width <= 0 || height <= 0 || !baselineExposureEv.isFinite()) return null
         val grid = chooseLtmGrid(width, height)
@@ -77,6 +78,15 @@ internal object DngHdrProfileGainTableGenerator {
         if (packedCellStats.size < requiredStats) {
             PLog.w(TAG, "GPU LTM stats too small: ${packedCellStats.size}, expected=$requiredStats")
             return null
+        }
+        if (curveModel == HdrPgtmCurveModel.PHOTON) {
+            return DngPhotonProfileGainTableGenerator.plan(
+                grid = grid,
+                pointCount = tablePointCount.coerceIn(TABLE_POINTS, TABLE_POINTS),
+                baselineExposureEv = baselineExposureEv,
+                samplingArea = samplingArea,
+                diagnosticBand = diagnosticBand?.sanitized(),
+            )
         }
 
         val cells = Array<HdrPgtmCellStats?>(cellCount) { index ->
@@ -91,18 +101,6 @@ internal object DngHdrProfileGainTableGenerator {
             ?: FALLBACK_NOISE_SLOPE
         val safeNoiseOffset = noiseOffset.takeIf { it.isFinite() && it > 0f }
             ?: FALLBACK_NOISE_OFFSET
-        if (curveModel == HdrPgtmCurveModel.PHOTON) {
-            return DngPhotonProfileGainTableGenerator.plan(
-                grid = grid,
-                pointCount = tablePointCount.coerceIn(TABLE_POINTS, TABLE_POINTS),
-                baselineExposureEv = baselineExposureEv,
-                cells = cells,
-                global = global,
-                noiseSlope = safeNoiseSlope,
-                noiseOffset = safeNoiseOffset,
-                diagnosticBand = diagnosticBand?.sanitized(),
-            )
-        }
 
         val curveParameters = GOOGLE_CURVE_PARAMETERS
         val inputScale = estimateInputScale(global, baselineExposureEv, curveParameters)
@@ -311,8 +309,8 @@ internal object DngHdrProfileGainTableGenerator {
         mapPointsH = plan.grid.mapPointsH,
         mapSpacingV = plan.grid.mapSpacingV,
         mapSpacingH = plan.grid.mapSpacingH,
-        mapOriginV = 0.0,
-        mapOriginH = 0.0,
+        mapOriginV = plan.grid.mapOriginV,
+        mapOriginH = plan.grid.mapOriginH,
         mapPointsN = plan.pointCount,
         mapInputWeights = plan.mapInputWeights,
         gamma = plan.gamma,

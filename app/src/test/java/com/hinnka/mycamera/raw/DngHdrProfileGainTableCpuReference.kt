@@ -1,7 +1,5 @@
 package com.hinnka.mycamera.raw
 
-import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
 
@@ -9,7 +7,8 @@ import kotlin.math.pow
 internal object DngHdrProfileGainTableCpuReference {
     fun generate(plan: HdrProfileGainTablePlan): FloatArray = when (plan.curveModel) {
         HdrPgtmCurveModel.GOOGLE -> generateGoogle(plan, requireNotNull(plan.googlePlan))
-        HdrPgtmCurveModel.PHOTON -> generatePhoton(plan, requireNotNull(plan.photonPlan))
+        HdrPgtmCurveModel.PHOTON ->
+            error("Photon curves require the sampled image; use DngPhotonLocalToneMapper.generate")
     }
 
     private fun generateGoogle(
@@ -56,102 +55,6 @@ internal object DngHdrProfileGainTableCpuReference {
             }
         }
         return result
-    }
-
-    private fun generatePhoton(
-        plan: HdrProfileGainTablePlan,
-        photonPlan: PhotonPgtmPlan,
-    ): FloatArray {
-        val result = FloatArray(photonPlan.cellPlans.size * plan.pointCount)
-        photonPlan.cellPlans.forEachIndexed { cell, cellPlan ->
-            var previousFinalOutput = 0f
-            repeat(plan.pointCount) { point ->
-                val tableInput = tableInput(point, plan.pointCount)
-                val sourceInput = max(tableInput, 0f).pow(1f / plan.gamma)
-                val exposedInput = photonPlan.exposureGain * sourceInput
-                val warpedInput = localContrastWarp(
-                    exposedInput = exposedInput,
-                    contrastExponent = cellPlan.contrastExponent,
-                    highlightRecovery = cellPlan.highlightRecovery,
-                    photonPlan = photonPlan,
-                )
-                val output = globalCurve(warpedInput, photonPlan)
-                val trueGain = if (exposedInput <= CURVE_EPS) {
-                    photonPlan.lowSlope.coerceIn(
-                        photonPlan.minTableGain,
-                        photonPlan.maxTableGain,
-                    )
-                } else {
-                    (output / exposedInput).coerceIn(
-                        photonPlan.minTableGain,
-                        photonPlan.maxTableGain,
-                    )
-                }
-                val finalGain = applyDiagnostic(
-                    trueGain = trueGain,
-                    tableInput = tableInput,
-                    physicalInput = exposedInput,
-                    previousFinalOutput = previousFinalOutput,
-                    plan = plan,
-                    minGain = photonPlan.minTableGain,
-                    maxGain = photonPlan.maxTableGain,
-                )
-                if (plan.diagnosticBand != null) {
-                    previousFinalOutput = max(previousFinalOutput, exposedInput * finalGain)
-                }
-                result[cell * plan.pointCount + point] = finalGain
-            }
-        }
-        return result
-    }
-
-    private fun localContrastWarp(
-        exposedInput: Float,
-        contrastExponent: Float,
-        highlightRecovery: Float,
-        photonPlan: PhotonPgtmPlan,
-    ): Float {
-        val pivot = photonPlan.exposedPivot
-        val endpoint = max(photonPlan.exposureGain, pivot + CURVE_EPS)
-        return if (exposedInput <= pivot) {
-            val normalized = (exposedInput / max(pivot, CURVE_EPS)).coerceIn(0f, 1f)
-            pivot * normalized.pow(contrastExponent)
-        } else {
-            val normalized = (
-                (exposedInput - pivot) / max(endpoint - pivot, CURVE_EPS)
-                ).coerceIn(0f, 1f)
-            val contrasted = 1f - (1f - normalized).pow(contrastExponent)
-            val recovered = contrasted -
-                highlightRecovery * contrasted * (1f - contrasted)
-            pivot + (endpoint - pivot) * recovered.coerceIn(0f, 1f)
-        }
-    }
-
-    private fun globalCurve(
-        input: Float,
-        plan: PhotonPgtmPlan,
-    ): Float {
-        if (input <= plan.exposedPivot) {
-            val x = (input / max(plan.exposedPivot, CURVE_EPS)).coerceIn(0f, 1f)
-            val oneMinusX = 1f - x
-            val lifted = x + plan.lowCurveLift * x * x * oneMinusX * oneMinusX
-            return plan.pivotOutput * lifted
-        }
-        val span = max(plan.exposureGain - plan.exposedPivot, CURVE_EPS)
-        val r = ((input - plan.exposedPivot) / span).coerceIn(0f, 1f)
-        val parameter = plan.shoulderParameter
-        val shaped = when {
-            parameter > 1e-4f -> (
-                ln(1.0 + parameter * r) / ln(1.0 + parameter)
-                ).toFloat()
-            parameter < -1e-4f -> {
-                val convexA = -parameter
-                ((exp((convexA * r).toDouble()) - 1.0) /
-                    (exp(convexA.toDouble()) - 1.0)).toFloat()
-            }
-            else -> r
-        }
-        return plan.pivotOutput + (plan.endpointOutput - plan.pivotOutput) * shaped
     }
 
     private fun applyDiagnostic(
