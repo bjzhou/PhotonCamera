@@ -203,6 +203,14 @@ class GpuReferenceGainmapProducer : GainmapProducer {
         )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(rawLumaResidualProgram, "uOffset"), EPSILON)
         GLES30.glUniform1f(GLES30.glGetUniformLocation(rawLumaResidualProgram, "uStrength"), strength)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(rawLumaResidualProgram, "uGainStartLuma"),
+            RAW_GAIN_START_LUMA,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(rawLumaResidualProgram, "uGainFullLuma"),
+            RAW_GAIN_FULL_LUMA,
+        )
         drawQuad(rawLumaResidualProgram)
         checkGlError("renderRawLumaResidualPass")
     }
@@ -484,6 +492,8 @@ class GpuReferenceGainmapProducer : GainmapProducer {
         private const val RAW_DOWNSAMPLE = RawGainmapMath.DOWNSAMPLE
         private const val RAW_MIN_GAIN_RATIO = RawGainmapMath.MIN_GAIN_RATIO
         private const val RAW_MAX_GAIN_RATIO = RawGainmapMath.MAX_GAIN_RATIO
+        private const val RAW_GAIN_START_LUMA = RawGainmapMath.GAIN_START_LUMA
+        private const val RAW_GAIN_FULL_LUMA = RawGainmapMath.GAIN_FULL_LUMA
         private const val RAW_LOW_SCENE_MAX_GAIN_RATIO = 1.6033f
         private const val EPSILON = RawGainmapMath.OFFSET
         private val RAW_CONFIG = Config(
@@ -524,6 +534,8 @@ class GpuReferenceGainmapProducer : GainmapProducer {
             uniform float uMaxGainRatio;
             uniform float uOffset;
             uniform float uStrength;
+            uniform float uGainStartLuma;
+            uniform float uGainFullLuma;
 
             float srgbToLinear(float value) {
                 float safeValue = max(value, 0.0);
@@ -557,8 +569,18 @@ class GpuReferenceGainmapProducer : GainmapProducer {
                     0.0
                 );
                 float targetHdrLuma = lutAdjustedHdrBaseLuma + hdrHeadroomLuma;
-                float ratio = clamp(
+                float candidateRatio = clamp(
                     (targetHdrLuma + uOffset) / (sdrLuma + uOffset),
+                    uMinGainRatio,
+                    uMaxGainRatio
+                );
+                float gainParticipation = smoothstep(
+                    uGainStartLuma,
+                    uGainFullLuma,
+                    hdrLuma
+                );
+                float ratio = clamp(
+                    mix(1.0, candidateRatio, gainParticipation),
                     uMinGainRatio,
                     uMaxGainRatio
                 );

@@ -9,6 +9,8 @@ internal object RawGainmapMath {
     const val MIN_GAIN_RATIO = 0.25f
     const val MAX_GAIN_RATIO = 4.0f
     const val OFFSET = 1e-4f
+    const val GAIN_START_LUMA = 0.09f
+    const val GAIN_FULL_LUMA = 0.18f
 
     private const val LUMA_R = 0.2126f
     private const val LUMA_G = 0.7152f
@@ -70,8 +72,14 @@ internal object RawGainmapMath {
         val targetHdrLuma = lutLuminanceGain?.let { gain ->
             applyLutLuminanceGain(gain, hdrLuma, offset)
         } ?: hdrLuma
-        val ratio = ((targetHdrLuma + offset) / (sdrLuma + offset))
+        val candidateRatio = ((targetHdrLuma + offset) / (sdrLuma + offset))
             .coerceIn(minGainRatio, maxGainRatio)
+        val ratio = gateRatioByHdrLuminance(
+            candidateRatio = candidateRatio,
+            hdrReferenceLuma = hdrLuma,
+            minGainRatio = minGainRatio,
+            maxGainRatio = maxGainRatio,
+        )
         val strengthRatio = HdrGainmapStrength.applyToRatio(
             ratio = ratio,
             minGainRatio = minGainRatio,
@@ -108,6 +116,21 @@ internal object RawGainmapMath {
         return adjustedBase + hdrHeadroom
     }
 
+    fun gateRatioByHdrLuminance(
+        candidateRatio: Float,
+        hdrReferenceLuma: Float,
+        minGainRatio: Float = MIN_GAIN_RATIO,
+        maxGainRatio: Float = MAX_GAIN_RATIO,
+    ): Float {
+        val participation = smoothstep(
+            GAIN_START_LUMA,
+            GAIN_FULL_LUMA,
+            hdrReferenceLuma.coerceAtLeast(0f),
+        )
+        return (1f + (candidateRatio - 1f) * participation)
+            .coerceIn(minGainRatio, maxGainRatio)
+    }
+
     fun reconstructLinear(
         sdrEncoded: Float,
         encodedGain: Float,
@@ -118,5 +141,10 @@ internal object RawGainmapMath {
         val logGain = ln(minGainRatio) +
             (ln(maxGainRatio) - ln(minGainRatio)) * encodedGain.coerceIn(0f, 1f)
         return (srgbToLinear(sdrEncoded) + offset) * kotlin.math.exp(logGain) - offset
+    }
+
+    private fun smoothstep(edge0: Float, edge1: Float, value: Float): Float {
+        val t = ((value - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
     }
 }
