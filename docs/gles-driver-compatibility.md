@@ -28,6 +28,48 @@ binding 8。SSBO、image 和 UBO 分属不同的绑定命名空间，相同数�
 1，RCD 路径至少需要 8。新增 shader 不得通过持续增大 binding 编号来规避不同 program
 之间的名称重复。
 
+## OPPO PLW110 / Mali-G720-Immortalis MC12
+
+已确认环境：
+
+- 设备：OPPO PLW110
+- GPU：ARM Mali-G720-Immortalis MC12
+- GLES：OpenGL ES 3.2
+- 驱动：`v1.r44p1-01eac0.7c759d1daf93e2baa476e2d4d07e761b`
+
+### `readonly` SSBO 元素不能直接传给用户函数
+
+该驱动会把 `readonly` SSBO 数组元素的访问限定符保留到用户函数调用处。即使函数参数按
+GLSL 值语义传递，下面的合法 GLSL ES 3.10 写法仍会在编译阶段被拒绝：
+
+```glsl
+layout(std430, binding = 2) readonly buffer HistogramRange {
+    uint histogramRange[];
+};
+
+float orderedFloatValue(uint ordered) {
+    // ...
+}
+
+float rangeMinimum = orderedFloatValue(histogramRange[0]);
+```
+
+驱动错误为：
+
+```text
+S0001: Function call discards 'readonly' access qualifier.
+```
+
+必须先把 SSBO 元素复制为普通局部值，再传给用户函数：
+
+```glsl
+uint rangeMinimumOrdered = histogramRange[0];
+float rangeMinimum = orderedFloatValue(rangeMinimumOrdered);
+```
+
+不能通过移除 SSBO 的 `readonly` 限定符规避编译错误；只读访问契约必须保留。内建函数当前
+未复现同一限制，但新增用户函数调用不得直接接收 `readonly` SSBO 成员或数组元素。
+
 ## PMA110
 
 ### `RGBA16F` image 的访问限制

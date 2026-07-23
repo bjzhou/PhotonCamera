@@ -427,8 +427,13 @@ internal object DngPhotonLocalToneMapGpuShaders {
             );
             float filteredLog = minimumLog +
                 reconstructed[uSourceOffset + index] * (maximumLog - minimumLog);
-            float rangeMinimum = orderedFloatValue(histogramRange[0]);
-            float rangeMaximum = orderedFloatValue(histogramRange[1]);
+            // Mali r44p1 preserves the readonly SSBO access qualifier when an array element is
+            // passed directly to a user function, then rejects the call because the value
+            // parameter is unqualified. Materialize plain local values before conversion.
+            uint rangeMinimumOrdered = histogramRange[0];
+            uint rangeMaximumOrdered = histogramRange[1];
+            float rangeMinimum = orderedFloatValue(rangeMinimumOrdered);
+            float rangeMaximum = orderedFloatValue(rangeMaximumOrdered);
             float coordinate = (filteredLog - rangeMinimum) /
                 max(rangeMaximum - rangeMinimum, SOURCE_EPS);
             int binIndex = int(floor(clamp(coordinate, 0.0, 1.0) * float(uBinCount - 1)));
