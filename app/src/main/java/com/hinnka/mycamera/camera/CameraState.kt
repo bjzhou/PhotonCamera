@@ -345,6 +345,7 @@ data class CameraState(
     val isRawSupported: Boolean = false,
     val multiFrameOutputScale: Float? = null,
     val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT,
+    val useJpgMaxHdrComposition: Boolean = false,
     val useRaw: Boolean = false,
     val useMultipleExposure: Boolean = false,
     val rawMinShutterSpeedNs: Long = 0L,
@@ -394,6 +395,9 @@ data class CameraState(
 
     val isJpgMaxEnabled: Boolean
         get() = isMultiFrameEnabled && !useRaw
+
+    val isJpgMaxHdrEnabled: Boolean
+        get() = isJpgMaxEnabled && useJpgMaxHdrComposition
 
     val isRawMaxEnabled: Boolean
         get() = isMultiFrameEnabled && useRaw

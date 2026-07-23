@@ -272,6 +272,7 @@ fun SettingsScreen(
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
+    val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
@@ -1490,6 +1491,18 @@ fun SettingsScreen(
 
                     // 多帧与曝光
                     SettingsSection(title = stringResource(R.string.settings_section_multiframe_exposure)) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_jpg_max_hdr_composition),
+                            description = stringResource(R.string.settings_jpg_max_hdr_composition_description),
+                            checked = useJpgMaxHdrComposition,
+                            onCheckedChange = viewModel::setUseJpgMaxHdrComposition
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         SliderSettingItem(
                             title = stringResource(R.string.settings_max_frame_count),
                             description = stringResource(R.string.settings_max_frame_count_description),

@@ -483,9 +483,9 @@ class Camera2Controller(private val context: Context) {
     private fun resolveImageReaderMaxImages(): Int {
         val currentState = _state.value
         val multiFrameCount = MultiFrameConfig.normalizeFrameCount(currentState.multiFrameCount)
-        val usesJpgMax = currentState.isJpgMaxEnabled
+        val usesJpgMaxHdr = currentState.isJpgMaxHdrEnabled
         val requestedImages = when {
-            usesJpgMax ->
+            usesJpgMaxHdr ->
                 multiFrameCount + HDR_BRACKET_SIDE_FRAME_COUNT
 
             currentState.isMultiFrameEnabled ->
@@ -5156,6 +5156,10 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    fun setUseJpgMaxHdrComposition(enabled: Boolean) {
+        _state.value = _state.value.copy(useJpgMaxHdrComposition = enabled)
+    }
+
 
     fun setCapturingLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(isCapturingLivePhoto = enabled)
@@ -5998,9 +6002,9 @@ class Camera2Controller(private val context: Context) {
         return false
     }
 
-    private fun shouldUseJpgMaxCapture(state: CameraState, isRawCapture: Boolean): Boolean {
+    private fun shouldUseJpgMaxHdrCapture(state: CameraState, isRawCapture: Boolean): Boolean {
         return state.captureMode == CaptureMode.PHOTO &&
-                state.isJpgMaxEnabled &&
+                state.isJpgMaxHdrEnabled &&
                 !isRawCapture &&
                 !state.burstCapturing &&
                 !state.hdrBracketCapturing &&
@@ -6024,7 +6028,7 @@ class Camera2Controller(private val context: Context) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
             val currentState = _state.value
-            if (shouldUseJpgMaxCapture(currentState, isRawCapture)) {
+            if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture)) {
                 val session = captureSession ?: run {
                     PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
                     _state.value = _state.value.copy(isCapturing = false)
@@ -6126,42 +6130,53 @@ class Camera2Controller(private val context: Context) {
                 }
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)
                 val baseRequest = captureBuilder.build()
-                val shortRequest = buildMultiFrameShortCaptureRequest(
-                    device = device,
-                    reader = reader,
-                    state = currentState,
-                    baseResult = baseExposureResult,
-                    baseRequest = baseRequest,
-                    isRawCapture = isRawCapture,
-                )
-                val longRequest = buildMultiFrameLongCaptureRequest(
-                    device = device,
-                    reader = reader,
-                    state = currentState,
-                    baseResult = baseExposureResult,
-                    baseRequest = baseRequest,
-                    isRawCapture = isRawCapture,
-                )
-                val requests = buildList(MultiFrameConfig.captureFrameCount(frameCount)) {
-                    repeat(normalFrameCount) {
-                        add(baseRequest)
+                val requests = if (currentState.isJpgMaxEnabled) {
+                    List(frameCount) { baseRequest }
+                } else {
+                    val shortRequest = buildMultiFrameShortCaptureRequest(
+                        device = device,
+                        reader = reader,
+                        state = currentState,
+                        baseResult = baseExposureResult,
+                        baseRequest = baseRequest,
+                        isRawCapture = isRawCapture,
+                    )
+                    val longRequest = buildMultiFrameLongCaptureRequest(
+                        device = device,
+                        reader = reader,
+                        state = currentState,
+                        baseResult = baseExposureResult,
+                        baseRequest = baseRequest,
+                        isRawCapture = isRawCapture,
+                    )
+                    val radianceRequests = buildList(MultiFrameConfig.captureFrameCount(frameCount)) {
+                        repeat(normalFrameCount) {
+                            add(baseRequest)
+                        }
+                        add(shortRequest)
+                        repeat(longFrameCount) {
+                            add(longRequest ?: baseRequest)
+                        }
                     }
-                    add(shortRequest)
-                    repeat(longFrameCount) {
-                        add(longRequest ?: baseRequest)
-                    }
+                    val scheduledLongFrameCount = if (longRequest != null) longFrameCount else 0
+                    PLog.i(
+                        TAG,
+                        "Multi-frame burst plan: normalFrames=$normalFrameCount shortFrames=" +
+                            "${MultiFrameConfig.SHORT_FRAME_COUNT} " +
+                            "longFrames=$scheduledLongFrameCount " +
+                            "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
+                            "longTargetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
+                            "longMaxShutterNs=${MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS} " +
+                            "total=${radianceRequests.size}",
+                    )
+                    radianceRequests
                 }
-                val scheduledLongFrameCount = if (longRequest != null) longFrameCount else 0
-                PLog.i(
-                    TAG,
-                    "Multi-frame burst plan: normalFrames=$normalFrameCount shortFrames=" +
-                        "${MultiFrameConfig.SHORT_FRAME_COUNT} " +
-                        "longFrames=$scheduledLongFrameCount " +
-                        "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
-                        "longTargetEv=${MultiFrameConfig.LONG_FRAME_EXPOSURE_EV} " +
-                        "longMaxShutterNs=${MultiFrameConfig.LONG_FRAME_MAX_EXPOSURE_TIME_NS} " +
-                        "total=${requests.size}",
-                )
+                if (currentState.isJpgMaxEnabled) {
+                    PLog.i(
+                        TAG,
+                        "JPGmax denoise burst plan: zeroEvFrames=${requests.size} hdr=false",
+                    )
+                }
 
                 var completedCaptureCount = 0
                 session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {

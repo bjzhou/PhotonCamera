@@ -18,6 +18,7 @@ class MultiFrameConfigTest {
             multiFrameOutputScale = 1f,
             useRaw = false,
         )
+        val jpgMaxHdr = jpgMax.copy(useJpgMaxHdrComposition = true)
         val rawMax = CameraState(
             multiFrameOutputScale = 1.5f,
             useRaw = true,
@@ -25,9 +26,12 @@ class MultiFrameConfigTest {
         )
 
         assertTrue(jpgMax.isJpgMaxEnabled)
+        assertFalse(jpgMax.isJpgMaxHdrEnabled)
         assertFalse(jpgMax.isRawMaxEnabled)
+        assertTrue(jpgMaxHdr.isJpgMaxHdrEnabled)
         assertTrue(rawMax.isRawMaxEnabled)
         assertFalse(rawMax.isJpgMaxEnabled)
+        assertFalse(rawMax.isJpgMaxHdrEnabled)
     }
 
     @Test

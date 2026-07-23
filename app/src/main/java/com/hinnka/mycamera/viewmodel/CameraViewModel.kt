@@ -1182,6 +1182,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useJpgMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useJpgMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val useJpgMaxHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useJpgMaxHdrComposition }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useMultipleExposure }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -1591,6 +1594,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentCameraState.multiFrameOutputScale != effectiveMultiFrameOutputScale) {
                     cameraController.setMultiFrameOutputScale(effectiveMultiFrameOutputScale)
                 }
+                if (currentCameraState.useJpgMaxHdrComposition != it.useJpgMaxHdrComposition) {
+                    cameraController.setUseJpgMaxHdrComposition(it.useJpgMaxHdrComposition)
+                }
                 if (multipleExposureEnabled && (it.useRaw || it.useJpgMax || it.useRawMax)) {
                     viewModelScope.launch {
                         userPreferencesRepository.saveCameraFeaturePreferences(
@@ -1794,6 +1800,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 )
                 cameraController.setMultiFrameCount(prefs.multiFrameCount)
+                cameraController.setUseJpgMaxHdrComposition(prefs.useJpgMaxHdrComposition)
                 cameraController.setUseLivePhoto(
                     prefs.useLivePhoto && !prefs.useJpgMax && prefs.captureMode == CaptureMode.PHOTO
                 )
@@ -3771,7 +3778,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // ==================== 延时拍摄和网格线相关方法 ====================
 
-    /** JPGmax：YUV 多帧降噪与 HDR 合成。 */
+    /** JPGmax：YUV 多帧降噪。 */
     fun setUseJpgMax(enabled: Boolean) {
         viewModelScope.launch {
             if (enabled) {
@@ -3784,6 +3791,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(useJpgMax = SettingValue(enabled))
             )
+        }
+    }
+
+    fun setUseJpgMaxHdrComposition(enabled: Boolean) {
+        val currentState = cameraController.state.value
+        val needsCameraReopen = currentState.isJpgMaxEnabled &&
+            currentState.useJpgMaxHdrComposition != enabled
+        cameraController.setUseJpgMaxHdrComposition(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseJpgMaxHdrComposition(enabled)
+            if (needsCameraReopen) {
+                reopenCamera()
+            }
         }
     }
 
@@ -4753,7 +4773,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 computationalAperture = aperture,
                 focusPointX = state.value.focusPoint?.first,
                 focusPointY = state.value.focusPoint?.second,
-                manualHdrEffectEnabled = defaultHdrEffectEnabled
+                manualHdrEffectEnabled = defaultHdrEffectEnabled,
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {
@@ -5301,7 +5321,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 computationalAperture = aperture,
                 focusPointX = state.value.focusPoint?.first,
                 focusPointY = state.value.focusPoint?.second,
-                manualHdrEffectEnabled = defaultHdrEffectEnabled
+                manualHdrEffectEnabled = defaultHdrEffectEnabled,
+                captureMode = if (isRawStack) null else "jpg_max",
             )
 
             val livePhotoVideoDeferred = if (useLivePhoto.value) {

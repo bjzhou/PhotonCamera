@@ -158,7 +158,8 @@ data class UserPreferences(
     val lutSelectorMode: LutSelectorMode = LutSelectorMode.Style,
     val defaultFocalLength: Float = 0f, // 默认焦段 (mm)，0表示不设置
     val zoomDisplayMode: String = "FOCAL_LENGTH",
-    val useJpgMax: Boolean = false, // JPGmax：YUV 多帧降噪与 HDR 合成
+    val useJpgMax: Boolean = false, // JPGmax：YUV 多帧降噪
+    val useJpgMaxHdrComposition: Boolean = false, // JPGmax：额外启用包围曝光 HDR 合成
     val multiFrameCount: Int = MultiFrameConfig.DEFAULT_FRAME_COUNT, // Max 管线帧数
     val useMultipleExposure: Boolean = false, // 是否启用多重曝光
     val multipleExposureCount: Int = 2, // 多重曝光张数
@@ -365,6 +366,8 @@ class UserPreferencesRepository(private val context: Context) {
 
         // 多帧合成 Key
         private val USE_JPG_MAX = booleanPreferencesKey("use_jpg_max")
+        private val USE_JPG_MAX_HDR_COMPOSITION =
+            booleanPreferencesKey("use_jpg_max_hdr_composition")
         private val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
         private val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
         private val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")
@@ -571,6 +574,7 @@ class UserPreferencesRepository(private val context: Context) {
                 defaultFocalLength = preferences[DEFAULT_FOCAL_LENGTH] ?: 0f,
                 zoomDisplayMode = preferences[ZOOM_DISPLAY_MODE] ?: "FOCAL_LENGTH",
                 useJpgMax = useJpgMax,
+                useJpgMaxHdrComposition = preferences[USE_JPG_MAX_HDR_COMPOSITION] ?: false,
                 multiFrameCount = preferences[MULTI_FRAME_COUNT]
                     ?.coerceIn(MultiFrameConfig.MIN_FRAME_COUNT, MultiFrameConfig.MAX_FRAME_COUNT)
                     ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
@@ -1608,6 +1612,12 @@ class UserPreferencesRepository(private val context: Context) {
                 MultiFrameConfig.MIN_FRAME_COUNT,
                 MultiFrameConfig.MAX_FRAME_COUNT
             )
+        }
+    }
+
+    suspend fun saveUseJpgMaxHdrComposition(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[USE_JPG_MAX_HDR_COMPOSITION] = enabled
         }
     }
 
