@@ -107,8 +107,6 @@ internal object RawRadianceExposurePlanner {
 
 internal data class RawRadianceHighlightFrame(
     val shortFrame: RawStackFrame,
-    val anchorFrameIndex: Int,
-    val anchorCandidateIndices: IntArray,
     val exposureRatio: Float,
     val baselineExposureEv: Float,
 )
@@ -227,11 +225,12 @@ internal fun planRadianceLongAdmission(
  * Unified same-exposure RAW fusion.
  *
  * One optional one-third-exposure frame is identified and reserved for sparse highlight recovery.
- * It is aligned through the nearest accepted normal anchor, admitted only where clipped normal
- * observations have locally supported short-frame geometry, and composed using RAW clipping,
- * noise, and photometric evidence. Tagged long exposures are also isolated and planned against
- * the nearest accepted normal anchor. They enter Radiance RGB through an exposure-normalized,
- * noise-weighted auxiliary path and may not participate in the normal Radiance frame cluster.
+ * The normal multi-frame output reference remains the only geometric and noise reference. Direct
+ * normal-to-short flow is measured only outside clipping, then each connected clipped region is
+ * either admitted in full from its observable collar or rejected in full. Tagged long exposures
+ * are also isolated and planned against the nearest accepted normal anchor. They enter Radiance
+ * RGB through an exposure-normalized, noise-weighted auxiliary path and may not participate in the
+ * normal Radiance frame cluster.
  *
  * The reconstruction algorithm is independent of output scale: every accepted RAW frame
  * contributes a wide-kernel denoise estimate and a narrow-kernel detail estimate in the
@@ -287,7 +286,6 @@ class GlesRawRadianceFusion(
         }
         val highlightFrame = shortFrame?.let { short ->
             createHighlightFrame(
-                normalFrames = fusionFrames,
                 shortFrame = short,
                 baseExposureProduct = exposurePlan.baseExposureProduct,
             )
@@ -299,8 +297,8 @@ class GlesRawRadianceFusion(
                     "exposure=${highlightFrame.shortFrame.exposureProduct} " +
                     "base=${exposurePlan.baseExposureProduct} " +
                     "ratio=${highlightFrame.exposureRatio} " +
-                    "anchor=${highlightFrame.anchorFrameIndex} " +
-                    "normalFrames=${exposurePlan.normalIndices.size}; normal fusion excluded",
+                    "normalFrames=${exposurePlan.normalIndices.size}; " +
+                    "normal reference retained and short excluded from normal fusion",
             )
         } else if (shortFrame != null) {
             PLog.w(
@@ -386,11 +384,9 @@ class GlesRawRadianceFusion(
     }
 
     private fun createHighlightFrame(
-        normalFrames: List<RawStackFrame>,
         shortFrame: RawStackFrame,
         baseExposureProduct: Double?,
     ): RawRadianceHighlightFrame? {
-        if (normalFrames.isEmpty()) return null
         val normalExposure = baseExposureProduct
             ?.takeIf { it.isFinite() && it > 0.0 }
             ?: return null
@@ -403,19 +399,8 @@ class GlesRawRadianceFusion(
         ) {
             return null
         }
-        val anchorCandidates = normalFrames.indices.sortedWith(
-            compareBy<Int> { index ->
-                timestampDistance(
-                    normalFrames[index].sensorTimestampNs,
-                    shortFrame.sensorTimestampNs,
-                )
-            }.thenBy { it },
-        )
-        val anchorIndex = anchorCandidates.firstOrNull() ?: return null
         return RawRadianceHighlightFrame(
             shortFrame = shortFrame.copy(role = RawBurstFrameRole.HIGHLIGHT_SHORT),
-            anchorFrameIndex = anchorIndex,
-            anchorCandidateIndices = anchorCandidates.toIntArray(),
             exposureRatio = ratio,
             baselineExposureEv = (ln(ratio.toDouble()) / ln(2.0)).toFloat(),
         )
@@ -512,27 +497,29 @@ data class RawRadianceFusionTuning(
     val highlightMaxExposureRatio: Float = 8.0f,
     val highlightNormalClipStart: Float = 0.90f,
     val highlightNormalClipFull: Float = 0.985f,
-    val highlightShortClipStart: Float = 0.94f,
-    val highlightShortClipFull: Float = 0.99f,
     val highlightFlowFbConsistencyStartPx: Float = 0.75f,
     val highlightFlowFbConsistencyFullPx: Float = 2.0f,
-    val highlightFlowPropagationPasses: Int = 6,
-    val highlightFlowPropagationDecay: Float = 0.82f,
-    val highlightFlowGuideEdgeSigma: Float = 0.08f,
-    val highlightFlowSeedConfidence: Float = 0.05f,
-    val highlightFlowMinimumConfidence: Float = 0.005f,
-    val highlightFlowFullConfidence: Float = 0.05f,
-    val highlightMinimumEligibleTiles: Int = 1,
-    val highlightMinimumEligibleCoverage: Float = 0.20f,
-    val highlightNeedTileThreshold: Float = 0.05f,
-    val highlightShortValidityTileThreshold: Float = 0.20f,
+    val highlightDirectFlowConfidence: Float = 0.05f,
+    val highlightDirectFlowFullConfidence: Float = 0.35f,
+    val highlightFlowMinimumConfidence: Float = 0.20f,
+    val highlightFlowFullConfidence: Float = 0.75f,
+    val highlightNeedTileStart: Float = 0.05f,
+    val highlightNeedTileThreshold: Float = 0.20f,
+    val highlightShortValidityTileThreshold: Float = 0.75f,
     val highlightPhotometricSigmaStart: Float = 3.0f,
     val highlightPhotometricSigmaFull: Float = 8.0f,
+    val highlightCollarPhotometricThreshold: Float = 0.35f,
+    val highlightCollarRadiusTiles: Int = 4,
+    val highlightCollarMinimumWeight: Float = 4.0f,
+    val highlightCollarFullWeight: Float = 10.0f,
+    val highlightCollarMinimumSectorWeight: Float = 0.75f,
+    val highlightCollarMinimumSectors: Int = 3,
+    val highlightCollarFlowSigmaStartPx: Float = 0.20f,
+    val highlightCollarFlowSigmaFullPx: Float = 0.60f,
+    val highlightHoleAcceptanceConfidence: Float = 0.50f,
+    val highlightHoleRejectionPropagationPasses: Int = 8,
     val highlightClipNoiseSigmaStart: Float = 8.0f,
     val highlightClipNoiseSigmaFull: Float = 2.0f,
-    val highlightShortSignalSnrStart: Float = 3.0f,
-    val highlightShortSignalSnrFull: Float = 8.0f,
-    val highlightCoreReliabilityMinimum: Float = 0.65f,
 )
 
 /** Returns a sensor-linear RGB value that becomes neutral after the capture WB is applied. */
@@ -1731,10 +1718,8 @@ internal object GlesRawRadianceFusionShaders {
         val highlightDeclarations = if (reconstructHighlights) {
             """
             uniform sampler2D uHighlightRgb;
-            uniform highp usampler2D uHighlightRaw;
             uniform highp usampler2D uReferenceRaw;
             uniform sampler2D uHighlightFlow;
-            uniform sampler2D uHighlightSupport;
             uniform ivec2 uHighlightSourceOrigin;
             uniform ivec2 uHighlightSourceSize;
             uniform ivec2 uHighlightFlowGridSize;
@@ -1747,19 +1732,10 @@ internal object GlesRawRadianceFusionShaders {
             uniform float uHighlightExposureRatio;
             uniform float uHighlightNormalClipStart;
             uniform float uHighlightNormalClipFull;
-            uniform float uHighlightShortClipStart;
-            uniform float uHighlightShortClipFull;
             uniform float uHighlightFlowMinimumConfidence;
             uniform float uHighlightFlowFullConfidence;
-            uniform float uHighlightShortNoiseAlpha[4];
-            uniform float uHighlightShortNoiseBeta[4];
-            uniform float uHighlightPhotometricSigmaStart;
-            uniform float uHighlightPhotometricSigmaFull;
             uniform float uHighlightClipNoiseSigmaStart;
             uniform float uHighlightClipNoiseSigmaFull;
-            uniform float uHighlightShortSignalSnrStart;
-            uniform float uHighlightShortSignalSnrFull;
-            uniform float uHighlightCoreReliabilityMinimum;
             """.trimIndent()
         } else {
             ""
@@ -1807,13 +1783,13 @@ internal object GlesRawRadianceFusionShaders {
             vec4 highlightFlowAt(vec2 planePosition) {
                 vec2 grid = planePosition / float(uHighlightFlowTileSize) - vec2(0.5);
                 vec2 uv = (grid + vec2(0.5)) / vec2(uHighlightFlowGridSize);
-                return texture(uHighlightFlow, clamp(uv, vec2(0.0), vec2(1.0)));
-            }
-
-            vec4 highlightSupportAt(vec2 planePosition) {
-                vec2 grid = planePosition / float(uHighlightFlowTileSize) - vec2(0.5);
-                vec2 uv = (grid + vec2(0.5)) / vec2(uHighlightFlowGridSize);
-                return texture(uHighlightSupport, clamp(uv, vec2(0.0), vec2(1.0)));
+                vec4 premultipliedFlow = texture(
+                    uHighlightFlow,
+                    clamp(uv, vec2(0.0), vec2(1.0))
+                );
+                premultipliedFlow.rg = premultipliedFlow.a > 1e-5 ?
+                    premultipliedFlow.rg / premultipliedFlow.a : vec2(0.0);
+                return premultipliedFlow;
             }
 
             vec3 highlightRgbAt(vec2 localRawPosition) {
@@ -1822,19 +1798,6 @@ internal object GlesRawRadianceFusionShaders {
                 vec2 uv = (clamp(localRawPosition, vec2(0.0), maximum) + vec2(0.5)) /
                     storageSize;
                 return clamp(texture(uHighlightRgb, uv).rgb, 0.0, 1.0);
-            }
-
-            float highlightRawNormAt(ivec2 localPosition) {
-                localPosition = clamp(
-                    localPosition,
-                    ivec2(0),
-                    uHighlightSourceSize - ivec2(1)
-                );
-                ivec2 globalPosition = localPosition + uHighlightSourceOrigin;
-                int bayerIndex = highlightBayerIndexAt(globalPosition);
-                float raw = float(texelFetch(uHighlightRaw, localPosition, 0).r);
-                float range = max(uWhiteLevel - uBlackLevel[bayerIndex], 1.0);
-                return clamp((raw - uBlackLevel[bayerIndex]) / range, 0.0, 1.0);
             }
 
             float referenceRawNormAt(ivec2 globalPosition) {
@@ -1861,38 +1824,6 @@ internal object GlesRawRadianceFusionShaders {
                 signalSum[channel] += sampleValue;
                 peak[channel] = max(peak[channel], sampleValue);
                 sampleCount[channel] += 1.0;
-            }
-
-            HighlightRawStats highlightRawStatsAt(vec2 localRawPosition) {
-                ivec2 globalCenter = ivec2(round(localRawPosition)) + uHighlightSourceOrigin;
-                int period = 2 * highlightCfaBlockSize();
-                ivec2 globalBlock = (globalCenter / period) * period;
-                vec3 signalSum = vec3(0.0);
-                vec3 peak = vec3(0.0);
-                vec3 sampleCount = vec3(0.0);
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
-                        if (x >= period || y >= period) continue;
-                        ivec2 globalPosition = clamp(
-                            globalBlock + ivec2(x, y),
-                            uHighlightSourceOrigin,
-                            uHighlightSourceOrigin + uHighlightSourceSize - ivec2(1)
-                        );
-                        ivec2 localPosition = globalPosition - uHighlightSourceOrigin;
-                        int bayerIndex = highlightBayerIndexAt(globalPosition);
-                        addHighlightRawSample(
-                            bayerIndex,
-                            highlightRawNormAt(localPosition),
-                            signalSum,
-                            peak,
-                            sampleCount
-                        );
-                    }
-                }
-                return HighlightRawStats(
-                    signalSum / max(sampleCount, vec3(1.0)),
-                    peak
-                );
             }
 
             HighlightRawStats referenceRawStatsAt(vec2 globalRawPosition) {
@@ -1935,24 +1866,6 @@ internal object GlesRawRadianceFusionShaders {
                             uNoiseAlphaByChannel[2] * signal.g + uNoiseBetaByChannel[2]
                         ),
                         uNoiseAlphaByChannel[3] * signal.b + uNoiseBetaByChannel[3]
-                    ),
-                    vec3(1e-10)
-                );
-            }
-
-            vec3 shortHighlightNoiseVariance(vec3 signal) {
-                return max(
-                    vec3(
-                        uHighlightShortNoiseAlpha[0] * signal.r +
-                            uHighlightShortNoiseBeta[0],
-                        0.5 * (
-                            uHighlightShortNoiseAlpha[1] * signal.g +
-                                uHighlightShortNoiseBeta[1] +
-                            uHighlightShortNoiseAlpha[2] * signal.g +
-                                uHighlightShortNoiseBeta[2]
-                        ),
-                        uHighlightShortNoiseAlpha[3] * signal.b +
-                            uHighlightShortNoiseBeta[3]
                     ),
                     vec3(1e-10)
                 );
@@ -2001,45 +1914,22 @@ internal object GlesRawRadianceFusionShaders {
                 highlightLocalPosition.x <= float(uHighlightSourceSize.x - 1) &&
                 highlightLocalPosition.y <= float(uHighlightSourceSize.y - 1) ? 1.0 : 0.0;
             vec3 highlightRgb = highlightRgbAt(highlightLocalPosition);
-            vec4 localSupport = highlightSupportAt(referenceRawPosition * 0.5);
-            HighlightRawStats shortRaw = highlightRawStatsAt(highlightLocalPosition);
             HighlightRawStats normalRaw = referenceRawStatsAt(referenceRawPosition);
             vec3 normalVariance = referenceHighlightNoiseVariance(normalRaw.signal);
-            vec3 shortVariance = shortHighlightNoiseVariance(shortRaw.signal);
             vec3 calculationGainVarianceScale = uCalculationGains * uCalculationGains;
             normalVariance *= calculationGainVarianceScale;
-            shortVariance *= calculationGainVarianceScale;
             vec3 normalClipProbability = noiseAwareClipProbability(
                 normalRaw.peak,
                 sqrt(normalVariance),
                 min(uHighlightNormalClipStart, uHighlightNormalClipFull),
                 max(uHighlightNormalClipStart, uHighlightNormalClipFull)
             );
-            vec3 shortClipProbability = noiseAwareClipProbability(
-                shortRaw.peak,
-                sqrt(shortVariance),
-                min(uHighlightShortClipStart, uHighlightShortClipFull),
-                max(uHighlightShortClipStart, uHighlightShortClipFull)
-            );
-            float normalClipped = max(
-                max(normalClipProbability.r, normalClipProbability.g),
+            // Full-RGB short reconstruction is permitted only after every normal channel has
+            // lost radiometric information. A single clipped channel must not replace the other
+            // high-SNR normal channels with a geometrically displaced RGB triplet.
+            float normalClipped = min(
+                min(normalClipProbability.r, normalClipProbability.g),
                 normalClipProbability.b
-            );
-            float shortHasHeadroom = min(
-                min(1.0 - shortClipProbability.r, 1.0 - shortClipProbability.g),
-                1.0 - shortClipProbability.b
-            );
-            const vec3 highlightLumaWeights = vec3(0.2126, 0.7152, 0.0722);
-            float shortLuma = dot(shortRaw.signal, highlightLumaWeights);
-            float shortLumaVariance = dot(
-                shortVariance,
-                highlightLumaWeights * highlightLumaWeights
-            );
-            float shortSnr = shortLuma / sqrt(max(shortLumaVariance, 1e-10));
-            float shortHasSignal = smoothstep(
-                min(uHighlightShortSignalSnrStart, uHighlightShortSignalSnrFull),
-                max(uHighlightShortSignalSnrStart, uHighlightShortSignalSnrFull),
-                shortSnr
             );
             float highlightFlowConfidence = smoothstep(
                 uHighlightFlowMinimumConfidence,
@@ -2047,56 +1937,18 @@ internal object GlesRawRadianceFusionShaders {
                     uHighlightFlowMinimumConfidence + 1e-4,
                     uHighlightFlowFullConfidence
                 ),
-                min(highlightFlow.a, localSupport.a)
+                highlightFlow.a
             );
-            float coarseShortValidity = smoothstep(0.05, 0.50, localSupport.g);
-            float shortReliability = clamp(
-                shortHasHeadroom * shortHasSignal * coarseShortValidity *
-                    highlightFlowConfidence * highlightInside,
+            float highlightWeight = clamp(
+                normalClipped * highlightFlowConfidence * highlightInside,
                 0.0,
                 1.0
             );
             vec3 normalInShortDomain = rgb / max(uHighlightExposureRatio, 1.0);
-            vec3 radiometricDifference = normalInShortDomain - highlightRgb;
-            vec3 radiometricVariance = normalVariance /
-                max(uHighlightExposureRatio * uHighlightExposureRatio, 1.0) + shortVariance;
-            float normalizedPhotometricResidual = dot(
-                radiometricDifference * radiometricDifference /
-                    max(radiometricVariance, vec3(1e-8)),
-                highlightLumaWeights
-            );
-            float photometricStart2 = uHighlightPhotometricSigmaStart *
-                uHighlightPhotometricSigmaStart;
-            float photometricFull2 = max(
-                uHighlightPhotometricSigmaFull * uHighlightPhotometricSigmaFull,
-                photometricStart2 + 1e-4
-            );
-            float pixelPhotometricConfidence = 1.0 - smoothstep(
-                photometricStart2,
-                photometricFull2,
-                normalizedPhotometricResidual
-            );
-            float photometricConfidence = sqrt(clamp(
-                pixelPhotometricConfidence * localSupport.b,
-                0.0,
-                1.0
-            ));
-            // A confirmed RAW-clipped normal sample contains no radiance information. In that
-            // core region choose one source: a sufficiently reliable short sample replaces it
-            // completely; otherwise retain the normal fallback. Never average the two, because
-            // the clipped normal value biases recovered highlights toward dirty gray.
-            float saturatedCore = step(0.90, normalClipped);
-            float coreShortSelection = saturatedCore * step(
-                uHighlightCoreReliabilityMinimum,
-                shortReliability
-            );
-            // The soft shoulder lies below confirmed sensor clipping, where the normal sample is
-            // still physically meaningful. Require both pixel and block photometric agreement so
-            // motion and occlusion cannot borrow detail merely because a flow vector exists.
-            float shoulderNeed = smoothstep(0.01, 0.25, localSupport.r);
-            float shoulderBlend = (1.0 - saturatedCore) * normalClipped * shoulderNeed *
-                shortReliability * photometricConfidence;
-            float highlightWeight = max(coreShortSelection, shoulderBlend);
+            // The GPU hole decision has already tested short headroom conservatively for every
+            // admitted tile. Its binary core gate is bilinearly sampled here, while the normal
+            // clipping probability owns the pixel-level transition. No short-frame sample enters
+            // a normal channel that still carries radiometric information.
             rgb = clamp(mix(normalInShortDomain, highlightRgb, highlightWeight), 0.0, 1.0);
             $highlightDebugOverlay
             """.trimIndent()

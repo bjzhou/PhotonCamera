@@ -66,15 +66,11 @@ internal class GlesRawRadianceStacker(
     )
     private data class RadianceHighlightAlignment(
         val frame: RawRadianceHighlightFrame,
-        val anchorFrameIndex: Int,
         val flowTexture: Int,
-        val supportTexture: Int,
         val minFlowXPlanePx: Float,
         val maxFlowXPlanePx: Float,
         val minFlowYPlanePx: Float,
         val maxFlowYPlanePx: Float,
-        val validTileFraction: Float,
-        val coveredQuadrants: Int,
     ) {
         fun flowBounds(): RadianceFlowBounds = RadianceFlowBounds(
             minXPlanePx = minFlowXPlanePx,
@@ -346,6 +342,10 @@ internal class GlesRawRadianceStacker(
     private var radianceHighlightPropagateFlowProgram = 0
     private var radianceHighlightComposeFlowProgram = 0
     private var radianceHighlightSupportProgram = 0
+    private var radianceHighlightInferFlowProgram = 0
+    private var radianceHighlightRejectionSeedProgram = 0
+    private var radianceHighlightRejectionPropagateProgram = 0
+    private var radianceHighlightApplyHoleDecisionProgram = 0
     private var radianceLongEligibilityProgram = 0
     private var radianceLongObservabilityDiagnosticProgram = 0
     private var radianceReferenceBaseProgram = 0
@@ -737,8 +737,6 @@ internal class GlesRawRadianceStacker(
             val highlightAlignment = activeRadianceHighlightFrame?.let { highlight ->
                 prepareRadianceHighlightAlignment(
                     highlight = highlight,
-                    frames = frames,
-                    acceptedFrames = acceptedSuperResolutionFrames,
                     referencePyramid = refPyramid,
                     currentPyramid = curPyramid,
                 )
@@ -1007,6 +1005,26 @@ internal class GlesRawRadianceStacker(
                     FULLSCREEN_VERTEX_SHADER,
                     GlesRadianceHighlightShaders.buildSupport,
                     "raw_radiance_highlight_support",
+                )
+                radianceHighlightInferFlowProgram = linkGraphicsProgram(
+                    FULLSCREEN_VERTEX_SHADER,
+                    GlesRadianceHighlightShaders.inferFlowFromCollar,
+                    "raw_radiance_highlight_infer_flow",
+                )
+                radianceHighlightRejectionSeedProgram = linkGraphicsProgram(
+                    FULLSCREEN_VERTEX_SHADER,
+                    GlesRadianceHighlightShaders.buildHoleRejectionSeed,
+                    "raw_radiance_highlight_rejection_seed",
+                )
+                radianceHighlightRejectionPropagateProgram = linkGraphicsProgram(
+                    FULLSCREEN_VERTEX_SHADER,
+                    GlesRadianceHighlightShaders.propagateHoleRejection,
+                    "raw_radiance_highlight_rejection_propagate",
+                )
+                radianceHighlightApplyHoleDecisionProgram = linkGraphicsProgram(
+                    FULLSCREEN_VERTEX_SHADER,
+                    GlesRadianceHighlightShaders.applyHoleDecision,
+                    "raw_radiance_highlight_apply_hole_decision",
                 )
             }
         }
@@ -2654,45 +2672,14 @@ internal class GlesRawRadianceStacker(
 
     private fun prepareRadianceHighlightAlignment(
         highlight: RawRadianceHighlightFrame,
-        frames: List<RawStackFrame>,
-        acceptedFrames: List<AcceptedSuperResolutionFrame>,
         referencePyramid: List<TextureLevel>,
         currentPyramid: List<TextureLevel>,
     ): RadianceHighlightAlignment? {
-        val acceptedAnchorIndices = buildSet {
-            add(0)
-            acceptedFrames.forEach { frame -> add(frame.frameIndex) }
-        }
-        val anchorFrameIndex = selectRadianceHighlightAnchor(
-            candidateIndices = highlight.anchorCandidateIndices,
-            frameCount = frames.size,
-            acceptedFrameIndices = acceptedAnchorIndices,
-        ) ?: run {
-            PLog.w(
-                TAG,
-                "Radiance highlight disabled: no accepted normal anchor from candidates=" +
-                    highlight.anchorCandidateIndices.joinToString(),
-            )
-            return null
-        }
-        if (anchorFrameIndex != highlight.anchorFrameIndex) {
-            PLog.i(
-                TAG,
-                "Radiance highlight anchor fallback primary=${highlight.anchorFrameIndex} " +
-                    "selected=$anchorFrameIndex",
-            )
-        }
-        val anchorIsReference = anchorFrameIndex == 0
-        val anchorAlignment = if (anchorIsReference) {
-            null
-        } else {
-            acceptedFrames.firstOrNull { it.frameIndex == anchorFrameIndex }
-                ?: return null
-        }
         return runCatching {
-            val anchor = frames[anchorFrameIndex]
-            uploadRawTexture(anchor.image, curRaw, "Radiance highlight anchor")
-            buildProxy(curRaw, refProxy, "Radiance highlight anchor")
+            // Keep the normal multi-frame output reference as the only geometry reference. A
+            // normal-anchor chain would compose two flow fields that are both unobservable inside
+            // clipping. Region planning below uses only direct normal-reference/short collar flow.
+            buildProxy(refRaw, refProxy, "Radiance highlight normal reference")
             buildPyramid(referencePyramid)
 
             uploadRawTexture(highlight.shortFrame.image, curRaw, "Radiance highlight short")
@@ -2714,7 +2701,7 @@ internal class GlesRawRadianceStacker(
                 outputGridHeight = gridHeight,
                 outputTileSpacing = flowGridSpacing,
                 preAlignment = null,
-                label = "Radiance highlight anchor-to-short",
+                label = "Radiance highlight normal-reference-to-short",
             )
             refineFlow(
                 referenceProxyTexture = refProxy,
@@ -2733,7 +2720,7 @@ internal class GlesRawRadianceStacker(
                 outputGridHeight = gridHeight,
                 outputTileSpacing = flowGridSpacing,
                 preAlignment = null,
-                label = "Radiance highlight short-to-anchor",
+                label = "Radiance highlight short-to-normal-reference",
             )
             refineFlow(
                 referenceProxyTexture = curProxy,
@@ -2743,48 +2730,24 @@ internal class GlesRawRadianceStacker(
             )
             smoothFlow(radianceHighlightReverseFlowTexture, flowScratchTexture)
             validateRadianceHighlightFlow()
-            propagateRadianceHighlightFlow(
-                targetTexture = flowTexture,
-                guideProxyTexture = refProxy,
-                label = "anchor-to-short",
-                passes = radianceFusionTuning.highlightFlowPropagationPasses,
-                confidenceDecay = radianceFusionTuning.highlightFlowPropagationDecay,
-                directConfidence = radianceFusionTuning.highlightFlowSeedConfidence,
-                minimumConfidence = radianceFusionTuning.highlightFlowMinimumConfidence,
-                guideEdgeSigma = radianceFusionTuning.highlightFlowGuideEdgeSigma,
-                allowInvalidGuidePropagation = false,
-            )
 
-            if (!anchorIsReference) {
-                copyRgbaTexture(
-                    checkNotNull(anchorAlignment).flowTexture,
-                    radianceHighlightAnchorFlowTexture,
-                    gridWidth,
-                    gridHeight,
-                    "Radiance highlight anchor flow copy",
-                )
-                buildProxy(refRaw, refProxy, "Radiance highlight reference guide")
-                propagateRadianceHighlightFlow(
-                    targetTexture = radianceHighlightAnchorFlowTexture,
-                    guideProxyTexture = refProxy,
-                    label = "reference-to-anchor",
-                    passes = radianceFusionTuning.highlightFlowPropagationPasses,
-                    confidenceDecay = radianceFusionTuning.highlightFlowPropagationDecay,
-                    directConfidence = radianceFusionTuning.highlightFlowSeedConfidence,
-                    minimumConfidence = radianceFusionTuning.highlightFlowMinimumConfidence,
-                    guideEdgeSigma = radianceFusionTuning.highlightFlowGuideEdgeSigma,
-                    allowInvalidGuidePropagation = false,
-                )
-            }
-            composeRadianceHighlightFlow(anchorIsReference)
+            // The validated flow and support below form the only direct geometric evidence.
+            // Saturated tiles are deliberately excluded as collar seeds.
             buildRadianceHighlightSupport(
                 referenceProxyTexture = refProxy,
                 shortProxyTexture = curProxy,
+                flowFieldTexture = flowTexture,
             )
-            summarizeRadianceHighlightAlignment(
-                highlight = highlight,
-                anchorFrameIndex = anchorFrameIndex,
+            inferRadianceHighlightFlowFromCollar()
+            buildRadianceHighlightSupport(
+                referenceProxyTexture = refProxy,
+                shortProxyTexture = curProxy,
+                flowFieldTexture = radianceHighlightComposedFlowTexture,
             )
+            buildRadianceHighlightHoleRejectionSeed()
+            propagateRadianceHighlightHoleRejection()
+            applyRadianceHighlightHoleDecision()
+            summarizeRadianceHighlightAlignment(highlight)
         }.onFailure { error ->
             PLog.w(TAG, "Radiance highlight alignment failed; preserving normal fusion", error)
         }.getOrNull()
@@ -3861,6 +3824,7 @@ internal class GlesRawRadianceStacker(
     private fun buildRadianceHighlightSupport(
         referenceProxyTexture: Int,
         shortProxyTexture: Int,
+        flowFieldTexture: Int,
     ) {
         val program = radianceHighlightSupportProgram
         check(program != 0)
@@ -3872,7 +3836,7 @@ internal class GlesRawRadianceStacker(
         GLES30.glUseProgram(program)
         bindTexture(program, "uReferenceProxy", 0, referenceProxyTexture)
         bindTexture(program, "uShortProxy", 1, shortProxyTexture)
-        bindTexture(program, "uComposedFlow", 2, radianceHighlightComposedFlowTexture)
+        bindTexture(program, "uComposedFlow", 2, flowFieldTexture)
         GLES31.glUniform2i(uniformLocation(program, "uGridSize"), gridWidth, gridHeight)
         GLES31.glUniform2i(uniformLocation(program, "uPlaneSize"), planeWidth, planeHeight)
         GLES31.glUniform1i(uniformLocation(program, "uTileSize"), flowGridSpacing)
@@ -3890,101 +3854,219 @@ internal class GlesRawRadianceStacker(
         finishFramebufferPass("Radiance highlight local support")
     }
 
+    private fun inferRadianceHighlightFlowFromCollar() {
+        val program = radianceHighlightInferFlowProgram
+        check(program != 0)
+        bindFramebufferOutput(
+            radianceHighlightComposedFlowTexture,
+            "Radiance highlight collar flow inference",
+        )
+        GLES30.glViewport(0, 0, gridWidth, gridHeight)
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uDirectFlow", 0, flowTexture)
+        bindTexture(program, "uDirectSupport", 1, radianceHighlightSupportTexture)
+        GLES31.glUniform2i(uniformLocation(program, "uGridSize"), gridWidth, gridHeight)
+        GLES31.glUniform1i(
+            uniformLocation(program, "uRadiusTiles"),
+            radianceFusionTuning.highlightCollarRadiusTiles.coerceIn(1, 4),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uNeedStart"),
+            radianceFusionTuning.highlightNeedTileStart.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uNeedFull"),
+            radianceFusionTuning.highlightNeedTileThreshold.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uDirectConfidenceStart"),
+            radianceFusionTuning.highlightDirectFlowConfidence.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uDirectConfidenceFull"),
+            radianceFusionTuning.highlightDirectFlowFullConfidence.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uShortValidityThreshold"),
+            radianceFusionTuning.highlightShortValidityTileThreshold.coerceIn(0f, 0.999f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uPhotometricThreshold"),
+            radianceFusionTuning.highlightCollarPhotometricThreshold.coerceIn(0f, 0.999f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uMinimumSampleWeight"),
+            radianceFusionTuning.highlightCollarMinimumWeight.coerceAtLeast(0f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uFullSampleWeight"),
+            radianceFusionTuning.highlightCollarFullWeight.coerceAtLeast(
+                radianceFusionTuning.highlightCollarMinimumWeight + 1e-3f,
+            ),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uMinimumSectorWeight"),
+            radianceFusionTuning.highlightCollarMinimumSectorWeight.coerceAtLeast(0f),
+        )
+        GLES31.glUniform1i(
+            uniformLocation(program, "uMinimumSectors"),
+            radianceFusionTuning.highlightCollarMinimumSectors.coerceIn(1, 4),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uFlowSigmaStart"),
+            radianceFusionTuning.highlightCollarFlowSigmaStartPx.coerceAtLeast(0f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uFlowSigmaFull"),
+            radianceFusionTuning.highlightCollarFlowSigmaFullPx.coerceAtLeast(
+                radianceFusionTuning.highlightCollarFlowSigmaStartPx + 1e-3f,
+            ),
+        )
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("Radiance highlight collar flow inference")
+    }
+
+    private fun buildRadianceHighlightHoleRejectionSeed() {
+        val program = radianceHighlightRejectionSeedProgram
+        check(program != 0)
+        bindFramebufferOutput(
+            radianceHighlightAnchorFlowTexture,
+            "Radiance highlight hole rejection seed",
+        )
+        GLES30.glViewport(0, 0, gridWidth, gridHeight)
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uInferredFlow", 0, radianceHighlightComposedFlowTexture)
+        bindTexture(program, "uCandidateSupport", 1, radianceHighlightSupportTexture)
+        setRadianceHighlightHoleDecisionUniforms(program)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("Radiance highlight hole rejection seed")
+    }
+
+    private fun propagateRadianceHighlightHoleRejection() {
+        val program = radianceHighlightRejectionPropagateProgram
+        check(program != 0)
+        val passes = radianceFusionTuning.highlightHoleRejectionPropagationPasses
+            .coerceIn(0, 16)
+        repeat(passes) { pass ->
+            val input = if ((pass and 1) == 0) {
+                radianceHighlightAnchorFlowTexture
+            } else {
+                flowScratchTexture
+            }
+            val output = if ((pass and 1) == 0) {
+                flowScratchTexture
+            } else {
+                radianceHighlightAnchorFlowTexture
+            }
+            bindFramebufferOutput(
+                output,
+                "Radiance highlight hole rejection propagation $pass",
+            )
+            GLES30.glViewport(0, 0, gridWidth, gridHeight)
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uInputRejection", 0, input)
+            GLES31.glUniform2i(uniformLocation(program, "uGridSize"), gridWidth, gridHeight)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            finishFramebufferPass("Radiance highlight hole rejection propagation $pass")
+        }
+        if ((passes and 1) != 0) {
+            copyRgbaTexture(
+                flowScratchTexture,
+                radianceHighlightAnchorFlowTexture,
+                gridWidth,
+                gridHeight,
+                "Radiance highlight propagated rejection copy",
+            )
+        }
+    }
+
+    private fun applyRadianceHighlightHoleDecision() {
+        val program = radianceHighlightApplyHoleDecisionProgram
+        check(program != 0)
+        bindFramebufferOutput(flowTexture, "Radiance highlight apply hole decision")
+        GLES30.glViewport(0, 0, gridWidth, gridHeight)
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uInferredFlow", 0, radianceHighlightComposedFlowTexture)
+        bindTexture(program, "uCandidateSupport", 1, radianceHighlightSupportTexture)
+        bindTexture(program, "uRejection", 2, radianceHighlightAnchorFlowTexture)
+        setRadianceHighlightHoleDecisionUniforms(program)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("Radiance highlight apply hole decision")
+    }
+
+    private fun setRadianceHighlightHoleDecisionUniforms(program: Int) {
+        GLES31.glUniform1f(
+            uniformLocation(program, "uNeedThreshold"),
+            radianceFusionTuning.highlightNeedTileThreshold.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uAcceptanceConfidence"),
+            radianceFusionTuning.highlightHoleAcceptanceConfidence.coerceIn(0f, 1f),
+        )
+        GLES31.glUniform1f(
+            uniformLocation(program, "uShortValidityThreshold"),
+            radianceFusionTuning.highlightShortValidityTileThreshold.coerceIn(0f, 1f),
+        )
+    }
+
     private fun summarizeRadianceHighlightAlignment(
         highlight: RawRadianceHighlightFrame,
-        anchorFrameIndex: Int,
     ): RadianceHighlightAlignment? {
-        val (flowValues, supportValues) = readFlowTextures(
-            textures = listOf(
-                radianceHighlightComposedFlowTexture,
-                radianceHighlightSupportTexture,
-            ),
+        // This is the only highlight GPU -> CPU transfer. It reads the low-resolution final gate
+        // solely to bound later tiled demosaic work; no per-region fitting or classification is
+        // performed on the CPU.
+        val flowValues = readFlowTextures(
+            textures = listOf(flowTexture),
             textureWidth = gridWidth,
             textureHeight = gridHeight,
-            label = "Radiance highlight flow and support",
-        )
-        val confidenceThreshold = radianceFusionTuning.highlightFlowMinimumConfidence
-            .coerceIn(0f, 1f)
-        val needThreshold = radianceFusionTuning.highlightNeedTileThreshold.coerceIn(0f, 1f)
-        val shortValidityThreshold = radianceFusionTuning.highlightShortValidityTileThreshold
-            .coerceIn(0f, 1f)
-        var eligibleTiles = 0
-        var supportedTiles = 0
+            label = "Radiance highlight final flow bounds",
+        ).single()
         var minX = 0f
         var maxX = 0f
         var minY = 0f
         var maxY = 0f
-        val quadrants = BooleanArray(4)
+        var acceptedTileCount = 0
         var offset = 0
-        while (offset + 3 < flowValues.size && offset + 3 < supportValues.size) {
-            val tileIndex = offset / 4
+        while (offset + 3 < flowValues.size) {
             val flowX = flowValues[offset]
             val flowY = flowValues[offset + 1]
-            val flowConfidence = minOf(flowValues[offset + 3], supportValues[offset + 3])
-            val normalNeed = supportValues[offset]
-            val shortValidity = supportValues[offset + 1]
-            val eligible = normalNeed.isFinite() && shortValidity.isFinite() &&
-                normalNeed >= needThreshold && shortValidity >= shortValidityThreshold
-            if (eligible) eligibleTiles++
-            if (eligible && flowX.isFinite() && flowY.isFinite() && flowConfidence.isFinite() &&
-                flowConfidence >= confidenceThreshold
+            val confidence = flowValues[offset + 3]
+            if (flowX.isFinite() && flowY.isFinite() && confidence.isFinite() &&
+                confidence >= 0.5f
             ) {
+                acceptedTileCount++
                 minX = minOf(minX, flowX)
                 maxX = maxOf(maxX, flowX)
                 minY = minOf(minY, flowY)
                 maxY = maxOf(maxY, flowY)
-                supportedTiles++
-                val tileX = tileIndex % gridWidth
-                val tileY = tileIndex / gridWidth
-                val quadrant = (if (tileY >= gridHeight / 2) 2 else 0) +
-                    if (tileX >= gridWidth / 2) 1 else 0
-                quadrants[quadrant] = true
             }
             offset += 4
         }
-        val totalTiles = (gridWidth * gridHeight).coerceAtLeast(1)
-        val validFraction = supportedTiles.toFloat() / totalTiles
-        val coveredQuadrants = quadrants.count { it }
-        val admission = planRadianceHighlightAdmission(
-            evidence = RawRadianceHighlightAdmissionEvidence(
-                eligibleTileCount = eligibleTiles,
-                supportedTileCount = supportedTiles,
-            ),
-            requirements = RawRadianceHighlightAdmissionRequirements(
-                minimumEligibleTiles = radianceFusionTuning.highlightMinimumEligibleTiles,
-                minimumEligibleCoverage =
-                    radianceFusionTuning.highlightMinimumEligibleCoverage,
-            ),
-        )
-        if (!admission.accepted) {
+        if (acceptedTileCount == 0) {
             PLog.w(
                 TAG,
-                "Radiance highlight alignment rejected eligible=$eligibleTiles/$totalTiles " +
-                    "supported=$supportedTiles coverage=${admission.eligibleCoverage} " +
-                    "needThreshold=$needThreshold shortThreshold=$shortValidityThreshold " +
-                    "anchor=$anchorFrameIndex",
+                "Radiance highlight disabled: no saturated hole passed collar enclosure, " +
+                    "flow consistency, and short-headroom gates",
             )
             return null
         }
+        val totalTiles = (gridWidth * gridHeight).coerceAtLeast(1)
+        val admittedTileFraction = acceptedTileCount.toFloat() / totalTiles
         PLog.i(
             TAG,
-            "Radiance highlight alignment accepted eligible=$eligibleTiles/$totalTiles " +
-                "supported=$supportedTiles coverage=${admission.eligibleCoverage} " +
-                "quadrants=$coveredQuadrants anchor=$anchorFrameIndex " +
+            "Radiance highlight GPU hole decision admittedTiles=" +
+                "$acceptedTileCount/$totalTiles admittedTileFraction=$admittedTileFraction " +
+                "normalReference=true shortAsReference=false cpuRegionPlanning=false " +
                 "flow=[$minX,$maxX]x[$minY,$maxY] " +
                 "ratio=${highlight.exposureRatio} baseline=${highlight.baselineExposureEv}EV",
         )
         return RadianceHighlightAlignment(
             frame = highlight,
-            anchorFrameIndex = anchorFrameIndex,
-            flowTexture = radianceHighlightComposedFlowTexture,
-            supportTexture = radianceHighlightSupportTexture,
+            flowTexture = flowTexture,
             minFlowXPlanePx = minX,
             maxFlowXPlanePx = maxX,
             minFlowYPlanePx = minY,
             maxFlowYPlanePx = maxY,
-            validTileFraction = validFraction,
-            coveredQuadrants = coveredQuadrants,
         )
     }
 
@@ -6546,10 +6628,8 @@ internal class GlesRawRadianceStacker(
         }
         if (highlightAlignment != null && highlightSourceRegion != null) {
             bindTexture(program, "uHighlightRgb", 8, radianceRgbTileTexture)
-            bindTexture(program, "uHighlightRaw", 9, rcdRawRegionTexture)
             bindTexture(program, "uHighlightFlow", 10, highlightAlignment.flowTexture)
             bindTexture(program, "uReferenceRaw", 11, refRaw)
-            bindTexture(program, "uHighlightSupport", 13, highlightAlignment.supportTexture)
             GLES31.glUniform2i(
                 uniformLocation(program, "uHighlightSourceOrigin"),
                 highlightSourceRegion.left,
@@ -6574,7 +6654,6 @@ internal class GlesRawRadianceStacker(
             setRadianceHighlightUniforms(
                 program = program,
                 exposureRatio = highlightAlignment.frame.exposureRatio,
-                shortNoiseModel = frameNoiseModel(highlightAlignment.frame.shortFrame),
             )
         }
         setRadianceNormalizeUniforms(program)
@@ -6618,7 +6697,6 @@ internal class GlesRawRadianceStacker(
     private fun setRadianceHighlightUniforms(
         program: Int,
         exposureRatio: Float,
-        shortNoiseModel: RawNoiseModel,
     ) {
         GLES31.glUniform1f(
             uniformLocation(program, "uHighlightExposureRatio"),
@@ -6633,14 +6711,6 @@ internal class GlesRawRadianceStacker(
             radianceFusionTuning.highlightNormalClipFull.coerceIn(0f, 1f),
         )
         GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightShortClipStart"),
-            radianceFusionTuning.highlightShortClipStart.coerceIn(0f, 1f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightShortClipFull"),
-            radianceFusionTuning.highlightShortClipFull.coerceIn(0f, 1f),
-        )
-        GLES31.glUniform1f(
             uniformLocation(program, "uHighlightFlowMinimumConfidence"),
             radianceFusionTuning.highlightFlowMinimumConfidence.coerceIn(0f, 1f),
         )
@@ -6649,28 +6719,6 @@ internal class GlesRawRadianceStacker(
             radianceFusionTuning.highlightFlowFullConfidence.coerceIn(
                 radianceFusionTuning.highlightFlowMinimumConfidence.coerceIn(0f, 1f),
                 1f,
-            ),
-        )
-        GLES31.glUniform1fv(
-            uniformLocation(program, "uHighlightShortNoiseAlpha[0]"),
-            4,
-            shortNoiseModel.normalizedShotNoiseForShader(cfaPattern),
-            0,
-        )
-        GLES31.glUniform1fv(
-            uniformLocation(program, "uHighlightShortNoiseBeta[0]"),
-            4,
-            shortNoiseModel.normalizedReadNoiseForShader(cfaPattern),
-            0,
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightPhotometricSigmaStart"),
-            radianceFusionTuning.highlightPhotometricSigmaStart.coerceAtLeast(0f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightPhotometricSigmaFull"),
-            radianceFusionTuning.highlightPhotometricSigmaFull.coerceAtLeast(
-                radianceFusionTuning.highlightPhotometricSigmaStart + 1e-3f,
             ),
         )
         GLES31.glUniform1f(
@@ -6683,20 +6731,6 @@ internal class GlesRawRadianceStacker(
                 0f,
                 radianceFusionTuning.highlightClipNoiseSigmaStart.coerceAtLeast(0f),
             ),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightShortSignalSnrStart"),
-            radianceFusionTuning.highlightShortSignalSnrStart.coerceAtLeast(0f),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightShortSignalSnrFull"),
-            radianceFusionTuning.highlightShortSignalSnrFull.coerceAtLeast(
-                radianceFusionTuning.highlightShortSignalSnrStart + 1e-3f,
-            ),
-        )
-        GLES31.glUniform1f(
-            uniformLocation(program, "uHighlightCoreReliabilityMinimum"),
-            radianceFusionTuning.highlightCoreReliabilityMinimum.coerceIn(0f, 1f),
         )
     }
 

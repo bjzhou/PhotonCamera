@@ -10,65 +10,66 @@ import java.io.File
 
 class GlesRawRadianceFusionShadersTest {
     @Test
-    fun highlightFlowRejectsForwardBackwardInconsistencyBeforePropagation() {
+    fun highlightFlowUsesDirectContinuousCollarEvidenceWithoutRecursiveFlowPropagation() {
         val validation = GlesRawRadianceFusionShaders.validateHighlightFlow
-        val propagation = GlesRawRadianceFusionShaders.propagateHighlightFlow
-        val composition = GlesRawRadianceFusionShaders.composeHighlightFlow
+        val inference = GlesRadianceHighlightShaders.inferFlowFromCollar
 
         assertTrue(validation.contains("forward.rg + reverse.rg"))
         assertTrue(validation.contains("min(forward.a, reverse.a) * consistency"))
-        assertTrue(propagation.contains("uConfidenceDecay"))
-        assertTrue(propagation.contains("uMinimumConfidence"))
-        assertTrue(propagation.contains("smoothstep("))
-        assertTrue(propagation.contains("sampleValue.a * support"))
-        assertTrue(propagation.contains("variance"))
-        assertTrue(propagation.contains("uGuideProxy"))
-        assertTrue(propagation.contains("uAllowInvalidGuidePropagation"))
-        assertTrue(propagation.contains("mix(0.35, 1.0"))
-        assertTrue(
-            RawRadianceFusionTuning().highlightFlowPropagationPasses <
-                RawRadianceFusionTuning().longFlowPropagationPasses,
-        )
-        assertTrue(
-            composition.contains("referenceToAnchorFlow.rg + anchorToShortFlow.rg"),
-        )
-        assertTrue(
-            composition.contains("float multipliedConfidence = referenceToAnchorFlow.a * anchorToShortFlow.a"),
-        )
-        assertTrue(composition.contains("uUseBottleneckConfidence"))
-        assertTrue(composition.contains("normalizedEdgeConfidence"))
-        assertTrue(composition.contains("float bottleneckConfidence = min("))
+        assertTrue(inference.contains("uniform sampler2D uDirectFlow"))
+        assertTrue(inference.contains("uniform sampler2D uDirectSupport"))
+        assertTrue(inference.contains("normalObservable * flowConfidence"))
+        assertTrue(inference.contains("sectorWeights"))
+        assertTrue(inference.contains("flowVariance"))
+        assertTrue(inference.contains("canBeEnclosed"))
+        assertFalse(inference.contains("uInputFlow"))
+        assertTrue(RawRadianceFusionTuning().highlightCollarMinimumSectors >= 3)
+        assertTrue(RawRadianceFusionTuning().highlightCollarRadiusTiles > 0)
     }
 
     @Test
-    fun highlightCompositionUsesLocalEvidenceAndShortExposureOutputDomain() {
+    fun highlightHoleDecisionPropagatesOnlyRejectionAndProducesBinaryCoreGate() {
+        val rejection = GlesRadianceHighlightShaders.propagateHoleRejection
+        val decision = GlesRadianceHighlightShaders.applyHoleDecision
+
+        assertTrue(rejection.contains("uniform sampler2D uInputRejection"))
+        assertTrue(rejection.contains("neighbor.r * step(0.5, neighbor.g)"))
+        assertFalse(rejection.contains("flow.rg"))
+        assertFalse(rejection.contains("uInferredFlow"))
+        assertTrue(decision.contains("float accepted = core *"))
+        assertTrue(decision.contains("(1.0 - step(0.5, rejection.r))"))
+        assertTrue(decision.contains("inferredFlow.rgb * accepted"))
+    }
+
+    @Test
+    fun highlightCompositionUsesWholeRegionEvidenceAndShortExposureOutputDomain() {
         val shader = GlesRawRadianceFusionShaders.normalize(
             showRejections = false,
             reconstructHighlights = true,
         )
 
-        assertTrue(shader.contains("uniform sampler2D uHighlightSupport"))
         assertTrue(shader.contains("uniform highp usampler2D uReferenceRaw"))
-        assertTrue(shader.contains("HighlightRawStats shortRaw"))
         assertTrue(shader.contains("noiseAwareClipProbability"))
-        assertTrue(shader.contains("normalizedPhotometricResidual"))
-        assertTrue(shader.contains("pixelPhotometricConfidence * localSupport.b"))
         assertTrue(shader.contains("uCalculationGains * uCalculationGains"))
-        assertTrue(shader.contains("uHighlightCoreReliabilityMinimum"))
-        assertTrue(shader.contains("float shoulderBlend = (1.0 - saturatedCore)"))
         assertTrue(shader.contains("uHighlightFlowFullConfidence"))
+        assertTrue(shader.contains("min(normalClipProbability.r, normalClipProbability.g)"))
         assertTrue(shader.contains("vec3 normalInShortDomain = rgb /"))
         assertTrue(shader.contains("mix(normalInShortDomain, highlightRgb, highlightWeight)"))
         assertFalse(shader.contains("vec3 highlightWeight"))
-        assertFalse(shader.contains("step(0.5, shortReliability)"))
+        assertFalse(shader.contains("uHighlightSupport"))
+        assertFalse(shader.contains("admittedRegionValidity"))
+        assertFalse(shader.contains("normalizedPhotometricResidual"))
+        assertFalse(shader.contains("uHighlightRaw"))
+        assertFalse(shader.contains("saturatedCore = step"))
     }
 
     @Test
-    fun highlightSupportSeparatesNeedValidityPhotometryAndGeometry() {
+    fun highlightSupportUsesDenseMinimumHeadroomForWholeRegionAdmission() {
         val shader = GlesRadianceHighlightShaders.buildSupport
 
         assertTrue(shader.contains("normalNeedSum"))
-        assertTrue(shader.contains("shortValiditySum"))
+        assertTrue(shader.contains("shortValidityMin"))
+        assertTrue(shader.contains("const int MAX_TILE_SIZE = 32"))
         assertTrue(shader.contains("normalizedResidual"))
         assertTrue(shader.contains("referenceSample.a + shortSample.a"))
         assertTrue(shader.contains("clamp(flow.a, 0.0, 1.0)"))
@@ -342,6 +343,10 @@ class GlesRawRadianceFusionShadersTest {
             "fragment" to GlesRawRadianceFusionShaders.longEligibility,
             "fragment" to GlesRawRadianceFusionShaders.normalize(showRejections = false),
             "fragment" to GlesRadianceHighlightShaders.buildSupport,
+            "fragment" to GlesRadianceHighlightShaders.inferFlowFromCollar,
+            "fragment" to GlesRadianceHighlightShaders.buildHoleRejectionSeed,
+            "fragment" to GlesRadianceHighlightShaders.propagateHoleRejection,
+            "fragment" to GlesRadianceHighlightShaders.applyHoleDecision,
             "fragment" to GlesRawRadianceFusionShaders.normalize(
                 showRejections = false,
                 reconstructHighlights = true,
