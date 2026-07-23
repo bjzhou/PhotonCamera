@@ -449,6 +449,8 @@
     <string name="favorite">เก็บรวบรวม</string>
     <string name="add_to_favorites">เพิ่มในรายการโปรด</string>
     <string name="remove_from_favorites">ยกเลิกรายการโปรด</string>
+    <string name="favorite_empty_title">ยังไม่มีรายการโปรด</string>
+    <string name="favorite_empty_message">แตะดาวบนฟิลเตอร์เพื่อเพิ่มไว้ที่นี่</string>
     <string name="built_in">ที่มากับแอป</string>
     <string name="custom">กำหนดเอง</string>
     <string name="uncategorized">ไม่มีหมวดหมู่</string>
