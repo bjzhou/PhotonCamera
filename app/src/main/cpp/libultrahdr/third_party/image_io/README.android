@@ -1,0 +1,9 @@
+Library Name: Image IO
+License: Apache 2
+Description: This library provides a lightweight interface to the images and metadata contained
+in Depth and AR photos.
+
+Local patches
+-------------
+- Add an NDK library variant.
+

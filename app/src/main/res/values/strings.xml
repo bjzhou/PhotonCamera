@@ -333,6 +333,8 @@
     <string name="settings_photo_quality_description">Select the JPEG compression quality for photos (higher = better quality, larger file size)</string>
     <string name="settings_use_heic_export">HEIC Export</string>
     <string name="settings_use_heic_export_description">Prefer native HEIC export on supported devices.</string>
+    <string name="settings_use_jpeg_444_export">JPEG 4:4:4 Export</string>
+    <string name="settings_use_jpeg_444_export_description">Export JPEGs with 4:4:4 chroma sampling for maximum color detail. Files are larger, HEIC export is disabled, and Ultra HDR gain maps are preserved when available.</string>
     <string name="settings_tonemap_mode">Tone Mapping</string>
     <string name="settings_tonemap_mode_description">Adjust the hardware tone mapping (contrast/gamma) mode</string>
     <string name="settings_tonemap_mode_system_default">System Default</string>

@@ -331,6 +331,8 @@
     <string name="settings_photo_quality_description">选择 JPEG 压缩的照片质量（越高画质越好，但文件体积也越大）</string>
     <string name="settings_use_heic_export">HEIC 导出</string>
     <string name="settings_use_heic_export_description">在支持的设备上优先使用原生 HEIC 导出。</string>
+    <string name="settings_use_jpeg_444_export">JPEG 4:4:4 导出</string>
+    <string name="settings_use_jpeg_444_export_description">使用 4:4:4 色度采样导出 JPEG，保留最完整的色彩细节。文件体积更大，且会关闭 HEIC 导出；有增益图时会保留 Ultra HDR。</string>
     <string name="settings_tonemap_mode">色调映射</string>
     <string name="settings_tonemap_mode_description">调整硬件色调映射（对比度/伽马）模式</string>
     <string name="settings_tonemap_mode_system_default">系统默认</string>

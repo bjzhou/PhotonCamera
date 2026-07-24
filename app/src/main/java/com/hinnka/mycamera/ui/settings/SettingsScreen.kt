@@ -113,6 +113,7 @@ import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.gallery.HeicExportEncoder
+import com.hinnka.mycamera.gallery.Jpeg444ExportEncoder
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
@@ -280,6 +281,7 @@ fun SettingsScreen(
     val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
     val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
     val useHeicExport by viewModel.useHeicExport.collectAsState(initial = false)
+    val useJpeg444Export by viewModel.useJpeg444Export.collectAsState(initial = false)
     val tonemapMode by viewModel.tonemapMode.collectAsState()
     val settingsTonemapMode = remember(tonemapMode) { sanitizeSettingsTonemapMode(tonemapMode) }
     val fixTonemapPreview by viewModel.fixTonemapPreview.collectAsState()
@@ -448,6 +450,7 @@ fun SettingsScreen(
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val isHdrSettingsSupported = remember { Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS }
     val isHeicExportSupported = remember { HeicExportEncoder.isSupported }
+    val isJpeg444ExportSupported = remember { Jpeg444ExportEncoder.isSupported }
     val photoSavePathOptions = PhotoSavePath.entries.toList()
     val photoSavePathLabels = photoSavePathOptions.map { it.displayName() }
     val photoSaveTreeLabel = remember(photoSaveTreeUri) {
@@ -1328,6 +1331,20 @@ fun SettingsScreen(
                                 description = stringResource(R.string.settings_use_heic_export_description),
                                 checked = useHeicExport,
                                 onCheckedChange = { viewModel.setUseHeicExport(it) }
+                            )
+                        }
+
+                        if (isJpeg444ExportSupported) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.settings_use_jpeg_444_export),
+                                description = stringResource(R.string.settings_use_jpeg_444_export_description),
+                                checked = useJpeg444Export,
+                                onCheckedChange = { viewModel.setUseJpeg444Export(it) }
                             )
                         }
 

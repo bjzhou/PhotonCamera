@@ -331,6 +331,8 @@
     <string name="settings_photo_quality_description">選擇 JPEG 壓縮的相片品質（越高畫質越好，但檔案體積也越大）</string>
     <string name="settings_use_heic_export">HEIC 匯出</string>
     <string name="settings_use_heic_export_description">在支援的設備上優先使用原生 HEIC 匯出。</string>
+    <string name="settings_use_jpeg_444_export">JPEG 4:4:4 匯出</string>
+    <string name="settings_use_jpeg_444_export_description">使用 4:4:4 色度取樣匯出 JPEG，保留最完整的色彩細節。檔案較大，且會關閉 HEIC 匯出；有增益圖時會保留 Ultra HDR。</string>
     <string name="settings_tonemap_mode">色調映射</string>
     <string name="settings_tonemap_mode_description">調整硬體色調映射（對比度/伽馬）模式</string>
     <string name="settings_tonemap_mode_system_default">系統預設</string>

@@ -1145,6 +1145,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
     val useHeicExport: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.useHeicExport }
+    val useJpeg444Export: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.useJpeg444Export }
 
     val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
     val zoomDisplayMode: StateFlow<ZoomDisplayMode> = userPreferencesRepository.userPreferences
@@ -4526,6 +4527,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setUseHeicExport(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveUseHeicExport(enabled)
+        }
+    }
+
+    fun setUseJpeg444Export(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseJpeg444Export(enabled)
         }
     }
 

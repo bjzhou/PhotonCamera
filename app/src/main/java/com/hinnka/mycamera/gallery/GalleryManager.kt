@@ -16,6 +16,7 @@ import android.provider.MediaStore
 import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.camera.HdrBracketConfig
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.db.GalleryMediaStore
@@ -604,6 +605,42 @@ object GalleryManager {
         return success
     }
 
+    private fun writeExportJpeg(
+        bitmap: Bitmap,
+        outputFile: File,
+        quality: Int,
+        captureInfo: CaptureInfo,
+        gainmapResult: GainmapResult? = null,
+        preferJpeg444: Boolean = false,
+    ): Boolean {
+        if (preferJpeg444) {
+            val encoded = Jpeg444ExportEncoder.write(
+                bitmap = bitmap,
+                outputFile = outputFile,
+                quality = quality,
+                gainmapResult = gainmapResult,
+                captureInfo = captureInfo,
+            )
+            if (encoded) {
+                return true
+            }
+            PLog.w(TAG, "JPEG 4:4:4 export failed, falling back to standard JPEG")
+        }
+
+        val encoded = FileOutputStream(outputFile).use { outputStream ->
+            writeFinalJpeg(
+                bitmap = bitmap,
+                outputStream = outputStream,
+                quality = quality,
+                gainmapResult = gainmapResult,
+            )
+        }
+        if (encoded) {
+            ExifWriter.writeExif(outputFile, captureInfo)
+        }
+        return encoded
+    }
+
     private fun deleteDeprecatedJxlStorage(photoDir: File) {
         File(photoDir, LEGACY_JXL_FILE).takeIf { it.exists() }?.delete()
         File(photoDir, HDR_FILE).takeIf { it.exists() }?.delete()
@@ -932,15 +969,33 @@ object GalleryManager {
         preparedUltraHdrSource: GainmapSourceSet? = null,
         preparedGainmapResult: GainmapResult? = null,
         preferHeicExport: Boolean? = null,
+        preferJpeg444Export: Boolean? = null,
         bitmapComputationalBokehApplied: Boolean = false,
     ): Boolean {
         return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
             var quickShotSourceBitmap: Bitmap? = null
             try {
-                val shouldPreferHeic = preferHeicExport
-                    ?: (ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                        ?.useHeicExport ?: false)
+                val hasEncodingOverride =
+                    preferHeicExport != null || preferJpeg444Export != null
+                val exportPreferences = if (!hasEncodingOverride) {
+                    ContentRepository.getInstance(context)
+                        .userPreferencesRepository
+                        .userPreferences
+                        .firstOrNull()
+                } else {
+                    null
+                }
+                val shouldPreferHeic = if (hasEncodingOverride) {
+                    preferHeicExport == true
+                } else {
+                    exportPreferences?.useHeicExport ?: false
+                }
+                val shouldPreferJpeg444 = if (hasEncodingOverride) {
+                    preferHeicExport != true && preferJpeg444Export == true
+                } else {
+                    (exportPreferences?.useJpeg444Export ?: false) && !shouldPreferHeic
+                }
                 val exportDestination = resolvePhotoExportDestination(context)
                 quickShotSourceBitmap = if (
                     bitmap == null &&
@@ -960,7 +1015,12 @@ object GalleryManager {
                 }
                 val exportInputBitmap = bitmap ?: quickShotSourceBitmap
 
-                if (!shouldPreferHeic && exportInputBitmap == null && canReuseEmbeddedGainmap(metadata)) {
+                if (
+                    !shouldPreferHeic &&
+                    !shouldPreferJpeg444 &&
+                    exportInputBitmap == null &&
+                    canReuseEmbeddedGainmap(metadata)
+                ) {
                     val embeddedBitmap = loadOriginalBitmap(context, id)
                     if (embeddedBitmap != null && hasBitmapGainmap(embeddedBitmap)) {
                         PLog.d(TAG, "Reusing embedded gainmap for export: $id")
@@ -1094,24 +1154,35 @@ object GalleryManager {
                 }
 
                 val filename = "$baseFilename.jpg"
-                val exportWriteElapsed = measureTimeMillis {
-                    FileOutputStream(tempExportFile).use { outputStream ->
-                        writeFinalJpeg(
-                            bitmap = outputBitmap,
-                            outputStream = outputStream,
-                            quality = photoQuality,
-                            gainmapResult = if (isLivePhoto) null else outputGainmapResult
-                        )
-                    }
-                }
-                PLog.d(TAG, "exportPhoto writeFinalJpeg wrapper took ${exportWriteElapsed}ms")
-
-                ExifWriter.writeExif(
-                    tempExportFile, metadata.toCaptureInfo().copy(
-                        imageWidth = outputBitmap.width,
-                        imageHeight = outputBitmap.height
-                    )
+                val captureInfo = metadata.toCaptureInfo().copy(
+                    imageWidth = outputBitmap.width,
+                    imageHeight = outputBitmap.height
                 )
+                var jpegEncoded = false
+                val exportWriteElapsed = measureTimeMillis {
+                    jpegEncoded = writeExportJpeg(
+                        bitmap = outputBitmap,
+                        outputFile = tempExportFile,
+                        quality = photoQuality,
+                        captureInfo = captureInfo,
+                        gainmapResult = if (isLivePhoto) null else outputGainmapResult,
+                        preferJpeg444 = shouldPreferJpeg444,
+                    )
+                }
+                PLog.d(
+                    TAG,
+                    "exportPhoto JPEG encode took ${exportWriteElapsed}ms, " +
+                        "jpeg444=$shouldPreferJpeg444, success=$jpegEncoded"
+                )
+                if (!jpegEncoded) {
+                    if (outputBitmap !== processedBitmap && !outputBitmap.isRecycled) {
+                        outputBitmap.recycle()
+                    }
+                    if (!processedBitmap.isRecycled) {
+                        processedBitmap.recycle()
+                    }
+                    return@withContext false
+                }
 
                 val uri = if (isLivePhoto) {
                     val tempMotionPhotoFile = File(context.cacheDir, "temp_motion_${System.nanoTime()}.jpg")
@@ -1319,11 +1390,13 @@ object GalleryManager {
         var exportedUri: Uri? = null
         var tempFile: File? = null
         try {
-            val shouldPreferHeic = ContentRepository.getInstance(context)
+            val exportPreferences = ContentRepository.getInstance(context)
                 .userPreferencesRepository
                 .userPreferences
                 .firstOrNull()
-                ?.useHeicExport ?: false
+            val shouldPreferHeic = exportPreferences?.useHeicExport ?: false
+            val shouldPreferJpeg444 =
+                (exportPreferences?.useJpeg444Export ?: false) && !shouldPreferHeic
             val captureInfo = metadata.toCaptureInfo().copy(
                 imageWidth = bitmap.width,
                 imageHeight = bitmap.height
@@ -1353,10 +1426,18 @@ object GalleryManager {
 
             if (encodedFile == null) {
                 val jpegFile = File(context.cacheDir, "temp_quick_shot_${System.nanoTime()}.jpg")
-                FileOutputStream(jpegFile).use { outputStream ->
-                    writeFinalJpeg(bitmap, outputStream, photoQuality)
+                val jpegSaved = writeExportJpeg(
+                    bitmap = bitmap,
+                    outputFile = jpegFile,
+                    quality = photoQuality,
+                    captureInfo = captureInfo,
+                    preferJpeg444 = shouldPreferJpeg444,
+                )
+                if (!jpegSaved) {
+                    jpegFile.delete()
+                    photoDir.deleteRecursively()
+                    return@withContext null
                 }
-                ExifWriter.writeExif(jpegFile, captureInfo)
                 encodedFile = jpegFile
             }
             tempFile = encodedFile
