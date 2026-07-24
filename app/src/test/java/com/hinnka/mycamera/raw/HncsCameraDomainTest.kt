@@ -70,6 +70,50 @@ class HncsCameraDomainTest {
         )
     }
 
+    @Test
+    fun compositeMatrixUsesActiveAsShotTintInsteadOfProfileReferenceNeutral() {
+        val activeCameraGains = floatArrayOf(2.6319275f, 1f, 1.6217346f)
+        val profileReferenceGains = floatArrayOf(2.4920428f, 1f, 1.7483141f)
+        val rawAsShotNeutral = FloatArray(3) { channel ->
+            1f / activeCameraGains[channel]
+        }
+
+        val activeComposite = HncsCameraDomain.composeWhiteBalancedCameraMatrix(
+            whiteBalancedCameraToWorkingMatrix = identityMatrix(),
+            cameraGains = activeCameraGains,
+        )
+        val activeContract = HncsCameraDomain.resolve(
+            compositeCameraToWorkingMatrix = activeComposite,
+            cameraGains = activeCameraGains,
+            baselineExposureEv = 0f,
+        )
+        val activeWhite = multiply(
+            activeContract.cameraToWorkingMatrix,
+            activeContract.applyCameraDomain(rawAsShotNeutral),
+        )
+
+        val referenceComposite = HncsCameraDomain.composeWhiteBalancedCameraMatrix(
+            whiteBalancedCameraToWorkingMatrix = identityMatrix(),
+            cameraGains = profileReferenceGains,
+        )
+        val referenceContract = HncsCameraDomain.resolve(
+            compositeCameraToWorkingMatrix = referenceComposite,
+            cameraGains = profileReferenceGains,
+            baselineExposureEv = 0f,
+        )
+        val referenceWhite = multiply(
+            referenceContract.cameraToWorkingMatrix,
+            referenceContract.applyCameraDomain(rawAsShotNeutral),
+        )
+
+        assertArrayEquals(floatArrayOf(1f, 1f, 1f), activeWhite, 1e-5f)
+        assertArrayEquals(
+            floatArrayOf(0.9468509f, 1f, 1.0780519f),
+            referenceWhite,
+            1e-5f,
+        )
+    }
+
     private fun identityMatrix(): FloatArray = floatArrayOf(
         1f, 0f, 0f,
         0f, 1f, 0f,

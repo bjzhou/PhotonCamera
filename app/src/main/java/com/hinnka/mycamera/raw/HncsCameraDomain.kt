@@ -48,6 +48,29 @@ internal object HncsCameraDomain {
     private const val MAX_CAMERA_GAIN = 64f
 
     /**
+     * Builds the composite matrix consumed by [resolve]. The supplied matrix
+     * operates on white-balanced camera RGB, so the active per-image camera
+     * gains must be part of the composite calibration invariant.
+     */
+    fun composeWhiteBalancedCameraMatrix(
+        whiteBalancedCameraToWorkingMatrix: FloatArray,
+        cameraGains: FloatArray,
+    ): FloatArray {
+        require(
+            whiteBalancedCameraToWorkingMatrix.size == 9 &&
+                whiteBalancedCameraToWorkingMatrix.all(Float::isFinite)
+        )
+        val gains = canonicalizeCameraGains(cameraGains)
+        return whiteBalancedCameraToWorkingMatrix.copyOf().also { composite ->
+            for (row in 0 until 3) {
+                for (column in 0 until 3) {
+                    composite[row * 3 + column] *= gains[column]
+                }
+            }
+        }
+    }
+
+    /**
      * Factors the camera gains out of a composite camera-to-working matrix so
      * they can be applied and clipped in camera space before that matrix.
      */
@@ -61,7 +84,7 @@ internal object HncsCameraDomain {
             compositeCameraToWorkingMatrix.size == 9 &&
                 compositeCameraToWorkingMatrix.all(Float::isFinite)
         )
-        val gains = sanitizeCameraGains(cameraGains)
+        val gains = canonicalizeCameraGains(cameraGains)
         val maximumGain = max(gains[0], max(gains[1], gains[2]))
         val normalizedGain = FloatArray(3) { channel ->
             gains[channel] / maximumGain
@@ -98,7 +121,7 @@ internal object HncsCameraDomain {
         val greenEven = component(1, 1f)
         val greenOdd = component(2, greenEven)
         val green = (greenEven + greenOdd) * 0.5f
-        return sanitizeCameraGains(
+        return canonicalizeCameraGains(
             floatArrayOf(
                 component(0, green),
                 green,
@@ -106,6 +129,9 @@ internal object HncsCameraDomain {
             )
         )
     }
+
+    fun canonicalizeCameraGains(cameraGains: FloatArray): FloatArray =
+        sanitizeCameraGains(cameraGains)
 
     private fun sanitizeCameraGains(cameraGains: FloatArray): FloatArray {
         return FloatArray(3) { channel ->

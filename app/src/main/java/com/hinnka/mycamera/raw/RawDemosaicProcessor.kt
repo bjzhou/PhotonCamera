@@ -1584,8 +1584,13 @@ class RawDemosaicProcessor {
                 )
             } else {
                 null
-            }
+        }
         val hncsRenderIntent = rawHncsRenderIntent
+        val activeHncsCameraGains = if (requestedColorEngine.isHncs) {
+            HncsCameraDomain.fromWhiteBalanceGains(actualMetadata.whiteBalanceGains)
+        } else {
+            null
+        }
         val hncsRenderPlan = when (requestedColorEngine) {
             RawRenderingEngine.HncsCcm ->
                 HncsProfileManager(context.applicationContext).createCcmRenderPlan(
@@ -1595,6 +1600,7 @@ class RawDemosaicProcessor {
             RawRenderingEngine.HncsLut ->
                 HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
                     colorTemperature = actualMetadata.colorTemperature,
+                    activeCameraGains = requireNotNull(activeHncsCameraGains),
                     requestedProfileId = rawHncsProfileId,
                     renderIntent = hncsRenderIntent,
                     filmCurveMode = rawHncsFilmCurveMode
@@ -1900,14 +1906,13 @@ class RawDemosaicProcessor {
                     metadata = actualMetadata,
                     dcpRenderPlan = activeDcpRenderPlan
                 )
-            }
+        }
         val hncsCameraDomainGains = when {
-            colorEngine.usesHncsColorMap -> requireNotNull(hncsRenderPlan?.profileNeutralGains) {
-                "HNCS LUT branch requires its profile camera gains"
+            colorEngine.usesHncsColorMap -> requireNotNull(hncsRenderPlan?.cameraDomainGains) {
+                "HNCS LUT branch requires the active RAW camera gains baked into its matrix"
             }
 
-            colorEngine.isHncs ->
-                HncsCameraDomain.fromWhiteBalanceGains(actualMetadata.whiteBalanceGains)
+            colorEngine.isHncs -> requireNotNull(activeHncsCameraGains)
 
             else -> null
         }
@@ -1929,8 +1934,9 @@ class RawDemosaicProcessor {
                     "profile=${hncsRenderPlan?.profileId} cct=${hncsRenderPlan?.colorTemperature} " +
                     "source=${hncsRenderPlan?.sourceFile} " +
                     "sha256=${hncsRenderPlan?.sourceSha256} profileSpace=$profileWorkingColorSpace " +
-                    "cameraMatrix=${if (colorEngine.usesHncsColorMap) "profile-M*diag(v)-to-HNCS" else "raw-metadata"} " +
+                    "cameraMatrix=${if (colorEngine.usesHncsColorMap) "profile-M*diag(as-shot)-to-HNCS" else "raw-metadata"} " +
                     "cameraDomainGains=${hncsCameraDomainGains?.contentToString()} " +
+                    "activeRawCameraGains=${activeHncsCameraGains?.contentToString()} " +
                     "profileNeutralGains=${hncsRenderPlan?.profileNeutralGains?.contentToString()} " +
                     "normalizedCameraGain=${hncsCameraDomainAudit?.normalizedGain?.contentToString()} " +
                     "inputEV=${hncsCameraDomainAudit?.inputEv} " +
@@ -11070,6 +11076,18 @@ class RawDemosaicProcessor {
                 }
             }
         }
+        val activeNeutralRaw = renderPlan.cameraDomainGains
+            ?.takeIf { it.size == 3 }
+            ?.let { gains -> FloatArray(3) { index -> 1f / gains[index] } }
+        val activeNeutralToHncs = activeNeutralRaw?.let { neutral ->
+            renderPlan.cameraToHncsMatrix?.takeIf { it.size == 9 }?.let { matrix ->
+                FloatArray(3) { row ->
+                    matrix[row * 3] * neutral[0] +
+                        matrix[row * 3 + 1] * neutral[1] +
+                        matrix[row * 3 + 2] * neutral[2]
+                }
+            }
+        }
         val boundTextures = IntArray(4)
         val textureBinding = IntArray(1)
         for (unit in boundTextures.indices) {
@@ -11134,8 +11152,11 @@ class RawDemosaicProcessor {
         )
         PLog.i(
             TAG,
-            "HNCS_DIAG matrices profileToEngine=${profileToEngineTransform.contentToString()} " +
+                "HNCS_DIAG matrices profileToEngine=${profileToEngineTransform.contentToString()} " +
                 "cameraToHncs=${renderPlan.cameraToHncsMatrix?.contentToString()} " +
+                "cameraDomainGains=${renderPlan.cameraDomainGains?.contentToString()} " +
+                "activeNeutralRaw=${activeNeutralRaw?.contentToString()} " +
+                "activeNeutralToHncs=${activeNeutralToHncs?.contentToString()} " +
                 "profileNeutralGains=${renderPlan.profileNeutralGains?.contentToString()} " +
                 "profileNeutralRaw=${profileNeutralRaw?.contentToString()} " +
                 "profileNeutralToHncs=${profileNeutralToHncs?.contentToString()} " +

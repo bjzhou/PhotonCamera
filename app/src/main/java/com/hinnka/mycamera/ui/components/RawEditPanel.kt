@@ -216,8 +216,6 @@ fun RawEditPanel(
                 title = stringResource(R.string.settings_raw_hncs_film_curve),
                 description = stringResource(R.string.settings_raw_hncs_film_curve_description),
                 levels = listOf(
-                    HncsFilmCurveMode.Basic.persistedValue to
-                        stringResource(R.string.settings_raw_hncs_film_curve_basic),
                     HncsFilmCurveMode.Standard.persistedValue to
                         stringResource(R.string.settings_raw_hncs_film_curve_standard),
                     HncsFilmCurveMode.Reproduction.persistedValue to

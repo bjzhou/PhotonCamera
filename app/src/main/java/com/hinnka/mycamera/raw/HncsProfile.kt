@@ -43,7 +43,6 @@ enum class HncsRenderIntent(val assetValue: String) {
 }
 
 enum class HncsFilmCurveMode(val persistedValue: String) {
-    Basic("basic"),
     Standard("standard"),
     Reproduction("reproduction");
 
@@ -131,9 +130,15 @@ internal data class HncsRenderPlan(
     val colorTemperature: Float?,
     val cameraToHncsMatrix: FloatArray?,
     /**
+     * Active per-image camera gains baked into [cameraToHncsMatrix]. These
+     * exact gains must be passed to HncsCameraDomain so factoring preserves
+     * the composite transform around the camera-domain headroom clamp.
+     */
+    val cameraDomainGains: FloatArray?,
+    /**
      * CXMLLut v* calibration values after its value * 0.5 + 1.0 decryption.
-     * These are camera-channel gains that neutralize the RAW camera domain
-     * before the profile's white-balanced camera-RGB-to-XYZ matrix.
+     * They describe the profile's reference neutral at the selected CCT. They
+     * are not a replacement for the active RAW AsShotNeutral/Tint.
      */
     val profileNeutralGains: FloatArray?,
     val colorMap: HncsColorMap?,
@@ -196,9 +201,6 @@ private data class ParsedHncsProfile(
  * No profile is selected implicitly: the caller must provide an exact profile id.
  */
 class HncsProfileManager(private val context: Context) {
-    private val basicFilmCurve: HncsFilmCurve by lazy {
-        loadHncsFilmCurve(BASIC_FILM_CURVE_ASSET)
-    }
     private val standardFilmCurve: HncsFilmCurve by lazy {
         loadHncsFilmCurve(STANDARD_FILM_CURVE_ASSET)
     }
@@ -218,6 +220,7 @@ class HncsProfileManager(private val context: Context) {
 
     internal fun resolveLutRenderPlan(
         colorTemperature: Float?,
+        activeCameraGains: FloatArray,
         requestedProfileId: String?,
         renderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
         filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
@@ -232,6 +235,12 @@ class HncsProfileManager(private val context: Context) {
         }
         // CXMLLut::CalculateLUT and CalculateMatrix both receive an integer Kelvin value.
         val temperature = measuredTemperature.toInt().toFloat()
+        val cameraGains = activeCameraGains.takeIf { gains ->
+            gains.size == 3 && gains.all { it.isFinite() && it > 0f }
+        }?.let(HncsCameraDomain::canonicalizeCameraGains) ?: run {
+            PLog.e(TAG, "HNCS LUT requires three valid active RAW camera gains")
+            return null
+        }
         val info = manifestProfiles().firstOrNull { it.id == profileId } ?: run {
             PLog.e(TAG, "Unknown HNCS camera profile id=$profileId")
             return null
@@ -241,9 +250,12 @@ class HncsProfileManager(private val context: Context) {
             return null
         }
         val profile = parseProfile(info) ?: return null
+        val cameraGainKey = cameraGains.joinToString(separator = ",") { gain ->
+            gain.toBits().toString()
+        }
         val cacheKey =
             "$profileId|${renderIntent.assetValue}|${temperature.toInt()}|" +
-                filmCurveMode.persistedValue
+                "${filmCurveMode.persistedValue}|$cameraGainKey"
         synchronized(renderPlanCache) {
             renderPlanCache[cacheKey]?.let { return it }
         }
@@ -276,7 +288,7 @@ class HncsProfileManager(private val context: Context) {
         }
         val cameraMatrix = profileMatrixToHncs(
             whiteBalancedCameraToXyzD50 = cameraToXyzD50,
-            profileNeutralGains = profileNeutralGains
+            activeCameraGains = cameraGains
         ) ?: run {
             PLog.e(TAG, "HNCS profile id=$profileId produced an invalid camera-to-HNCS matrix")
             return null
@@ -308,6 +320,7 @@ class HncsProfileManager(private val context: Context) {
             profile = profile,
             colorTemperature = temperature,
             cameraMatrix = cameraMatrix,
+            cameraDomainGains = cameraGains,
             profileNeutralGains = profileNeutralGains,
             colorMap = colorMap,
             renderIntent = renderIntent,
@@ -324,6 +337,7 @@ class HncsProfileManager(private val context: Context) {
         profile: ParsedHncsProfile?,
         colorTemperature: Float?,
         cameraMatrix: FloatArray?,
+        cameraDomainGains: FloatArray?,
         profileNeutralGains: FloatArray?,
         colorMap: HncsColorMap?,
         renderIntent: HncsRenderIntent,
@@ -339,6 +353,7 @@ class HncsProfileManager(private val context: Context) {
             sourceKey = sourceKey,
             colorTemperature = colorTemperature,
             cameraToHncsMatrix = cameraMatrix,
+            cameraDomainGains = cameraDomainGains,
             profileNeutralGains = profileNeutralGains,
             colorMap = colorMap,
             rgbToYccMatrix = HNCS_RGB_TO_YCC.copyOf(),
@@ -360,7 +375,6 @@ class HncsProfileManager(private val context: Context) {
 
     private fun resolveFilmCurve(mode: HncsFilmCurveMode): HncsFilmCurve =
         when (mode) {
-            HncsFilmCurveMode.Basic -> basicFilmCurve
             HncsFilmCurveMode.Standard -> standardFilmCurve
             HncsFilmCurveMode.Reproduction -> reproductionFilmCurve
         }
@@ -424,29 +438,27 @@ class HncsProfileManager(private val context: Context) {
 
     private fun profileMatrixToHncs(
         whiteBalancedCameraToXyzD50: FloatArray,
-        profileNeutralGains: FloatArray
+        activeCameraGains: FloatArray
     ): FloatArray? {
         if (whiteBalancedCameraToXyzD50.size != 9 ||
             whiteBalancedCameraToXyzD50.any { !it.isFinite() } ||
-            profileNeutralGains.size != 3 ||
-            profileNeutralGains.any { !it.isFinite() || it <= 0f }
+            activeCameraGains.size != 3 ||
+            activeCameraGains.any { !it.isFinite() || it <= 0f }
         ) {
             return null
         }
-        // Phocus CXMLLut stores m* in the white-balanced camera domain and v*
-        // as encrypted per-channel neutral gains. Keep the complete M*diag(v)
-        // transform in the render plan. HncsCameraDomain factors v back out at
-        // execution time so it can apply Phocus' pre-matrix headroom clamp,
-        // while preserving this composite matrix as the calibration invariant.
-        val rawCameraToXyzD50 = whiteBalancedCameraToXyzD50.copyOf()
-        for (row in 0 until 3) {
-            for (column in 0 until 3) {
-                rawCameraToXyzD50[row * 3 + column] *= profileNeutralGains[column]
-            }
-        }
-        val result = DngSdkColorSpec.multiplyMatrix3x3(
+        // CXMLLut m* operates on white-balanced camera RGB. Its v* vector is
+        // the profile reference neutral used for the CCT calibration, while
+        // the active RAW can carry an independent green/magenta Tint. Compose
+        // the per-image AsShotNeutral gains here so that neutral camera input
+        // remains neutral before the 2D color map.
+        val whiteBalancedCameraToHncs = DngSdkColorSpec.multiplyMatrix3x3(
             HNCS_XYZ_D50_TO_RGB,
-            rawCameraToXyzD50
+            whiteBalancedCameraToXyzD50
+        )
+        val result = HncsCameraDomain.composeWhiteBalancedCameraMatrix(
+            whiteBalancedCameraToWorkingMatrix = whiteBalancedCameraToHncs,
+            cameraGains = activeCameraGains,
         )
         return result.takeIf { matrix ->
             matrix.size == 9 && matrix.all(Float::isFinite)
@@ -694,17 +706,9 @@ class HncsProfileManager(private val context: Context) {
          *   D = filmCurveType 7,    companding 1
          *   E = filmCurveType 7,    companding 2
          *
-         * PhotonCamera exposes the three requested Phocus responses as
-         * Basic=B, Standard=C, and Reproduction=E. Type 7 alone is ambiguous:
-         * companding 1 would select D, not E.
+         * PhotonCamera exposes Standard=C and Reproduction=E. Type 7 alone is
+         * ambiguous: companding 1 would select D, not E.
          */
-        private val BASIC_FILM_CURVE_ASSET = HncsFilmCurveAsset(
-            path = "$ASSET_DIRECTORY/filmcurve_type6_companding1.hcurve",
-            sha256 = "495bc29bd9bccb6b1ad7a184be960f1bf6d9c1d403c8891286034fe6ff819fb7",
-            filmCurveType = 6,
-            companding = 1,
-            sourceFloatFnv1a64 = "2c7059f97ee8b5ad"
-        )
         private val STANDARD_FILM_CURVE_ASSET = HncsFilmCurveAsset(
             path = "$ASSET_DIRECTORY/filmcurve_type6_companding2.hcurve",
             sha256 = "0b26cfdeb578ca21eee5e55e95c4f49ca43ab333e2cea5a011049c07bee4b531",
@@ -787,6 +791,7 @@ class HncsProfileManager(private val context: Context) {
                 "hncs-ccm|$PHOCUS_SOURCE_LIBRARY|$HNCS_FILM_CURVE_SOURCE_LIBRARY_SHA256",
             colorTemperature = null,
             cameraToHncsMatrix = null,
+            cameraDomainGains = null,
             profileNeutralGains = null,
             colorMap = null,
             rgbToYccMatrix = HNCS_RGB_TO_YCC.copyOf(),

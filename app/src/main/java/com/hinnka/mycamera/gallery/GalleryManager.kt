@@ -4549,6 +4549,7 @@ object GalleryManager {
                         fileName.endsWith(".dng", ignoreCase = true) ||
                         fileName.endsWith(".rw2", ignoreCase = true) ||
                         fileName.endsWith(".arw", ignoreCase = true) ||
+                        fileName.endsWith(".3fr", ignoreCase = true) ||
                         fileName.endsWith(".cr3", ignoreCase = true)
 
                 if (isRaw) {

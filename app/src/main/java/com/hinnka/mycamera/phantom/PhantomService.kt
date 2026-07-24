@@ -152,7 +152,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             ".orf",
             ".raf",
             ".pef",
-            ".srw"
+            ".srw",
+            ".3fr"
         )
     }
 

@@ -748,10 +748,9 @@
     <string name="settings_raw_hncs_color_branch_lut">2D LUT</string>
     <string name="settings_raw_hncs_profile">HNCS camera profile</string>
     <string name="settings_raw_hncs_2d_lut">Hasselblad camera-exclusive 2D LUT</string>
-    <string name="settings_raw_hncs_profile_description">Using a Hasselblad-exclusive profile on a non-Hasselblad camera will cause a color cast.</string>
+    <string name="settings_raw_hncs_profile_description">Uses Hasselblad camera-specific Cb/Y-Cr/Y chroma tables.</string>
     <string name="settings_raw_hncs_film_curve">Response Curve</string>
     <string name="settings_raw_hncs_film_curve_description">Choose a response curve.</string>
-    <string name="settings_raw_hncs_film_curve_basic">Basic</string>
     <string name="settings_raw_hncs_film_curve_standard">Standard</string>
     <string name="settings_raw_hncs_film_curve_reproduction">Reproduction</string>
     <string name="settings_raw_google_pixel_tone_map">Google Pixel-style tone mapping</string>

@@ -1252,6 +1252,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             lowerName.endsWith(".dng") ||
             lowerName.endsWith(".rw2") ||
             lowerName.endsWith(".arw") ||
+            lowerName.endsWith(".3fr") ||
             lowerName.endsWith(".cr3")
     }
 

@@ -19,6 +19,14 @@ class RawHncsShadersTest {
     }
 
     @Test
+    fun removedBasicFilmCurveSelectionFallsBackToStandard() {
+        assertEquals(
+            HncsFilmCurveMode.Standard,
+            HncsFilmCurveMode.fromPersistedValue("basic"),
+        )
+    }
+
+    @Test
     fun hncsShaderKeepsFilmCurveBeforeGammaAndOmitsHighlightStrength() {
         val shader = RawShaders.combinedFragmentShaderFor(
             colorEngine = RawRenderingEngine.HncsCcm,

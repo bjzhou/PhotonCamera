@@ -112,7 +112,7 @@ flowchart LR
     H0 --> H1["clamp(input / hrTrunc, 0, hrMax) × inputEV"]
     H1 --> B{"HNCS 分支"}
     B -- "CCM" --> C["当前 RAW CCM → HNCS（D50）"]
-    B -- "二维 LUT" --> D["profile neutral gain × 温度矩阵 → XYZ(D50)"]
+    B -- "二维 LUT" --> D["当前 RAW as-shot gain × profile 温度矩阵 → XYZ(D50)"]
     D --> E["XYZ(D50) → HNCS"]
     E --> F["Cb/Y–Cr/Y 105×89 色度表"]
     C --> G["真实 filmCurveType=6 / companding=2"]
@@ -165,31 +165,37 @@ manifest 和每个 `.hncs` header 同时保存 `cameraModels`、`colorProfileIds
 
 该分支同时使用同一 profile 的：
 
-- 插值后的 `vlt/vt/vf/vh` RAW 相机通道 neutral gain；
+- 插值后的 `vlt/vt/vf/vh` profile 参考 neutral gain，用于保留/审计 profile 的 CCT 标定白点；
 - 插值后的白平衡 camera RGB→XYZ(D50) 矩阵；
 - 插值后的 Standard 或 Reproduction Cb/Y–Cr/Y 表；
 - 固定 XYZ(D50)→HNCS 矩阵。
 
 XML 中 `mlt/mt/mf/mh` 的行和对应 D50 XYZ 白点，说明它们不是 camera→HNCS 矩阵。
-它们消费的是已按 profile neutral gain 白平衡后的 camera RGB。`vlt/vt/vf/vh` 不是明文 gain；
+它们消费的是已白平衡的 camera RGB。`vlt/vt/vf/vh` 不是明文 gain；
 `CXMLLut::DecodeFrom` 对三元素数组执行与矩阵相同的 `encrypted × 0.5 + 1.0`。原始
 `CRawColorParams::GetXYZ2RawRGBNeutralizedMatrix` 随后逐列乘对应 gain，再对结果求逆。
 
 PhotonCamera 的 RCD/VGN 对外输出刻意撤销了仅供插值计算的白平衡，所以进入线性色彩 pass 的是
-未白平衡 camera RGB。二维 LUT 分支必须把 neutral gain 合并回矩阵：
+未白平衡 camera RGB。`v_profile(CCT)` 只描述 profile 在该 CCT 上的参考白点，不能替换当前
+RAW 的 `AsShotNeutral`：同一个 CCT 可以有不同的绿—洋红 Tint。二维 LUT 分支必须把当前
+RAW 的实际 gain 合并回矩阵：
 
 ```text
-rawCameraToXyzD50 = M_profile(CCT) × diag(v_profile(CCT))
+g_active             = inverse(AsShotNeutral)
+rawCameraToXyzD50    = M_profile(CCT) × diag(g_active)
 rawCameraToHncs    = inverse(HNCS_RGB_TO_XYZ_D50) × rawCameraToXyzD50
 ```
 
-这个契约可直接用中性不变量验证。profile 对应光源下的 RAW 中性向量为 `1/v`，因此：
+这个契约可直接用中性不变量验证。当前 RAW 的中性向量为 `1/g_active`，因此：
 
 ```text
-rawCameraToHncs × (1/v)
+rawCameraToHncs × (1/g_active)
 = inverse(HNCS_RGB_TO_XYZ_D50) × M_profile × [1,1,1]
 ≈ [1,1,1]
 ```
+
+矩阵与 LUT 仍按 CCT 插值，但 render-plan 缓存键还必须包含 `g_active`。否则两张 Kelvin
+相同、Tint 不同的 RAW 会复用错误的复合矩阵。
 
 此前 schema v1 把加密的 `v*` 原值写入资产（G 通道因此为 0），运行时又未把 gain 合并进矩阵，
 未白平衡 RAW 会以 G 通道占优进入 LUT，表现为整幅绿色。schema v1 资产及解析语义已删除，
@@ -275,7 +281,7 @@ ColorCorrectAll
 
 ```text
 ColorCorrectAll
-→ FilmCurve(基础 B / 标准 C / Reproduction E)
+→ FilmCurve(标准 C / Reproduction E)
 → 跳过 CGammaFilter（Phocus 默认 correction version=2、gamma flag=false）
 → HNCS companding 解码
 → HNCS 到线性 sRGB
@@ -305,15 +311,14 @@ type=7,    companding=2 → E
 ```
 
 因此 type 7 本身不等于 E；还必须是 `companding=2`，`type=7/companding=1` 会得到 D。
-应用按界面语义接入三张原表：
+应用按界面语义接入两张原表：
 
 | 界面选项 | 原表 | 构造参数 | float 表 FNV-1a64 | asset SHA-256 |
 |---|---|---|---|---|
-| 基础 | B | type=6, companding=1 | `2c7059f97ee8b5ad` | `495bc29bd9bccb6b1ad7a184be960f1bf6d9c1d403c8891286034fe6ff819fb7` |
 | 标准 | C | type=6, companding=2 | `a7fda12f9d03aa3f` | `0b26cfdeb578ca21eee5e55e95c4f49ca43ab333e2cea5a011049c07bee4b531` |
 | Reproduction | E | type=7, companding=2 | `aef781b4a11cdc4a` | `a5f1b9e3e7dc5f37a71840906e3edf6467e64d11450e68d85c436acf84504bd8` |
 
-三张 65,536 点表都由原始 `libcrosssdk.so`（SHA-256
+两张 65,536 点表都由原始 `libcrosssdk.so`（SHA-256
 `4320cacc91faf0ac16b0653760b86f604303162d43c1cad5fe182b73b9eede6b`）
 运行时直接导出，而不是用近似公式重建。缺少 maker FilmCurve tag 时，
 `CRawImageFile::GetFilmCurveType` 与 `CRawImageFileData::GetFilmCurveType` 返回 6；
@@ -435,8 +440,7 @@ PhotonCamera 进入该阶段前已经按 `(raw - black) / (white - black)` 完�
 `2^BaselineExposure`，不能再额外乘一次 ISO 或 `PostRawSensitivityBoost`。运行时使用：
 
 ```text
-g = profile neutral gain              // HNCS 2D LUT
-g = 当前 RAW as-shot RGB gain         // HNCS CCM
+g = 当前 RAW as-shot RGB gain         // HNCS 2D LUT 与 CCM
 
 gNormalized = g / max(g)
 inputEV     = 2^BaselineExposure × max(g)

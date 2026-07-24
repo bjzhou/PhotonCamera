@@ -108,10 +108,12 @@ neutral gain。`CRawColorParams::GetXYZ2RawRGBNeutralizedMatrix` 会把矩阵三
 gain 后再求逆。
 
 Phocus 的 `ColorCorrectAll` 输入已经位于 neutralized camera domain；PhotonCamera 的 RCD/VGN
-对外输出则恢复为未白平衡 camera RGB。因此当前集成将 gain 折入输入矩阵：
+对外输出则恢复为未白平衡 camera RGB。`v_profile(CCT)` 是 profile 在参考光源上的 neutral
+gain，不能覆盖当前 RAW 独立的 `AsShotNeutral`/Tint。因此当前集成按 CCT 选择 profile
+矩阵，但将实际 as-shot gain 折入输入矩阵：
 
 ```text
-M_raw_to_hncs = inverse(M_hncs_to_xyz_d50) · M_profile · diag(v_profile)
+M_raw_to_hncs = inverse(M_hncs_to_xyz_d50) · M_profile(CCT) · diag(g_as-shot)
 ```
 
 这不是额外白平衡补偿，而是两个 demosaic 输出契约之间必须存在的等价变换。

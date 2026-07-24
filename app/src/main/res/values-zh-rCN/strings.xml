@@ -764,10 +764,9 @@
     <string name="settings_raw_hncs_color_branch_lut">2D LUT</string>
     <string name="settings_raw_hncs_profile">HNCS 相机配置</string>
     <string name="settings_raw_hncs_2d_lut">哈苏相机专属 2D LUT</string>
-    <string name="settings_raw_hncs_profile_description">非哈苏相机使用哈苏专属配置会导致偏色。</string>
+    <string name="settings_raw_hncs_profile_description">使用哈苏相机专属 Cb/Y-Cr/Y 色度表</string>
     <string name="settings_raw_hncs_film_curve">响应曲线</string>
     <string name="settings_raw_hncs_film_curve_description">选择响应曲线</string>
-    <string name="settings_raw_hncs_film_curve_basic">基础</string>
     <string name="settings_raw_hncs_film_curve_standard">标准</string>
     <string name="settings_raw_hncs_film_curve_reproduction">色彩复刻</string>
     <string name="settings_raw_google_pixel_tone_map">Google Pixel 风格色调映射</string>
