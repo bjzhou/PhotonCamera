@@ -497,9 +497,7 @@ class UserPreferencesRepository(private val context: Context) {
                 rawDcpId = preferences[RAW_DCP_ID_KEY],
                 rawDcpIdsByLens = parseNullableStringMap(preferences[RAW_DCP_IDS_BY_LENS_KEY]),
                 rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
-                rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                    preferences[RAW_HNCS_RENDER_INTENT_KEY]
-                ),
+                rawHncsRenderIntent = HncsRenderIntent.Standard,
                 rawRenderingEngine = RawRenderingEngine.fromPersistedName(preferences[RAW_COLOR_ENGINE_KEY]),
                 rawToneMappingParameters = RawToneMappingParameters(
                     agxBlackRelativeExposure = preferences[RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY]

@@ -91,9 +91,7 @@ data class CameraPreset(
             .copy(
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
                 rawHncsProfileId = rawHncsProfileId?.takeIf(String::isNotBlank),
-                rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                    rawHncsRenderIntent
-                ).assetValue,
+                rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
                 rawGooglePixelToneMap = rawGooglePixelToneMap && !rawOppoMasterToneMap && !rawPhotonPgtmToneMap,
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawPhotonPgtmToneMap = rawPhotonPgtmToneMap && !rawOppoMasterToneMap
@@ -123,6 +121,23 @@ data class CameraPreset(
                 useJpgMax = false,
                 rawDcpId = null,
                 rawDROMode = "DR100",
+                isBuiltIn = true
+            ),
+            CameraPreset(
+                id = "builtin_hasselblad_natural",
+                name = "builtin_hasselblad_natural",
+                lutId = null,
+                colorRecipe = ColorRecipeParams.DEFAULT.copy(
+                    masterCurvePoints = floatArrayOf(
+                        0f, 0f,
+                        0.2784f, 0.2392f,
+                        0.7216f, 0.7569f,
+                        1f, 1f
+                    )
+                ),
+                effects = EffectParams.DEFAULT,
+                useRaw = true,
+                rawRenderingEngine = RawRenderingEngine.HncsCcm.name,
                 isBuiltIn = true
             ),
             CameraPreset(

@@ -1576,6 +1576,7 @@ class RawDemosaicProcessor {
             } else {
                 null
             }
+        val hncsRenderIntent = HncsRenderIntent.Standard
         val hncsRenderPlan = when (requestedColorEngine) {
             RawRenderingEngine.HncsCcm ->
                 HncsProfileManager(context.applicationContext).createCcmRenderPlan()
@@ -1584,7 +1585,7 @@ class RawDemosaicProcessor {
                 HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
                     colorTemperature = actualMetadata.colorTemperature,
                     requestedProfileId = rawHncsProfileId,
-                    renderIntent = rawHncsRenderIntent
+                    renderIntent = hncsRenderIntent
                 )
 
             else -> null
@@ -1593,7 +1594,7 @@ class RawDemosaicProcessor {
             PLog.e(
                 TAG,
                 "HNCS rendering rejected: branch=$requestedColorEngine " +
-                    "profile=$rawHncsProfileId intent=${rawHncsRenderIntent.assetValue} " +
+                    "profile=$rawHncsProfileId intent=${hncsRenderIntent.assetValue} " +
                     "cct=${actualMetadata.colorTemperature}"
             )
             return@withContext null
@@ -1888,6 +1889,23 @@ class RawDemosaicProcessor {
                     dcpRenderPlan = activeDcpRenderPlan
                 )
             }
+        val hncsCameraDomainGains = when {
+            colorEngine.usesHncsColorMap -> requireNotNull(hncsRenderPlan?.profileNeutralGains) {
+                "HNCS LUT branch requires its profile camera gains"
+            }
+
+            colorEngine.isHncs ->
+                HncsCameraDomain.fromWhiteBalanceGains(actualMetadata.whiteBalanceGains)
+
+            else -> null
+        }
+        val hncsCameraDomainAudit = hncsCameraDomainGains?.let { gains ->
+            HncsCameraDomain.resolve(
+                compositeCameraToWorkingMatrix = linearColorCorrectionMatrix,
+                cameraGains = gains,
+                baselineExposureEv = actualMetadata.baselineExposure,
+            )
+        }
         val linearCameraWhite = resolveLinearCameraWhite(
             metadata = actualMetadata,
             dcpRenderPlan = activeDcpRenderPlan
@@ -1900,7 +1918,12 @@ class RawDemosaicProcessor {
                     "source=${hncsRenderPlan?.sourceFile} " +
                     "sha256=${hncsRenderPlan?.sourceSha256} profileSpace=$profileWorkingColorSpace " +
                     "cameraMatrix=${if (colorEngine.usesHncsColorMap) "profile-M*diag(v)-to-HNCS" else "raw-metadata"} " +
-                    "profileNeutralGains=${hncsRenderPlan?.profileNeutralGains?.contentToString()}"
+                    "cameraDomainGains=${hncsCameraDomainGains?.contentToString()} " +
+                    "profileNeutralGains=${hncsRenderPlan?.profileNeutralGains?.contentToString()} " +
+                    "normalizedCameraGain=${hncsCameraDomainAudit?.normalizedGain?.contentToString()} " +
+                    "inputEV=${hncsCameraDomainAudit?.inputEv} " +
+                    "hrTrunc=${hncsCameraDomainAudit?.hrTrunc} " +
+                    "hrMax=${hncsCameraDomainAudit?.hrMax}"
             )
         }
         logRawDcpPipeline(
@@ -2045,6 +2068,7 @@ class RawDemosaicProcessor {
                         useProfileExposureRamp = useProfileExposureRamp,
                         applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
                         supportProfileOverrange = supportProfileOverrange,
+                        hncsCameraDomainGains = hncsCameraDomainGains,
                     )
                 }
                 solvedExposureEv?.let { exposureEv ->
@@ -2198,8 +2222,9 @@ class RawDemosaicProcessor {
                 )
             }
 
-            // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. Linear-domain
-            // engines apply the same EV as an exact 2^EV gain in this ProPhoto/RIMM pass.
+            // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. HNCS consumes
+            // it through ColorCorrectAll's camera-domain inputEV; other linear engines retain
+            // the exact post-matrix 2^EV gain.
             checkGlError("Before LinearRcdPass")
 
             renderLinearRcdPass(
@@ -2221,6 +2246,7 @@ class RawDemosaicProcessor {
                 },
                 clampProfileRgb = clampProfileRgb,
                 supportProfileOverrange = supportProfileOverrange,
+                hncsCameraDomainGains = hncsCameraDomainGains,
                 label = "LinearRcdPass"
             )
 
@@ -4197,6 +4223,11 @@ class RawDemosaicProcessor {
         uniform mat3 uColorCorrectionMatrix;
         uniform vec3 uCameraWhite;
         uniform float uExposureGain;
+        uniform int uHncsCameraDomainEnabled;
+        uniform vec3 uHncsCameraDomainGain;
+        uniform float uHncsInputEV;
+        uniform float uHncsHrTrunc;
+        uniform float uHncsHrMax;
         uniform int uClampProfileRgb;
         uniform int uClampProfileGainOutput;
         uniform int uProfileSupportOverrange;
@@ -4277,6 +4308,12 @@ class RawDemosaicProcessor {
         
         void main() {
             vec3 rgb = texture(uDemosaickedTexture, vTexCoord).rgb;
+            if (uHncsCameraDomainEnabled != 0) {
+                rgb *= uHncsCameraDomainGain;
+                rgb /= uHncsHrTrunc;
+                rgb = clamp(rgb, vec3(0.0), vec3(uHncsHrMax));
+                rgb *= uHncsInputEV;
+            }
             if (uClampProfileRgb != 0) {
                 rgb = min(rgb, max(uCameraWhite, vec3(0.001)));
             }
@@ -10030,6 +10067,7 @@ class RawDemosaicProcessor {
         profileBaselineExposureOffsetEv: Float,
         clampProfileRgb: Boolean,
         supportProfileOverrange: Boolean,
+        hncsCameraDomainGains: FloatArray? = null,
         label: String
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
@@ -10042,7 +10080,21 @@ class RawDemosaicProcessor {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(linearRcdProgram, "uDemosaickedTexture"), 0)
 
-        val transposedCCM = transposeMatrix3x3(colorCorrectionMatrix)
+        val hncsCameraDomain = hncsCameraDomainGains?.let { gains ->
+            HncsCameraDomain.resolve(
+                compositeCameraToWorkingMatrix = colorCorrectionMatrix,
+                cameraGains = gains,
+                baselineExposureEv = if (applyDngBaselineExposure) {
+                    metadata.baselineExposure
+                } else {
+                    0f
+                },
+                additionalExposureEv = rawExposureCompensation,
+            )
+        }
+        val transposedCCM = transposeMatrix3x3(
+            hncsCameraDomain?.cameraToWorkingMatrix ?: colorCorrectionMatrix
+        )
         GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(linearRcdProgram, "uColorCorrectionMatrix"),
             1,
@@ -10061,8 +10113,12 @@ class RawDemosaicProcessor {
             applyProfileGainTableMap
         val exposureGain = computeLinearExposureGain(
             metadata,
-            rawExposureCompensation,
-            applyDngBaselineExposure
+            rawExposureCompensation = if (hncsCameraDomain == null) {
+                rawExposureCompensation
+            } else {
+                0f
+            },
+            applyDngBaselineExposure = hncsCameraDomain == null && applyDngBaselineExposure
         )
         bindLinearDcpHueSatMap(
             program = linearRcdProgram,
@@ -10075,6 +10131,28 @@ class RawDemosaicProcessor {
             profileBaselineExposureOffsetEv
         )
         GLES30.glUniform1f(GLES30.glGetUniformLocation(linearRcdProgram, "uExposureGain"), exposureGain)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsCameraDomainEnabled"),
+            if (hncsCameraDomain != null) 1 else 0
+        )
+        GLES30.glUniform3fv(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsCameraDomainGain"),
+            1,
+            hncsCameraDomain?.normalizedGain ?: floatArrayOf(1f, 1f, 1f),
+            0
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsInputEV"),
+            hncsCameraDomain?.inputEv ?: 1f
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsHrTrunc"),
+            hncsCameraDomain?.hrTrunc ?: 1f
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(linearRcdProgram, "uHncsHrMax"),
+            hncsCameraDomain?.hrMax ?: 1f
+        )
         GLES30.glUniform1i(
             GLES30.glGetUniformLocation(linearRcdProgram, "uClampProfileRgb"),
             if (clampProfileRgb) 1 else 0
@@ -10297,7 +10375,8 @@ class RawDemosaicProcessor {
         rawToneMappingParameters: RawToneMappingParameters,
         useProfileExposureRamp: Boolean,
         applyProfileDcpBaselineExposureOffset: Boolean,
-        supportProfileOverrange: Boolean
+        supportProfileOverrange: Boolean,
+        hncsCameraDomainGains: FloatArray? = null,
     ): Float? {
         val previewSize = resolveLongEdgePreviewSize(
             sourceWidth = metadata.width,
@@ -10332,6 +10411,7 @@ class RawDemosaicProcessor {
                     profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
                     clampProfileRgb = clampProfileRgb,
                     supportProfileOverrange = supportProfileOverrange,
+                    hncsCameraDomainGains = hncsCameraDomainGains,
                     label = "AdobeExposurePreviewLinearPass"
                 )
                 GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -10406,6 +10486,7 @@ class RawDemosaicProcessor {
                             profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
                             clampProfileRgb = clampProfileRgb,
                             supportProfileOverrange = supportProfileOverrange,
+                            hncsCameraDomainGains = hncsCameraDomainGains,
                             label = "LinearExposurePreviewPass"
                         )
                         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)

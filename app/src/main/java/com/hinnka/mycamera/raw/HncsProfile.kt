@@ -385,9 +385,10 @@ class HncsProfileManager(private val context: Context) {
             return null
         }
         // Phocus CXMLLut stores m* in the white-balanced camera domain and v*
-        // as encrypted per-channel neutral gains. PhotonCamera's demosaic output
-        // is deliberately un-white-balanced camera RGB, so fold diag(v*) into
-        // the camera matrix exactly before entering the common HNCS RGB space.
+        // as encrypted per-channel neutral gains. Keep the complete M*diag(v)
+        // transform in the render plan. HncsCameraDomain factors v back out at
+        // execution time so it can apply Phocus' pre-matrix headroom clamp,
+        // while preserving this composite matrix as the calibration invariant.
         val rawCameraToXyzD50 = whiteBalancedCameraToXyzD50.copyOf()
         for (row in 0 until 3) {
             for (column in 0 until 3) {

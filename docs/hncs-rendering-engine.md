@@ -108,7 +108,9 @@ HNCS 与 ProPhoto 数值接近，但两者是不同的处理契约，代码中�
 
 ```mermaid
 flowchart LR
-    A["线性 camera RGB + RAW white point"] --> B{"HNCS 分支"}
+    A["线性 camera RGB + RAW white point"] --> H0["归一化 camera gain"]
+    H0 --> H1["clamp(input / hrTrunc, 0, hrMax) × inputEV"]
+    H1 --> B{"HNCS 分支"}
     B -- "CCM" --> C["当前 RAW CCM → HNCS（D50）"]
     B -- "二维 LUT" --> D["profile neutral gain × 温度矩阵 → XYZ(D50)"]
     D --> E["XYZ(D50) → HNCS"]
@@ -375,18 +377,64 @@ Hasselblad/LStar Gamma 分支，不能仅凭相机品牌或 UI 选项推断。
 
 没有 LUT→CCM、HNCS→Adobe Curve、首 profile 或默认 5000 K 回退。
 
-## 尚未伪造的运行时参数
+## 相机域截断与 headroom
 
-原始 `ColorCorrectAll` 在相机域执行：
+原始 `ColorCorrectAll` shader 在输入矩阵前执行：
 
 ```text
-source = clamp(input / hrTrunc, 0, hrMax) × inputEV
+source = clamp(raw × normalizedCameraGain / hrTrunc, 0, hrMax) × inputEV
 ```
 
-`hrTrunc/hrMax/inputEV` 来自 Phocus source description 与 image correction 状态，并非
-Colormap XML 常量。PhotonCamera 已有自己的 RAW 白电平、曝光与高光重建契约，但目前没有证据
-证明两套字段可以逐项等同，所以没有硬编码 Phocus headroom 数值，也没有在 HNCS 矩阵之后补一
-次错误的 `[0,1]` clamp。后者已删除，以免破坏 camera→HNCS 矩阵产生的合法 overrange。
+`CColorCorrectAllFilter::FilterResultGpu` 的 uniform 映射已经逐项确认：
+
+```text
+filter + 0x188 → uInputEV
+filter + 0x190 → uHrTrunc
+filter + 0x194 → uHrMax
+```
+
+`ColorCorrectionAllFilter::GetHrEV` 使用当前 as-shot RGB gain、source ISO/sensitivity gain 和
+image-correction EV；`UpdateParameters` 再写入上述三个字段。旧版与新版
+`CImageCorrection` 会把 camera gain/source exposure 分配到 gain、`inputEV` 和
+`CRawColorCorrection` linearization 的不同位置，不能把某一版本的对象内存值直接套到当前
+管线。没有导入 Phocus 局部曝光或镜头 EV correction 时，能够确定的默认截断因子为：
+
+```text
+hrTrunc = 1
+hrMax   = 1
+```
+
+PhotonCamera 把跨版本但数值等价的 gain/exposure 项规范到显式参数：
+
+```text
+normalizedCameraGain = cameraGain / max(cameraGain)
+inputEV = sourceExposureGain × max(cameraGain)
+```
+
+PhotonCamera 进入该阶段前已经按 `(raw - black) / (white - black)` 完成 RAW 白电平归一化，
+所以 Phocus source ISO/sensitivity normalization 在本域的等价量就是 DNG
+`2^BaselineExposure`，不能再额外乘一次 ISO 或 `PostRawSensitivityBoost`。运行时使用：
+
+```text
+g = profile neutral gain              // HNCS 2D LUT
+g = 当前 RAW as-shot RGB gain         // HNCS CCM
+
+gNormalized = g / max(g)
+inputEV     = 2^BaselineExposure × max(g)
+Mbase       = Mcomposite × diag(1 / g)
+
+camera = clamp(raw × gNormalized, 0, 1) × inputEV
+hncs   = Mbase × camera
+```
+
+未触发截断时，上式严格等于既有
+`Mcomposite × raw × 2^BaselineExposure`；触发截断时则与 Phocus 一样在相机 gain 之后、
+输入矩阵之前截断。`BaselineExposure` 和测光候选 EV 由 `inputEV` 消费，线性 pass 的通用
+`uExposureGain` 在 HNCS 路径保持 1，因此不会重复曝光。用户编辑 EV 仍可在矩阵后、2D LUT 前
+作为线性标量应用，与在输入矩阵前相乘数值等价。
+
+这里的 `[0,1]` 只属于相机域。camera→HNCS 矩阵产生的合法负值和 overrange 不再二次 clamp，
+以免破坏矩阵与后续 Cb/Y–Cr/Y 色度表的输入。
 
 ## 非 Hasselblad RAW 的相机专属 LUT
 

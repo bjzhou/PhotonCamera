@@ -32,7 +32,6 @@ import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsProfileInfo
-import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -87,7 +86,6 @@ fun CameraTopSheet(
     rawDcpLensOptions: List<RawDcpLensOption> = emptyList(),
     availableDcps: List<DcpInfo>,
     rawHncsProfileId: String?,
-    rawHncsRenderIntent: HncsRenderIntent,
     availableHncsProfiles: List<HncsProfileInfo>,
     rawBaselineLutId: String?,
     availableLuts: List<LutInfo>,
@@ -106,7 +104,6 @@ fun CameraTopSheet(
     onRawDcpChange: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
     onRawHncsProfileChange: (String?) -> Unit,
-    onRawHncsRenderIntentChange: (HncsRenderIntent) -> Unit,
     onImportRawDcp: () -> Unit,
     onDeleteRawDcp: (DcpInfo) -> Unit,
     onRawBaselineLutChange: (String?) -> Unit,
@@ -629,6 +626,7 @@ fun CameraTopSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
@@ -668,10 +666,8 @@ fun CameraTopSheet(
                     onImportDcp = onImportRawDcp,
                     onDeleteDcp = onDeleteRawDcp,
                     selectedHncsProfileId = rawHncsProfileId,
-                    selectedHncsRenderIntent = rawHncsRenderIntent,
                     availableHncsProfiles = availableHncsProfiles,
                     onSelectHncsProfile = onRawHncsProfileChange,
-                    onSelectHncsRenderIntent = onRawHncsRenderIntentChange,
                     onRawExposureCompensationChange = {},
                     onRawAutoExposureChange = {},
                     onRawHighlightsAdjustmentChange = {},

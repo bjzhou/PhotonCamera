@@ -19,30 +19,6 @@ enum class RawRenderingEngine(
         defaultExposureCompensationEv = 0f,
         exposureCompensationDomain = RawExposureCompensationDomain.Curve
     ),
-    DarktableFilmic(
-        shaderId = 4,
-        workingColorSpace = ColorSpace.BT2020,
-        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
-        exposureCompensationDomain = RawExposureCompensationDomain.Linear
-    ),
-    AgX(
-        shaderId = 1,
-        workingColorSpace = ColorSpace.BT2020,
-        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
-        exposureCompensationDomain = RawExposureCompensationDomain.Linear
-    ),
-    DarktableSigmoid(
-        shaderId = 3,
-        workingColorSpace = ColorSpace.BT2020,
-        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
-        exposureCompensationDomain = RawExposureCompensationDomain.Linear
-    ),
-    Spektrafilm(
-        shaderId = 2,
-        workingColorSpace = ColorSpace.ProPhoto,
-        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
-        exposureCompensationDomain = RawExposureCompensationDomain.Linear
-    ),
     HncsCcm(
         shaderId = 5,
         workingColorSpace = ColorSpace.HNCS,
@@ -53,6 +29,30 @@ enum class RawRenderingEngine(
         shaderId = 6,
         workingColorSpace = ColorSpace.HNCS,
         defaultExposureCompensationEv = 0f,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
+    AgX(
+        shaderId = 1,
+        workingColorSpace = ColorSpace.BT2020,
+        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
+    Spektrafilm(
+        shaderId = 2,
+        workingColorSpace = ColorSpace.ProPhoto,
+        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
+    DarktableSigmoid(
+        shaderId = 3,
+        workingColorSpace = ColorSpace.BT2020,
+        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
+    DarktableFilmic(
+        shaderId = 4,
+        workingColorSpace = ColorSpace.BT2020,
+        defaultExposureCompensationEv = RAW_RENDERING_ENGINE_DEFAULT_EXPOSURE_EV,
         exposureCompensationDomain = RawExposureCompensationDomain.Linear
     ),
     ;

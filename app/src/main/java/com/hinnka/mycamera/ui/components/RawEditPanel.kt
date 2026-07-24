@@ -30,7 +30,6 @@ import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsProfileInfo
-import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
@@ -130,10 +129,8 @@ fun RawEditPanel(
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
     selectedHncsProfileId: String? = null,
-    selectedHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
     availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
     onSelectHncsProfile: (String?) -> Unit = {},
-    onSelectHncsRenderIntent: (HncsRenderIntent) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var rawMaxOutputScaleDraft by remember {
@@ -209,38 +206,6 @@ fun RawEditPanel(
                     },
                     currentLevel = selectedHncsProfileId.orEmpty(),
                     onLevelSelected = { onSelectHncsProfile(it) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                val selectedProfile = availableHncsProfiles.firstOrNull {
-                    it.id == selectedHncsProfileId
-                }
-                val supportedIntents = selectedProfile?.intents
-                    ?: availableHncsProfiles.flatMapTo(linkedSetOf()) { it.intents }
-                RawChoiceSetting(
-                    title = stringResource(R.string.settings_raw_hncs_render_intent),
-                    description = stringResource(
-                        R.string.settings_raw_hncs_render_intent_description
-                    ),
-                    levels = HncsRenderIntent.entries
-                        .filter { it in supportedIntents }
-                        .map { intent ->
-                            intent.assetValue to when (intent) {
-                                HncsRenderIntent.Standard -> stringResource(
-                                    R.string.settings_raw_hncs_render_intent_standard
-                                )
-
-                                HncsRenderIntent.Reproduction -> stringResource(
-                                    R.string.settings_raw_hncs_render_intent_reproduction
-                                )
-                            }
-                        },
-                    currentLevel = selectedHncsRenderIntent.assetValue,
-                    onLevelSelected = { persistedValue ->
-                        onSelectHncsRenderIntent(
-                            HncsRenderIntent.fromPersistedValue(persistedValue)
-                        )
-                    }
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }

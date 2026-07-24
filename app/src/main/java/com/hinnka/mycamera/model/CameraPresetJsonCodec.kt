@@ -65,9 +65,7 @@ internal object CameraPresetJsonCodec {
             rawDcpId = obj.stringOrNull("rawDcpId"),
             rawDcpIdsByLens = parseRawDcpIdsByLens(obj.get("rawDcpIdsByLens")),
             rawHncsProfileId = obj.stringOrNull("rawHncsProfileId"),
-            rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(
-                obj.stringOrNull("rawHncsRenderIntent")
-            ).assetValue,
+            rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
             rawRenderingEngine = parseRawRenderingEngine(
                 obj.stringOrNull("rawRenderingEngine") ?: obj.stringOrNull("rawColorEngine")
             ),

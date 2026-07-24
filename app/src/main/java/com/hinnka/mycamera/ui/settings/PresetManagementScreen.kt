@@ -327,6 +327,7 @@ private fun PresetManagementItem(
 private fun presetDisplayName(preset: CameraPreset): String {
     return when (preset.id) {
         "builtin_default" -> stringResource(R.string.default_text)
+        "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
         "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
         "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
         "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)

@@ -34,7 +34,6 @@ import com.hinnka.mycamera.ui.components.CurveChannel
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.HncsProfileManager
-import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.ui.components.EffectsBottomSheet
 import com.hinnka.mycamera.ui.components.FrameSelector
@@ -107,11 +106,6 @@ fun PresetEditorScreen(
     var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
     var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
     var rawHncsProfileId by remember { mutableStateOf(sourcePreset?.rawHncsProfileId) }
-    var rawHncsRenderIntent by remember {
-        mutableStateOf(
-            HncsRenderIntent.fromPersistedValue(sourcePreset?.rawHncsRenderIntent)
-        )
-    }
     var rawRenderingEngine by remember {
         mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
     }
@@ -154,7 +148,6 @@ fun PresetEditorScreen(
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
             rawHncsProfileId = rawHncsProfileId,
-            rawHncsRenderIntent = rawHncsRenderIntent.assetValue,
             rawRenderingEngine = rawRenderingEngine.name,
             rawGooglePixelToneMap = rawGooglePixelToneMap,
             rawOppoMasterToneMap = rawOppoMasterToneMap,
@@ -522,43 +515,6 @@ fun PresetEditorScreen(
                             }
                         )
 
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.05f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                        val supportedIntents = availableHncsProfiles
-                            .firstOrNull { it.id == rawHncsProfileId }
-                            ?.intents
-                            ?: availableHncsProfiles.flatMapTo(linkedSetOf()) { it.intents }
-                        val renderIntentNames = HncsRenderIntent.entries
-                            .filter { it in supportedIntents }
-                            .associateWith { intent ->
-                                when (intent) {
-                                    HncsRenderIntent.Standard -> stringResource(
-                                        R.string.settings_raw_hncs_render_intent_standard
-                                    )
-
-                                    HncsRenderIntent.Reproduction -> stringResource(
-                                        R.string.settings_raw_hncs_render_intent_reproduction
-                                    )
-                                }
-                            }
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_raw_hncs_render_intent),
-                            description = stringResource(
-                                R.string.settings_raw_hncs_render_intent_description
-                            ),
-                            value = renderIntentNames[rawHncsRenderIntent].orEmpty(),
-                            options = renderIntentNames.values.toList(),
-                            isLoading = false,
-                            onExpanded = {},
-                            onOptionSelected = { selectedName ->
-                                renderIntentNames.entries
-                                    .firstOrNull { it.value == selectedName }
-                                    ?.key
-                                    ?.let { rawHncsRenderIntent = it }
-                            }
-                        )
                     }
                 }
 

@@ -246,4 +246,5 @@
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>
     <string name="settings_dro_dr400">DR400</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution：ハッセルブラッドが独自に開発したカラーマネジメントシステム</string>
 </resources>

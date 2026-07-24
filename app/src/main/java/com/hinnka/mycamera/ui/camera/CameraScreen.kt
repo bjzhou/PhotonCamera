@@ -241,7 +241,6 @@ fun CameraScreen(
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
-    val rawHncsRenderIntent by viewModel.rawHncsRenderIntent.collectAsState()
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
     val phantomBaselineLutId by viewModel.phantomBaselineLutId.collectAsState()
@@ -1463,7 +1462,6 @@ fun CameraScreen(
             rawDcpLensOptions = rawDcpLensOptions(state.availableCameras),
             availableDcps = viewModel.availableDcps,
             rawHncsProfileId = rawHncsProfileId,
-            rawHncsRenderIntent = rawHncsRenderIntent,
             availableHncsProfiles = availableHncsProfiles,
             rawBaselineLutId = rawBaselineLutId,
             availableLuts = viewModel.availableLutList,
@@ -1482,7 +1480,6 @@ fun CameraScreen(
             onRawDcpChange = { viewModel.setRawDcpId(it) },
             onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
             onRawHncsProfileChange = { viewModel.setRawHncsProfileId(it) },
-            onRawHncsRenderIntentChange = { viewModel.setRawHncsRenderIntent(it) },
             onImportRawDcp = { dcpImportLauncher.launch("*/*") },
             onDeleteRawDcp = { dcp ->
                 viewModel.deleteRawDcp(dcp.id) { success ->

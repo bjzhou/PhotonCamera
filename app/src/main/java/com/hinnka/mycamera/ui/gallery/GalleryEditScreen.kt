@@ -1185,20 +1185,11 @@ fun GalleryEditScreen(
                                             }
                                         },
                                         selectedHncsProfileId = editRawHncsProfileId,
-                                        selectedHncsRenderIntent = editRawHncsRenderIntent,
                                         availableHncsProfiles = availableHncsProfiles,
                                         onSelectHncsProfile = { profileId ->
                                             viewModel.saveRawHncsProfileSelection(
                                                 currentEditSourcePhoto,
                                                 profileId
-                                            ) {
-                                                requestRawPreviewRefresh()
-                                            }
-                                        },
-                                        onSelectHncsRenderIntent = { renderIntent ->
-                                            viewModel.saveRawHncsRenderIntent(
-                                                currentEditSourcePhoto,
-                                                renderIntent
                                             ) {
                                                 requestRawPreviewRefresh()
                                             }

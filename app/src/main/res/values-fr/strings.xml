@@ -246,4 +246,5 @@
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_use_p010">P010 (YUV 10 bits)</string>
     <string name="settings_use_p010_description">Active la sortie YUV 10 bits pour une meilleure précision des données d\'image. Efficace sur les appareils compatibles lorsque le mode RAW est désactivé.</string>
+    <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution : un système de gestion des couleurs développé indépendamment par Hasselblad</string>
 </resources>
