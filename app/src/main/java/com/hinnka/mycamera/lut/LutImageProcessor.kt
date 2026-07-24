@@ -21,6 +21,7 @@ import com.hinnka.mycamera.raw.HncsNaturalLightOutputPassShaders
 import com.hinnka.mycamera.raw.RawProfileExposureGl
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawShaders
+import com.hinnka.mycamera.raw.RawSrgbPassShaders
 import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.utils.PLog
@@ -90,11 +91,12 @@ class LutImageProcessor(context: Context? = null) {
     private var naturalLightCurveTextureId = 0
     private var naturalLightCurveSize = 0
     private var naturalLightDummy3DTextureId = 0
+    private var naturalLightSrgbOutputProgram = 0
     private var naturalLightHncsOutputProgram = 0
-    private var naturalLightHncsOutputTextureId = 0
-    private var naturalLightHncsOutputFboId = 0
-    private var naturalLightHncsOutputWidth = 0
-    private var naturalLightHncsOutputHeight = 0
+    private var naturalLightOutputTextureId = 0
+    private var naturalLightOutputFboId = 0
+    private var naturalLightOutputWidth = 0
+    private var naturalLightOutputHeight = 0
     private val naturalLightHncsGl = context?.let(::HncsNaturalLightGl)
 
     private var vertexBuffer: FloatBuffer? = null
@@ -1298,6 +1300,8 @@ class LutImageProcessor(context: Context? = null) {
         setUniform1i(program, "uInputTexture", 0)
         RawToneMappingGl.bindRawToneMappingUniforms(program, toneMappingParameters)
         bindNaturalLightProfileExposureUniforms(program, effectiveEngine, exposureCompensationEv)
+        setUniform1f(program, "uBlacks", 0f)
+        setUniform1f(program, "uWhites", 0f)
         bindNaturalLightColorTransforms(program, effectiveEngine)
         if (effectiveEngine == RawRenderingEngine.AdobeCurve) {
             bindNaturalLightDisabledDcpUniforms(program)
@@ -1334,16 +1338,20 @@ class LutImageProcessor(context: Context? = null) {
             PLog.e(TAG, "renderNaturalLightToneMap glError $error")
             return inputTextureId
         }
-        return if (effectiveEngine.isHncs) {
-            val hncsOutputTextureId = renderNaturalLightHncsOutput(
+        val outputTextureId = if (effectiveEngine.isHncs) {
+            renderNaturalLightHncsOutput(
                 inputTextureId = naturalLightTextureId,
                 width = width,
                 height = height,
             )
-            if (hncsOutputTextureId != 0) hncsOutputTextureId else inputTextureId
         } else {
-            naturalLightTextureId
+            renderNaturalLightSrgbOutput(
+                inputTextureId = naturalLightTextureId,
+                width = width,
+                height = height,
+            )
         }
+        return if (outputTextureId != 0) outputTextureId else inputTextureId
     }
 
     private fun renderNaturalLightHncsOutput(
@@ -1353,10 +1361,10 @@ class LutImageProcessor(context: Context? = null) {
     ): Int {
         val program = getOrCreateNaturalLightHncsOutputProgram()
         if (program == 0) return 0
-        setupNaturalLightHncsOutputFramebuffer(width, height)
-        if (naturalLightHncsOutputFboId == 0 || naturalLightHncsOutputTextureId == 0) return 0
+        setupNaturalLightOutputFramebuffer(width, height)
+        if (naturalLightOutputFboId == 0 || naturalLightOutputTextureId == 0) return 0
 
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightHncsOutputFboId)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightOutputFboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(program)
@@ -1391,7 +1399,42 @@ class LutImageProcessor(context: Context? = null) {
             PLog.e(TAG, "renderNaturalLightHncsOutput glError $error")
             return 0
         }
-        return naturalLightHncsOutputTextureId
+        return naturalLightOutputTextureId
+    }
+
+    private fun renderNaturalLightSrgbOutput(
+        inputTextureId: Int,
+        width: Int,
+        height: Int,
+    ): Int {
+        val program = getOrCreateNaturalLightSrgbOutputProgram()
+        if (program == 0) return 0
+        setupNaturalLightOutputFramebuffer(width, height)
+        if (naturalLightOutputFboId == 0 || naturalLightOutputTextureId == 0) return 0
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightOutputFboId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(program)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
+        setUniform1i(program, "uInputTexture", 0)
+        val identityMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(program, "uTexMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0,
+        )
+        drawQuad(program)
+        val error = GLES30.glGetError()
+        if (error != GLES30.GL_NO_ERROR) {
+            PLog.e(TAG, "renderNaturalLightSrgbOutput glError $error")
+            return 0
+        }
+        return naturalLightOutputTextureId
     }
 
     private fun getOrCreateNaturalLightProgram(engine: RawRenderingEngine): Int {
@@ -1432,6 +1475,16 @@ class LutImageProcessor(context: Context? = null) {
             "NaturalLight_HncsOutput",
         )
         return naturalLightHncsOutputProgram
+    }
+
+    private fun getOrCreateNaturalLightSrgbOutputProgram(): Int {
+        if (naturalLightSrgbOutputProgram != 0) return naturalLightSrgbOutputProgram
+        naturalLightSrgbOutputProgram = createFragmentProgram(
+            RawShaders.VERTEX_SHADER,
+            RawSrgbPassShaders.FRAGMENT_SHADER,
+            "NaturalLight_SrgbOutput",
+        )
+        return naturalLightSrgbOutputProgram
     }
 
     private fun setupNaturalLightFramebuffer(width: Int, height: Int) {
@@ -1498,20 +1551,20 @@ class LutImageProcessor(context: Context? = null) {
         naturalLightHeight = 0
     }
 
-    private fun setupNaturalLightHncsOutputFramebuffer(width: Int, height: Int) {
-        if (naturalLightHncsOutputTextureId != 0 &&
-            naturalLightHncsOutputFboId != 0 &&
-            naturalLightHncsOutputWidth == width &&
-            naturalLightHncsOutputHeight == height
+    private fun setupNaturalLightOutputFramebuffer(width: Int, height: Int) {
+        if (naturalLightOutputTextureId != 0 &&
+            naturalLightOutputFboId != 0 &&
+            naturalLightOutputWidth == width &&
+            naturalLightOutputHeight == height
         ) {
             return
         }
-        releaseNaturalLightHncsOutputFramebuffer()
+        releaseNaturalLightOutputFramebuffer()
 
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
-        naturalLightHncsOutputTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightHncsOutputTextureId)
+        naturalLightOutputTextureId = textures[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, naturalLightOutputTextureId)
         GLES30.glTexImage2D(
             GLES30.GL_TEXTURE_2D,
             0,
@@ -1530,44 +1583,44 @@ class LutImageProcessor(context: Context? = null) {
 
         val framebuffers = IntArray(1)
         GLES30.glGenFramebuffers(1, framebuffers, 0)
-        naturalLightHncsOutputFboId = framebuffers[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightHncsOutputFboId)
+        naturalLightOutputFboId = framebuffers[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, naturalLightOutputFboId)
         GLES30.glFramebufferTexture2D(
             GLES30.GL_FRAMEBUFFER,
             GLES30.GL_COLOR_ATTACHMENT0,
             GLES30.GL_TEXTURE_2D,
-            naturalLightHncsOutputTextureId,
+            naturalLightOutputTextureId,
             0,
         )
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.e(TAG, "Natural Light HNCS output framebuffer not complete: $status")
-            releaseNaturalLightHncsOutputFramebuffer()
+            PLog.e(TAG, "Natural Light output framebuffer not complete: $status")
+            releaseNaturalLightOutputFramebuffer()
             return
         }
-        naturalLightHncsOutputWidth = width
-        naturalLightHncsOutputHeight = height
+        naturalLightOutputWidth = width
+        naturalLightOutputHeight = height
     }
 
-    private fun releaseNaturalLightHncsOutputFramebuffer() {
-        if (naturalLightHncsOutputFboId != 0) {
+    private fun releaseNaturalLightOutputFramebuffer() {
+        if (naturalLightOutputFboId != 0) {
             GLES30.glDeleteFramebuffers(
                 1,
-                intArrayOf(naturalLightHncsOutputFboId),
+                intArrayOf(naturalLightOutputFboId),
                 0,
             )
-            naturalLightHncsOutputFboId = 0
+            naturalLightOutputFboId = 0
         }
-        if (naturalLightHncsOutputTextureId != 0) {
+        if (naturalLightOutputTextureId != 0) {
             GLES30.glDeleteTextures(
                 1,
-                intArrayOf(naturalLightHncsOutputTextureId),
+                intArrayOf(naturalLightOutputTextureId),
                 0,
             )
-            naturalLightHncsOutputTextureId = 0
+            naturalLightOutputTextureId = 0
         }
-        naturalLightHncsOutputWidth = 0
-        naturalLightHncsOutputHeight = 0
+        naturalLightOutputWidth = 0
+        naturalLightOutputHeight = 0
     }
 
     private fun bindNaturalLightColorTransforms(program: Int, engine: RawRenderingEngine) {
@@ -3199,7 +3252,7 @@ class LutImageProcessor(context: Context? = null) {
         }
         releaseOutputFramebuffer()
         releaseNaturalLightFramebuffer()
-        releaseNaturalLightHncsOutputFramebuffer()
+        releaseNaturalLightOutputFramebuffer()
         for (i in naturalLightPrograms.indices) {
             if (naturalLightPrograms[i] != 0) {
                 GLES30.glDeleteProgram(naturalLightPrograms[i])
@@ -3209,6 +3262,10 @@ class LutImageProcessor(context: Context? = null) {
         if (naturalLightHncsOutputProgram != 0) {
             GLES30.glDeleteProgram(naturalLightHncsOutputProgram)
             naturalLightHncsOutputProgram = 0
+        }
+        if (naturalLightSrgbOutputProgram != 0) {
+            GLES30.glDeleteProgram(naturalLightSrgbOutputProgram)
+            naturalLightSrgbOutputProgram = 0
         }
         naturalLightHncsGl?.release()
         if (naturalLightCurveTextureId != 0) {

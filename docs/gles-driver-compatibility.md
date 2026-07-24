@@ -421,6 +421,12 @@ profile metadata，因此 HNCS LUT 选择在预览端只执行共同的 CCM→Fi
 pass 中完成 HNCS companding 解码、HNCS→线性 sRGB 与单次 sRGB 编码；传感器专属二维 LUT
 仍只在 RAW 渲染器中执行。
 
+自然光影的 combined pass 对所有引擎都遵循线性 RGB 输出契约，不能把该中间纹理直接作为
+sRGB 显示或 LUT 输入，否则高亮和高饱和通道会按错误传递函数截断，表现为色彩溢出。实时
+取景器和静态图片预览都固定保留独立输出 pass：HNCS 使用上述专用解码与色彩空间变换，
+其他引擎使用 `RawSrgbPassShaders` 完成一次 linear→sRGB 编码。切换引擎只切换输出程序，
+不改变三段 FBO 链，也不能依赖前一引擎遗留的 framebuffer、program 或 texture unit 状态。
+
 新增 HNCS profile 后，至少在目标 Mali、Adreno 和可用的 PowerVR/IMG 设备上验证 shader
 compile/link、纹理上传、边界四点采样、灰轴以及 LUT 网格外的 clamp。完整 profile 契约见
 [`docs/hncs-rendering-engine.md`](hncs-rendering-engine.md)。

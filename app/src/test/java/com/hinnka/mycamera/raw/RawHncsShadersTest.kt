@@ -55,6 +55,18 @@ class RawHncsShadersTest {
     }
 
     @Test
+    fun naturalLightStandardOutputEncodesLinearRgbExactlyOnce() {
+        val shader = RawSrgbPassShaders.FRAGMENT_SHADER
+
+        assertTrue(shader.contains("vec3 color = texture(uInputTexture, vTexCoord).rgb;"))
+        assertTrue(shader.contains("fragColor = vec4(linearToSrgb(color), 1.0);"))
+        assertEquals(
+            1,
+            Regex(Regex.escape("linearToSrgb(color)")).findAll(shader).count(),
+        )
+    }
+
+    @Test
     fun hncsFragmentShadersPassAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val validator = sdkRoot?.let(::File)
@@ -80,6 +92,7 @@ class RawHncsShadersTest {
                 includeShadowsHighlights = true,
             ),
             HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
+            RawSrgbPassShaders.FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, shader ->
             val sourceFile = File.createTempFile("raw-hncs-$index-", ".frag")
