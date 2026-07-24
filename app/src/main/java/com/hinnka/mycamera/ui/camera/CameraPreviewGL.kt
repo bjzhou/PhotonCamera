@@ -23,6 +23,7 @@ import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.ui.components.FocusIndicator
@@ -73,6 +74,7 @@ fun CameraPreviewGL(
     rawBlackPointCorrection: Float = 0f,
     rawWhitePointCorrection: Float = 0f,
     rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
+    rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     isAiFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
@@ -284,6 +286,7 @@ fun CameraPreviewGL(
                             blackPointCorrection = rawBlackPointCorrection,
                             whitePointCorrection = rawWhitePointCorrection,
                             renderingEngine = rawRenderingEngine,
+                            hncsFilmCurveMode = rawHncsFilmCurveMode,
                             toneMappingParameters = rawToneMappingParameters
                         )
                         glSurfaceView.setAutoFocus(isAutoFocus)

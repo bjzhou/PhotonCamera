@@ -1,11 +1,15 @@
 package com.hinnka.mycamera.lut
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
+import com.hinnka.mycamera.raw.HncsNaturalLightGl
+import com.hinnka.mycamera.raw.HncsNaturalLightOutputPassShaders
 import com.hinnka.mycamera.raw.RawProfileExposureGl
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawShaders
@@ -40,7 +44,7 @@ enum class PreviewCaptureSource {
     Original
 }
 
-class LutRenderer : GLSurfaceView.Renderer {
+class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     companion object {
         private const val TAG = "LutRenderer"
 
@@ -50,12 +54,15 @@ class LutRenderer : GLSurfaceView.Renderer {
         private const val BYTES_PER_FLOAT = 4
         private const val BYTES_PER_SHORT = 2
         private const val DEFAULT_PREVIEW_CAPTURE_MAX_LONG_EDGE = 1080
-        private const val RAW_PREVIEW_STAGE_COUNT = 2
+        private const val RAW_PREVIEW_BASE_STAGE_COUNT = 2
+        private const val RAW_PREVIEW_STAGE_COUNT = 3
         private const val RAW_PREVIEW_INPUT_STAGE = 0
         private const val RAW_PREVIEW_COMBINED_STAGE = 1
+        private const val RAW_PREVIEW_HNCS_OUTPUT_STAGE = 2
     }
 
     private val colorProgramCache = PreviewColorProgramCache()
+    private val rawPreviewHncsGl = HncsNaturalLightGl(context)
 
     private data class PreviewSourceOverride(
         val textureSource: PreviewColorTextureSource,
@@ -151,10 +158,12 @@ class LutRenderer : GLSurfaceView.Renderer {
     private val rawPreviewTextureIds = IntArray(RAW_PREVIEW_STAGE_COUNT)
     private var rawPreviewWidth: Int = 0
     private var rawPreviewHeight: Int = 0
+    private var rawPreviewAllocatedStageCount: Int = 0
     private var rawPreviewInputProgramId: Int = 0
     private var rawPreviewCurveTextureId: Int = 0
     private var rawPreviewCurveSize: Int = 0
     private var rawPreviewDummy3DTextureId: Int = 0
+    private var rawPreviewHncsOutputProgramId: Int = 0
     private val rawPreviewCombinedPrograms = IntArray(RawRenderingEngine.entries.size)
 
     // Copy Shader (FBO -> Screen)
@@ -186,6 +195,9 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     @Volatile
     var rawPreviewToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT
+
+    @Volatile
+    var rawPreviewHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
 
     // 曲线纹理
     private var curveTextureId: Int = 0
@@ -573,10 +585,13 @@ class LutRenderer : GLSurfaceView.Renderer {
         rawPreviewTextureIds.fill(0)
         rawPreviewWidth = 0
         rawPreviewHeight = 0
+        rawPreviewAllocatedStageCount = 0
         rawPreviewInputProgramId = 0
         rawPreviewCurveTextureId = 0
         rawPreviewCurveSize = 0
         rawPreviewDummy3DTextureId = 0
+        rawPreviewHncsOutputProgramId = 0
+        rawPreviewHncsGl.resetAfterContextLoss()
         rawPreviewCombinedPrograms.fill(0)
         copyProgramId = 0
         hdfExtractBlurHProgram = 0
@@ -743,16 +758,21 @@ class LutRenderer : GLSurfaceView.Renderer {
 
     private fun renderRawPreviewSource(width: Int, height: Int): PreviewSourceOverride? {
         if (!ensureRawPreviewFramebuffers(width, height)) return null
+        val effectiveEngine = resolveRawPreviewEngine()
         if (!renderRawPreviewInputStage(width, height)) return null
-        val effectiveEngine = rawPreviewRenderingEngine.takeIf { it != RawRenderingEngine.Spektrafilm }
-            ?: RawRenderingEngine.AdobeCurve
         if (!renderRawPreviewCombinedStage(width, height, effectiveEngine)) return null
+        val outputStage = if (effectiveEngine.isHncs) {
+            if (!renderRawPreviewHncsOutputStage(width, height)) return null
+            RAW_PREVIEW_HNCS_OUTPUT_STAGE
+        } else {
+            RAW_PREVIEW_COMBINED_STAGE
+        }
 
         val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
         return PreviewSourceOverride(
             textureSource = PreviewColorTextureSource.TEXTURE_2D,
             textureTarget = GLES30.GL_TEXTURE_2D,
-            textureId = rawPreviewTextureIds[RAW_PREVIEW_COMBINED_STAGE],
+            textureId = rawPreviewTextureIds[outputStage],
             stMatrix = identityMatrix,
             cropRect = floatArrayOf(0f, 0f, 1f, 1f),
             mvpMatrix = identityMatrix,
@@ -760,12 +780,31 @@ class LutRenderer : GLSurfaceView.Renderer {
         )
     }
 
+    private fun resolveRawPreviewEngine(): RawRenderingEngine {
+        return when (rawPreviewRenderingEngine) {
+            // Spectral film requires a selected stock and print, neither of which belongs to the
+            // Natural Light viewfinder contract.
+            RawRenderingEngine.Spektrafilm -> RawRenderingEngine.AdobeCurve
+            // A live preview is already in sRGB, outside the RAW camera domain required by the
+            // sensor-specific HNCS color map. Keep the common HNCS CCM + FilmCurve path.
+            RawRenderingEngine.HncsLut -> RawRenderingEngine.HncsCcm
+            else -> rawPreviewRenderingEngine
+        }
+    }
+
     private fun ensureRawPreviewFramebuffers(width: Int, height: Int): Boolean {
+        val requiredStageCount = if (resolveRawPreviewEngine().isHncs) {
+            RAW_PREVIEW_STAGE_COUNT
+        } else {
+            RAW_PREVIEW_BASE_STAGE_COUNT
+        }
         if (
             rawPreviewWidth == width &&
             rawPreviewHeight == height &&
-            rawPreviewFboIds.all { it != 0 } &&
-            rawPreviewTextureIds.all { it != 0 }
+            rawPreviewAllocatedStageCount == requiredStageCount &&
+            (0 until requiredStageCount).all { index ->
+                rawPreviewFboIds[index] != 0 && rawPreviewTextureIds[index] != 0
+            }
         ) {
             return true
         }
@@ -773,10 +812,11 @@ class LutRenderer : GLSurfaceView.Renderer {
         releaseRawPreviewFramebuffers()
         rawPreviewWidth = width
         rawPreviewHeight = height
+        rawPreviewAllocatedStageCount = requiredStageCount
 
-        GLES30.glGenFramebuffers(RAW_PREVIEW_STAGE_COUNT, rawPreviewFboIds, 0)
-        GLES30.glGenTextures(RAW_PREVIEW_STAGE_COUNT, rawPreviewTextureIds, 0)
-        for (i in 0 until RAW_PREVIEW_STAGE_COUNT) {
+        GLES30.glGenFramebuffers(requiredStageCount, rawPreviewFboIds, 0)
+        GLES30.glGenTextures(requiredStageCount, rawPreviewTextureIds, 0)
+        for (i in 0 until requiredStageCount) {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawPreviewTextureIds[i])
             GLES30.glTexImage2D(
                 GLES30.GL_TEXTURE_2D,
@@ -820,8 +860,6 @@ class LutRenderer : GLSurfaceView.Renderer {
         val program = getOrCreateRawPreviewInputProgram()
         if (program == 0) return false
 
-        val engine = rawPreviewRenderingEngine.takeIf { it != RawRenderingEngine.Spektrafilm }
-            ?: RawRenderingEngine.AdobeCurve
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, rawPreviewFboIds[RAW_PREVIEW_INPUT_STAGE])
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -866,14 +904,23 @@ class LutRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
         RawToneMappingGl.bindRawToneMappingUniforms(program, rawPreviewToneMappingParameters)
         bindRawPreviewProfileExposureUniforms(program, engine)
-        bindRawPreviewBlacksWhitesUniforms(program)
-        bindRawPreviewDisabledDcpUniforms(program)
+        bindRawPreviewBlacksWhitesUniforms(
+            program = program,
+            applyAdjustments = !engine.isHncs,
+        )
         bindRawPreviewColorTransforms(program, engine)
         if (engine == RawRenderingEngine.AdobeCurve) {
+            bindRawPreviewDisabledDcpUniforms(program)
             bindRawPreviewAdobeCurve(program)
         }
         if (engine == RawRenderingEngine.Spektrafilm) {
             bindRawPreviewDummySpectralFilmUniforms(program)
+        }
+        if (engine.isHncs) {
+            rawPreviewHncsGl.bindCombinedResources(
+                program = program,
+                filmCurveMode = rawPreviewHncsFilmCurveMode,
+            )
         }
         val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
         GLES30.glUniformMatrix4fv(
@@ -883,8 +930,66 @@ class LutRenderer : GLSurfaceView.Renderer {
             identityMatrix,
             0
         )
+        // Resource setup may change the active unit. Reassert the per-frame image binding so a
+        // first HNCS frame and all cached frames have exactly the same sampler state.
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(
+            GLES30.GL_TEXTURE_2D,
+            rawPreviewTextureIds[RAW_PREVIEW_INPUT_STAGE],
+        )
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
         drawRawPreviewQuad(program)
         GlUtils.checkGlError("renderRawPreviewCombinedStage")
+        return true
+    }
+
+    private fun renderRawPreviewHncsOutputStage(width: Int, height: Int): Boolean {
+        val program = getOrCreateRawPreviewHncsOutputProgram()
+        if (program == 0) return false
+
+        GLES30.glBindFramebuffer(
+            GLES30.GL_FRAMEBUFFER,
+            rawPreviewFboIds[RAW_PREVIEW_HNCS_OUTPUT_STAGE],
+        )
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glUseProgram(program)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(
+            GLES30.GL_TEXTURE_2D,
+            rawPreviewTextureIds[RAW_PREVIEW_COMBINED_STAGE],
+        )
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uInputTexture"), 0)
+        val outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(
+            ColorSpace.HNCS,
+            ColorSpace.SRGB,
+        )
+        GLES30.glUniformMatrix3fv(
+            GLES30.glGetUniformLocation(program, "uHncsToLinearOutput"),
+            1,
+            false,
+            RawToneMappingGl.transposeMatrix3x3(outputTransform),
+            0,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uBlacks"),
+            rawPreviewBlackPointCorrection.coerceIn(-1f, 1f),
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(program, "uWhites"),
+            rawPreviewWhitePointCorrection.coerceIn(-1f, 1f),
+        )
+        val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+        GLES30.glUniformMatrix4fv(
+            GLES30.glGetUniformLocation(program, "uTexMatrix"),
+            1,
+            false,
+            identityMatrix,
+            0,
+        )
+        drawRawPreviewQuad(program)
+        GlUtils.checkGlError("renderRawPreviewHncsOutputStage")
         return true
     }
 
@@ -926,14 +1031,38 @@ class LutRenderer : GLSurfaceView.Renderer {
         return program
     }
 
-    private fun bindRawPreviewBlacksWhitesUniforms(program: Int) {
+    private fun getOrCreateRawPreviewHncsOutputProgram(): Int {
+        if (rawPreviewHncsOutputProgramId != 0) return rawPreviewHncsOutputProgramId
+        val vertexShader = GlUtils.compileShader(
+            GLES30.GL_VERTEX_SHADER,
+            RawShaders.VERTEX_SHADER,
+        )
+        val fragmentShader = GlUtils.compileShader(
+            GLES30.GL_FRAGMENT_SHADER,
+            HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
+        )
+        if (vertexShader == 0 || fragmentShader == 0) {
+            if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
+            if (fragmentShader != 0) GLES30.glDeleteShader(fragmentShader)
+            return 0
+        }
+        rawPreviewHncsOutputProgramId = GlUtils.linkProgram(vertexShader, fragmentShader)
+        GLES30.glDeleteShader(vertexShader)
+        GLES30.glDeleteShader(fragmentShader)
+        return rawPreviewHncsOutputProgramId
+    }
+
+    private fun bindRawPreviewBlacksWhitesUniforms(
+        program: Int,
+        applyAdjustments: Boolean,
+    ) {
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(program, "uBlacks"),
-            rawPreviewBlackPointCorrection.coerceIn(-1f, 1f)
+            if (applyAdjustments) rawPreviewBlackPointCorrection.coerceIn(-1f, 1f) else 0f,
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(program, "uWhites"),
-            rawPreviewWhitePointCorrection.coerceIn(-1f, 1f)
+            if (applyAdjustments) rawPreviewWhitePointCorrection.coerceIn(-1f, 1f) else 0f,
         )
     }
 
@@ -1099,21 +1228,32 @@ class LutRenderer : GLSurfaceView.Renderer {
     }
 
     private fun releaseRawPreviewFramebuffers() {
-        if (rawPreviewFboIds.any { it != 0 }) {
-            GLES30.glDeleteFramebuffers(RAW_PREVIEW_STAGE_COUNT, rawPreviewFboIds, 0)
+        if (rawPreviewAllocatedStageCount > 0 && rawPreviewFboIds.any { it != 0 }) {
+            GLES30.glDeleteFramebuffers(
+                rawPreviewAllocatedStageCount,
+                rawPreviewFboIds,
+                0,
+            )
             rawPreviewFboIds.fill(0)
         }
-        if (rawPreviewTextureIds.any { it != 0 }) {
-            GLES30.glDeleteTextures(RAW_PREVIEW_STAGE_COUNT, rawPreviewTextureIds, 0)
+        if (rawPreviewAllocatedStageCount > 0 && rawPreviewTextureIds.any { it != 0 }) {
+            GLES30.glDeleteTextures(
+                rawPreviewAllocatedStageCount,
+                rawPreviewTextureIds,
+                0,
+            )
             rawPreviewTextureIds.fill(0)
         }
         rawPreviewWidth = 0
         rawPreviewHeight = 0
+        rawPreviewAllocatedStageCount = 0
     }
 
     private fun releaseRawPreviewPrograms() {
         GlUtils.deleteProgram(rawPreviewInputProgramId)
         rawPreviewInputProgramId = 0
+        GlUtils.deleteProgram(rawPreviewHncsOutputProgramId)
+        rawPreviewHncsOutputProgramId = 0
         for (i in rawPreviewCombinedPrograms.indices) {
             GlUtils.deleteProgram(rawPreviewCombinedPrograms[i])
             rawPreviewCombinedPrograms[i] = 0
@@ -1127,6 +1267,7 @@ class LutRenderer : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(rawPreviewDummy3DTextureId), 0)
             rawPreviewDummy3DTextureId = 0
         }
+        rawPreviewHncsGl.release()
     }
 
     private fun hasBaselineLayer(): Boolean {
@@ -3807,6 +3948,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         blackPointCorrection: Float,
         whitePointCorrection: Float,
         renderingEngine: RawRenderingEngine,
+        hncsFilmCurveMode: HncsFilmCurveMode,
         toneMappingParameters: RawToneMappingParameters
     ) {
         rawPreviewEnabled = enabled
@@ -3814,6 +3956,7 @@ class LutRenderer : GLSurfaceView.Renderer {
         rawPreviewBlackPointCorrection = blackPointCorrection
         rawPreviewWhitePointCorrection = whitePointCorrection
         rawPreviewRenderingEngine = renderingEngine
+        rawPreviewHncsFilmCurveMode = hncsFilmCurveMode
         rawPreviewToneMappingParameters = toneMappingParameters
     }
 

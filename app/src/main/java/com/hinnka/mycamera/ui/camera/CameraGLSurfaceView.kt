@@ -14,6 +14,7 @@ import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.lut.PreviewCaptureSource
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
@@ -36,7 +37,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         private const val TAG = "CameraGLSurfaceView"
     }
 
-    private val renderer: LutRenderer = LutRenderer()
+    private val renderer: LutRenderer = LutRenderer(context.applicationContext)
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -201,6 +202,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         blackPointCorrection: Float,
         whitePointCorrection: Float,
         renderingEngine: RawRenderingEngine,
+        hncsFilmCurveMode: HncsFilmCurveMode,
         toneMappingParameters: RawToneMappingParameters
     ) {
         queueEvent {
@@ -210,6 +212,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
                 blackPointCorrection = blackPointCorrection,
                 whitePointCorrection = whitePointCorrection,
                 renderingEngine = renderingEngine,
+                hncsFilmCurveMode = hncsFilmCurveMode,
                 toneMappingParameters = toneMappingParameters
             )
             requestRender()

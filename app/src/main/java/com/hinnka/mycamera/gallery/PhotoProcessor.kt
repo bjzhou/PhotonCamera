@@ -742,6 +742,7 @@ class PhotoProcessor(
             naturalLightInputSrgb = true,
             linearInputExposureEv = metadata.rawExposureCompensation ?: 0f,
             rawRenderingEngine = metadata.rawRenderingEngine,
+            rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode,
             rawToneMappingParameters = metadata.rawToneMappingParameters
         )
     }

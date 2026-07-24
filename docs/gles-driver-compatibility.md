@@ -413,6 +413,14 @@ HNCS 纹理首次创建时必须先切换到专用纹理单元，不能继承照
 缓存后的第二帧又可能正常。引擎绘制前还应显式重绑 unit 0 与输入图像，使首次和缓存渲染具有
 相同状态，不能依赖 helper 的调用顺序或遗留 active unit。
 
+自然光影实时预览复用 HNCS combined shader 时也必须完整绑定 Film Curve sampler 与全部
+HNCS uniform。Sampler uniform 的 GL 初始值为 0；若只因 color-map 分支关闭就省略整组绑定，
+`uHncsCurveTexture` 会错误采样 unit 0 的动态相机画面，把单个画面像素当作三通道曲线值，
+表现为随帧变化的黑白闪烁。预览输入已经是线性 sRGB，不具备 RAW 相机域矩阵、白平衡与
+profile metadata，因此 HNCS LUT 选择在预览端只执行共同的 CCM→Film Curve 路径，并在独立
+pass 中完成 HNCS companding 解码、HNCS→线性 sRGB 与单次 sRGB 编码；传感器专属二维 LUT
+仍只在 RAW 渲染器中执行。
+
 新增 HNCS profile 后，至少在目标 Mali、Adreno 和可用的 PowerVR/IMG 设备上验证 shader
 compile/link、纹理上传、边界四点采样、灰轴以及 LUT 网格外的 clamp。完整 profile 契约见
 [`docs/hncs-rendering-engine.md`](hncs-rendering-engine.md)。

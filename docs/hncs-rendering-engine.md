@@ -401,6 +401,12 @@ Hasselblad/LStar Gamma 分支，不能仅凭相机品牌或 UI 选项推断。
 
 没有 LUT→CCM、HNCS→Adobe Curve、首 profile 或默认 5000 K 回退。
 
+这里的约束针对 RAW 渲染计划。自然光影取景器/系统 JPEG 预览已经进入 sRGB 域，不再持有
+执行相机二维 LUT 所需的 RAW camera matrix、as-shot gains 与实测 CCT；这条预览链路只显示
+两个 HNCS 选择共有的 sRGB→HNCS CCM→FilmCurve tone rendering，再完成 HNCS companding
+解码与 sRGB 输出。它不会把某个相机 profile 的二维 LUT 套到 sRGB 图像，也不改变最终 RAW
+仍按所选 HNCS LUT 计划渲染的行为。
+
 ## 相机域截断与 headroom
 
 原始 `ColorCorrectAll` shader 在输入矩阵前执行：

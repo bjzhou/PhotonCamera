@@ -1075,6 +1075,7 @@ fun CameraScreen(
                         rawBlackPointCorrection = rawBlackPointCorrection,
                         rawWhitePointCorrection = rawWhitePointCorrection,
                         rawRenderingEngine = rawColorEngine,
+                        rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                         rawToneMappingParameters = rawToneMappingParameters,
                         aperture = if (state.isVirtualApertureEnabled) state.virtualAperture else 0f,
                         isAutoFocus = state.isAutoFocus,

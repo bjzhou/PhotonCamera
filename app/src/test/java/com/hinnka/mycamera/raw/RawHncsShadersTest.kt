@@ -42,6 +42,19 @@ class RawHncsShadersTest {
     }
 
     @Test
+    fun naturalLightHncsOutputDecodesThenTransformsThenEncodes() {
+        val shader = HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER
+        val decode = shader.indexOf("gamma22Eotf(sampleValue.rgb)")
+        val transform = shader.indexOf("uHncsToLinearOutput * gamma22Eotf")
+        val displayEncode = shader.indexOf("linearToSrgb(linearOutput)")
+
+        assertTrue(transform >= 0)
+        assertTrue(decode in transform until displayEncode)
+        assertTrue(displayEncode > transform)
+        assertTrue(shader.contains("linearOutput = applyBlackWhiteLevels(linearOutput);"))
+    }
+
+    @Test
     fun hncsFragmentShadersPassAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val validator = sdkRoot?.let(::File)
@@ -66,6 +79,7 @@ class RawHncsShadersTest {
                 colorEngine = RawRenderingEngine.HncsLut,
                 includeShadowsHighlights = true,
             ),
+            HncsNaturalLightOutputPassShaders.FRAGMENT_SHADER,
         )
         shaders.forEachIndexed { index, shader ->
             val sourceFile = File.createTempFile("raw-hncs-$index-", ".frag")
