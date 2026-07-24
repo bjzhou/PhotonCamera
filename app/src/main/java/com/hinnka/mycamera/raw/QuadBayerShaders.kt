@@ -73,6 +73,8 @@ object QuadBayerShaders {
         layout(std430, binding = 3) buffer RGB2_Buf { float rgb2[]; };
 
         uniform ivec2 uImageSize;
+        uniform ivec2 uFullImageSize;
+        uniform ivec2 uGlobalOrigin;
         uniform int uCfaPattern;
         uniform vec4 uBlackLevel;
         uniform float uWhiteLevel;
@@ -102,11 +104,12 @@ object QuadBayerShaders {
             if (!uLensShadingEnabled) {
                 return 1.0;
             }
-            vec2 norm = (vec2(coord) + vec2(0.5)) / vec2(uImageSize);
+            ivec2 globalCoord = coord + uGlobalOrigin;
+            vec2 norm = (vec2(globalCoord) + vec2(0.5)) / vec2(uFullImageSize);
             vec2 uv = norm;
             if (uLensShadingUsesDngGrid) {
                 vec2 boundsSize = max(uLensShadingBoundsSize, vec2(1.0));
-                norm = (vec2(coord) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
+                norm = (vec2(globalCoord) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
                 vec2 origin = uLensShadingGrid.xy;
                 vec2 spacing = max(uLensShadingGrid.zw, vec2(1e-8));
                 vec2 mapIndex = (norm - origin) / spacing;

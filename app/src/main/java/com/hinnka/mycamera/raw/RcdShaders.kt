@@ -160,6 +160,8 @@ object RcdShaders {
         layout(std430, binding = 3) buffer RGB2_Buf   { float rgb2[]; }; // B
 
         uniform ivec2 uImageSize;
+        uniform ivec2 uFullImageSize;
+        uniform ivec2 uGlobalOrigin;
         uniform int uCfaPattern;
         uniform vec4 uBlackLevel; // R, Gr, Gb, B 或 [0,1,2,3] 四通道黑电平
         uniform float uWhiteLevel;
@@ -231,11 +233,12 @@ object RcdShaders {
             if (!uLensShadingEnabled) {
                 return 1.0;
             }
-            vec2 norm = (vec2(coord) + vec2(0.5)) / vec2(uImageSize);
+            ivec2 globalCoord = coord + uGlobalOrigin;
+            vec2 norm = (vec2(globalCoord) + vec2(0.5)) / vec2(uFullImageSize);
             vec2 uv = norm;
             if (uLensShadingUsesDngGrid) {
                 vec2 boundsSize = max(uLensShadingBoundsSize, vec2(1.0));
-                norm = (vec2(coord) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
+                norm = (vec2(globalCoord) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
                 vec2 origin = uLensShadingGrid.xy;
                 vec2 spacing = max(uLensShadingGrid.zw, vec2(1e-8));
                 vec2 mapIndex = (norm - origin) / spacing;
@@ -3540,6 +3543,8 @@ void main() {
         layout(rgba16f, binding = 0) writeonly uniform image2D outTex;
 
         uniform ivec2 uImageSize;
+        uniform ivec2 uFullImageSize;
+        uniform ivec2 uGlobalOrigin;
         uniform ivec2 uPackedSize;
         uniform ivec2 uSourceOffset;
         uniform int uCfaPattern;
@@ -3607,11 +3612,12 @@ void main() {
 
         float lensShadingGainAt(int channel, ivec2 p) {
             if (!uLensShadingEnabled) return 1.0;
-            vec2 norm = (vec2(p) + vec2(0.5)) / vec2(uImageSize);
+            ivec2 globalPosition = p + uGlobalOrigin;
+            vec2 norm = (vec2(globalPosition) + vec2(0.5)) / vec2(uFullImageSize);
             vec2 uv = norm;
             if (uLensShadingUsesDngGrid) {
                 vec2 boundsSize = max(uLensShadingBoundsSize, vec2(1.0));
-                norm = (vec2(p) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
+                norm = (vec2(globalPosition) + vec2(0.5) - uLensShadingBoundsOrigin) / boundsSize;
                 vec2 mapIndex = (norm - uLensShadingGrid.xy) /
                     max(uLensShadingGrid.zw, vec2(1e-8));
                 uv = (mapIndex + vec2(0.5)) / max(uLensShadingMapSize, vec2(1.0));
