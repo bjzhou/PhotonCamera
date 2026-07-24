@@ -271,35 +271,53 @@ ColorCorrectAll
 → [启用选择性色彩时] SelectiveColor
 ```
 
-当前 HNCS 默认渲染计划有真实数据可执行的路径为：
+当前 HNCS 渲染计划有真实数据可执行的路径为：
 
 ```text
 ColorCorrectAll
-→ FilmCurve(filmCurveType=6, companding=2)
+→ FilmCurve(基础 B / 标准 C / Reproduction E)
 → 跳过 CGammaFilter（Phocus 默认 correction version=2、gamma flag=false）
 → HNCS companding 解码
 → HNCS 到线性 sRGB
 ```
 
-`filmCurveType=6` 不创建 HighlightStrength。Gradation 在原始图中始终存在，SelectiveColor
-按用户设置创建；但二者的非恒等 65,536 点表来自 Phocus `CImageCorrection`/用户编辑状态，
-不在相机 Colormap XML 中。PhotonCamera 没有这些真实表时不会把自己的通用滑杆、经验曲线或
-identity 纹理伪装成 Phocus 数据。默认 Brightness/Contrast 为 0，`EffectiveGamma=1`，所以
-这时 `CGradationFilter` 的总表是恒等映射；不绘制一个 identity pass 与原图数值等价。
+Phocus 自动插入 HighlightStrength 的条件仍是 `EffectiveFilmCurve=2/4`，这与
+`CGradationManager` 构造参数中的 `filmCurveType=7` 不是同一个判断。由于数值 2/4 的公开
+枚举名称尚未恢复，当前应用不接入 HighlightStrength，也不根据 B/C/E 曲线名称臆测它的启用
+状态。
+
+Gradation 在原始图中始终存在，SelectiveColor 按用户设置创建；但二者的非恒等 65,536 点表
+来自 Phocus `CImageCorrection`/用户编辑状态，不在相机 Colormap XML 中。PhotonCamera 没有
+这些真实表时不会把自己的通用滑杆、经验曲线或 identity 纹理伪装成 Phocus 数据。默认
+Brightness/Contrast 为 0，`EffectiveGamma=1`，所以这时 `CGradationFilter` 的总表是恒等
+映射；不绘制一个 identity pass 与原图数值等价。
 
 ### Film Curve
 
-缺少 maker FilmCurve tag 时，`CRawImageFile::GetFilmCurveType` 与
-`CRawImageFileData::GetFilmCurveType` 都返回枚举值 6；HNCS 工作空间在
-`CRawColorCorrection` 中选择 companding 2。应用内的 65,536 点表由原始
-`libcrosssdk.so` 的 `CGradationManager(type=6, companding=2)` 运行时直接导出，而不是用
-近似公式重建：
+`CGradationManager` 根据 `filmCurveType` 与 `companding` 从五张静态表 A–E 选择：
 
 ```text
-source library SHA-256 = 4320cacc91faf0ac16b0653760b86f604303162d43c1cad5fe182b73b9eede6b
-float table FNV-1a64   = a7fda12f9d03aa3f
-asset SHA-256          = 0b26cfdeb578ca21eee5e55e95c4f49ca43ab333e2cea5a011049c07bee4b531
+type=0,    companding=1 → A
+type=1..6, companding=1 → B
+type=0..6, companding=2 → C
+type=7,    companding=1 → D
+type=7,    companding=2 → E
 ```
+
+因此 type 7 本身不等于 E；还必须是 `companding=2`，`type=7/companding=1` 会得到 D。
+应用按界面语义接入三张原表：
+
+| 界面选项 | 原表 | 构造参数 | float 表 FNV-1a64 | asset SHA-256 |
+|---|---|---|---|---|
+| 基础 | B | type=6, companding=1 | `2c7059f97ee8b5ad` | `495bc29bd9bccb6b1ad7a184be960f1bf6d9c1d403c8891286034fe6ff819fb7` |
+| 标准 | C | type=6, companding=2 | `a7fda12f9d03aa3f` | `0b26cfdeb578ca21eee5e55e95c4f49ca43ab333e2cea5a011049c07bee4b531` |
+| Reproduction | E | type=7, companding=2 | `aef781b4a11cdc4a` | `a5f1b9e3e7dc5f37a71840906e3edf6467e64d11450e68d85c436acf84504bd8` |
+
+三张 65,536 点表都由原始 `libcrosssdk.so`（SHA-256
+`4320cacc91faf0ac16b0653760b86f604303162d43c1cad5fe182b73b9eede6b`）
+运行时直接导出，而不是用近似公式重建。缺少 maker FilmCurve tag 时，
+`CRawImageFile::GetFilmCurveType` 与 `CRawImageFileData::GetFilmCurveType` 返回 6；
+原先默认 HNCS 路径的 `companding=2` 对应上表中的标准 C。
 
 `CGradationManager::SetFilmCurve` 与构造函数都只是从已经初始化的同一组静态表选择并复制目标
 表，不存在漏掉的二次曲线计算。shader 按 Phocus 行为使用
@@ -337,12 +355,13 @@ Hasselblad/LStar Gamma 分支，不能仅凭相机品牌或 UI 选项推断。
 
 ### 仍不可执行的原始分支
 
-- `EffectiveFilmCurve=2/4` 的公开名称及 HighlightStrength 宿主参数表尚未恢复；
+- `EffectiveFilmCurve=2/4` 的公开名称仍未恢复，因此不能自动把该条件映射到 B/C/E；
+- HighlightStrength 不接入当前渲染计划，避免脱离 `EffectiveFilmCurve=2/4` 条件单独运行；
 - LStar Gamma 的选择字段已定位，但当前 HNCS 默认计划不满足 Gamma filter 插入条件；
 - Gradation/SelectiveColor 的 shader 已审计，缺少的是真实 `CImageCorrection` 用户表，不是
   像素公式。
 
-因此不会在 UI 中暴露无法由真实参数驱动的开关。以后启用这些分支时，必须接入对应的真实
+因此 UI 只暴露已有真实表驱动的选择。以后启用其他分支时，必须接入对应的真实
 65,536 点或 128×128 表及其宿主状态，不能用经验曲线替代。
 
 ## “自然”和“人像”在哪里

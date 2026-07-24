@@ -765,6 +765,11 @@
     <string name="settings_raw_hncs_profile">HNCS 相機設定檔</string>
     <string name="settings_raw_hncs_2d_lut">哈蘇相機專屬 2D LUT</string>
     <string name="settings_raw_hncs_profile_description">非哈蘇相機使用哈蘇專屬配置會導致偏色。</string>
+    <string name="settings_raw_hncs_film_curve">響應曲線</string>
+    <string name="settings_raw_hncs_film_curve_description">選擇響應曲線</string>
+    <string name="settings_raw_hncs_film_curve_basic">基礎</string>
+    <string name="settings_raw_hncs_film_curve_standard">標準</string>
+    <string name="settings_raw_hncs_film_curve_reproduction">色彩復刻</string>
     <string name="settings_raw_google_pixel_tone_map">Google Pixel 風格色調映射</string>
     <string name="settings_raw_google_pixel_tone_map_description">使用 Google Pixel 風格的影調渲染</string>
     <string name="settings_raw_oppo_master_tone_map">OPPO 大師影調</string>

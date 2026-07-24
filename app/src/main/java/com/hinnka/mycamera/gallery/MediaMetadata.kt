@@ -14,6 +14,7 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -40,7 +41,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 26,
+    val version: Int = 27,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -67,6 +68,7 @@ data class MediaMetadata(
     val rawDcpId: String? = null,
     val rawHncsProfileId: String? = null,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+    val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val cameraId: String? = null,
@@ -327,6 +329,13 @@ data class MediaMetadata(
                             null
                         } else {
                             obj.optString("rawHncsRenderIntent")
+                        }
+                    ),
+                    rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                        if (obj.isNull("rawHncsFilmCurveMode")) {
+                            null
+                        } else {
+                            obj.optString("rawHncsFilmCurveMode")
                         }
                     ),
                     rawRenderingEngine = RawRenderingEngine.fromPersistedName(

@@ -42,6 +42,25 @@ enum class HncsRenderIntent(val assetValue: String) {
     }
 }
 
+enum class HncsFilmCurveMode(val persistedValue: String) {
+    Basic("basic"),
+    Standard("standard"),
+    Reproduction("reproduction");
+
+    companion object {
+        fun fromPersistedValue(
+            value: String?,
+            fallback: HncsFilmCurveMode = Standard
+        ): HncsFilmCurveMode {
+            if (value.isNullOrBlank()) return fallback
+            return entries.firstOrNull {
+                it.name.equals(value, ignoreCase = true) ||
+                    it.persistedValue.equals(value, ignoreCase = true)
+            } ?: fallback
+        }
+    }
+}
+
 internal data class HncsColorMap(
     val width: Int,
     val height: Int,
@@ -122,6 +141,7 @@ internal data class HncsRenderPlan(
     val yccToRgbMatrix: FloatArray,
     val colorCorrection: HncsColorCorrectionParameters,
     val renderIntent: HncsRenderIntent,
+    val filmCurveMode: HncsFilmCurveMode,
     val filmCurveTexture: FloatArray,
     val filmCurveType: Int,
     val filmCurveCompanding: Int,
@@ -176,17 +196,31 @@ private data class ParsedHncsProfile(
  * No profile is selected implicitly: the caller must provide an exact profile id.
  */
 class HncsProfileManager(private val context: Context) {
-    private val hncsFilmCurve: HncsFilmCurve by lazy(::loadHncsFilmCurve)
+    private val basicFilmCurve: HncsFilmCurve by lazy {
+        loadHncsFilmCurve(BASIC_FILM_CURVE_ASSET)
+    }
+    private val standardFilmCurve: HncsFilmCurve by lazy {
+        loadHncsFilmCurve(STANDARD_FILM_CURVE_ASSET)
+    }
+    private val reproductionFilmCurve: HncsFilmCurve by lazy {
+        loadHncsFilmCurve(REPRODUCTION_FILM_CURVE_ASSET)
+    }
 
     fun getAvailableProfiles(): List<HncsProfileInfo> = manifestProfiles()
 
-    internal fun createCcmRenderPlan(): HncsRenderPlan =
-        createCcmRuntimePlan(hncsFilmCurve)
+    internal fun createCcmRenderPlan(
+        filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
+    ): HncsRenderPlan =
+        createCcmRuntimePlan(
+            filmCurve = resolveFilmCurve(filmCurveMode),
+            filmCurveMode = filmCurveMode
+        )
 
     internal fun resolveLutRenderPlan(
         colorTemperature: Float?,
         requestedProfileId: String?,
-        renderIntent: HncsRenderIntent = HncsRenderIntent.Standard
+        renderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+        filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
     ): HncsRenderPlan? {
         val profileId = requestedProfileId?.takeIf(String::isNotBlank) ?: run {
             PLog.e(TAG, "HNCS LUT requires an explicitly selected camera profile")
@@ -207,7 +241,9 @@ class HncsProfileManager(private val context: Context) {
             return null
         }
         val profile = parseProfile(info) ?: return null
-        val cacheKey = "$profileId|${renderIntent.assetValue}|${temperature.toInt()}"
+        val cacheKey =
+            "$profileId|${renderIntent.assetValue}|${temperature.toInt()}|" +
+                filmCurveMode.persistedValue
         synchronized(renderPlanCache) {
             renderPlanCache[cacheKey]?.let { return it }
         }
@@ -275,6 +311,7 @@ class HncsProfileManager(private val context: Context) {
             profileNeutralGains = profileNeutralGains,
             colorMap = colorMap,
             renderIntent = renderIntent,
+            filmCurveMode = filmCurveMode,
             sourceKey = cacheKey
         )
         synchronized(renderPlanCache) {
@@ -290,35 +327,47 @@ class HncsProfileManager(private val context: Context) {
         profileNeutralGains: FloatArray?,
         colorMap: HncsColorMap?,
         renderIntent: HncsRenderIntent,
+        filmCurveMode: HncsFilmCurveMode,
         sourceKey: String
-    ) = HncsRenderPlan(
-        profileId = profile?.info?.id,
-        profileName = profile?.info?.displayName ?: CCM_PROFILE_NAME,
-        sourceFile = profile?.info?.sourceFile,
-        sourceSha256 = profile?.info?.sourceSha256,
-        sourceKey = sourceKey,
-        colorTemperature = colorTemperature,
-        cameraToHncsMatrix = cameraMatrix,
-        profileNeutralGains = profileNeutralGains,
-        colorMap = colorMap,
-        rgbToYccMatrix = HNCS_RGB_TO_YCC.copyOf(),
-        yccToRgbMatrix = HNCS_YCC_TO_RGB.copyOf(),
-        colorCorrection = FULL_SUPPORT_COLOR_CORRECTION,
-        renderIntent = renderIntent,
-        filmCurveTexture = hncsFilmCurve.texture,
-        filmCurveType = hncsFilmCurve.filmCurveType,
-        filmCurveCompanding = hncsFilmCurve.companding,
-        filmCurveAssetPath = hncsFilmCurve.assetPath,
-        filmCurveAssetSha256 = hncsFilmCurve.assetSha256,
-        filmCurveSourceFloatFnv1a64 = hncsFilmCurve.sourceFloatFnv1a64,
-        filmCurveSourceLibrarySha256 = hncsFilmCurve.sourceLibrarySha256,
-        filmCurveGain = FILM_CURVE_GAIN,
-        gamma = HASSELBLAD_GAMMA
-    )
+    ): HncsRenderPlan {
+        val filmCurve = resolveFilmCurve(filmCurveMode)
+        return HncsRenderPlan(
+            profileId = profile?.info?.id,
+            profileName = profile?.info?.displayName ?: CCM_PROFILE_NAME,
+            sourceFile = profile?.info?.sourceFile,
+            sourceSha256 = profile?.info?.sourceSha256,
+            sourceKey = sourceKey,
+            colorTemperature = colorTemperature,
+            cameraToHncsMatrix = cameraMatrix,
+            profileNeutralGains = profileNeutralGains,
+            colorMap = colorMap,
+            rgbToYccMatrix = HNCS_RGB_TO_YCC.copyOf(),
+            yccToRgbMatrix = HNCS_YCC_TO_RGB.copyOf(),
+            colorCorrection = FULL_SUPPORT_COLOR_CORRECTION,
+            renderIntent = renderIntent,
+            filmCurveMode = filmCurveMode,
+            filmCurveTexture = filmCurve.texture,
+            filmCurveType = filmCurve.filmCurveType,
+            filmCurveCompanding = filmCurve.companding,
+            filmCurveAssetPath = filmCurve.assetPath,
+            filmCurveAssetSha256 = filmCurve.assetSha256,
+            filmCurveSourceFloatFnv1a64 = filmCurve.sourceFloatFnv1a64,
+            filmCurveSourceLibrarySha256 = filmCurve.sourceLibrarySha256,
+            filmCurveGain = FILM_CURVE_GAIN,
+            gamma = HASSELBLAD_GAMMA
+        )
+    }
 
-    private fun loadHncsFilmCurve(): HncsFilmCurve {
-        val encoded = context.assets.open(HNCS_FILM_CURVE_ASSET).use { it.readBytes() }
-        require(sha256(encoded).equals(HNCS_FILM_CURVE_ASSET_SHA256, ignoreCase = true)) {
+    private fun resolveFilmCurve(mode: HncsFilmCurveMode): HncsFilmCurve =
+        when (mode) {
+            HncsFilmCurveMode.Basic -> basicFilmCurve
+            HncsFilmCurveMode.Standard -> standardFilmCurve
+            HncsFilmCurveMode.Reproduction -> reproductionFilmCurve
+        }
+
+    private fun loadHncsFilmCurve(spec: HncsFilmCurveAsset): HncsFilmCurve {
+        val encoded = context.assets.open(spec.path).use { it.readBytes() }
+        require(sha256(encoded).equals(spec.sha256, ignoreCase = true)) {
             "HNCS FilmCurve asset SHA-256 mismatch"
         }
         require(encoded.size == HNCS_FILM_CURVE_HEADER_BYTES + CURVE_SAMPLE_COUNT * Short.SIZE_BYTES)
@@ -335,11 +384,11 @@ class HncsProfileManager(private val context: Context) {
         val sourceLibrarySha256 = ByteArray(32).also { buffer.get(it) }
             .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-        require(filmCurveType == HNCS_FILM_CURVE_TYPE)
-        require(companding == HNCS_COMPANDING)
+        require(filmCurveType == spec.filmCurveType)
+        require(companding == spec.companding)
         require(sampleCount == CURVE_SAMPLE_COUNT)
         require(codeValueMax == HNCS_FILM_CURVE_CODE_VALUE_MAX)
-        require(sourceFloatFnv1a64.equals(HNCS_FILM_CURVE_SOURCE_FLOAT_FNV1A64, ignoreCase = true))
+        require(sourceFloatFnv1a64.equals(spec.sourceFloatFnv1a64, ignoreCase = true))
         require(
             sourceLibrarySha256.equals(
                 HNCS_FILM_CURVE_SOURCE_LIBRARY_SHA256,
@@ -366,8 +415,8 @@ class HncsProfileManager(private val context: Context) {
             texture = texture,
             filmCurveType = filmCurveType,
             companding = companding,
-            assetPath = HNCS_FILM_CURVE_ASSET,
-            assetSha256 = HNCS_FILM_CURVE_ASSET_SHA256,
+            assetPath = spec.path,
+            assetSha256 = spec.sha256,
             sourceFloatFnv1a64 = sourceFloatFnv1a64,
             sourceLibrarySha256 = sourceLibrarySha256
         )
@@ -630,19 +679,46 @@ class HncsProfileManager(private val context: Context) {
         private const val VERSION_3_MAX_TEMPERATURE = 10000f
         private const val CCM_PROFILE_NAME = "HNCS CCM"
         private const val PHOCUS_SOURCE_LIBRARY = "libcrosssdk.so"
-        private const val HNCS_FILM_CURVE_ASSET =
-            "$ASSET_DIRECTORY/filmcurve_type6_companding2.hcurve"
         private const val HNCS_FILM_CURVE_SCHEMA_VERSION = 1
-        private const val HNCS_FILM_CURVE_TYPE = 6
-        private const val HNCS_COMPANDING = 2
         private const val HNCS_FILM_CURVE_CODE_VALUE_MAX = 65_535
         private const val HNCS_FILM_CURVE_HEADER_BYTES = 68
-        private const val HNCS_FILM_CURVE_ASSET_SHA256 =
-            "0b26cfdeb578ca21eee5e55e95c4f49ca43ab333e2cea5a011049c07bee4b531"
-        private const val HNCS_FILM_CURVE_SOURCE_FLOAT_FNV1A64 = "a7fda12f9d03aa3f"
         private const val HNCS_FILM_CURVE_SOURCE_LIBRARY_SHA256 =
             "4320cacc91faf0ac16b0653760b86f604303162d43c1cad5fe182b73b9eede6b"
         private val HNCS_FILM_CURVE_MAGIC = "HNCURV1\u0000".toByteArray(Charsets.US_ASCII)
+
+        /*
+         * CGradationManager's static selection matrix:
+         *   A = filmCurveType 0,    companding 1
+         *   B = filmCurveType 1..6, companding 1
+         *   C = filmCurveType 0..6, companding 2
+         *   D = filmCurveType 7,    companding 1
+         *   E = filmCurveType 7,    companding 2
+         *
+         * PhotonCamera exposes the three requested Phocus responses as
+         * Basic=B, Standard=C, and Reproduction=E. Type 7 alone is ambiguous:
+         * companding 1 would select D, not E.
+         */
+        private val BASIC_FILM_CURVE_ASSET = HncsFilmCurveAsset(
+            path = "$ASSET_DIRECTORY/filmcurve_type6_companding1.hcurve",
+            sha256 = "495bc29bd9bccb6b1ad7a184be960f1bf6d9c1d403c8891286034fe6ff819fb7",
+            filmCurveType = 6,
+            companding = 1,
+            sourceFloatFnv1a64 = "2c7059f97ee8b5ad"
+        )
+        private val STANDARD_FILM_CURVE_ASSET = HncsFilmCurveAsset(
+            path = "$ASSET_DIRECTORY/filmcurve_type6_companding2.hcurve",
+            sha256 = "0b26cfdeb578ca21eee5e55e95c4f49ca43ab333e2cea5a011049c07bee4b531",
+            filmCurveType = 6,
+            companding = 2,
+            sourceFloatFnv1a64 = "a7fda12f9d03aa3f"
+        )
+        private val REPRODUCTION_FILM_CURVE_ASSET = HncsFilmCurveAsset(
+            path = "$ASSET_DIRECTORY/filmcurve_type7_companding2.hcurve",
+            sha256 = "a5f1b9e3e7dc5f37a71840906e3edf6467e64d11450e68d85c436acf84504bd8",
+            filmCurveType = 7,
+            companding = 2,
+            sourceFloatFnv1a64 = "aef781b4a11cdc4a"
+        )
 
         const val CURVE_SAMPLE_COUNT = 65_536
         const val CURVE_TEXTURE_EDGE = 256
@@ -699,7 +775,10 @@ class HncsProfileManager(private val context: Context) {
             lowLightDesaturation = floatArrayOf(2f, 0f, 0f, 1f)
         )
 
-        internal fun createCcmRuntimePlan(filmCurve: HncsFilmCurve) = HncsRenderPlan(
+        internal fun createCcmRuntimePlan(
+            filmCurve: HncsFilmCurve,
+            filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard
+        ) = HncsRenderPlan(
             profileId = null,
             profileName = CCM_PROFILE_NAME,
             sourceFile = PHOCUS_SOURCE_LIBRARY,
@@ -714,6 +793,7 @@ class HncsProfileManager(private val context: Context) {
             yccToRgbMatrix = HNCS_YCC_TO_RGB.copyOf(),
             colorCorrection = FULL_SUPPORT_COLOR_CORRECTION,
             renderIntent = HncsRenderIntent.Standard,
+            filmCurveMode = filmCurveMode,
             filmCurveTexture = filmCurve.texture,
             filmCurveType = filmCurve.filmCurveType,
             filmCurveCompanding = filmCurve.companding,
@@ -740,3 +820,11 @@ class HncsProfileManager(private val context: Context) {
         }
     }
 }
+
+private data class HncsFilmCurveAsset(
+    val path: String,
+    val sha256: String,
+    val filmCurveType: Int,
+    val companding: Int,
+    val sourceFloatFnv1a64: String
+)

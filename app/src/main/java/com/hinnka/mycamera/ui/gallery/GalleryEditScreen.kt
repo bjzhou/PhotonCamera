@@ -122,6 +122,7 @@ private data class PreviewRenderSignature(
     val editRawDcpId: String?,
     val editRawHncsProfileId: String?,
     val editRawHncsRenderIntent: String,
+    val editRawHncsFilmCurveMode: String,
     val editRawRenderingEngine: String,
     val editRawBaselineLutId: String?,
     val editRawBaselineRecipeParams: ColorRecipeParams?,
@@ -209,6 +210,7 @@ fun GalleryEditScreen(
     val editRawDcpId by viewModel.editRawDcpId.collectAsState()
     val editRawHncsProfileId by viewModel.editRawHncsProfileId.collectAsState()
     val editRawHncsRenderIntent by viewModel.editRawHncsRenderIntent.collectAsState()
+    val editRawHncsFilmCurveMode by viewModel.editRawHncsFilmCurveMode.collectAsState()
     val editRawBaselineLutId by viewModel.editRawBaselineLutId.collectAsState()
     val editRawBaselineRecipeParams by viewModel.editRawBaselineRecipeParams.collectAsState()
     val editRawColorEngine by viewModel.editRawRenderingEngine.collectAsState()
@@ -288,6 +290,8 @@ fun GalleryEditScreen(
                 if (fast || rawDevelopIsBaked) null else editRawHncsProfileId,
             editRawHncsRenderIntent =
                 if (fast || rawDevelopIsBaked) "" else editRawHncsRenderIntent.assetValue,
+            editRawHncsFilmCurveMode =
+                if (fast || rawDevelopIsBaked) "" else editRawHncsFilmCurveMode.persistedValue,
             editRawRenderingEngine = if (fast || rawDevelopIsBaked) "" else editRawColorEngine.name,
             // RAW develop controls above are baked into original.jpg, while baseline color
             // correction is still applied by PhotoProcessor to that bitmap preview.
@@ -1190,6 +1194,15 @@ fun GalleryEditScreen(
                                             viewModel.saveRawHncsProfileSelection(
                                                 currentEditSourcePhoto,
                                                 profileId
+                                            ) {
+                                                requestRawPreviewRefresh()
+                                            }
+                                        },
+                                        hncsFilmCurveMode = editRawHncsFilmCurveMode,
+                                        onHncsFilmCurveModeChange = { mode ->
+                                            viewModel.saveRawHncsFilmCurveMode(
+                                                currentEditSourcePhoto,
+                                                mode
                                             ) {
                                                 requestRawPreviewRefresh()
                                             }

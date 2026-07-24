@@ -31,6 +31,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -86,6 +87,7 @@ fun CameraTopSheet(
     rawDcpLensOptions: List<RawDcpLensOption> = emptyList(),
     availableDcps: List<DcpInfo>,
     rawHncsProfileId: String?,
+    rawHncsFilmCurveMode: HncsFilmCurveMode,
     availableHncsProfiles: List<HncsProfileInfo>,
     rawBaselineLutId: String?,
     availableLuts: List<LutInfo>,
@@ -104,6 +106,7 @@ fun CameraTopSheet(
     onRawDcpChange: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
     onRawHncsProfileChange: (String?) -> Unit,
+    onRawHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit,
     onImportRawDcp: () -> Unit,
     onDeleteRawDcp: (DcpInfo) -> Unit,
     onRawBaselineLutChange: (String?) -> Unit,
@@ -668,6 +671,8 @@ fun CameraTopSheet(
                     selectedHncsProfileId = rawHncsProfileId,
                     availableHncsProfiles = availableHncsProfiles,
                     onSelectHncsProfile = onRawHncsProfileChange,
+                    hncsFilmCurveMode = rawHncsFilmCurveMode,
+                    onHncsFilmCurveModeChange = onRawHncsFilmCurveModeChange,
                     onRawExposureCompensationChange = {},
                     onRawAutoExposureChange = {},
                     onRawHighlightsAdjustmentChange = {},

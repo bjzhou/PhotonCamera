@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 26,
+    version = 27,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -210,6 +210,15 @@ abstract class GalleryDatabase : RoomDatabase() {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE gallery_media ADD COLUMN rawHncsRenderIntent TEXT " +
+                        "NOT NULL DEFAULT 'standard'"
+                )
+            }
+        }
+
+        private val MIGRATION_26_27 = object : androidx.room.migration.Migration(26, 27) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE gallery_media ADD COLUMN rawHncsFilmCurveMode TEXT " +
                         "NOT NULL DEFAULT 'standard'"
                 )
             }
@@ -572,7 +581,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_22_23,
                         MIGRATION_23_24,
                         MIGRATION_24_25,
-                        MIGRATION_25_26
+                        MIGRATION_25_26,
+                        MIGRATION_26_27
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

@@ -968,6 +968,7 @@ class RawDemosaicProcessor {
         rawDcpId: String? = null,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1008,6 +1009,7 @@ class RawDemosaicProcessor {
                 rawDcpId = rawDcpId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
+                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1051,6 +1053,7 @@ class RawDemosaicProcessor {
         rawDcpId: String? = null,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1090,6 +1093,7 @@ class RawDemosaicProcessor {
                 rawDcpId = rawDcpId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
+                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1185,6 +1189,7 @@ class RawDemosaicProcessor {
         rawDcpId: String? = null,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1225,6 +1230,7 @@ class RawDemosaicProcessor {
                 rawDcpId = rawDcpId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
+                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1281,6 +1287,7 @@ class RawDemosaicProcessor {
         rawDcpId: String? = null,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         embeddedDngRenderPlan: DcpRenderPlan,
         spectralFilmStock: String? = null,
@@ -1361,6 +1368,7 @@ class RawDemosaicProcessor {
                 rawDcpId = rawDcpId,
                 rawHncsProfileId = rawHncsProfileId,
                 rawHncsRenderIntent = rawHncsRenderIntent,
+                rawHncsFilmCurveMode = rawHncsFilmCurveMode,
                 dcpRenderPlan = dcpRenderPlan,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = spectralFilmPrint,
@@ -1412,6 +1420,7 @@ class RawDemosaicProcessor {
         rawDcpId: String? = null,
         rawHncsProfileId: String? = null,
         rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+        rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
         dcpRenderPlan: DcpRenderPlan? = null,
         spectralFilmStock: String? = null,
         spectralFilmPrint: String? = null,
@@ -1576,16 +1585,19 @@ class RawDemosaicProcessor {
             } else {
                 null
             }
-        val hncsRenderIntent = HncsRenderIntent.Standard
+        val hncsRenderIntent = rawHncsRenderIntent
         val hncsRenderPlan = when (requestedColorEngine) {
             RawRenderingEngine.HncsCcm ->
-                HncsProfileManager(context.applicationContext).createCcmRenderPlan()
+                HncsProfileManager(context.applicationContext).createCcmRenderPlan(
+                    filmCurveMode = rawHncsFilmCurveMode
+                )
 
             RawRenderingEngine.HncsLut ->
                 HncsProfileManager(context.applicationContext).resolveLutRenderPlan(
                     colorTemperature = actualMetadata.colorTemperature,
                     requestedProfileId = rawHncsProfileId,
-                    renderIntent = hncsRenderIntent
+                    renderIntent = hncsRenderIntent,
+                    filmCurveMode = rawHncsFilmCurveMode
                 )
 
             else -> null
@@ -11099,6 +11111,7 @@ class RawDemosaicProcessor {
                 "profile=${renderPlan.profileId} source=${renderPlan.sourceFile} " +
                 "sha256=${renderPlan.sourceSha256} exposureEv=${profileExposureUniforms.exposureEv} " +
                 "exposureGain=${profileExposureUniforms.linearGain} " +
+                "filmCurveMode=${renderPlan.filmCurveMode} " +
                 "filmCurveType=${renderPlan.filmCurveType} " +
                 "filmCurveCompanding=${renderPlan.filmCurveCompanding} " +
                 "filmCurveAsset=${renderPlan.filmCurveAssetPath} " +

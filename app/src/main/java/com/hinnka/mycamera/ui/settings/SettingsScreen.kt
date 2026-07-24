@@ -315,6 +315,7 @@ fun SettingsScreen(
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawHncsProfileId by viewModel.rawHncsProfileId.collectAsState()
+    val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
     val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
     val rawAutoExposure by viewModel.rawAutoExposure.collectAsState()
     val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
@@ -1749,6 +1750,8 @@ fun SettingsScreen(
                         selectedHncsProfileId = rawHncsProfileId,
                         availableHncsProfiles = availableHncsProfiles,
                         onSelectHncsProfile = viewModel::setRawHncsProfileId,
+                        hncsFilmCurveMode = rawHncsFilmCurveMode,
+                        onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
                         contentMode = RawEditPanelContentMode.FULL
                     )
 

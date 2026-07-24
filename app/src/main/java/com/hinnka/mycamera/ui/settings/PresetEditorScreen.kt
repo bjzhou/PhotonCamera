@@ -31,6 +31,7 @@ import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.LutSelectorWithRecipeAction
 import com.hinnka.mycamera.ui.components.CurveChannel
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.HncsProfileManager
@@ -106,6 +107,8 @@ fun PresetEditorScreen(
     var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
     var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
     var rawHncsProfileId by remember { mutableStateOf(sourcePreset?.rawHncsProfileId) }
+    val rawHncsFilmCurveMode =
+        sourcePreset?.rawHncsFilmCurveMode ?: HncsFilmCurveMode.Standard.persistedValue
     var rawRenderingEngine by remember {
         mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
     }
@@ -148,6 +151,7 @@ fun PresetEditorScreen(
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
             rawHncsProfileId = rawHncsProfileId,
+            rawHncsFilmCurveMode = rawHncsFilmCurveMode,
             rawRenderingEngine = rawRenderingEngine.name,
             rawGooglePixelToneMap = rawGooglePixelToneMap,
             rawOppoMasterToneMap = rawOppoMasterToneMap,

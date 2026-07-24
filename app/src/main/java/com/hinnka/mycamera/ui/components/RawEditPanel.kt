@@ -29,6 +29,7 @@ import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsProfileInfo
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
@@ -131,6 +132,8 @@ fun RawEditPanel(
     selectedHncsProfileId: String? = null,
     availableHncsProfiles: List<HncsProfileInfo> = emptyList(),
     onSelectHncsProfile: (String?) -> Unit = {},
+    hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
+    onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var rawMaxOutputScaleDraft by remember {
@@ -209,6 +212,25 @@ fun RawEditPanel(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_hncs_film_curve),
+                description = stringResource(R.string.settings_raw_hncs_film_curve_description),
+                levels = listOf(
+                    HncsFilmCurveMode.Basic.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_basic),
+                    HncsFilmCurveMode.Standard.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_standard),
+                    HncsFilmCurveMode.Reproduction.persistedValue to
+                        stringResource(R.string.settings_raw_hncs_film_curve_reproduction)
+                ),
+                currentLevel = hncsFilmCurveMode.persistedValue,
+                onLevelSelected = { persistedValue ->
+                    onHncsFilmCurveModeChange(
+                        HncsFilmCurveMode.fromPersistedValue(persistedValue)
+                    )
+                }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {

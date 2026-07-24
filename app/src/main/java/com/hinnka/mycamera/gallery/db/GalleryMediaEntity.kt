@@ -57,6 +57,7 @@ data class GalleryMediaEntity(
     val rawDcpId: String?,
     val rawHncsProfileId: String? = null,
     val rawHncsRenderIntent: String = "standard",
+    val rawHncsFilmCurveMode: String = "standard",
     val rawColorEngine: String,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,

@@ -6,6 +6,7 @@ import coil.transform.Transformation
 import android.content.Context
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.PhotoProcessor
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -51,6 +52,7 @@ private fun MediaMetadata.thumbnailTransformCacheKey(): Int {
         rawDcpId = null,
         rawHncsProfileId = null,
         rawHncsRenderIntent = HncsRenderIntent.Standard,
+        rawHncsFilmCurveMode = HncsFilmCurveMode.Standard,
         rawRenderingEngine = RawRenderingEngine.AdobeCurve,
         rawToneMappingParameters = RawToneMappingParameters.DEFAULT,
         rawBlackLevelMode = null,

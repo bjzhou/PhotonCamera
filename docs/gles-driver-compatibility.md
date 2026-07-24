@@ -400,10 +400,12 @@ HNCS 引擎遵循上述显式尺寸原则。Phocus 二维相机色度表固定�
 - 不声明 `RGBA16F image2D`，也不使用 `imageLoad/imageStore`；
 - 不把 sampler opaque type 作为用户函数参数。
 
-Film Curve Type 0 是从 Phocus 公式生成的固定 65,536 点数据，物理布局为 256×256，
-按原程序的整数索引规则读取，不使用插值，也不需要查询纹理尺寸。Gradation、
-Selective Color、Highlight 等没有真实 profile 数据的表或参数不上传，不能用 identity
-纹理或经验常量补齐。
+Film Curve 的 B、C、E 三张原始 65,536 点表分别对应 type 6/companding 1、
+type 6/companding 2、type 7/companding 2；都使用 256×256 物理布局，按原程序的整数索引规则
+读取，不使用插值，也不需要查询纹理尺寸。切换曲线时，纹理缓存键必须包含曲线 asset
+路径与 SHA，不能沿用上一张 256×256 纹理。Gradation、Selective Color 等仍然缺少真实
+profile 数据的表时不能用
+identity 纹理或经验常量补齐。
 
 HNCS 纹理首次创建时必须先切换到专用纹理单元，不能继承照片输入使用的 `GL_TEXTURE0`。
 `glBindTexture` 的绑定属于当前 active texture unit；若资源上传留在 unit 0，会把

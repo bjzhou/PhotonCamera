@@ -724,15 +724,14 @@ object RawShaders {
     """.trimIndent()
 
     /**
-     * Phocus HNCS color-correction and default film-curve path.
+     * Phocus HNCS color-correction and selectable FilmCurve path.
      *
-     * The camera matrix is applied by the linear RAW pass. HNCS resolves to
-     * companding=2; a RAW without an explicit maker FilmCurve tag resolves to
-     * type=6. The exact 65,536-entry curve comes from the original Phocus
-     * CGradationManager. Phocus still constructs the later Gradation stage and
-     * conditionally constructs SelectiveColor, but both require real
-     * CImageCorrection/user tables. With no such tables in a PhotonCamera RAW
-     * render plan, non-identity versions of those stages are not synthesized.
+     * The camera matrix is applied by the linear RAW pass. The exact 65,536-entry
+     * B, C, and E curves come from the original Phocus CGradationManager.
+     * Phocus still constructs the later Gradation stage and conditionally
+     * constructs SelectiveColor, but both require real CImageCorrection/user
+     * tables. With no such tables in a PhotonCamera RAW render plan,
+     * non-identity versions of those stages are not synthesized.
      */
     private val HNCS_COMBINED_FUNCTIONS = """
         const float HNCS_EPSILON = 0.000001;

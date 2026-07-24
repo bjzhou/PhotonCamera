@@ -14,6 +14,7 @@ import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -232,6 +233,7 @@ object GalleryMediaStore {
             rawDcpId = metadata.rawDcpId,
             rawHncsProfileId = metadata.rawHncsProfileId,
             rawHncsRenderIntent = metadata.rawHncsRenderIntent.assetValue,
+            rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode.persistedValue,
             rawColorEngine = metadata.rawRenderingEngine.name,
             rawAgxBlackRelativeExposure = metadata.rawToneMappingParameters.agxBlackRelativeExposure,
             rawAgxWhiteRelativeExposure = metadata.rawToneMappingParameters.agxWhiteRelativeExposure,
@@ -416,6 +418,9 @@ object GalleryMediaStore {
             rawDcpId = rawDcpId,
             rawHncsProfileId = rawHncsProfileId,
             rawHncsRenderIntent = HncsRenderIntent.fromPersistedValue(rawHncsRenderIntent),
+            rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                rawHncsFilmCurveMode
+            ),
             rawRenderingEngine = RawRenderingEngine.fromPersistedName(
                 rawColorEngine,
                 fallback = RawRenderingEngine.AdobeCurve

@@ -262,7 +262,10 @@ T(x) =       P2(x),                     X1 ≤ x < X2
 时不能只复制像素公式而忽略参数约束。
 
 主调用图只在特定 `EffectiveFilmCurve` 枚举值（反汇编中为 2 或 4）插入该 filter；枚举名称
-尚未从二进制中恢复，不能把它描述成所有 Film Curve 的固定步骤。
+尚未从二进制中恢复，不能把它描述成所有 Film Curve 的固定步骤。宿主标准值已经恢复为
+`strength=50`、`saturation=50`，对应
+`strengthBlend=0.6125`、`saturationBlend=0.5`、`amountSatFact=0.3875`；这只恢复了参数，
+没有恢复数值 2/4 的公开枚举名称。
 
 大写 [`HighlightStrength_0x3019721.frag`](./HighlightStrength_0x3019721.frag) 的分段 `mix`
 方向与生产版本不同，低/高区间行为并不等价；它只应视为另一包装层的实现证据。
@@ -524,7 +527,7 @@ HDR headroom 和用户曲线的独立可编辑性。若为实时预览做缓存�
 
 ## 10. 仍需动态验证的问题
 
-- `EffectiveFilmCurve` 数值 2、4 的公开名称及其 HighlightStrength 参数表；
+- `EffectiveFilmCurve` 数值 2、4 的公开名称，以及非标准 HighlightStrength 参数组合的产品语义；
 - 动态 Film Curve `uGain` 与 `hrTrunc/hrMax/inputEV` 在不同机型、HDR 和输出模式下的实际
   数值闭环；
 - `desatHighLight` 是否只服务某个未导出的 HDR/缩略图分支；
@@ -537,8 +540,8 @@ HDR headroom 和用户曲线的独立可编辑性。若为实时预览做缓存�
 | 原始模块 | 是否需要 | 当前状态 |
 |---|---|---|
 | `colorCorrectAll` 小写生产版 | 需要 | 已接入 105×89 手工双线性、整数 Kelvin 插值、真实矩阵/解密 neutral gain/LUT、gray/low-light 参数；相机域 headroom 保留为待真实宿主值 |
-| `filmcurve` 小写生产版 | 需要 | 已接入原库直接导出的 type=6 / companding=2 真实 65,536 点表与 nearest texel 读取 |
-| `highlightstrength` | 条件需要 | type=6 不需要；type=2/4 缺真实枚举名和宿主参数，不伪造 |
+| `filmcurve` 小写生产版 | 需要 | 已接入原库直接导出的 B(type=6/companding=1)、C(type=6/companding=2)、E(type=7/companding=2) 三张真实 65,536 点表与 nearest texel 读取 |
+| `highlightstrength` | 条件需要 | 原生标准 50/50 参数与生产 shader 已接入为显式选择；type=2/4 的自动启用枚举名仍未知，不与 B/C/E 强行绑定 |
 | `gamma_hasselblad` | 条件需要 | 真实常量和 shader 已接入；默认 correction version=2/flag=false 时严格跳过 |
 | `gamma_lstar` | 条件需要 | 原始选择路径存在，但当前默认状态没有真实选择字段，不启用 |
 | `gradation` | 图结构需要 | 原始图始终构造；非恒等内容依赖真实用户曲线，当前不上传 identity 冒充 |
@@ -573,4 +576,3 @@ Film Curve、Gamma、Gradation 和输出 ICC 的贡献。
   [`colorspaceconvert_0x2ff7cb6.frag`](./colorspaceconvert_0x2ff7cb6.frag)、
   [`customCmm_0x3011778.frag`](./customCmm_0x3011778.frag)、
   [`sdr_icc_0x3073d21.frag`](./sdr_icc_0x3073d21.frag)
-

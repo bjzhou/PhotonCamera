@@ -21,6 +21,7 @@ import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -110,6 +111,7 @@ data class UserPreferences(
     val rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     val rawHncsProfileId: String? = null,
     val rawHncsRenderIntent: HncsRenderIntent = HncsRenderIntent.Standard,
+    val rawHncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     val rawRenderingEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
     val rawToneMappingParameters: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
     val rawNlmNoiseFactor: Float = 0f,
@@ -270,6 +272,7 @@ data class CameraFeaturePreferencesUpdate(
     val rawDcpIdsByLens: PreferenceUpdateValue<Map<String, String?>>? = null,
     val rawHncsProfileId: PreferenceUpdateValue<String?>? = null,
     val rawHncsRenderIntent: PreferenceUpdateValue<HncsRenderIntent>? = null,
+    val rawHncsFilmCurveMode: PreferenceUpdateValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: PreferenceUpdateValue<RawRenderingEngine>? = null,
     val rawToneMappingParameters: PreferenceUpdateValue<RawToneMappingParameters>? = null,
     val rawSpectralFilmStock: PreferenceUpdateValue<String?>? = null,
@@ -302,6 +305,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_DCP_IDS_BY_LENS_KEY = stringPreferencesKey("raw_dcp_ids_by_lens")
         private val RAW_HNCS_PROFILE_ID_KEY = stringPreferencesKey("raw_hncs_profile_id")
         private val RAW_HNCS_RENDER_INTENT_KEY = stringPreferencesKey("raw_hncs_render_intent")
+        private val RAW_HNCS_FILM_CURVE_MODE_KEY = stringPreferencesKey("raw_hncs_film_curve_mode")
         private val RAW_COLOR_ENGINE_KEY = stringPreferencesKey("raw_color_engine")
         private val RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_agx_black_relative_exposure")
         private val RAW_AGX_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_agx_white_relative_exposure")
@@ -498,6 +502,9 @@ class UserPreferencesRepository(private val context: Context) {
                 rawDcpIdsByLens = parseNullableStringMap(preferences[RAW_DCP_IDS_BY_LENS_KEY]),
                 rawHncsProfileId = preferences[RAW_HNCS_PROFILE_ID_KEY],
                 rawHncsRenderIntent = HncsRenderIntent.Standard,
+                rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
+                    preferences[RAW_HNCS_FILM_CURVE_MODE_KEY]
+                ),
                 rawRenderingEngine = RawRenderingEngine.fromPersistedName(preferences[RAW_COLOR_ENGINE_KEY]),
                 rawToneMappingParameters = RawToneMappingParameters(
                     agxBlackRelativeExposure = preferences[RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY]
@@ -1007,6 +1014,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawHncsRenderIntent(renderIntent: HncsRenderIntent) {
         context.dataStore.edit { preferences ->
             preferences[RAW_HNCS_RENDER_INTENT_KEY] = renderIntent.assetValue
+        }
+    }
+
+    suspend fun saveRawHncsFilmCurveMode(mode: HncsFilmCurveMode) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = mode.persistedValue
         }
     }
 
@@ -2135,6 +2148,9 @@ class UserPreferencesRepository(private val context: Context) {
             }
             update.rawHncsRenderIntent?.let {
                 preferences[RAW_HNCS_RENDER_INTENT_KEY] = it.value.assetValue
+            }
+            update.rawHncsFilmCurveMode?.let {
+                preferences[RAW_HNCS_FILM_CURVE_MODE_KEY] = it.value.persistedValue
             }
             update.rawRenderingEngine?.let {
                 preferences[RAW_COLOR_ENGINE_KEY] = it.value.name
