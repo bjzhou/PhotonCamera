@@ -304,7 +304,7 @@ data class CameraState(
     val currentAfMode: Int? = null, // 当前的 AF 模式
 
     //闪光灯
-    val flashMode: Int = 0, // 0: off, 1: auto, 2: torch
+    val flashMode: Int = 0, // 0: off, 1: forced flash, 2: torch
 
     // 变焦
     val zoomRatio: Float = 1.0f,

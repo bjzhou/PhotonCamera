@@ -94,6 +94,7 @@ class Camera2Controller(private val context: Context) {
         private const val STATE_WAITING_NON_PRECAPTURE =
             3 // Waiting for the exposure state to be something other than precapture.
         private const val STATE_PICTURE_TAKEN = 4 // Picture is already taken.
+        private const val PRECAPTURE_TIMEOUT_MS = 3_000L
 
         // 场景变化检测阈值
         private const val SCENE_CHANGE_EXPOSURE_RATIO = 1.5   // 曝光乘积变化判定为场景变化
@@ -164,6 +165,10 @@ class Camera2Controller(private val context: Context) {
         val baseResult: CaptureResult?,
     )
 
+    private data class PrecaptureRequestTag(
+        val generation: Long,
+    )
+
     private data class MultiFrameFocusSnapshot(
         val afMode: Int,
         val focusDistanceDiopters: Float?,
@@ -198,6 +203,10 @@ class Camera2Controller(private val context: Context) {
     private var pendingCaptureDevice: CameraDevice? = null
     private var pendingCaptureReader: ImageReader? = null
     private var pendingCaptureBaseExposureResult: CaptureResult? = null
+    private var precaptureGeneration = 0L
+    private var activePrecaptureGeneration = 0L
+    private var precaptureTriggerFrameNumber: Long? = null
+    private var precaptureTimeoutRunnable: Runnable? = null
     private var pendingMultiFrameFocusCapture: PendingMultiFrameFocusCapture? = null
     private var pendingMultiFrameFocusResult: TotalCaptureResult? = null
     private var activeMultiFrameFocusSnapshot: MultiFrameFocusSnapshot? = null
@@ -519,6 +528,26 @@ class Camera2Controller(private val context: Context) {
     }
 
     private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureStarted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            timestamp: Long,
+            frameNumber: Long
+        ) {
+            super.onCaptureStarted(session, request, timestamp, frameNumber)
+            val tag = request.tag as? PrecaptureRequestTag ?: return
+            if (tag.generation != activePrecaptureGeneration ||
+                internalCaptureState != STATE_WAITING_PRECAPTURE
+            ) {
+                return
+            }
+            precaptureTriggerFrameNumber = frameNumber
+            PLog.d(
+                TAG,
+                "Precapture trigger started: generation=${tag.generation}, frame=$frameNumber"
+            )
+        }
+
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
             request: CaptureRequest,
@@ -686,7 +715,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private var lastAeState = 0
+    private var lastAeState: Int? = null
     private var lastAfState: Int? = null
 
     private fun logVideoCaptureStats(result: TotalCaptureResult) {
@@ -730,35 +759,77 @@ class Camera2Controller(private val context: Context) {
     /**
      * 处理拍照状态机的核心逻辑
      */
-    private fun processCaptureState(result: CaptureResult) {
-        result.get(CaptureResult.CONTROL_AF_STATE) ?: return
-        val aeState = result.get(CaptureResult.CONTROL_AE_STATE) ?: return
+    private fun processCaptureState(result: TotalCaptureResult) {
+        if (internalCaptureState != STATE_WAITING_PRECAPTURE &&
+            internalCaptureState != STATE_WAITING_NON_PRECAPTURE
+        ) {
+            return
+        }
 
+        val triggerFrameNumber = precaptureTriggerFrameNumber ?: return
+        if (result.frameNumber < triggerFrameNumber) {
+            return
+        }
+
+        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
         if (aeState != lastAeState) {
-            //Log.d(TAG, "processCaptureState: aeState = $aeState")
+            PLog.d(
+                TAG,
+                "Precapture AE state: generation=$activePrecaptureGeneration, " +
+                    "frame=${result.frameNumber}, state=$aeState"
+            )
             lastAeState = aeState
         }
 
         when (internalCaptureState) {
-            STATE_PREVIEW -> {
-                // 正常预览状态，不做处理
-            }
-
             STATE_WAITING_PRECAPTURE -> {
-                // 等待 AE 预取（预闪）完成
-                if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
-                    internalCaptureState = STATE_WAITING_NON_PRECAPTURE
+                when (aeState) {
+                    CaptureResult.CONTROL_AE_STATE_PRECAPTURE -> {
+                        internalCaptureState = STATE_WAITING_NON_PRECAPTURE
+                    }
+
+                    null -> {
+                        // CONTROL_AE_STATE is optional. HedgeCam treats a missing state as
+                        // precapture having started, then waits for the following result.
+                        internalCaptureState = STATE_WAITING_NON_PRECAPTURE
+                    }
                 }
             }
 
             STATE_WAITING_NON_PRECAPTURE -> {
-                // 等待 AE 退出预取状态
-                if (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
-                    internalCaptureState = STATE_PICTURE_TAKEN
-                    runCaptureSequence()
+                if (aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                    completePrecapture(result, "left PRECAPTURE")
                 }
             }
         }
+    }
+
+    private fun completePrecapture(result: CaptureResult?, reason: String) {
+        if (internalCaptureState != STATE_WAITING_PRECAPTURE &&
+            internalCaptureState != STATE_WAITING_NON_PRECAPTURE
+        ) {
+            return
+        }
+
+        val generation = activePrecaptureGeneration
+        pendingCaptureBaseExposureResult = result ?: pendingCaptureBaseExposureResult
+        internalCaptureState = STATE_PICTURE_TAKEN
+        clearPrecaptureTracking()
+        PLog.i(
+            TAG,
+            "Precapture complete: generation=$generation, reason=$reason, " +
+                "aeState=${result?.get(CaptureResult.CONTROL_AE_STATE)}, " +
+                "iso=${result?.get(CaptureResult.SENSOR_SENSITIVITY)}, " +
+                "shutter=${result?.get(CaptureResult.SENSOR_EXPOSURE_TIME)}"
+        )
+        runCaptureSequence()
+    }
+
+    private fun clearPrecaptureTracking() {
+        precaptureTimeoutRunnable?.let { cameraHandler?.removeCallbacks(it) }
+        precaptureTimeoutRunnable = null
+        activePrecaptureGeneration = 0L
+        precaptureTriggerFrameNumber = null
     }
 
     /**
@@ -781,31 +852,83 @@ class Camera2Controller(private val context: Context) {
      * 运行预取序列（预闪）
      */
     private fun runPrecaptureSequence() {
+        val session = captureSession
+        val device = cameraDevice
+        val previewTarget = previewSurface
+        val handler = cameraHandler
+        if (session == null || device == null || previewTarget == null || handler == null) {
+            PLog.w(TAG, "Precapture unavailable, proceeding directly to capture")
+            internalCaptureState = STATE_PICTURE_TAKEN
+            clearPrecaptureTracking()
+            runCaptureSequence()
+            return
+        }
+
+        val generation = ++precaptureGeneration
+        activePrecaptureGeneration = generation
+        precaptureTriggerFrameNumber = null
+        lastAeState = null
+
         try {
-            previewRequestBuilder?.let { builder ->
-                // 触发预闪
-                if (_state.value.flashMode == CameraMetadata.FLASH_MODE_SINGLE) {
-                    builder.set(
-                        CaptureRequest.CONTROL_AE_MODE,
-                        CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+            // Match HedgeCam's standard Camera2 flash sequence. A dedicated still-template
+            // request first resets the trigger to IDLE, then remains repeating with the same
+            // AE/flash configuration before the one-shot START request is submitted.
+            val precaptureBuilder =
+                device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                    addTarget(previewTarget)
+                    set(
+                        CaptureRequest.CONTROL_CAPTURE_INTENT,
+                        CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE
+                    )
+                    applyBaseCameraSettings(this, isCapture = false)
+                    set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                    set(CaptureRequest.CONTROL_AE_LOCK, false)
+                    set(
+                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
                     )
                 }
-                builder.set(
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START
+            val idleRequest = precaptureBuilder.build()
+
+            internalCaptureState = STATE_WAITING_PRECAPTURE
+            val idleSequenceId = session.capture(idleRequest, previewCallback, handler)
+            session.setRepeatingRequest(idleRequest, previewCallback, handler)
+
+            precaptureBuilder.set(
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START
+            )
+            precaptureBuilder.setTag(PrecaptureRequestTag(generation))
+            val triggerSequenceId =
+                session.capture(precaptureBuilder.build(), previewCallback, handler)
+
+            val timeout = Runnable {
+                if (activePrecaptureGeneration != generation ||
+                    (internalCaptureState != STATE_WAITING_PRECAPTURE &&
+                        internalCaptureState != STATE_WAITING_NON_PRECAPTURE)
+                ) {
+                    return@Runnable
+                }
+                PLog.w(
+                    TAG,
+                    "Precapture timeout: generation=$generation, " +
+                        "triggerFrame=$precaptureTriggerFrameNumber, lastAeState=$lastAeState"
                 )
-                internalCaptureState = STATE_WAITING_PRECAPTURE
-                captureSession?.capture(builder.build(), null, cameraHandler)
-                cameraHandler?.postDelayed({
-                    if (internalCaptureState != STATE_PICTURE_TAKEN) {
-                        PLog.w(TAG, "Precapture timeout, proceeding to capture")
-                        internalCaptureState = STATE_PICTURE_TAKEN
-                        runCaptureSequence()
-                    }
-                }, 3000)
+                completePrecapture(lastCaptureResult, "timeout")
             }
+            precaptureTimeoutRunnable = timeout
+            handler.postDelayed(timeout, PRECAPTURE_TIMEOUT_MS)
+            PLog.d(
+                TAG,
+                "Precapture submitted: generation=$generation, idleSequence=$idleSequenceId, " +
+                    "triggerSequence=$triggerSequenceId, aeMode=" +
+                    "${idleRequest.get(CaptureRequest.CONTROL_AE_MODE)}, flashMode=" +
+                    "${idleRequest.get(CaptureRequest.FLASH_MODE)}"
+            )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to run precapture sequence", e)
+            internalCaptureState = STATE_PICTURE_TAKEN
+            clearPrecaptureTracking()
             runCaptureSequence()
         }
     }
@@ -971,6 +1094,11 @@ class Camera2Controller(private val context: Context) {
     private fun clearCameraSessionState(reason: String, closeImageReader: Boolean = true) {
         previewSessionGeneration++
         previewUpdateScheduled.set(false)
+        clearPrecaptureTracking()
+        internalCaptureState = STATE_PREVIEW
+        pendingCaptureDevice = null
+        pendingCaptureReader = null
+        pendingCaptureBaseExposureResult = null
         clearMultiFrameFocusState("session cleared: $reason")
         safeCloseCaptureSession(captureSession, reason)
         captureSession = null
@@ -1896,7 +2024,7 @@ class Camera2Controller(private val context: Context) {
                 TAG,
                 "Creating preview session: forceStandard=$forceStandardSession, " +
                         "useHlgCapture=$useHlgCapture, readerFormat=${imageFormatToString(readerFormat)}, " +
-                        "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported, "
+                        "isP010Supported=$isP010Supported, isHlg10Supported=$isHlg10Supported"
             )
             val outputConfigs = buildList {
                 add(
@@ -1996,9 +2124,14 @@ class Camera2Controller(private val context: Context) {
             ) {
                 return
             }
-            if (!retryPreviewSessionWithoutPhysicalOutput("create session illegal state: ${e.message}", openGeneration)) {
-                handlePreviewSessionFailure("create session illegal state", openGeneration, e)
+            if (retryPreviewSessionWithoutPhysicalOutput(
+                    "create session illegal state: ${e.message}",
+                    openGeneration
+                )
+            ) {
+                return
             }
+            handlePreviewSessionFailure("create session illegal state", openGeneration, e)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to create preview session", e)
             if (vendorSessionParametersApplied &&
@@ -2010,9 +2143,14 @@ class Camera2Controller(private val context: Context) {
             ) {
                 return
             }
-            if (!retryPreviewSessionWithoutPhysicalOutput("create session exception: ${e.message}", openGeneration)) {
-                handlePreviewSessionFailure("create session exception", openGeneration, e)
+            if (retryPreviewSessionWithoutPhysicalOutput(
+                    "create session exception: ${e.message}",
+                    openGeneration
+                )
+            ) {
+                return
             }
+            handlePreviewSessionFailure("create session exception", openGeneration, e)
         }
     }
 
@@ -2753,10 +2891,7 @@ class Camera2Controller(private val context: Context) {
                     CaptureRequest.CONTROL_AE_MODE_ON
                 } else {
                     when (state.flashMode) {
-                        CameraMetadata.FLASH_MODE_SINGLE -> {
-                            if (isCapture) CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
-                            else CaptureRequest.CONTROL_AE_MODE_ON
-                        }
+                        CameraMetadata.FLASH_MODE_SINGLE -> CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
 
                         CameraMetadata.FLASH_MODE_TORCH -> CaptureRequest.CONTROL_AE_MODE_ON
                         else -> CaptureRequest.CONTROL_AE_MODE_ON
@@ -2866,7 +3001,8 @@ class Camera2Controller(private val context: Context) {
                 state.captureMode == CaptureMode.PHOTO &&
                 state.rawMinShutterSpeedNs > 0L &&
                 state.isIsoAuto &&
-                state.isShutterSpeedAuto
+                state.isShutterSpeedAuto &&
+                state.flashMode != CameraMetadata.FLASH_MODE_SINGLE
     }
 
     private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
@@ -3176,13 +3312,21 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        // 修正：在全自动曝光下，ISP 虽然主导闪光控制，但为了 YUV 模式下的快门同步，
-        // 在拍摄瞬间显式指定 FLASH_MODE_SINGLE 能显著提升兼容性。
         when (state.flashMode) {
             CameraMetadata.FLASH_MODE_SINGLE -> {
-                if (isCapture) {
-                    builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                if (!state.isIsoAuto || !state.isShutterSpeedAuto) {
+                    // Manual/semi-manual exposure has no AE precapture convergence.
+                    // Fire a single flash only for the still request.
+                    builder.set(
+                        CaptureRequest.FLASH_MODE,
+                        if (isCapture) {
+                            CameraMetadata.FLASH_MODE_SINGLE
+                        } else {
+                            CameraMetadata.FLASH_MODE_OFF
+                        }
+                    )
                 } else {
+                    // AE_MODE_ON_ALWAYS_FLASH owns precapture and main-flash control.
                     builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
                 }
             }
@@ -5397,7 +5541,8 @@ class Camera2Controller(private val context: Context) {
         baseExposureResult: CaptureResult?,
     ) {
         val currentState = _state.value
-        val needsPrecapture = currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+        val needsPrecapture =
+            currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
             currentState.isIsoAuto &&
             currentState.isShutterSpeedAuto
 
@@ -5754,10 +5899,16 @@ class Camera2Controller(private val context: Context) {
         if (!state.isMultiFrameEnabled) return
 
         if (lockExposure) {
-            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+            val rawMaxFlashDenoise = shouldUseRawMaxFlashDenoise(
+                state = state,
+                isRawCapture = isRawCapture,
+            )
+            if (!rawMaxFlashDenoise) {
+                builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+            }
             val requestUsesManualExposure =
                 builder.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_OFF
-            if (isRawCapture && !requestUsesManualExposure) {
+            if (isRawCapture && !requestUsesManualExposure && !rawMaxFlashDenoise) {
                 val lockedIso = baseResult?.get(CaptureResult.SENSOR_SENSITIVITY)
                 val lockedExposure = baseResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
                 val canUseManualExposure = isManualSensorSupported &&
@@ -5804,6 +5955,7 @@ class Camera2Controller(private val context: Context) {
             TAG,
             "Multi-frame capture locked exposure=$lockExposure " +
                     "ae=${builder.get(CaptureRequest.CONTROL_AE_MODE)} " +
+                    "flash=${builder.get(CaptureRequest.FLASH_MODE)} " +
                     "iso=${builder.get(CaptureRequest.SENSOR_SENSITIVITY)} " +
                     "shutter=${builder.get(CaptureRequest.SENSOR_EXPOSURE_TIME)} " +
                     "af=${builder.get(CaptureRequest.CONTROL_AF_MODE)} " +
@@ -6012,6 +6164,16 @@ class Camera2Controller(private val context: Context) {
                 !state.useLivePhoto
     }
 
+    private fun shouldUseRawMaxFlashDenoise(
+        state: CameraState,
+        isRawCapture: Boolean,
+    ): Boolean {
+        return isRawCapture &&
+                state.isRawMaxEnabled &&
+                isFlashSupported &&
+                state.flashMode == CameraMetadata.FLASH_MODE_SINGLE
+    }
+
     private fun resolveHdrBracketZeroEvFrameCount(state: CameraState): Int {
         return if (state.isMultiFrameEnabled) {
             MultiFrameConfig.normalizeFrameCount(state.multiFrameCount)
@@ -6028,6 +6190,10 @@ class Camera2Controller(private val context: Context) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
             val currentState = _state.value
+            val rawMaxFlashDenoise = shouldUseRawMaxFlashDenoise(
+                state = currentState,
+                isRawCapture = isRawCapture,
+            )
             if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture)) {
                 val session = captureSession ?: run {
                     PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
@@ -6111,8 +6277,13 @@ class Camera2Controller(private val context: Context) {
 
                 PLog.d(
                     TAG,
-                    "Capture request built and ready to send. ISO: ${currentState.iso}, " +
-                        "shutter: ${currentState.shutterSpeed}, AE: ${currentState.isAutoExposure}"
+                    "Capture request built and ready to send: " +
+                        "aeMode=${get(CaptureRequest.CONTROL_AE_MODE)}, " +
+                        "aeTrigger=${get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER)}, " +
+                        "aeLock=${get(CaptureRequest.CONTROL_AE_LOCK)}, " +
+                        "flashMode=${get(CaptureRequest.FLASH_MODE)}, " +
+                        "iso=${get(CaptureRequest.SENSOR_SENSITIVITY)}, " +
+                        "shutter=${get(CaptureRequest.SENSOR_EXPOSURE_TIME)}"
                 )
             }
 
@@ -6130,7 +6301,7 @@ class Camera2Controller(private val context: Context) {
                 }
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)
                 val baseRequest = captureBuilder.build()
-                val requests = if (currentState.isJpgMaxEnabled) {
+                val requests = if (currentState.isJpgMaxEnabled || rawMaxFlashDenoise) {
                     List(frameCount) { baseRequest }
                 } else {
                     val shortRequest = buildMultiFrameShortCaptureRequest(
@@ -6176,6 +6347,15 @@ class Camera2Controller(private val context: Context) {
                         TAG,
                         "JPGmax denoise burst plan: zeroEvFrames=${requests.size} hdr=false",
                     )
+                } else if (rawMaxFlashDenoise) {
+                    PLog.i(
+                        TAG,
+                        "RAWmax flash denoise burst plan: baseFrames=${requests.size} " +
+                            "shortFrames=0 longFrames=0 " +
+                            "aeMode=${baseRequest.get(CaptureRequest.CONTROL_AE_MODE)} " +
+                            "aeLock=${baseRequest.get(CaptureRequest.CONTROL_AE_LOCK)} " +
+                            "flashMode=${baseRequest.get(CaptureRequest.FLASH_MODE)}",
+                    )
                 }
 
                 var completedCaptureCount = 0
@@ -6207,13 +6387,18 @@ class Camera2Controller(private val context: Context) {
                         }
                         val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
                         val actualShutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                        val actualAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+                        val actualAeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                        val actualFlashState = result.get(CaptureResult.FLASH_STATE)
                         val actualAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
                         val actualAfState = result.get(CaptureResult.CONTROL_AF_STATE)
                         val actualFocusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
                         val actualLensState = result.get(CaptureResult.LENS_STATE)
                         PLog.d(
                             TAG,
-                            "Capture completed role=$role ISO=$actualIso shutter=$actualShutter, " +
+                            "Capture completed role=$role aeMode=$actualAeMode " +
+                                "aeState=$actualAeState flashState=$actualFlashState " +
+                                "ISO=$actualIso shutter=$actualShutter, " +
                                 "afMode=$actualAfMode afState=$actualAfState " +
                                 "focus=$actualFocusDistance lensState=$actualLensState, " +
                                 "result buffered (timestamp: $timestamp). " +
@@ -6283,7 +6468,13 @@ class Camera2Controller(private val context: Context) {
                         lastCaptureResult = result
                         PLog.d(
                             TAG,
-                            "Capture completed, result buffered (timestamp: $timestamp). Pending images: ${pendingImages.size}, Pending results: ${pendingResults.size}"
+                            "Capture completed: aeMode=${result.get(CaptureResult.CONTROL_AE_MODE)}, " +
+                                "aeState=${result.get(CaptureResult.CONTROL_AE_STATE)}, " +
+                                "flashState=${result.get(CaptureResult.FLASH_STATE)}, " +
+                                "iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)}, " +
+                                "shutter=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}, " +
+                                "timestamp=$timestamp. Pending images: ${pendingImages.size}, " +
+                                "Pending results: ${pendingResults.size}"
                         )
                         resetPreviewAfterCapture()
                     }
@@ -6310,6 +6501,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun resetPreviewAfterCapture() {
         // 重置拍照状态机
+        clearPrecaptureTracking()
         internalCaptureState = STATE_PREVIEW
         pendingCaptureDevice = null
         pendingCaptureReader = null

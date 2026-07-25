@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureResult
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -1680,6 +1681,9 @@ object GalleryManager {
             )
             saveMetadata(context, photoId, metadataWithInfo)
 
+            // The preview bitmap is the UI placeholder shown while the final image is being
+            // processed. For flash captures it must not participate in RAW exposure matching,
+            // but it should still be published immediately and replaced by the rendered result.
             if (thumbnail != null && !thumbnail.isRecycled) {
                 generateThumbnail(thumbnail, thumbnailFile)
                 notifyPreparedPhotoThumbnail(photoId)
@@ -1989,6 +1993,15 @@ object GalleryManager {
                 image.close()
                 return@withContext
             }
+            val mainFlashFired = didMainFlashFire(resolvedCaptureResult)
+            val dngThumbnail = thumbnail.takeUnless { mainFlashFired }
+            if (mainFlashFired && thumbnail != null) {
+                PLog.i(
+                    TAG,
+                    "RAW flash capture: ignoring the unflashed preview thumbnail for " +
+                        "DNG embedding and viewfinder exposure matching"
+                )
+            }
 
             var dngSaveAttempted = false
             val captureInfo = metadata.toCaptureInfo()
@@ -2007,7 +2020,7 @@ object GalleryManager {
                             resolvedCaptureResult,
                             outputStream,
                             rotation,
-                            thumbnail,
+                            dngThumbnail,
                             blackLevelMode = metadata.rawBlackLevelMode,
                             customBlackLevel = metadata.rawCustomBlackLevel,
                             whiteLevelMode = metadata.rawWhiteLevelMode,
@@ -2023,7 +2036,8 @@ object GalleryManager {
                                 defaultCrop = rawDngDefaultCrop,
                                 aspectRatio = aspectRatio,
                                 rotation = rotation,
-                                capturePreviewThumbnail = thumbnail,
+                                capturePreviewThumbnail = dngThumbnail,
+                                captureResult = resolvedCaptureResult,
                             ),
                         )
                     } catch (e: Throwable) {
@@ -2913,6 +2927,7 @@ object GalleryManager {
                     aspectRatio = aspectRatio,
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
+                    captureResult = captureResult,
                 )
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
                     rawBuffer = fusedBayerBuffer,
@@ -3528,6 +3543,7 @@ object GalleryManager {
                             aspectRatio = aspectRatio,
                             rotation = rotation,
                             capturePreviewThumbnail = capturePreviewThumbnail,
+                            captureResult = captureResult,
                         ),
                     // Carry the Camera2 field of view into the DNG itself. The renderer consumes
                     // DefaultCrop after OpcodeList3, matching the DNG SDK processing order.
@@ -3695,15 +3711,18 @@ object GalleryManager {
         aspectRatio: AspectRatio?,
         rotation: Int,
         capturePreviewThumbnail: Bitmap?,
+        captureResult: CaptureResult?,
     ): RawDngProfilePreparationOptions {
-         val profileToneMapMode = rawDngPgtmModeForMetadata(metadata)
+        val profileToneMapMode = rawDngPgtmModeForMetadata(metadata)
         val statsBounds = resolveRawStatsBounds(
             width = width,
             height = height,
             defaultCrop = defaultCrop,
             cropRegion = metadata.cropRegion,
         )
+        val mainFlashFired = didMainFlashFire(captureResult)
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
+            !mainFlashFired &&
             resolveRawAutoExposure(context, metadata) &&
             kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f
         val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon ||
@@ -3742,6 +3761,8 @@ object GalleryManager {
             TAG,
             "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
                 "curve=DEFAULT pgtmOnGpu=$profileGainTableRequired " +
+                "mainFlashFired=$mainFlashFired " +
+                "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
                 "sourceAutoExposure=${metadata.rawAutoExposure} " +
                 "manualExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
@@ -3750,6 +3771,22 @@ object GalleryManager {
             statsBounds = statsBounds,
             captureProfilePreparer = captureProfilePreparer,
         )
+    }
+
+    private fun didMainFlashFire(captureResult: CaptureResult?): Boolean {
+        val flashState = captureResult?.get(CaptureResult.FLASH_STATE)
+        if (flashState != CaptureResult.FLASH_STATE_FIRED &&
+            flashState != CaptureResult.FLASH_STATE_PARTIAL
+        ) {
+            return false
+        }
+
+        val aeMode = captureResult.get(CaptureResult.CONTROL_AE_MODE)
+        val flashMode = captureResult.get(CaptureResult.FLASH_MODE)
+        return flashMode == CameraMetadata.FLASH_MODE_SINGLE ||
+            aeMode == CameraMetadata.CONTROL_AE_MODE_ON_ALWAYS_FLASH ||
+            aeMode == CameraMetadata.CONTROL_AE_MODE_ON_AUTO_FLASH ||
+            aeMode == CameraMetadata.CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE
     }
 
     private fun profileNameForPgtmMode(mode: RawProfileToneMapMode): String {
