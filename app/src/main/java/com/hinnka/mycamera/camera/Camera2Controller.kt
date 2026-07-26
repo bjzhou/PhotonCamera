@@ -463,6 +463,59 @@ class Camera2Controller(private val context: Context) {
             }
     }
 
+    private fun logRawColorMatrices(
+        characteristics: CameraCharacteristics,
+        result: CaptureResult,
+    ) {
+        val matrices = listOf(
+            "ColorMatrix1" to characteristics.get(
+                CameraCharacteristics.SENSOR_COLOR_TRANSFORM1
+            ),
+            "ColorMatrix2" to characteristics.get(
+                CameraCharacteristics.SENSOR_COLOR_TRANSFORM2
+            ),
+            "ForwardMatrix1" to characteristics.get(
+                CameraCharacteristics.SENSOR_FORWARD_MATRIX1
+            ),
+            "ForwardMatrix2" to characteristics.get(
+                CameraCharacteristics.SENSOR_FORWARD_MATRIX2
+            ),
+        )
+        val illuminant1 = characteristics.get(
+            CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1
+        )
+        val illuminant2 = characteristics.get(
+            CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2
+        )
+
+        PLog.i(
+            TAG,
+            buildString {
+                appendLine(
+                    "RAW color matrices: frame=${result.frameNumber}, " +
+                        "timestamp=${result.get(CaptureResult.SENSOR_TIMESTAMP)}, " +
+                        "referenceIlluminant1=$illuminant1, referenceIlluminant2=$illuminant2"
+                )
+                matrices.forEachIndexed { index, (name, matrix) ->
+                    append(name)
+                    append(" = ")
+                    append(formatColorSpaceTransform(matrix))
+                    if (index != matrices.lastIndex) appendLine()
+                }
+            }
+        )
+    }
+
+    private fun formatColorSpaceTransform(transform: ColorSpaceTransform?): String {
+        if (transform == null) return "null"
+        return (0 until 3).joinToString(prefix = "[", postfix = "]", separator = ", ") { row ->
+            (0 until 3).joinToString(prefix = "[", postfix = "]", separator = ", ") { col ->
+                val value = transform.getElement(col, row)
+                "${value.numerator}/${value.denominator} (${value.toDouble()})"
+            }
+        }
+    }
+
     // 快门音效播放回调
     var onPlayShutterSound: (() -> Unit)? = null
 
@@ -3220,13 +3273,23 @@ class Camera2Controller(private val context: Context) {
         val characteristics = resolveActiveWhiteBalanceCharacteristics() ?: return null
         val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.let(::extractMatrix3x3)
         val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.let(::extractMatrix3x3)
+        val forwardMatrix1 = if (DeviceUtil.isOppo) {
+            null
+        } else {
+            characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractMatrix3x3)
+        }
+        val forwardMatrix2 = if (DeviceUtil.isOppo) {
+            null
+        } else {
+            characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractMatrix3x3)
+        }
         if (colorMatrix1 == null && colorMatrix2 == null) return null
 
         val matrix = DngSdkColorSpec.computeCameraToWorkingMatrix(
             colorMatrix1 = colorMatrix1,
             colorMatrix2 = colorMatrix2,
-            forwardMatrix1 = null,
-            forwardMatrix2 = null,
+            forwardMatrix1 = forwardMatrix1,
+            forwardMatrix2 = forwardMatrix2,
             calibrationIlluminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: 0,
             calibrationIlluminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
                 ?: 0,
@@ -6840,6 +6903,14 @@ class Camera2Controller(private val context: Context) {
                     }
                 }
             }
+
+//            if (
+//                image.format == ImageFormat.RAW_SENSOR &&
+//                effectiveCharacteristics != null &&
+//                effectiveResult != null
+//            ) {
+//                logRawColorMatrices(effectiveCharacteristics, effectiveResult)
+//            }
 
             // 构建 CaptureInfo
             val captureInfo = rebuildCaptureInfo(

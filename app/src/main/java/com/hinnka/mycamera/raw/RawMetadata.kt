@@ -8,6 +8,7 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
 import kotlin.collections.contentToString
 
@@ -484,11 +485,21 @@ data class RawMetadata(
             } else {
                 floatArrayOf(1f, 1f, 1f, 1f)
             }
+            val forwardMatrix1 = if (DeviceUtil.isOppo) {
+                null
+            } else {
+                characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractCCM)
+            }
+            val forwardMatrix2 = if (DeviceUtil.isOppo) {
+                null
+            } else {
+                characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractCCM)
+            }
             return DngSdkColorSpec.computeCameraToWorkingMatrix(
                 colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.let(::extractCCM),
                 colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.let(::extractCCM),
-                forwardMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractCCM),
-                forwardMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractCCM),
+                forwardMatrix1 = forwardMatrix1,
+                forwardMatrix2 = forwardMatrix2,
                 calibrationIlluminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: 0,
                 calibrationIlluminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0,
                 whiteBalanceGains = whiteBalanceGains,

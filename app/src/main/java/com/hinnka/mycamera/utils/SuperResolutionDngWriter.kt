@@ -68,6 +68,24 @@ object SuperResolutionDngWriter {
             ?.let(::colorTransformToDngMatrix)
             ?.map(Double::toFloat)
             ?.toFloatArray()
+        val forwardMatrix1 = if (DeviceUtil.isOppo) {
+            null
+        } else {
+            characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
+                ?.takeIf(::isUsableColorTransform)
+                ?.let(::colorTransformToExactDngMatrix)
+                ?.map(Double::toFloat)
+                ?.toFloatArray()
+        }
+        val forwardMatrix2 = if (DeviceUtil.isOppo) {
+            null
+        } else {
+            characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
+                ?.takeIf(::isUsableColorTransform)
+                ?.let(::colorTransformToExactDngMatrix)
+                ?.map(Double::toFloat)
+                ?.toFloatArray()
+        }
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)
             ?.toInt()
             ?.takeIf { colorMatrix2 != null }
@@ -102,8 +120,8 @@ object SuperResolutionDngWriter {
             supportsOverrange = false,
             colorMatrix1 = colorMatrix1,
             colorMatrix2 = colorMatrix2,
-            forwardMatrix1 = null,
-            forwardMatrix2 = null,
+            forwardMatrix1 = forwardMatrix1,
+            forwardMatrix2 = forwardMatrix2,
             hueSatDeltas1 = null,
             hueSatDeltas2 = null,
             lookTable = null,
@@ -178,6 +196,8 @@ object SuperResolutionDngWriter {
     private const val TAG_CAMERA_CALIBRATION_1 = 50723
     private const val TAG_CAMERA_CALIBRATION_2 = 50724
     private const val TAG_PROFILE_TONE_CURVE = 50940
+    private const val TAG_FORWARD_MATRIX_1 = 50964
+    private const val TAG_FORWARD_MATRIX_2 = 50965
     private const val TAG_AS_SHOT_NEUTRAL = 50728
     private const val TAG_BASELINE_EXPOSURE = 50730
     private const val TAG_CALIBRATION_ILLUMINANT_1 = 50778
@@ -418,6 +438,18 @@ object SuperResolutionDngWriter {
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
         val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
         val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+        val forwardMatrix1 = if (DeviceUtil.isOppo) {
+            null
+        } else {
+            characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
+                ?.takeIf(::isUsableColorTransform)
+        }
+        val forwardMatrix2 = if (DeviceUtil.isOppo) {
+            null
+        } else {
+            characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
+                ?.takeIf(::isUsableColorTransform)
+        }
         val calibrationMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)
         val calibrationMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
         val noiseProfile = buildNoiseProfile(captureResult)
@@ -550,6 +582,14 @@ object SuperResolutionDngWriter {
             calibrationMatrix1?.let { add(sRationalArray(TAG_CAMERA_CALIBRATION_1, colorTransformToExactDngMatrix(it))) }
             if (illuminant2 != null) {
                 calibrationMatrix2?.let { add(sRationalArray(TAG_CAMERA_CALIBRATION_2, colorTransformToExactDngMatrix(it))) }
+            }
+            forwardMatrix1?.let {
+                add(sRationalArray(TAG_FORWARD_MATRIX_1, colorTransformToExactDngMatrix(it)))
+            }
+            if (illuminant2 != null && colorMatrix2 != null) {
+                forwardMatrix2?.let {
+                    add(sRationalArray(TAG_FORWARD_MATRIX_2, colorTransformToExactDngMatrix(it)))
+                }
             }
             add(rationalArray(TAG_AS_SHOT_NEUTRAL, asShotNeutral(captureResult)))
             if (profileGainTableMap != null) {
@@ -1369,6 +1409,18 @@ object SuperResolutionDngWriter {
                 for (col in 0 until 3) add(transform.getElement(col, row).toDouble())
             }
         }
+
+    private fun isUsableColorTransform(transform: ColorSpaceTransform): Boolean {
+        var signal = 0.0
+        for (row in 0 until 3) {
+            for (col in 0 until 3) {
+                val value = transform.getElement(col, row).toDouble()
+                if (!value.isFinite()) return false
+                signal += kotlin.math.abs(value)
+            }
+        }
+        return signal > 0.01
+    }
 
     private fun normalizeDngColorMatrix(values: List<Double>): List<Double> {
         if (values.size != 9) return values
