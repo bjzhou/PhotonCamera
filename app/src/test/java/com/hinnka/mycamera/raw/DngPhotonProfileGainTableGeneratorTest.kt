@@ -30,7 +30,7 @@ class DngPhotonProfileGainTableGeneratorTest {
     }
 
     @Test
-    fun dngCoordinatesUseSourceLinearGuideAtTileCenters() {
+    fun dngCoordinatesUseMaxRgbGuideAtTileCenters() {
         val plan = plan(
             gridWidth = 4,
             gridHeight = 2,
@@ -48,7 +48,7 @@ class DngPhotonProfileGainTableGeneratorTest {
         assertEquals(0.375, plan.grid.mapSpacingV, 0.0)
         assertEquals(0.3125, plan.grid.mapOriginH, 0.0)
         assertEquals(0.3125, plan.grid.mapOriginV, 0.0)
-        DngHdrProfileGainTableGenerator.BASE_INPUT_WEIGHTS.forEachIndexed { index, weight ->
+        DngPhotonProfileGainTableGenerator.MAX_RGB_INPUT_WEIGHTS.forEachIndexed { index, weight ->
             assertEquals(weight / exposureGain, plan.mapInputWeights[index], 1e-7f)
         }
         val map = requireNotNull(
@@ -88,6 +88,28 @@ class DngPhotonProfileGainTableGeneratorTest {
                 assertEquals("cell=$cell guide=$guide", 1f, gain, 2e-4f)
             }
         }
+    }
+
+    @Test
+    fun localLaplacianClampsSparsePeakBeforeNonlinearProfileStages() {
+        val width = 16
+        val height = 16
+        val source = FloatArray(width * height) { 0.1f }
+        source[source.lastIndex] = 1f
+
+        val result = DngPhotonLocalToneMapper.localLaplacianToneMap(
+            source = source,
+            width = width,
+            height = height,
+            exposureGain = 2f,
+            parameters = PhotonLocalToneMappingParameters(
+                targetDynamicRange = 1_000_000f,
+            ),
+        )
+
+        assertEquals(0.2f, result.target.first(), 2e-4f)
+        assertEquals(1f, result.target.last(), 0f)
+        assertEquals(0, result.target.count { it > 1f })
     }
 
     private fun plan(

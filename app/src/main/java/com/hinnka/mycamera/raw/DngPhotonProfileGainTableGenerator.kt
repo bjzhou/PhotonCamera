@@ -13,6 +13,8 @@ internal object DngPhotonProfileGainTableGenerator {
     private const val MIN_TABLE_GAIN = 1f / 4096f
     private const val MAX_TABLE_GAIN = 4096f
 
+    internal val MAX_RGB_INPUT_WEIGHTS = floatArrayOf(0f, 0f, 0f, 0f, 1f)
+
     fun plan(
         grid: HdrPgtmGrid,
         pointCount: Int,
@@ -35,8 +37,8 @@ internal object DngPhotonProfileGainTableGenerator {
         // DNG renderers include BaselineExposure before calculating the table coordinate.
         // Dividing the weights by that exact gain makes the BGU guide the sampled source-linear
         // scene input, while the gain itself still acts on the exposed signal.
-        val mapWeights = FloatArray(DngHdrProfileGainTableGenerator.BASE_INPUT_WEIGHTS.size) {
-            DngHdrProfileGainTableGenerator.BASE_INPUT_WEIGHTS[it] / exposureGain
+        val mapWeights = FloatArray(MAX_RGB_INPUT_WEIGHTS.size) {
+            MAX_RGB_INPUT_WEIGHTS[it] / exposureGain
         }
         return HdrProfileGainTablePlan(
             curveModel = HdrPgtmCurveModel.PHOTON,
@@ -60,9 +62,13 @@ internal object DngPhotonProfileGainTableGenerator {
  * Parameters copied from the published Local Laplacian and Google BGU reference code.
  *
  * The Local Laplacian edge slope is the compression ratio required to reach the reference target
- * dynamic range. ACR3's fixed +1.1 EV gray placement is applied to scene-linear input before Local
+ * dynamic range. ACR3's fixed +1.25 EV gray placement is applied to scene-linear input before Local
  * Laplacian; scene highlights therefore do not determine exposure. The resulting SDR target is
  * then projected directly into ProfileGainTableMap's RGB-uniform multiplicative representation.
+ * Photon uses max RGB as both the Local Laplacian intensity and the DNG table coordinate, so the
+ * gain follows and bounds the brightest channel without changing RGB ratios. A luma-like guide
+ * can reach one while a saturated channel is still far above one after gain, which turns
+ * downstream profile rendering into a color-changing operation.
  * The MATLAB example's final display gamma is omitted because output encoding is performed by the
  * renderer after the DNG profile pipeline.
  */

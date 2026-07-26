@@ -18,14 +18,14 @@
 
 | 阶段 | 参考实现 | Photon 实现 | 差异 |
 | --- | --- | --- | --- |
-| 输入域 | `lapfilter.m`: `log(I + eps)` | RAW 先执行与 demosaic 相同的 Lens Shading Correction 和 WarpRectilinear 空间映射，再变换为 source-linear scene input；进入 Local Laplacian 前固定乘 `BaselineExposure × 2^1.1` | `+1.1 EV` 是 ACR3 灰点曝光，在线性 0.18 上得到 `0.18 × 2^1.1`，顺序在 LTM 之前；RAW 可以精确为 0，因此保留 `1e-6` 正值到 log 域；统计域和最终应用域使用同一 LSC/warp |
+| 输入域 | `lapfilter.m`: `log(I + eps)` | RAW 先执行与 demosaic 相同的 Lens Shading Correction 和 WarpRectilinear 空间映射，再变换为 profile RGB 并取 `max(R,G,B)`；进入 Local Laplacian 前固定乘 `BaselineExposure × 2^1.25` | `+1.25 EV` 是固定灰点曝光，顺序在 LTM 之前；max RGB 使 PGTM 的公共标量 gain 以最亮颜色通道为准，不改变 RGB 比例；RAW 可以精确为 0，因此保留 `1e-6` 正值到 log 域 |
 | HDR remap | `sigma_r=log(2.5)`, `alpha=1`；HDR 展示脚本手工选择 `beta=0` | `sigma_r`、`alpha` 相同；`beta=min(1, log(100)/log(input DR))` | 官方 API 把 `beta` 定义为 large-edge slope；展示脚本的 `0` 是特定 HDR 图的最强压缩参数，不是通用自动参数。Photon 直接用达到相同目标 DR 所需的全局压缩比，无需调参；输入 DR≤100 时为恒等斜率 1 |
 | 强度离散 | `llf_general.m` general remap 示例 `N=20` | 20 个等距 reference levels | 无 |
 | 金字塔层数 | `ceil(log(min(h,w))-log(2))+2` | 相同，并受实际可构造层数约束 | 只防止尺寸小于公式要求 |
 | 金字塔核 | `[.05,.25,.4,.25,.05]`，越界样本重新归一化 | GPU pass 直接计算可分离核的二维外积 | 数学上与先横后纵相同，减少一次中间写入和 dispatch |
 | Laplacian residual | 最粗层直接取输入 Gaussian residual | 相同 | 无 |
-| HDR 输出范围 | 展示脚本在 LTM 后按 99.5% 分位归一化并执行显示 gamma | `beta=min(1, log(100)/log(input DR))` 已在 Local Laplacian 内完成 large-edge 压缩；重建后的线性 radiance 直接 clamp 为 SDR target | 不再执行会抵消固定预曝光的 `R/Rmax`，也不在 LTM 后增加第二条 compression/pivot 曲线；tone curve 和输出编码由后续 profile renderer 执行 |
-| BGU guide | Google BGU：`x / lerp(1,x,curve_alpha)`，`curve_alpha=0.8`，`r_sigma=1/8` | 相同；guide 只选择 range plane，仍使用 source-linear input | 无 |
+| HDR 输出范围 | 展示脚本在 LTM 后按 99.5% 分位归一化并执行显示 gamma | `beta=min(1, log(100)/log(input DR))` 已在 Local Laplacian 内完成 large-edge 压缩；重建后的 max-RGB radiance clamp 为 SDR target | 不执行会抵消固定预曝光的 `R/Rmax`，也不在 LTM 后增加第二条 compression/pivot 曲线；Photon 不把 overrange 交给后续非线性 profile 阶段 |
+| BGU guide | Google BGU：`x / lerp(1,x,curve_alpha)`，`curve_alpha=0.8`，`r_sigma=1/8` | 相同；guide 只选择 range plane，Photon 的 `x` 为 source-linear max RGB | DNG `MapInputWeights=[0,0,0,0,1/BaselineExposure]`，与生成 target 的输入域完全一致 |
 | BGU spatial bin | `s_sigma=16` | 每个 DNG 空间点 16×16 个 GPU RAW 样本 | DNG map origin/spacing 由实际 `statsBounds` 归一化，并平移半个 bin，使点精确位于采样 tile 中心 |
 | BGU histogram | RGB 3×4 affine normal equations，输入/输出为已完成变换的图像对 | 直接使用 source-linear `I` 与 Local Laplacian 的最终 SDR target `T`，求解 `T/BaselineExposure = gain × I` | BGU 只负责把已经确定的 `(I,T)` 图像对编码成 PGTM，不再定义第二套影调；DNG PGTM 只能存 RGB 共用乘法 gain，因此去掉 affine intercept，避免写表后退化为 `b/x` |
 | BGU blur | 7 taps：中心 `1`，距离 1/2/3 为 `1/8,1/27,1/64` | 相同，按 z/y/x 分离执行 | 无 |
@@ -37,26 +37,31 @@
 
 1. `DNG_PGTM_CELL_STATS` 在 GPU 上从最终输出坐标反向组合有效 DNG WarpRectilinear
    opcodes，再从 RAW 读取与 demosaic 完全相同的 DNG/Camera2 Lens Shading Gain，经
-   ColorMatrix 和 HueSatMap 得到 scene input；每个空间 tile 保留 16×16 个有序空间样本。
+   ColorMatrix 和 HueSatMap 得到 profile RGB，并以 max RGB 作为 Photon scene input；
+   每个空间 tile 保留 16×16 个有序空间样本。
 2. compute pass 先执行固定线性曝光
-   `Iₑ = I × BaselineExposure × 2^1.1`，再在 SSBO 中完成 log normalization、20 个强度
-   reference 的 Gaussian/Laplacian pyramid 和重建；重建 radiance clamp 后就是最终 SDR
-   target `T`。
+   `Iₑ = I × BaselineExposure × 2^1.25`，再在 SSBO 中完成 log normalization、20 个强度
+   reference 的 Gaussian/Laplacian pyramid 和重建；重建 max-RGB radiance clamp 后就是
+   最终 SDR target `T`。
 3. GPU histogram 只统计预曝光输入的 0.5%/50%/99.5% 分位数；CPU 扫描一个
    32768-bin 计数表，计算 Local Laplacian large-edge slope。LTM 后不再估算曝光或生成
    全局 compression 曲线。
-4. 标量 BGU 直接以 `I` 为 guide/fit input，以 `T/BaselineExposure` 为 fit target，
-   经过 z/y/x 7-tap blur 后求解过原点的 gain；它只把已经完成的 LTM 结果投影到 DNG
-   可表达的乘法模型。
+4. 标量 BGU 直接以 max RGB `I` 为 guide/fit input，以 `T/BaselineExposure` 为 fit
+   target，经过 z/y/x 7-tap blur 后求解过原点的 gain；DNG 查表使用相同的 max RGB
+   coordinate，并把所得单一 gain 同乘 RGB，因此不会在 PGTM 内改变色相或饱和度。
 5. GPU slice 每个空间格的 257 个 DNG gain 点；CPU 只回读最终 gain table 并封装 DNG
    metadata，DNG renderer 在空间和输入强度上插值。
+
+Photon PGTM 使用归一化 SDR contract：Local Laplacian target、PGTM gain 输出、
+HueSatMap、曝光和 ProfileToneCurve 均不启用 overrange。Google PGTM 和普通 DCP
+仍按各自 profile 的能力决定 overrange。
 
 `DngPhotonLocalToneMapper` 保留为可读的 CPU 方程参考，不在拍摄生产路径调用。
 
 ## 全局曲线职责
 
 Photon `ProfileToneCurve` 只负责 profile 的全局输出风格，不接收场景统计量。RAW 默认
-亮度由 Local Tone Mapping 之前的固定 `+1.1 EV` 建立。PGTM 只编码 Local Laplacian
+亮度由 Local Tone Mapping 之前的固定 `+1.25 EV` 建立。PGTM 只编码 Local Laplacian
 已经产生的 SDR target；tone curve 不参与曝光估计，只提供基础的全局输出风格。
 
 旧实现中的全局 gray pivot、global shoulder、highlight pressure、cell contrast warp 和

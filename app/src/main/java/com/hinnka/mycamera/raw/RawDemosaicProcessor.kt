@@ -449,6 +449,7 @@ class RawDemosaicProcessor {
                 useProfileExposureRamp = true,
                 applyProfileDcpBaselineExposureOffset = false,
                 supportProfileOverrange = false,
+                hueSatMapSupportsOverrange = false,
             ) != null
             val warmedProfileMap = when (profileToneMapMode) {
                 RawProfileToneMapMode.Photon,
@@ -464,6 +465,7 @@ class RawDemosaicProcessor {
                     colorCorrectionMatrix = identity,
                     cameraWhite = metadata.cameraWhite,
                     hueSatMap = null,
+                    hueSatMapSupportsOverrange = false,
                 )
 
                 else -> null
@@ -492,6 +494,7 @@ class RawDemosaicProcessor {
                 profileBaselineExposureOffsetEv = 0f,
                 clampProfileRgb = true,
                 supportProfileOverrange = false,
+                hueSatMapSupportsOverrange = false,
                 label = "CaptureWarmupLinearRcdPass",
             )
             PLog.d(
@@ -854,6 +857,7 @@ class RawDemosaicProcessor {
         val applyDcpBaselineExposureOffset: Boolean,
         val clampProfileRgb: Boolean,
         val supportProfileOverrange: Boolean,
+        val hueSatMapSupportsOverrange: Boolean,
         val hncsCameraDomainGains: FloatArray?,
         val colorEngine: RawRenderingEngine,
         val activeDcpRenderPlan: DcpRenderPlan?,
@@ -1879,6 +1883,9 @@ class RawDemosaicProcessor {
                     ?: actualMetadata.colorCorrectionMatrix,
                 cameraWhite = resolvedDcpRenderPlan?.cameraWhite ?: actualMetadata.cameraWhite,
                 hueSatMap = resolvedDcpRenderPlan?.hueSatMap,
+                hueSatMapSupportsOverrange =
+                    requestedProfileToneMapMode != RawProfileToneMapMode.Photon &&
+                        resolvedDcpRenderPlan?.supportsOverrange == true,
                 warpRectilinear = dngWarpRectilinear,
             )?.takeIf { it.isValid }
             if (generated != null) {
@@ -1998,8 +2005,23 @@ class RawDemosaicProcessor {
         val applyDcpBaselineExposureOffset =
             shouldApplyDcpBaselineExposureOffset(activeDcpRenderPlan)
         val useProfileExposureRamp = useAdobeProfilePipeline
+        val photonPgtmNormalizedSdr = profileGainToneMapActive &&
+            requestedProfileToneMapMode == RawProfileToneMapMode.Photon
         val supportProfileOverrange =
-            useAdobeProfilePipeline && activeDcpRenderPlan?.supportsOverrange == true
+            useAdobeProfilePipeline &&
+                !photonPgtmNormalizedSdr &&
+                activeDcpRenderPlan?.supportsOverrange == true
+        val hueSatMapSupportsOverrange = useAdobeProfilePipeline && if (
+            photonPgtmNormalizedSdr
+        ) {
+            false
+        } else if (
+            profileGainToneMapActive
+        ) {
+            profileBaseDcpRenderPlan?.supportsOverrange == true
+        } else {
+            activeDcpRenderPlan?.supportsOverrange == true
+        }
         val clampProfileRgb = useAdobeProfilePipeline
         val engineWorkingColorSpace = colorEngine.workingColorSpace
         val profileToEngineTransform = computeWorkingToOutputTransform(
@@ -2057,7 +2079,8 @@ class RawDemosaicProcessor {
             profileToEngineTransform = profileToEngineTransform,
             useAdobeProfilePipeline = useAdobeProfilePipeline,
             useProfileExposureRamp = useProfileExposureRamp,
-            applyDcpBaselineExposureOffset = applyDcpBaselineExposureOffset
+            applyDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
+            hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
         )
         PLog.d(
             TAG,
@@ -2183,6 +2206,7 @@ class RawDemosaicProcessor {
                         useProfileExposureRamp = useProfileExposureRamp,
                         applyProfileDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
                         supportProfileOverrange = supportProfileOverrange,
+                        hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                         hncsCameraDomainGains = hncsCameraDomainGains,
                     )
                 }
@@ -2211,6 +2235,7 @@ class RawDemosaicProcessor {
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         cameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                        hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                         warpRectilinear = dngWarpRectilinear,
                     )
                     else -> null
@@ -2296,6 +2321,7 @@ class RawDemosaicProcessor {
                         applyDcpBaselineExposureOffset = applyDcpBaselineExposureOffset,
                         clampProfileRgb = clampProfileRgb,
                         supportProfileOverrange = supportProfileOverrange,
+                        hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                         hncsCameraDomainGains = hncsCameraDomainGains,
                         colorEngine = colorEngine,
                         activeDcpRenderPlan = activeDcpRenderPlan,
@@ -2401,6 +2427,7 @@ class RawDemosaicProcessor {
                 },
                 clampProfileRgb = clampProfileRgb,
                 supportProfileOverrange = supportProfileOverrange,
+                hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                 hncsCameraDomainGains = hncsCameraDomainGains,
                 label = "LinearRcdPass"
             )
@@ -2797,6 +2824,7 @@ class RawDemosaicProcessor {
                     },
                     clampProfileRgb = config.clampProfileRgb,
                     supportProfileOverrange = config.supportProfileOverrange,
+                    hueSatMapSupportsOverrange = config.hueSatMapSupportsOverrange,
                     hncsCameraDomainGains = config.hncsCameraDomainGains,
                     globalOriginX = working.left,
                     globalOriginY = working.top,
@@ -3107,6 +3135,7 @@ class RawDemosaicProcessor {
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
         hueSatMap: DcpHueSatMap?,
+        hueSatMapSupportsOverrange: Boolean,
         warpRectilinear: FloatArray? = null,
     ): DngProfileGainTableMap? {
         if (rawTextureId == 0 || width <= 0 || height <= 0 ||
@@ -3255,6 +3284,10 @@ class RawDemosaicProcessor {
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatEncoding"),
                 activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
             )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatSupportOverrange"),
+                if (hueSatMapSupportsOverrange) 1 else 0,
+            )
             GLES31.glUniform2i(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uImageSize"),
                 rawTextureWidth,
@@ -3298,6 +3331,10 @@ class RawDemosaicProcessor {
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uBaselineGain"),
                 if (curveModel == HdrPgtmCurveModel.PHOTON) 1f else exposureGain,
+            )
+            GLES31.glUniform1i(
+                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uUseMaxRgbInput"),
+                if (curveModel == HdrPgtmCurveModel.PHOTON) 1 else 0,
             )
             GLES31.glUniform1f(
                 GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHighlightThreshold"),
@@ -3388,6 +3425,8 @@ class RawDemosaicProcessor {
                         "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
                         "lsc=${lensShadingLogString(metadata)} " +
                         "warpCount=${activeWarpParameters.size / 8} " +
+                        "photonGuide=maxRgb " +
+                        "hueSatOverrange=$hueSatMapSupportsOverrange " +
                         "photonBaselineGain=${photonPlan.exposureGain} " +
                         "photonPreToneMapGain=$photonPreToneMapGain " +
                         "photonLlfLevels=${photonPlan.parameters.localLaplacianIntensityLevels} " +
@@ -4893,7 +4932,7 @@ class RawDemosaicProcessor {
         uniform float uHncsHrMax;
         uniform int uClampProfileRgb;
         uniform int uClampProfileGainOutput;
-        uniform int uProfileSupportOverrange;
+        uniform int uHueSatSupportOverrange;
         uniform int uProfileGainEnabled;
         uniform ivec3 uProfileGainTableSize;
         uniform vec4 uProfileGainGrid;
@@ -4994,7 +5033,7 @@ class RawDemosaicProcessor {
                     uLinearDcpHueSatMap,
                     uLinearDcpHueSatDivisions,
                     uLinearDcpHueSatEncoding,
-                    uProfileSupportOverrange != 0
+                    uHueSatSupportOverrange != 0
                 );
             }
             vec3 profileInputRgb = rgb * uProfileGainBaselineGain;
@@ -10483,9 +10522,9 @@ class RawDemosaicProcessor {
             workingColorSpace = basePlan?.workingColorSpace ?: workingColorSpace,
             baselineExposureOffset = basePlan?.baselineExposureOffset ?: 0f,
             defaultBlackRender = basePlan?.defaultBlackRender ?: DcpDefaultBlackRender.None,
-            // Photon endpoint normalization may require a value above 1 before a negative
-            // BaselineExposure gain. Preserve it until exposure and the tone curve are applied.
-            supportsOverrange = mode == RawProfileToneMapMode.Photon ||
+            // Photon PGTM has a normalized SDR contract. Do not inherit profile overrange:
+            // later nonlinear profile stages would otherwise change highlight channel ratios.
+            supportsOverrange = mode != RawProfileToneMapMode.Photon &&
                 basePlan?.supportsOverrange == true,
             colorCorrectionMatrix = basePlan?.colorCorrectionMatrix ?: metadata.colorCorrectionMatrix,
             cameraWhite = basePlan?.cameraWhite ?: metadata.cameraWhite,
@@ -10566,7 +10605,8 @@ class RawDemosaicProcessor {
         profileToEngineTransform: FloatArray,
         useAdobeProfilePipeline: Boolean,
         useProfileExposureRamp: Boolean,
-        applyDcpBaselineExposureOffset: Boolean
+        applyDcpBaselineExposureOffset: Boolean,
+        hueSatMapSupportsOverrange: Boolean,
     ) {
         if (profilePlanSource == null) return
 
@@ -10607,6 +10647,7 @@ class RawDemosaicProcessor {
                 "profileToneCurve=$profileToneCurveEnabled " +
                 "profileExposureRamp=$useProfileExposureRamp " +
                 "profileSupportsOverrange=${dcpRenderPlan?.supportsOverrange == true} " +
+                "hueSatSupportsOverrange=$hueSatMapSupportsOverrange " +
                 "defaultBlackRender=$defaultBlackRender " +
                 "baselineExposureOffset=$dcpBaselineExposureOffset " +
                 "cameraWhite=${cameraWhite.contentToString()} " +
@@ -10730,6 +10771,7 @@ class RawDemosaicProcessor {
         profileBaselineExposureOffsetEv: Float,
         clampProfileRgb: Boolean,
         supportProfileOverrange: Boolean,
+        hueSatMapSupportsOverrange: Boolean,
         hncsCameraDomainGains: FloatArray? = null,
         globalOriginX: Int = 0,
         globalOriginY: Int = 0,
@@ -10829,8 +10871,8 @@ class RawDemosaicProcessor {
             if (clampProfileRgb && !supportProfileOverrange) 1 else 0
         )
         GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(linearRcdProgram, "uProfileSupportOverrange"),
-            if (supportProfileOverrange) 1 else 0
+            GLES30.glGetUniformLocation(linearRcdProgram, "uHueSatSupportOverrange"),
+            if (hueSatMapSupportsOverrange) 1 else 0
         )
         GLES30.glUniform2f(
             GLES30.glGetUniformLocation(linearRcdProgram, "uGlobalUvOrigin"),
@@ -11053,6 +11095,7 @@ class RawDemosaicProcessor {
         useProfileExposureRamp: Boolean,
         applyProfileDcpBaselineExposureOffset: Boolean,
         supportProfileOverrange: Boolean,
+        hueSatMapSupportsOverrange: Boolean,
         hncsCameraDomainGains: FloatArray? = null,
     ): Float? {
         val previewSize = resolveLongEdgePreviewSize(
@@ -11088,6 +11131,7 @@ class RawDemosaicProcessor {
                     profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
                     clampProfileRgb = clampProfileRgb,
                     supportProfileOverrange = supportProfileOverrange,
+                    hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                     hncsCameraDomainGains = hncsCameraDomainGains,
                     label = "AdobeExposurePreviewLinearPass"
                 )
@@ -11163,6 +11207,7 @@ class RawDemosaicProcessor {
                             profileBaselineExposureOffsetEv = profileBaselineExposureOffsetEv,
                             clampProfileRgb = clampProfileRgb,
                             supportProfileOverrange = supportProfileOverrange,
+                            hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                             hncsCameraDomainGains = hncsCameraDomainGains,
                             label = "LinearExposurePreviewPass"
                         )

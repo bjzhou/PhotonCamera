@@ -5,7 +5,7 @@ import kotlin.math.ln
 import kotlin.math.min
 
 /**
- * GLES 3.1 compute passes for the Photon Local Laplacian + scalar Google BGU pipeline.
+ * GLES 3.1 compute passes for the Photon max-RGB Local Laplacian + scalar Google BGU pipeline.
  *
  * The equations and boundary handling intentionally mirror [DngPhotonLocalToneMapper]. Each
  * pyramid level occupies a disjoint range in one SSBO so a pass can read one level and write the
@@ -472,8 +472,8 @@ internal object DngPhotonLocalToneMapGpuShaders {
             );
             float filteredLog = minimumLog +
                 reconstructed[uSourceOffset + index] * (maximumLog - minimumLog);
-            // Local Laplacian operates on the already-exposed input. Its reconstructed
-            // linear radiance is the definitive SDR target; no second global curve follows it.
+            // Photon PGTM has a normalized SDR output contract. Keep max RGB inside that
+            // contract before later nonlinear profile stages can change channel ratios.
             target[index] = clamp(exp(filteredLog) - SOURCE_EPS, 0.0, 1.0);
         }
     """.trimIndent()

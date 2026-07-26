@@ -35,6 +35,8 @@ internal object DngHdrProfileGainTableGpuShaders {
         uniform int uHueSatEnabled;
         uniform ivec3 uHueSatDivisions;
         uniform int uHueSatEncoding;
+        uniform int uHueSatSupportOverrange;
+        uniform int uUseMaxRgbInput;
         uniform int uWriteCellSamples;
         uniform int uWarpCount;
 
@@ -135,12 +137,13 @@ internal object DngHdrProfileGainTableGpuShaders {
                     uHueSatMap,
                     uHueSatDivisions,
                     uHueSatEncoding,
-                    false
+                    uHueSatSupportOverrange != 0
                 );
             }
             profileRgb = clamp(profileRgb, 0.0, 1.0) * uBaselineGain;
             float rgbMin = min(profileRgb.r, min(profileRgb.g, profileRgb.b));
             float rgbMax = max(profileRgb.r, max(profileRgb.g, profileRgb.b));
+            if (uUseMaxRgbInput != 0) return rgbMax;
             return max(
                 0.1495 * profileRgb.r +
                 0.2935 * profileRgb.g +

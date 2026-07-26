@@ -27,7 +27,7 @@ import kotlin.math.roundToInt
  * Photon local tone mapping for DNG ProfileGainTableMap.
  *
  * Algorithm lineage:
- *  1. Paris/Hasinoff/Kautz Local Laplacian HDR remapping in log luminance.
+ *  1. Paris/Hasinoff/Kautz Local Laplacian HDR remapping on Photon max-RGB intensity.
  *  2. Aubry et al. intensity-discretized Local Laplacian evaluation.
  *  3. Google's fit-and-slice affine bilateral grid (BGU).
  *
@@ -126,9 +126,10 @@ internal object DngPhotonLocalToneMapper {
     }
 
     /**
-     * Fast general Local Laplacian evaluation from llf_general.m. [exposureGain] already contains
-     * BaselineExposure and the fixed ACR3 +1.1 EV placement. The middle 99% determines only the
-     * Local Laplacian large-edge slope; reconstructed linear radiance is the final SDR target.
+     * Fast general Local Laplacian evaluation from llf_general.m. The caller supplies max-RGB
+     * intensity, and [exposureGain] already contains BaselineExposure and the fixed ACR3 +1.25 EV
+     * placement. The middle 99% determines the Local Laplacian large-edge slope. Reconstructed
+     * max-RGB intensity is bounded to Photon PGTM's normalized SDR output contract.
      */
     internal fun localLaplacianToneMap(
         source: FloatArray,
