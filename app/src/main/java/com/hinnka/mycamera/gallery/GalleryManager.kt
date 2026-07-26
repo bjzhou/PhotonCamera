@@ -19,6 +19,7 @@ import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.camera.HdrBracketConfig
+import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.db.GalleryMediaStore
 import com.hinnka.mycamera.hdr.GainmapResult
@@ -2843,6 +2844,11 @@ object GalleryManager {
             }
 
             val currentUseSuperResolution = useSuperResolution
+            val rawStackOutputScale = if (currentUseSuperResolution) {
+                MultiFrameConfig.normalizeOutputScale(superResolutionScale)
+            } else {
+                1f
+            }
             val applyRawLensShading = resolveRawLensShadingCorrectionEnabled(context, metadata)
             val effectiveRawStackFrames = if (rawStackFrames.size == images.size &&
                 rawStackFrames.indices.all { rawStackFrames[it].image === images[it] }
@@ -2867,7 +2873,7 @@ object GalleryManager {
                 MultiFrameStacker.processBurstRaw(
                     frames = effectiveRawStackFrames,
                     cfaPattern = stackCfaPattern,
-                    outputScale = if (currentUseSuperResolution) superResolutionScale else 1f,
+                    outputScale = rawStackOutputScale,
                     masterBlackLevel = stackBlackLevel,
                     whiteLevel = stackWhiteLevel,
                     whiteBalanceGains = rawMetadata.whiteBalanceGains,
@@ -2885,10 +2891,23 @@ object GalleryManager {
             val finalStackResult = rawStackResult ?: return@withContext
             gpuSourceToRelease = finalStackResult.gpuLinearRgbSource
 
-            val stackedMetadata = if (finalStackResult.isNormalizedSensorData) {
+            val outputRawBlackBorderCrop =
+                metadata.rawBlackBorderCrop.scaledForOutput(rawStackOutputScale)
+            val stackedMetadataBase = if (finalStackResult.isNormalizedSensorData) {
                 metadata.withNormalizedRawLevelCorrectionsCleared("RAW stack")
             } else {
                 metadata
+            }
+            val stackedMetadata = stackedMetadataBase.copy(
+                rawBlackBorderCrop = outputRawBlackBorderCrop
+            )
+            if (outputRawBlackBorderCrop != metadata.rawBlackBorderCrop) {
+                PLog.i(
+                    TAG,
+                    "RAWmax black border crop mapped to output scale: " +
+                        "scale=$rawStackOutputScale native=${metadata.rawBlackBorderCrop} " +
+                        "output=$outputRawBlackBorderCrop"
+                )
             }
             val fusedBayerBuffer = finalStackResult.fusedBayerBuffer ?: return@withContext
             var fusedBufferReleased = false

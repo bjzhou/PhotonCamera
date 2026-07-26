@@ -78,4 +78,33 @@ class IszLensConfigTest {
         assertEquals(VendorCaptureValueType.INT, VendorCaptureKey.MTK_RAW_BPP.valueType)
         assertEquals("mtk_raw_bpp_14", settings.toVirtualLensProfileId())
     }
+
+    @Test
+    fun rawBlackBorderCrop_scaledForOutputMapsEveryMarginToRawMaxGrid() {
+        val nativeCrop = RawBlackBorderCrop(
+            leftPx = 7,
+            topPx = 10,
+            rightPx = 13,
+            bottomPx = 20
+        )
+
+        assertEquals(
+            RawBlackBorderCrop(
+                leftPx = 11,
+                topPx = 15,
+                rightPx = 20,
+                bottomPx = 30
+            ),
+            nativeCrop.scaledForOutput(1.5f)
+        )
+    }
+
+    @Test
+    fun rawBlackBorderCrop_scaledForOutputKeepsNativeGridForUnitOrInvalidScale() {
+        val nativeCrop = RawBlackBorderCrop(leftPx = 12, bottomPx = 8)
+
+        assertEquals(nativeCrop, nativeCrop.scaledForOutput(1f))
+        assertEquals(nativeCrop, nativeCrop.scaledForOutput(Float.NaN))
+        assertEquals(nativeCrop, nativeCrop.scaledForOutput(0f))
+    }
 }
