@@ -2,7 +2,6 @@ package com.hinnka.mycamera.camera
 
 import android.graphics.ColorSpace
 import android.os.Build
-import com.hinnka.mycamera.utils.DeviceUtil
 
 /**
  * 拍摄信息
@@ -21,7 +20,7 @@ data class CaptureInfo(
     
     // 设备信息
     val make: String = Build.MANUFACTURER,
-    val model: String = Build.MODEL,
+    val model: String = Build.MODEL,          // EXIF 设备型号代码
     val software: String = "PhotonCamera",
     
     // 拍摄参数

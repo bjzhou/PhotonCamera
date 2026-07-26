@@ -18,6 +18,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
+import com.hinnka.mycamera.utils.DeviceUtil
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
@@ -81,7 +82,7 @@ data class MediaMetadata(
     val cropRegion: Rect? = null,
     val rotation: Int = 0,
     // 拍摄信息
-    val deviceModel: String? = null,
+    val deviceModel: String? = null, // 边框水印显示的机型名称
     val brand: String? = null,
     val dateTaken: Long? = null,
     val location: String? = null,
@@ -144,12 +145,13 @@ data class MediaMetadata(
 ) {
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
+     *
+     * CaptureInfo.model 使用其 Build.MODEL 默认值，不复用边框水印的 deviceModel。
      */
     fun toCaptureInfo(): com.hinnka.mycamera.camera.CaptureInfo {
         return com.hinnka.mycamera.camera.CaptureInfo(
             iso = iso,
             make = brand ?: Build.MANUFACTURER,
-            model = deviceModel ?: Build.MODEL,
             captureTime = dateTaken ?: System.currentTimeMillis(),
             imageWidth = width,
             imageHeight = height,
@@ -478,7 +480,7 @@ data class MediaMetadata(
          */
         fun createDefault(width: Int, height: Int): MediaMetadata {
             return MediaMetadata(
-                deviceModel = Build.MODEL,
+                deviceModel = DeviceUtil.model,
                 brand = Build.MANUFACTURER.replaceFirstChar { it.uppercase() },
                 dateTaken = System.currentTimeMillis(),
                 width = width,
