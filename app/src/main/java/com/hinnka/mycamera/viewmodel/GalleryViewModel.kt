@@ -2529,13 +2529,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 设置裁剪比例选项
+     * 设置裁剪比例选项。
+     *
+     * 系统相册中的 RAW 会先导入为 Photon 副本再进入编辑，外层系统条目的尺寸/方向
+     * 可能与实际编辑预览不同，因此裁剪框必须使用实际编辑源的元数据坐标系。
      */
     fun setCropAspectOption(option: CropAspectOption) {
         editCropAspectOption.value = option
-        val photo = getCurrentPhoto() ?: return
-        val w = photo.metadata?.width ?: photo.width
-        val h = photo.metadata?.height ?: photo.height
+        val photo = getCurrentPhoto()?.let { it.relatedPhoto ?: it } ?: return
+        val w = photo.metadata?.width?.takeIf { it > 0 }
+            ?: currentMediaMetadata?.width?.takeIf { it > 0 }
+            ?: photo.width
+        val h = photo.metadata?.height?.takeIf { it > 0 }
+            ?: currentMediaMetadata?.height?.takeIf { it > 0 }
+            ?: photo.height
         if (w > 0 && h > 0) {
             editCropRect.value = calculateInitialCropRect(w, h, option)
         }
