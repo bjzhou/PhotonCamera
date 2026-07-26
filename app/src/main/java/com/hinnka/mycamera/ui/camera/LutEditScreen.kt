@@ -27,6 +27,7 @@ import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.CustomSlider
+import com.hinnka.mycamera.ui.components.ImageHistogram
 import com.hinnka.mycamera.viewmodel.LutEditViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -56,6 +57,7 @@ fun LutEditBottomSheet(
     onDismiss: () -> Unit,
     initialParams: ColorRecipeParams? = null,
     onParamsPreviewChange: ((ColorRecipeParams) -> Unit)? = null,
+    imageHistogram: ImageHistogram? = null,
     // 照片级配方相关（为 null 则隐藏 scope 切换，保持纯 LUT 编辑模式）
     photoRecipeParams: ColorRecipeParams? = null,
     onPhotoParamsChange: ((ColorRecipeParams?) -> Unit)? = null,
@@ -264,6 +266,7 @@ fun LutEditBottomSheet(
                         }
                     )
                 },
+                imageHistogram = imageHistogram,
                 modifier = Modifier.fillMaxWidth()
             )
         }

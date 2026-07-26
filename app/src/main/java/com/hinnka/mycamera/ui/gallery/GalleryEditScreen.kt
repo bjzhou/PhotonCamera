@@ -69,6 +69,7 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
@@ -185,6 +186,7 @@ fun GalleryEditScreen(
     // 预览 Bitmap 状态
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var imageHistogram by remember { mutableStateOf<ImageHistogram?>(null) }
 
     // 边框编辑状态
     val editFrameId by viewModel.editFrameId.collectAsState()
@@ -255,6 +257,8 @@ fun GalleryEditScreen(
         if (shouldShowEditControls) 160.dp else 0.dp
     )
     var previewRenderRequestId by remember { mutableLongStateOf(0L) }
+    val shouldCalculateImageHistogram =
+        (showLutEditDialog && editLutId != null) || isBaselineLutEditSheetVisible
 
     fun currentPreviewSignature(fast: Boolean = false): PreviewRenderSignature? {
         val photo = editSourcePhoto ?: return null
@@ -398,6 +402,29 @@ fun GalleryEditScreen(
         val photo = editSourcePhoto ?: return@LaunchedEffect
         thumbnailBitmap = withContext(Dispatchers.IO) {
             viewModel.loadThumbnail(photo)
+        }
+    }
+
+    LaunchedEffect(shouldCalculateImageHistogram, previewBitmap) {
+        val bitmap = previewBitmap
+        if (!shouldCalculateImageHistogram || bitmap == null || bitmap.isRecycled) {
+            imageHistogram = null
+            return@LaunchedEffect
+        }
+
+        imageHistogram = try {
+            withContext(Dispatchers.Default) {
+                ImageHistogram.fromBitmap(bitmap)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            PLog.e(
+                "GalleryEditScreen",
+                "Failed to calculate curve histogram from the current preview",
+                error,
+            )
+            null
         }
     }
 
@@ -1347,6 +1374,7 @@ fun GalleryEditScreen(
             onParamsPreviewChange = {
                 previewRecipeParamsOverride = it
             },
+            imageHistogram = imageHistogram,
             onDismiss = {
                 previewRecipeParamsOverride = null
                 showLutEditDialog = false
@@ -1362,6 +1390,7 @@ fun GalleryEditScreen(
         LutEditBottomSheet(
             lutId = baselineLutEditId!!,
             editorTarget = LutEditorTarget.BASELINE_RAW,
+            imageHistogram = imageHistogram,
             onDismiss = {
                 showBaselineLutEditSheet = false
                 showRawBaselineLutSelectorSheet = true

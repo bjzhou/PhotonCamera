@@ -50,6 +50,7 @@ fun ColorRecipePanel(
     onParamsChange: (ColorRecipeParams) -> Unit,
     onRemarksChange: (String) -> Unit,
     onCurveChange: (CurveChannel, FloatArray?) -> Unit = { _, _ -> },
+    imageHistogram: ImageHistogram? = null,
     hideNonBakeable: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -264,6 +265,7 @@ fun ColorRecipePanel(
                                 CurveEditorPanel(
                                     currentParams = currentParams,
                                     onCurveChange = onCurveChange,
+                                    imageHistogram = imageHistogram,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
