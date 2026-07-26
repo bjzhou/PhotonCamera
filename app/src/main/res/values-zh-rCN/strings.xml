@@ -104,6 +104,8 @@
     <string name="crop_free">自由</string>
     <string name="crop_original">原始</string>
     <string name="crop_reset">重置</string>
+    <string name="rotate">旋转</string>
+    <string name="flip_horizontal">水平翻转</string>
     <string name="delete_confirm">删除这张照片吗？</string>
     <string name="delete_multiple_confirm">删除 %d 张照片吗？</string>
     <string name="delete_exported_photos_count">同时删除 %d 张已导出照片</string>

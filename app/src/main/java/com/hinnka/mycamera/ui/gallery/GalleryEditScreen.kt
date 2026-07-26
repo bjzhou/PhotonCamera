@@ -130,6 +130,8 @@ private data class PreviewRenderSignature(
     val editComputationalAperture: Float?,
     val editFocusX: Float?,
     val editFocusY: Float?,
+    val editRotationDegrees: Int,
+    val editMirrorHorizontal: Boolean,
     val showOrigin: Boolean,
     val editTab: Int,
 )
@@ -233,6 +235,8 @@ fun GalleryEditScreen(
 
     val editCropRect by viewModel.editCropRect.collectAsState()
     val editCropAspectOption by viewModel.editCropAspectOption.collectAsState()
+    val editRotationDegrees by viewModel.editRotationDegrees.collectAsState()
+    val editMirrorHorizontal by viewModel.editMirrorHorizontal.collectAsState()
 
     val editAiDenoiseStrength by viewModel.editAiDenoiseStrength.collectAsState()
 
@@ -304,6 +308,8 @@ fun GalleryEditScreen(
             editComputationalAperture = if (fast) 0f else editComputationalAperture,
             editFocusX = editFocusX,
             editFocusY = editFocusY,
+            editRotationDegrees = editRotationDegrees,
+            editMirrorHorizontal = editMirrorHorizontal,
             showOrigin = showOrigin,
             editTab = editTab
         )
@@ -1340,6 +1346,13 @@ fun GalleryEditScreen(
                                         CropEditPanel(
                                             selectedOption = editCropAspectOption,
                                             onOptionSelected = { viewModel.setCropAspectOption(it) },
+                                            isHorizontallyMirrored = editMirrorHorizontal,
+                                            onRotate = {
+                                                viewModel.rotateEditClockwise()
+                                            },
+                                            onMirrorHorizontal = {
+                                                viewModel.toggleEditHorizontalMirror()
+                                            },
                                             availableRatios = availablePhotoAspectRatios,
                                             imageWidth = previewBitmap?.width ?: 1,
                                             imageHeight = previewBitmap?.height ?: 1

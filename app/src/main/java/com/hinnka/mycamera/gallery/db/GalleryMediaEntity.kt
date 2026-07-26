@@ -110,6 +110,8 @@ data class GalleryMediaEntity(
     val postCropTop: Int?,
     val postCropRight: Int?,
     val postCropBottom: Int?,
+    val postRotationDegrees: Int,
+    val postMirrorHorizontal: Boolean,
     val presentationTimestampUs: Long?,
     val droMode: String?,
     val software: String?,

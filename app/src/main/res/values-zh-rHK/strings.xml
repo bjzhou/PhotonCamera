@@ -104,6 +104,8 @@
     <string name="crop_free">自由</string>
     <string name="crop_original">原始</string>
     <string name="crop_reset">重置</string>
+    <string name="rotate">旋轉</string>
+    <string name="flip_horizontal">水平翻轉</string>
     <string name="delete_confirm">刪除這張相片嗎？</string>
     <string name="delete_multiple_confirm">刪除 %d 張相片嗎？</string>
     <string name="delete_exported_photos_count">同時刪除 %d 張已匯出相片</string>

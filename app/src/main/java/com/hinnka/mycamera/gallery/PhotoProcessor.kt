@@ -166,7 +166,7 @@ class PhotoProcessor(
                         lutLuminanceGainDownsample = RawGainmapMath.DOWNSAMPLE,
                     )
                     lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
-                        applyCrop(it, metadata, "ai_lut_luminance_gain")
+                        applyPostEditGeometry(it, metadata, "ai_lut_luminance_gain")
                     }
                     lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
                         alignLutLuminanceGainMapToSdr(sdrBitmap, it)
@@ -331,10 +331,10 @@ class PhotoProcessor(
 
         hdrReferenceBitmap = hdrReferenceBitmap?.let { alignHdrReferenceSizeToSdr(sdrBitmap, it, "raw_pre_crop") }
         lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
-            applyCrop(it, metadata, "raw_lut_luminance_gain")
+            applyPostEditGeometry(it, metadata, "raw_lut_luminance_gain")
         }
-        sdrBitmap = applyCrop(sdrBitmap, metadata, "raw_sdr")
-        hdrReferenceBitmap = hdrReferenceBitmap?.let { applyCrop(it, metadata, "raw_hdr") }
+        sdrBitmap = applyPostEditGeometry(sdrBitmap, metadata, "raw_sdr")
+        hdrReferenceBitmap = hdrReferenceBitmap?.let { applyPostEditGeometry(it, metadata, "raw_hdr") }
         hdrReferenceBitmap = hdrReferenceBitmap?.let { alignHdrReferenceSizeToSdr(sdrBitmap, it, "raw_post_crop") }
         lutLuminanceGainBitmap = lutLuminanceGainBitmap?.let {
             alignLutLuminanceGainMapToSdr(sdrBitmap, it)
@@ -721,7 +721,7 @@ class PhotoProcessor(
 
         result ?: return@withContext null
 
-        result = applyCrop(result, metadata, "dng")
+        result = applyPostEditGeometry(result, metadata, "dng")
         result = applyFrame(result, metadata)
 
         result
@@ -815,7 +815,7 @@ class PhotoProcessor(
             )
         }
 
-        result = applyCrop(result, metadata, "bitmap")
+        result = applyPostEditGeometry(result, metadata, "bitmap")
         if (applyFrameWatermark) {
             result = applyFrame(result, metadata)
         }
@@ -843,12 +843,34 @@ class PhotoProcessor(
     }
 
 
+    private fun applyPostEditGeometry(
+        input: Bitmap,
+        metadata: MediaMetadata,
+        label: String = "bitmap"
+    ): Bitmap {
+        val rotated = BitmapUtils.rotate(
+            input,
+            PostEditGeometry.normalizeRotation(metadata.postRotationDegrees).toFloat()
+        )
+        val transformed = if (metadata.postMirrorHorizontal) {
+            BitmapUtils.flipHorizontal(rotated)
+        } else {
+            rotated
+        }
+        return applyCrop(transformed, metadata, label)
+    }
+
     private fun applyCrop(input: Bitmap, metadata: MediaMetadata, label: String = "bitmap"): Bitmap {
         val cropRegion = metadata.postCropRegion ?: return input
         if (cropRegion.width() <= 0 || cropRegion.height() <= 0) return input
 
-        val sourceWidth = metadata.width.takeIf { it > 0 } ?: input.width
-        val sourceHeight = metadata.height.takeIf { it > 0 } ?: input.height
+        val baseWidth = metadata.width.takeIf { it > 0 } ?: input.width
+        val baseHeight = metadata.height.takeIf { it > 0 } ?: input.height
+        val (sourceWidth, sourceHeight) = PostEditGeometry.rotatedDimensions(
+            baseWidth,
+            baseHeight,
+            metadata.postRotationDegrees
+        )
         val mappedCropRegion = mapPostCropRegionToInput(cropRegion, sourceWidth, sourceHeight, input.width, input.height)
         if (mappedCropRegion.isEmpty) return input
 

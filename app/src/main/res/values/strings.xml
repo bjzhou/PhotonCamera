@@ -106,6 +106,8 @@
     <string name="crop_free">Free</string>
     <string name="crop_original">Original</string>
     <string name="crop_reset">Reset</string>
+    <string name="rotate">Rotate</string>
+    <string name="flip_horizontal">Flip horizontally</string>
     <string name="delete_confirm">Delete this photo?</string>
     <string name="delete_multiple_confirm">Delete %d photos?</string>
     <string name="delete_exported_photos_count">Also delete %d exported photos</string>

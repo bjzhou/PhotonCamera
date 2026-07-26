@@ -22,6 +22,7 @@ import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
+import com.hinnka.mycamera.gallery.PostEditGeometry
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.creator.AiPhotoEvaluation
@@ -410,6 +411,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editCropAspectOption = MutableStateFlow<CropAspectOption>(CropAspectOption.Free)
         private set
+    var editRotationDegrees = MutableStateFlow(0)
+        private set
+    var editMirrorHorizontal = MutableStateFlow(false)
+        private set
 
     private val _editAiDenoiseStrength = MutableStateFlow(1.0f)
     val editAiDenoiseStrength = _editAiDenoiseStrength.asStateFlow()
@@ -428,8 +433,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setFocusPoint(x: Float, y: Float) {
-        editFocusPointX.value = x
-        editFocusPointY.value = y
+        val (sourceX, sourceY) = PostEditGeometry.mapEditedPointToSource(
+            x = x,
+            y = y,
+            rotationDegrees = editRotationDegrees.value,
+            mirrorHorizontal = editMirrorHorizontal.value
+        )
+        editFocusPointX.value = sourceX
+        editFocusPointY.value = sourceY
         updateBokehPhoto()
     }
 
@@ -1263,8 +1274,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        val cw = metadata.width.takeIf { it > 0 } ?: photo?.width ?: 0
-        val ch = metadata.height.takeIf { it > 0 } ?: photo?.height ?: 0
+        val baseWidth = metadata.width.takeIf { it > 0 } ?: photo?.width ?: 0
+        val baseHeight = metadata.height.takeIf { it > 0 } ?: photo?.height ?: 0
+        val (cw, ch) = PostEditGeometry.rotatedDimensions(
+            baseWidth,
+            baseHeight,
+            metadata.postRotationDegrees
+        )
         if (metadata.postCropRegion != null && cw > 0 && ch > 0) {
             val cropRect = RectF(
                 metadata.postCropRegion.left.toFloat() / cw,
@@ -1321,6 +1337,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRawSpectralFilmCDensityGain.value = m.spectralFilmCDensityGain
             editRawSpectralFilmMDensityGain.value = m.spectralFilmMDensityGain
             editRawSpectralFilmYDensityGain.value = m.spectralFilmYDensityGain
+            editRotationDegrees.value = PostEditGeometry.normalizeRotation(m.postRotationDegrees)
+            editMirrorHorizontal.value = m.postMirrorHorizontal
             _editAiDenoiseStrength.value = if (m.hasAiDenoisedBase) m.aiDenoiseStrength ?: 1.0f else 0.0f
             restoreCropEditState(photo, m)
 
@@ -1333,6 +1351,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         } ?: run {
+            editRotationDegrees.value = 0
+            editMirrorHorizontal.value = false
             _editAiDenoiseStrength.value = 0.0f
             restoreCropEditState(photo, null)
         }
@@ -1922,6 +1942,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawSpectralFilmCDensityGain.value = metadata.spectralFilmCDensityGain
                 editRawSpectralFilmMDensityGain.value = metadata.spectralFilmMDensityGain
                 editRawSpectralFilmYDensityGain.value = metadata.spectralFilmYDensityGain
+                editRotationDegrees.value =
+                    PostEditGeometry.normalizeRotation(metadata.postRotationDegrees)
+                editMirrorHorizontal.value = metadata.postMirrorHorizontal
                 restoreCropEditState(targetPhoto, metadata)
                 // 智能初始化：导入的照片默认值为 0，App 拍摄的则回退到当前全局配置
                 editSharpening.value =
@@ -1983,6 +2006,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawSpectralFilmCDensityGain.value = 1f
                 editRawSpectralFilmMDensityGain.value = 1f
                 editRawSpectralFilmYDensityGain.value = 1f
+                editRotationDegrees.value = 0
+                editMirrorHorizontal.value = false
                 editComputationalAperture.value = null
                 editFocusPointX.value = null
                 editFocusPointY.value = null
@@ -2069,6 +2094,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editApplyEffectsToVideo.value = false
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
+        editRotationDegrees.value = 0
+        editMirrorHorizontal.value = false
         editRawExposureCompensation.value = 0f
         editRawAutoExposure.value = true
         editRawHighlightsAdjustment.value = 0f
@@ -2537,15 +2564,48 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setCropAspectOption(option: CropAspectOption) {
         editCropAspectOption.value = option
         val photo = getCurrentPhoto()?.let { it.relatedPhoto ?: it } ?: return
-        val w = photo.metadata?.width?.takeIf { it > 0 }
+        val baseWidth = photo.metadata?.width?.takeIf { it > 0 }
             ?: currentMediaMetadata?.width?.takeIf { it > 0 }
             ?: photo.width
-        val h = photo.metadata?.height?.takeIf { it > 0 }
+        val baseHeight = photo.metadata?.height?.takeIf { it > 0 }
             ?: currentMediaMetadata?.height?.takeIf { it > 0 }
             ?: photo.height
+        val (w, h) = PostEditGeometry.rotatedDimensions(
+            baseWidth,
+            baseHeight,
+            editRotationDegrees.value
+        )
         if (w > 0 && h > 0) {
             editCropRect.value = calculateInitialCropRect(w, h, option)
         }
+    }
+
+    fun rotateEditClockwise() {
+        editCropRect.value = editCropRect.value?.let {
+            PostEditGeometry.rotateNormalizedRect(it, 90)
+        }
+        editCropAspectOption.value = when (val option = editCropAspectOption.value) {
+            is CropAspectOption.FromAspectRatio -> CropAspectOption.Custom(
+                option.heightRatio,
+                option.widthRatio
+            )
+            is CropAspectOption.Custom -> CropAspectOption.Custom(
+                option.heightRatio,
+                option.widthRatio
+            )
+            else -> option
+        }
+        editRotationDegrees.value = PostEditGeometry.rotationAfterClockwiseTurn(
+            rotationDegrees = editRotationDegrees.value,
+            mirrorHorizontal = editMirrorHorizontal.value
+        )
+    }
+
+    fun toggleEditHorizontalMirror() {
+        editCropRect.value = editCropRect.value?.let {
+            PostEditGeometry.mirrorNormalizedRectHorizontally(it)
+        }
+        editMirrorHorizontal.value = !editMirrorHorizontal.value
     }
 
     /**
@@ -2746,15 +2806,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
                         postCropRegion = editCropRect.value?.let { rectF ->
-                            val cw = photo.metadata?.width ?: photo.width
-                            val ch = photo.metadata?.height ?: photo.height
+                            val baseWidth = photo.metadata?.width ?: photo.width
+                            val baseHeight = photo.metadata?.height ?: photo.height
+                            val (cw, ch) = PostEditGeometry.rotatedDimensions(
+                                baseWidth,
+                                baseHeight,
+                                editRotationDegrees.value
+                            )
                             android.graphics.Rect(
                                 (rectF.left * cw).roundToInt(),
                                 (rectF.top * ch).roundToInt(),
                                 (rectF.right * cw).roundToInt(),
                                 (rectF.bottom * ch).roundToInt()
                             )
-                        }
+                        },
+                        postRotationDegrees = editRotationDegrees.value,
+                        postMirrorHorizontal = editMirrorHorizontal.value
                     )
                     
                     if (ignoreCrop) {
@@ -3034,12 +3101,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     ?: photo.metadata
                 val rawBaselineLutId = editRawBaselineLutId.value
                 val rawBaselineRecipeParams = loadRawBaselineRecipeParams(rawBaselineLutId)
-                val w = targetMetadata?.width?.takeIf { it > 0 }
+                val baseWidth = targetMetadata?.width?.takeIf { it > 0 }
                     ?: photo.relatedPhoto?.width?.takeIf { it > 0 }
                     ?: photo.width
-                val h = targetMetadata?.height?.takeIf { it > 0 }
+                val baseHeight = targetMetadata?.height?.takeIf { it > 0 }
                     ?: photo.relatedPhoto?.height?.takeIf { it > 0 }
                     ?: photo.height
+                val (w, h) = PostEditGeometry.rotatedDimensions(
+                    baseWidth,
+                    baseHeight,
+                    editRotationDegrees.value
+                )
                 val finalCropRegion = editCropRect.value?.let { rectF ->
                     android.graphics.Rect(
                         (rectF.left * w).roundToInt(),
@@ -3087,6 +3159,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         focusPointX = editFocusPointX.value,
                         focusPointY = editFocusPointY.value,
                         postCropRegion = finalCropRegion,
+                        postRotationDegrees = editRotationDegrees.value,
+                        postMirrorHorizontal = editMirrorHorizontal.value,
                         applyEffectsToVideo = editApplyEffectsToVideo.value
                     )
                 }

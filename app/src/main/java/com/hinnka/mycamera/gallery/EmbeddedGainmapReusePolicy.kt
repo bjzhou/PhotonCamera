@@ -16,6 +16,8 @@ object EmbeddedGainmapReusePolicy {
                 metadata.frameId == null &&
                 metadata.cropRegion == null &&
                 metadata.postCropRegion == null &&
+                PostEditGeometry.normalizeRotation(metadata.postRotationDegrees) == 0 &&
+                !metadata.postMirrorHorizontal &&
                 metadata.computationalAperture == null
     }
 }

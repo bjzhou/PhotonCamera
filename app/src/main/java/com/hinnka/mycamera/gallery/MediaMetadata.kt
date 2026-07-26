@@ -42,7 +42,7 @@ private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
  * 保存 LUT、边框水印、编辑信息和拍摄参数，用于非破坏性编辑和边框水印渲染
  */
 data class MediaMetadata(
-    val version: Int = 27,
+    val version: Int = 29,
     val mediaType: MediaType = MediaType.IMAGE,
     // 编辑配置
     val lutId: String? = null,
@@ -115,6 +115,8 @@ data class MediaMetadata(
     val focusPointX: Float? = null,
     val focusPointY: Float? = null,
     val postCropRegion: Rect? = null,
+    val postRotationDegrees: Int = 0,
+    val postMirrorHorizontal: Boolean = false,
     // Live Photo 演示时间戳 (us)
     val presentationTimestampUs: Long? = null,
     // DRO 模式
@@ -407,6 +409,8 @@ data class MediaMetadata(
                             pcObj.getInt("bottom")
                         )
                     },
+                    postRotationDegrees = obj.optInt("postRotationDegrees", 0),
+                    postMirrorHorizontal = obj.optBoolean("postMirrorHorizontal", false),
                     rotation = obj.optInt("rotation", 0),
                     // 拍摄信息
                     deviceModel = if (obj.isNull("deviceModel")) null else obj.optString("deviceModel"),
