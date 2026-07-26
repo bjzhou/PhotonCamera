@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,6 +44,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -99,6 +102,10 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.CustomFocalLengthValue
+import com.hinnka.mycamera.camera.CustomVendorKey
+import com.hinnka.mycamera.camera.CustomVendorKeySettings
+import com.hinnka.mycamera.camera.CustomVendorKeyTarget
+import com.hinnka.mycamera.camera.CustomVendorKeyValueType
 import com.hinnka.mycamera.camera.IszLensConfig
 import com.hinnka.mycamera.camera.IszRawDngMetadataCorrections
 import com.hinnka.mycamera.camera.LensType
@@ -138,6 +145,7 @@ import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.video.VideoRecordingPath
 import java.io.File
+import java.util.UUID
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
 
@@ -259,6 +267,7 @@ fun SettingsScreen(
     val nrLevel by viewModel.nrLevel.collectAsState(initial = 5)
     val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
     val vendorCaptureSettingsByLens by viewModel.vendorCaptureSettingsByLens.collectAsState()
+    val customVendorKeySettings by viewModel.customVendorKeySettings.collectAsState()
     val useRaw by viewModel.useRaw.collectAsState(initial = false)
     val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = true)
     // 软件处理参数
@@ -362,6 +371,7 @@ fun SettingsScreen(
     var windowScreenBrightnessEnabled by remember { mutableStateOf(windowScreenBrightness != null) }
     var showAspectRatioDialog by remember { mutableStateOf(false) }
     var showAddIszLensDialog by remember { mutableStateOf(false) }
+    var showCustomVendorKeysDialog by remember { mutableStateOf(false) }
     var backupOperation by remember { mutableStateOf<BackupOperation?>(null) }
 
     LaunchedEffect(
@@ -984,6 +994,20 @@ fun SettingsScreen(
                                 iszLensConfigs.size
                             ),
                             onClick = { showAddIszLensDialog = true }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_custom_vendor_keys),
+                            description = stringResource(
+                                R.string.settings_custom_vendor_keys_description,
+                                customVendorKeySettings.keys.size
+                            ),
+                            onClick = { showCustomVendorKeysDialog = true }
                         )
 
                         if (mainCameraIdOptions.size > 1) {
@@ -2431,6 +2455,16 @@ fun SettingsScreen(
         )
     }
 
+    if (showCustomVendorKeysDialog) {
+        CustomVendorKeysDialog(
+            availableCameras = state.availableCameras,
+            settings = customVendorKeySettings,
+            onSave = viewModel::upsertCustomVendorKey,
+            onDelete = viewModel::removeCustomVendorKey,
+            onDismiss = { showCustomVendorKeysDialog = false }
+        )
+    }
+
     baselinePickerTarget?.let { target ->
         val currentBaselineLutId = when (target) {
             BaselineColorCorrectionTarget.JPG -> jpgBaselineLutId
@@ -3515,6 +3549,369 @@ private fun PremiumCard(
     }
 }
 
+
+@Composable
+private fun CustomVendorKeysDialog(
+    availableCameras: List<CameraInfo>,
+    settings: CustomVendorKeySettings,
+    onSave: (CustomVendorKey) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var showEditor by remember { mutableStateOf(false) }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var keyNameText by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf(CustomVendorKeyTarget.CAPTURE_REQUEST) }
+    var valueType by remember { mutableStateOf(CustomVendorKeyValueType.INT32) }
+    var valueText by remember { mutableStateOf("0") }
+    var lensId by remember { mutableStateOf<String?>(null) }
+
+    val lensIds = remember(availableCameras, settings.keys) {
+        (availableCameras.map { it.cameraId } + settings.keys.mapNotNull { it.lensId })
+            .distinct()
+    }
+    val allLensesLabel = stringResource(R.string.settings_custom_vendor_key_all_lenses)
+    val captureTargetLabel = stringResource(R.string.settings_custom_vendor_key_target_capture)
+    val sessionTargetLabel = stringResource(R.string.settings_custom_vendor_key_target_session)
+    val int32TypeLabel = stringResource(R.string.settings_custom_vendor_key_type_int32)
+    val u8TypeLabel = stringResource(R.string.settings_custom_vendor_key_type_u8)
+    val targetOptions = listOf(
+        CustomVendorKeyTarget.CAPTURE_REQUEST to captureTargetLabel,
+        CustomVendorKeyTarget.SESSION_PARAMETER to sessionTargetLabel
+    )
+    val valueTypeOptions = listOf(
+        CustomVendorKeyValueType.INT32 to int32TypeLabel,
+        CustomVendorKeyValueType.U8 to u8TypeLabel
+    )
+    val lensOptions = listOf<String?>(null) + lensIds
+    val lensLabels = lensOptions.map { id ->
+        id to if (id == null) {
+            allLensesLabel
+        } else {
+            stringResource(R.string.settings_custom_vendor_key_lens_id, id)
+        }
+    }
+
+    fun beginAdd() {
+        editingId = null
+        keyNameText = ""
+        target = CustomVendorKeyTarget.CAPTURE_REQUEST
+        valueType = CustomVendorKeyValueType.INT32
+        valueText = "0"
+        lensId = null
+        showEditor = true
+    }
+
+    fun beginEdit(key: CustomVendorKey) {
+        editingId = key.id
+        keyNameText = key.keyName
+        target = key.target
+        valueType = key.valueType
+        valueText = key.normalizedValue.toString()
+        lensId = key.lensId
+        showEditor = true
+    }
+
+    val normalizedKeyName = keyNameText.trim()
+    val isKeyNameValid = CustomVendorKey.isValidKeyName(normalizedKeyName)
+    val parsedValue = valueText.toIntOrNull()
+    val isValueValid = parsedValue != null && valueType.isValid(parsedValue)
+    val hasDuplicate = settings.keys.any { existing ->
+        if (
+            existing.id == editingId ||
+            existing.keyName != normalizedKeyName ||
+            existing.target != target
+        ) {
+            false
+        } else {
+            val lensScopesOverlap =
+                existing.lensId == null || lensId == null || existing.lensId == lensId
+            existing.lensId == lensId ||
+                (lensScopesOverlap && existing.valueType != valueType)
+        }
+    }
+    val isDraftValid = isKeyNameValid && isValueValid && !hasDuplicate
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(
+                    if (showEditor) {
+                        R.string.settings_custom_vendor_key_editor_title
+                    } else {
+                        R.string.settings_custom_vendor_keys
+                    }
+                )
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_custom_vendor_keys_warning),
+                    color = Color(0xFFFFB74D),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (showEditor) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = keyNameText,
+                        onValueChange = { keyNameText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.settings_custom_vendor_key_name)) },
+                        supportingText = {
+                            Text(
+                                when {
+                                    hasDuplicate ->
+                                        stringResource(R.string.settings_custom_vendor_key_duplicate)
+                                    keyNameText.isNotEmpty() && !isKeyNameValid ->
+                                        stringResource(R.string.settings_custom_vendor_key_invalid_name)
+                                    else ->
+                                        stringResource(R.string.settings_custom_vendor_key_name_description)
+                                }
+                            )
+                        },
+                        isError = hasDuplicate || (keyNameText.isNotEmpty() && !isKeyNameValid),
+                        singleLine = true,
+                        colors = customVendorKeyTextFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_custom_vendor_key_target),
+                        description = stringResource(
+                            if (target == CustomVendorKeyTarget.CAPTURE_REQUEST) {
+                                R.string.settings_custom_vendor_key_target_capture_description
+                            } else {
+                                R.string.settings_custom_vendor_key_target_session_description
+                            }
+                        ),
+                        value = targetOptions.first { it.first == target }.second,
+                        options = targetOptions.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selected ->
+                            targetOptions.firstOrNull { it.second == selected }?.let {
+                                target = it.first
+                            }
+                        }
+                    )
+
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_custom_vendor_key_value_type),
+                        value = valueTypeOptions.first { it.first == valueType }.second,
+                        options = valueTypeOptions.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selected ->
+                            valueTypeOptions.firstOrNull { it.second == selected }?.let {
+                                valueType = it.first
+                            }
+                        }
+                    )
+
+                    androidx.compose.material3.OutlinedTextField(
+                        value = valueText,
+                        onValueChange = { valueText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.settings_custom_vendor_key_value)) },
+                        supportingText = {
+                            Text(
+                                if (isValueValid) {
+                                    stringResource(
+                                        if (valueType == CustomVendorKeyValueType.INT32) {
+                                            R.string.settings_custom_vendor_key_int32_range
+                                        } else {
+                                            R.string.settings_custom_vendor_key_u8_range
+                                        }
+                                    )
+                                } else {
+                                    stringResource(R.string.settings_custom_vendor_key_invalid_value)
+                                }
+                            )
+                        },
+                        isError = !isValueValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = if (valueType == CustomVendorKeyValueType.INT32) {
+                                KeyboardType.Ascii
+                            } else {
+                                KeyboardType.Number
+                            }
+                        ),
+                        colors = customVendorKeyTextFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_custom_vendor_key_lens),
+                        value = lensLabels.firstOrNull { it.first == lensId }?.second ?: allLensesLabel,
+                        options = lensLabels.map { it.second },
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selected ->
+                            lensLabels.firstOrNull { it.second == selected }?.let {
+                                lensId = it.first
+                            }
+                        }
+                    )
+                } else {
+                    if (settings.keys.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.settings_custom_vendor_keys_empty),
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    } else {
+                        settings.keys.forEachIndexed { index, key ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    color = Color.White.copy(alpha = 0.08f),
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            }
+                            val keyTargetLabel = when (key.target) {
+                                CustomVendorKeyTarget.CAPTURE_REQUEST -> captureTargetLabel
+                                CustomVendorKeyTarget.SESSION_PARAMETER -> sessionTargetLabel
+                            }
+                            val keyTypeLabel = when (key.valueType) {
+                                CustomVendorKeyValueType.INT32 -> int32TypeLabel
+                                CustomVendorKeyValueType.U8 -> u8TypeLabel
+                            }
+                            val keyLensLabel = lensLabels.firstOrNull { it.first == key.lensId }
+                                ?.second
+                                ?: key.lensId.orEmpty()
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { beginEdit(key) }
+                                        .padding(vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = key.keyName,
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(
+                                            R.string.settings_custom_vendor_key_summary,
+                                            keyTargetLabel,
+                                            keyTypeLabel,
+                                            key.normalizedValue,
+                                            keyLensLabel
+                                        ),
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 12.sp,
+                                        lineHeight = 17.sp
+                                    )
+                                }
+                                IconButton(onClick = { beginEdit(key) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = stringResource(R.string.edit),
+                                        tint = Color.White.copy(alpha = 0.7f)
+                                    )
+                                }
+                                IconButton(onClick = { onDelete(key.id) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = stringResource(R.string.delete),
+                                        tint = Color(0xFFFF8A80)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    TextButton(
+                        onClick = ::beginAdd,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.settings_custom_vendor_key_add))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (showEditor) {
+                TextButton(
+                    enabled = isDraftValid,
+                    onClick = {
+                        val validValue = parsedValue ?: return@TextButton
+                        onSave(
+                            CustomVendorKey(
+                                id = editingId ?: UUID.randomUUID().toString(),
+                                keyName = normalizedKeyName,
+                                target = target,
+                                valueType = valueType,
+                                value = validValue,
+                                lensId = lensId
+                            )
+                        )
+                        showEditor = false
+                    }
+                ) {
+                    Text(stringResource(R.string.save))
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.close))
+                }
+            }
+        },
+        dismissButton = if (showEditor) {
+            {
+                TextButton(onClick = { showEditor = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        } else {
+            null
+        }
+    )
+}
+
+@Composable
+private fun customVendorKeyTextFieldColors() =
+    androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+        focusedTextColor = Color.White,
+        unfocusedTextColor = Color.White,
+        focusedBorderColor = Color(0xFFE5A324),
+        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+        focusedLabelColor = Color(0xFFE5A324),
+        unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
+        focusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
+        unfocusedSupportingTextColor = Color.White.copy(alpha = 0.55f),
+        errorTextColor = Color.White,
+        errorSupportingTextColor = Color(0xFFFF8A80),
+        errorBorderColor = Color(0xFFFF8A80),
+        cursorColor = Color(0xFFE5A324)
+    )
 
 /**
  * 图像质量等级设置（通用组件）

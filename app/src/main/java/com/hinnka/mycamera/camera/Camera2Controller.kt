@@ -2313,8 +2313,17 @@ class Camera2Controller(private val context: Context) {
         } else {
             emptyMap()
         }
+        val customVendorSessionKeys = if (includeVendorSessionParameters) {
+            customVendorSessionParameterKeys(state)
+        } else {
+            emptyList()
+        }
 
-        if (!shouldApplyStandardSessionParameters && vendorSessionValues.isEmpty()) {
+        if (
+            !shouldApplyStandardSessionParameters &&
+            vendorSessionValues.isEmpty() &&
+            customVendorSessionKeys.isEmpty()
+        ) {
             return InitialSessionParametersResult(applied = false, usedVendorParameters = false)
         }
 
@@ -2331,15 +2340,23 @@ class Camera2Controller(private val context: Context) {
                     target = "session"
                 )
             }
+            applyCustomVendorKeys(
+                builder = builder,
+                lensId = state.currentCameraId,
+                keys = customVendorSessionKeys,
+                target = "session"
+            )
             sessionConfig.setSessionParameters(builder.build())
             PLog.d(
                 TAG,
                 "Initial session parameters applied: standard=$shouldApplyStandardSessionParameters, " +
-                        "vendorKeys=${vendorSessionValues.keys.map { it.requestKeyName }}"
+                        "vendorKeys=${vendorSessionValues.keys.map { it.requestKeyName }}, " +
+                        "customVendorKeys=${customVendorSessionKeys.map { it.keyName }}"
             )
             return InitialSessionParametersResult(
                 applied = true,
-                usedVendorParameters = vendorSessionValues.isNotEmpty()
+                usedVendorParameters =
+                    vendorSessionValues.isNotEmpty() || customVendorSessionKeys.isNotEmpty()
             )
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to set initial session parameters", e)
@@ -2591,6 +2608,7 @@ class Camera2Controller(private val context: Context) {
             setZslDisabledIfSupported(builder)
         }
         applyVendorCaptureSettings(builder, isCapture)
+        applyCustomVendorCaptureRequestKeys(builder, isCapture)
         if (isCapture) {
             PLog.i(
                 TAG,
@@ -2612,6 +2630,13 @@ class Camera2Controller(private val context: Context) {
         return settings.values.filterKeys { key ->
             FORCED_VENDOR_SESSION_PARAMETER_KEYS.contains(key)
         }
+    }
+
+    private fun customVendorSessionParameterKeys(state: CameraState): List<CustomVendorKey> {
+        return state.customVendorKeySettings.keysFor(
+            cameraId = state.currentCameraId,
+            target = CustomVendorKeyTarget.SESSION_PARAMETER
+        )
     }
 
     private fun applyVendorCaptureSettings(builder: CaptureRequest.Builder, isCapture: Boolean) {
@@ -2655,6 +2680,64 @@ class Camera2Controller(private val context: Context) {
                 PLog.d(TAG, "Applied vendor $target key for lens $lensId: ${key.requestKeyName}=$normalizedValue")
             } catch (e: Exception) {
                 PLog.w(TAG, "Failed to apply vendor $target key for lens $lensId: ${key.requestKeyName}", e)
+            }
+        }
+    }
+
+    private fun applyCustomVendorCaptureRequestKeys(
+        builder: CaptureRequest.Builder,
+        isCapture: Boolean
+    ) {
+        val state = _state.value
+        val lensId = state.currentCameraId
+        val keys = state.customVendorKeySettings.keysFor(
+            cameraId = lensId,
+            target = CustomVendorKeyTarget.CAPTURE_REQUEST
+        )
+        applyCustomVendorKeys(
+            builder = builder,
+            lensId = lensId,
+            keys = keys,
+            target = if (isCapture) "capture" else "preview"
+        )
+    }
+
+    private fun applyCustomVendorKeys(
+        builder: CaptureRequest.Builder,
+        lensId: String,
+        keys: List<CustomVendorKey>,
+        target: String
+    ) {
+        keys.forEach { key ->
+            try {
+                when (key.valueType) {
+                    CustomVendorKeyValueType.INT32 -> {
+                        builder.set(
+                            CaptureRequest.Key(key.keyName, Int::class.java),
+                            key.normalizedValue
+                        )
+                    }
+
+                    CustomVendorKeyValueType.U8 -> {
+                        // Camera2 exposes byte vendor tags as Java Byte. Values 128..255
+                        // keep their unsigned bit pattern when converted to Byte.
+                        builder.set(
+                            CaptureRequest.Key(key.keyName, Byte::class.java),
+                            key.normalizedValue.toByte()
+                        )
+                    }
+                }
+                PLog.d(
+                    TAG,
+                    "Applied custom vendor $target key for lens $lensId: " +
+                        "${key.keyName}=${key.normalizedValue} (${key.valueType})"
+                )
+            } catch (e: Exception) {
+                PLog.w(
+                    TAG,
+                    "Failed to apply custom vendor $target key for lens $lensId: ${key.keyName}",
+                    e
+                )
             }
         }
     }
@@ -3780,6 +3863,55 @@ class Camera2Controller(private val context: Context) {
                 TAG,
                 "Recreating preview session for vendor session parameter change: " +
                         "old=$previousVendorSessionValues, new=$updatedVendorSessionValues"
+            )
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+            return
+        }
+
+        previewRequestBuilder?.apply {
+            applyBaseCameraSettings(this, isCapture = false)
+            updatePreview()
+        }
+    }
+
+    fun setCustomVendorKeySettings(settings: CustomVendorKeySettings) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                setCustomVendorKeySettings(settings)
+            }
+            return
+        }
+
+        val previousState = _state.value
+        if (previousState.customVendorKeySettings == settings) return
+
+        val previousSessionKeys = customVendorSessionParameterKeys(previousState)
+        val updatedState = previousState.copy(customVendorKeySettings = settings)
+        val updatedSessionKeys = customVendorSessionParameterKeys(updatedState)
+
+        _state.value = updatedState
+        PLog.d(TAG, "Custom vendor key count: ${settings.keys.size}")
+
+        val shouldRecreateSession =
+            previousSessionKeys != updatedSessionKeys &&
+                cameraDevice != null &&
+                previewSurface != null
+        if (shouldRecreateSession) {
+            if (_state.value.videoRecordingState.isRecording) {
+                pendingVendorSessionParameterRestart = true
+                PLog.w(
+                    TAG,
+                    "Custom vendor session parameter changed during recording; " +
+                        "keeping active request until session restart"
+                )
+                return
+            }
+            PLog.d(
+                TAG,
+                "Recreating preview session for custom vendor session parameter change: " +
+                    "old=${previousSessionKeys.map { it.keyName }}, " +
+                    "new=${updatedSessionKeys.map { it.keyName }}"
             )
             createPreviewSession(openGeneration = cameraOpenGeneration)
             return

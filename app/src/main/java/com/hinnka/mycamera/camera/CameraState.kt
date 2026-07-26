@@ -341,6 +341,7 @@ data class CameraState(
     val nrLevel: Int = 5,
     val availableNrModes: IntArray = intArrayOf(),
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
+    val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
 
     val isRawSupported: Boolean = false,
     val multiFrameOutputScale: Float? = null,

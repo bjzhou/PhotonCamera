@@ -1121,6 +1121,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         userPreferencesRepository.userPreferences
             .map { it.vendorCaptureSettingsByLens }
             .stateIn(viewModelScope, SharingStarted.Eagerly, VendorCaptureSettingsByLens.Empty)
+    val customVendorKeySettings: StateFlow<CustomVendorKeySettings> =
+        userPreferencesRepository.userPreferences
+            .map { it.customVendorKeySettings }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, CustomVendorKeySettings.Empty)
     val rawRenderingEngine: StateFlow<RawRenderingEngine> = userPreferencesRepository.userPreferences
         .map { it.rawRenderingEngine }
         .stateIn(viewModelScope, SharingStarted.Eagerly, RawRenderingEngine.AdobeCurve)
@@ -1631,6 +1635,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setEdgeLevel(it.edgeLevel)
                 if (currentCameraState.vendorCaptureSettingsByLens != it.vendorCaptureSettingsByLens) {
                     cameraController.setVendorCaptureSettingsByLens(it.vendorCaptureSettingsByLens)
+                }
+                if (currentCameraState.customVendorKeySettings != it.customVendorKeySettings) {
+                    cameraController.setCustomVendorKeySettings(it.customVendorKeySettings)
                 }
                 if (currentCameraState.quickShotConfig.resolution != it.quickShotResolution) {
                     cameraController.setQuickShotResolution(it.quickShotResolution)
@@ -3112,6 +3119,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (cameraController.state.value.vendorCaptureSettingsByLens != settings) {
             cameraController.setVendorCaptureSettingsByLens(settings)
         }
+        val customSettings = customVendorKeySettings.value
+        if (cameraController.state.value.customVendorKeySettings != customSettings) {
+            cameraController.setCustomVendorKeySettings(customSettings)
+        }
     }
 
     /**
@@ -4512,6 +4523,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setVendorCaptureSettings(lensId: String, settings: VendorCaptureSettings) {
         viewModelScope.launch {
             userPreferencesRepository.saveVendorCaptureSettingsForLens(lensId, settings)
+        }
+    }
+
+    fun upsertCustomVendorKey(key: CustomVendorKey) {
+        viewModelScope.launch {
+            userPreferencesRepository.upsertCustomVendorKey(key)
+        }
+    }
+
+    fun removeCustomVendorKey(id: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.removeCustomVendorKey(id)
         }
     }
 
