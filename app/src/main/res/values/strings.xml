@@ -198,6 +198,8 @@
     <string name="settings_jpg_max_hdr_composition">JPGmax HDR Composition</string>
     <string name="settings_jpg_max_hdr_composition_description">Use bracketed exposures for HDR fusion in JPGmax. Keep the camera steady or use a tripod while shooting. When disabled, JPGmax only performs multi-frame noise reduction.</string>
     <string name="settings_use_raw_max">RAWmax</string>
+    <string name="settings_raw_max_hdr_composition">RAWmax HDR Composition</string>
+    <string name="settings_raw_max_hdr_composition_description">Use bracketed exposures for HDR fusion in RAWmax. Turn it off to improve processing performance.</string>
     <string name="settings_use_multiple_exposure">Multiple Exposure</string>
     <string name="multiple_exposure_finish">Finish</string>
     <string name="multiple_exposure_undo">Undo</string>

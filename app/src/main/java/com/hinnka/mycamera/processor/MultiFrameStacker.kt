@@ -25,9 +25,11 @@ data class GpuLinearRgbSource(
     val width: Int,
     val height: Int,
     val samplesPerPixel: Int = 4,
+    val stackCompletionTimeline: GpuStackCompletionTimeline? = null,
 )
 
 data class RawStackResult(
+    /** Null when a GPU source is exported and CPU/DNG materialization has been deferred. */
     var fusedBayerBuffer: ByteBuffer?,
     val width: Int,
     val height: Int,
@@ -184,6 +186,7 @@ object MultiFrameStacker {
         applyLensShadingCorrection: Boolean = true,
         useCurrentGlContext: Boolean = false,
         exportGpuLinearRgbSource: Boolean = false,
+        enableHdrFusion: Boolean = true,
     ): RawStackResult? {
         if (frames.isEmpty()) return null
         val images = frames.map { it.image }
@@ -218,6 +221,7 @@ object MultiFrameStacker {
             debugConfig = RawStackRuntimeDebug.debugConfig,
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
+            enableHdrFusion = enableHdrFusion,
         ).processFrames(frames)
     }
 

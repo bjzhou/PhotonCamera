@@ -92,4 +92,22 @@ class RawRadianceExposurePlannerTest {
         assertArrayEquals(intArrayOf(3), plan.longIndices)
         assertArrayEquals(IntArray(0), plan.excludedIndices)
     }
+
+    @Test
+    fun hdrDisabledTreatsEveryFrameAsSameExposureWithoutAuxiliaryResources() {
+        val plan = RawRadianceExposurePlanner.plan(
+            exposureProducts = listOf(100.0, 33.0, 420.0),
+            frameRoles = listOf(
+                RawBurstFrameRole.NORMAL,
+                RawBurstFrameRole.HIGHLIGHT_SHORT,
+                RawBurstFrameRole.SHADOW_LONG,
+            ),
+            enableHdrFusion = false,
+        )
+
+        assertArrayEquals(intArrayOf(0, 1, 2), plan.normalIndices)
+        assertNull(plan.shortIndex)
+        assertArrayEquals(IntArray(0), plan.longIndices)
+        assertArrayEquals(IntArray(0), plan.excludedIndices)
+    }
 }

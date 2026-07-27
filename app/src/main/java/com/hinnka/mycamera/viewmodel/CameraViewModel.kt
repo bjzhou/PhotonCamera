@@ -1277,6 +1277,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRawMax }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val useRawMaxHdrComposition: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.useRawMaxHdrComposition }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -1498,10 +1501,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val chronologicalFrames = pendingRawStackFrames
                         .sortedBy { it.frame.sensorTimestampNs }
                     pendingRawStackFrames.clear()
+                    val rawMaxHdrFusionEnabled = state.value.isRawMaxHdrEnabled
                     viewModelScope.launch {
                         val exposurePlan = RawRadianceExposurePlanner.plan(
                             exposureProducts = chronologicalFrames.map { it.frame.exposureProduct },
                             frameRoles = chronologicalFrames.map { it.frame.role },
+                            enableHdrFusion = rawMaxHdrFusionEnabled,
                         )
                         val normalFrames = exposurePlan.normalIndices.map(chronologicalFrames::get)
                         val auxiliaryFrames = chronologicalFrames.indices
@@ -1558,6 +1563,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             captureInfo = referenceCaptureInfo,
                             characteristics = characteristics,
                             captureResult = referenceCaptureResult,
+                            rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                         )
                     }
                 }
@@ -1679,6 +1685,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (currentCameraState.useJpgMaxHdrComposition != it.useJpgMaxHdrComposition) {
                     cameraController.setUseJpgMaxHdrComposition(it.useJpgMaxHdrComposition)
+                }
+                if (currentCameraState.useRawMaxHdrComposition != it.useRawMaxHdrComposition) {
+                    cameraController.setUseRawMaxHdrComposition(it.useRawMaxHdrComposition)
                 }
                 if (multipleExposureEnabled && (it.useRaw || it.useJpgMax || it.useRawMax)) {
                     viewModelScope.launch {
@@ -1884,6 +1893,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 cameraController.setMultiFrameCount(prefs.multiFrameCount)
                 cameraController.setUseJpgMaxHdrComposition(prefs.useJpgMaxHdrComposition)
+                cameraController.setUseRawMaxHdrComposition(prefs.useRawMaxHdrComposition)
                 cameraController.setUseLivePhoto(
                     prefs.useLivePhoto && !prefs.useJpgMax && prefs.captureMode == CaptureMode.PHOTO
                 )
@@ -2226,9 +2236,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val currentState = state.value
             val captureSize = currentState.currentCaptureSize
             val rawCaptureEnabled = prefs?.useRaw == true
-            val rawMaxFrameCount = MultiFrameConfig.normalFrameCount(
+            val rawMaxEnabled = currentState.isRawMaxEnabled
+            val rawMaxHdrCompositionEnabled =
+                rawMaxEnabled && (prefs?.useRawMaxHdrComposition ?: true)
+            val totalRawMaxFrameCount = MultiFrameConfig.normalizeFrameCount(
                 prefs?.multiFrameCount ?: MultiFrameConfig.DEFAULT_FRAME_COUNT,
             )
+            val rawMaxFrameCount = if (rawMaxHdrCompositionEnabled) {
+                MultiFrameConfig.normalFrameCount(totalRawMaxFrameCount)
+            } else {
+                totalRawMaxFrameCount
+            }
             supervisorScope {
                 val dcpPrewarmJob = if (rawCaptureEnabled) {
                     async {
@@ -2256,7 +2274,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             captureWidth = captureSize.width,
                             captureHeight = captureSize.height,
                             rawMaxFrameCount = rawMaxFrameCount,
-                            rawMaxEnabled = currentState.isMultiFrameEnabled,
+                            rawMaxEnabled = rawMaxEnabled,
+                            rawMaxHdrCompositionEnabled = rawMaxHdrCompositionEnabled,
                         )
                     }.onFailure { error ->
                         if (error is CancellationException) throw error
@@ -3928,6 +3947,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setUseRawMaxHdrComposition(enabled: Boolean) {
+        cameraController.setUseRawMaxHdrComposition(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveUseRawMaxHdrComposition(enabled)
+        }
+    }
+
     /**
      * 设置多帧合成帧数
      */
@@ -5332,6 +5358,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?,
+        rawMaxHdrFusionEnabled: Boolean,
     ) {
         try {
             val images = frames.map { it.image }
@@ -5534,6 +5561,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     exportDngWithRawExport = exportDngWithRawExport.value,
                     capturePreviewThumbnail = previewThumbnail,
                     rawStackFrames = frames,
+                    rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")

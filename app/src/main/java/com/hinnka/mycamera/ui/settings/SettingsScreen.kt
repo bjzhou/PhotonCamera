@@ -294,6 +294,7 @@ fun SettingsScreen(
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val useJpgMaxHdrComposition by viewModel.useJpgMaxHdrComposition.collectAsState()
+    val useRawMaxHdrComposition by viewModel.useRawMaxHdrComposition.collectAsState()
     val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
     val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
     val useLivePhoto by viewModel.useLivePhoto.collectAsState()
@@ -1609,6 +1610,18 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_raw_max_hdr_composition),
+                            description = stringResource(R.string.settings_raw_max_hdr_composition_description),
+                            checked = useRawMaxHdrComposition,
+                            onCheckedChange = viewModel::setUseRawMaxHdrComposition
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         SliderSettingItem(
                             title = stringResource(R.string.settings_max_frame_count),
                             description = stringResource(R.string.settings_max_frame_count_description),
@@ -2676,6 +2689,7 @@ private fun SettingsCategoryOverview(
             title = stringResource(R.string.settings_section_multiframe_exposure),
             description = listOf(
                 stringResource(R.string.settings_jpg_max_hdr_composition),
+                stringResource(R.string.settings_raw_max_hdr_composition),
                 stringResource(R.string.settings_max_frame_count),
                 stringResource(R.string.settings_multiple_exposure_count)
             ).joinToString(" · "),

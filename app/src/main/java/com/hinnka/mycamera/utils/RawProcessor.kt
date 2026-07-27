@@ -483,7 +483,7 @@ object RawProcessor {
     }
 
     suspend fun prepareRawDngProfile(
-        rawBuffer: ByteBuffer,
+        rawBuffer: ByteBuffer?,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
         width: Int,
         height: Int,
@@ -566,7 +566,7 @@ object RawProcessor {
         )
         val captureProfile = options.captureProfilePreparer?.prepare(
             com.hinnka.mycamera.raw.RawDngCaptureProfileInput(
-                rawData = rawBuffer.duplicate().order(ByteOrder.nativeOrder()),
+                rawData = rawBuffer?.duplicate()?.order(ByteOrder.nativeOrder()),
                 width = width,
                 height = height,
                 rowStride = inputRowStrideBytes,

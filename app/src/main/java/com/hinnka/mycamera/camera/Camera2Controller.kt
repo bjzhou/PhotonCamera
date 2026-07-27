@@ -5499,6 +5499,10 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(useJpgMaxHdrComposition = enabled)
     }
 
+    fun setUseRawMaxHdrComposition(enabled: Boolean) {
+        _state.value = _state.value.copy(useRawMaxHdrComposition = enabled)
+    }
+
 
     fun setCapturingLivePhoto(enabled: Boolean) {
         _state.value = _state.value.copy(isCapturingLivePhoto = enabled)
@@ -6486,8 +6490,6 @@ class Camera2Controller(private val context: Context) {
                 // Burst Mode
                 val requestedFrameCount = currentState.multiFrameCount
                 val frameCount = MultiFrameConfig.normalizeFrameCount(requestedFrameCount)
-                val normalFrameCount = MultiFrameConfig.normalFrameCount(frameCount)
-                val longFrameCount = MultiFrameConfig.longFrameCount(frameCount)
                 if (frameCount != requestedFrameCount) {
                     PLog.w(
                         TAG,
@@ -6496,9 +6498,13 @@ class Camera2Controller(private val context: Context) {
                 }
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)
                 val baseRequest = captureBuilder.build()
-                val requests = if (currentState.isJpgMaxEnabled || rawMaxFlashDenoise) {
+                val useRawMaxHdrExposurePlan =
+                    currentState.isRawMaxHdrEnabled && !rawMaxFlashDenoise
+                val requests = if (!useRawMaxHdrExposurePlan) {
                     List(frameCount) { baseRequest }
                 } else {
+                    val normalFrameCount = MultiFrameConfig.normalFrameCount(frameCount)
+                    val longFrameCount = MultiFrameConfig.longFrameCount(frameCount)
                     val shortRequest = buildMultiFrameShortCaptureRequest(
                         device = device,
                         reader = reader,
@@ -6550,6 +6556,12 @@ class Camera2Controller(private val context: Context) {
                             "aeMode=${baseRequest.get(CaptureRequest.CONTROL_AE_MODE)} " +
                             "aeLock=${baseRequest.get(CaptureRequest.CONTROL_AE_LOCK)} " +
                             "flashMode=${baseRequest.get(CaptureRequest.FLASH_MODE)}",
+                    )
+                } else if (!useRawMaxHdrExposurePlan) {
+                    PLog.i(
+                        TAG,
+                        "RAWmax same-exposure burst plan: baseFrames=${requests.size} " +
+                            "hdr=false shortFrames=0 longFrames=0",
                     )
                 }
 

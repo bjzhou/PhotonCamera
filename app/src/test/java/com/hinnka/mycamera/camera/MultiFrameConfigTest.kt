@@ -30,6 +30,8 @@ class MultiFrameConfigTest {
         assertFalse(jpgMax.isRawMaxEnabled)
         assertTrue(jpgMaxHdr.isJpgMaxHdrEnabled)
         assertTrue(rawMax.isRawMaxEnabled)
+        assertTrue(rawMax.isRawMaxHdrEnabled)
+        assertFalse(rawMax.copy(useRawMaxHdrComposition = false).isRawMaxHdrEnabled)
         assertFalse(rawMax.isJpgMaxEnabled)
         assertFalse(rawMax.isJpgMaxHdrEnabled)
     }

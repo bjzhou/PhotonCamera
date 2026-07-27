@@ -68,6 +68,6 @@ data class RawStackDebugConfig(
         private const val ENABLE_RADIANCE_SR_DETAIL_OVERLAY = false
         private const val ENABLE_RADIANCE_HIGHLIGHT_RECONSTRUCTION_OVERLAY = false
         private const val ENABLE_RADIANCE_LONG_PARTICIPATION_OVERLAY = false
-        private const val ENABLE_RADIANCE_FUSION_PARTICIPATION_LOG = true
+        private const val ENABLE_RADIANCE_FUSION_PARTICIPATION_LOG = false
     }
 }

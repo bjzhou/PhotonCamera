@@ -4,7 +4,6 @@ import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
-import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import kotlin.math.acos
 import kotlin.math.ceil
@@ -15,10 +14,10 @@ import kotlin.math.sin
 /**
  * Post-fusion VGN chroma filtering for Radiance RGB.
  *
- * Radiance tiles are first captured into a tiled 2D-array backing store. All later shader
- * coordinates are global output coordinates, so local color-noise kernels cross layer boundaries
- * and every IIR invocation scans an entire output row or column. A Radiance tile is therefore a
- * storage page, never a filter boundary.
+ * Radiance tiles are assembled into one full-size 2D texture before chroma filtering. All later
+ * shaders use direct global coordinates over that contiguous surface, so local kernels cross tile
+ * seams naturally and every IIR invocation scans one physical output row or column without
+ * per-sample tile lookup.
  *
  * Input and output are un-white-balanced camera RGB. LSC is already part of reconstructed RGB and
  * is deliberately untouched here. The seed shader enters calculation-WB RGB/YCCD once, and the
@@ -45,14 +44,18 @@ internal class GlesRadianceVgnChromaPostprocessor(
 
     data class ReadbackTiming(
         val elapsedMs: Long,
-        val glReadMs: Long,
-        val copyMs: Long,
+        val gpuQueueWaitMs: Long,
+        val pixelTransferMs: Long,
+        val cpuPackMs: Long,
         val allocMs: Long,
     )
 
     data class ProcessResult(
         val readbackTiming: ReadbackTiming,
         val exportedTextureId: Int,
+        val chromaSubmissionMs: Long,
+        val finalSubmissionMs: Long,
+        val cpuBufferPopulated: Boolean,
     )
 
     private val calculationRgbGains = floatArrayOf(
@@ -66,14 +69,9 @@ internal class GlesRadianceVgnChromaPostprocessor(
     }
     private val safeOutputScale = outputScale.takeIf { it.isFinite() && it > 0f } ?: 1f
     private val coefficients = RadianceVgnChromaIirCoefficients.forOutputScale(safeOutputScale)
-    private val tileColumns: Int
-    private val tileRows: Int
-    private val tileLefts: IntArray
-    private val tileTops: IntArray
-    private val layerWidth: Int
-    private val layerHeight: Int
+    private val readbackTileWidth: Int
+    private val readbackTileHeight: Int
 
-    private var captureProgram = 0
     private var seedProgram = 0
     private var colorNoise1Program = 0
     private var colorNoise2Program = 0
@@ -85,48 +83,53 @@ internal class GlesRadianceVgnChromaPostprocessor(
     private var colorNoiseFilterProgram = 0
     private var finalProgram = 0
 
-    private var capturedRgb = 0
+    private var assembledRgb = 0
     private var originalYccd = 0
     private var smoothYccd = 0
-    private var fullSizeCameraRgb = 0
-    private var gpuExportEnabled = exportFullSizeTexture
+    private var writtenTileCount = 0
     private var readbackFbo = 0
     private val ownedTextures = ArrayList<Int>(3)
 
     init {
         require(imageWidth > 0 && imageHeight > 0)
         require(tiles.isNotEmpty())
-        require(tiles.size <= GlesRadianceVgnChromaShaders.MAX_TILE_LAYERS) {
-            "Radiance VGN chroma has ${tiles.size} tiles; shader supports at most " +
-                GlesRadianceVgnChromaShaders.MAX_TILE_LAYERS
-        }
         val rows = tiles.groupBy { it.outputCore.top }.toSortedMap().values.toList()
-        tileRows = rows.size
-        tileColumns = rows.first().size
-        require(tileColumns in 1..GlesRadianceVgnChromaShaders.MAX_TILE_AXIS)
-        require(tileRows in 1..GlesRadianceVgnChromaShaders.MAX_TILE_AXIS)
-        require(rows.all { it.size == tileColumns }) { "Radiance tile grid must be rectangular" }
-        tileLefts = rows.first().map { it.outputCore.left }.toIntArray()
-        tileTops = rows.map { it.first().outputCore.top }.toIntArray()
+        var expectedTop = 0
+        var expectedIndex = 0
         rows.forEachIndexed { rowIndex, row ->
-            row.forEachIndexed { columnIndex, tile ->
-                require(tile.index == rowIndex * tileColumns + columnIndex) {
-                    "Radiance tiles must be row-major for array storage"
-                }
-                require(tile.outputCore.left == tileLefts[columnIndex])
-                require(tile.outputCore.top == tileTops[rowIndex])
+            val orderedRow = row.sortedBy { it.outputCore.left }
+            require(orderedRow.first().outputCore.top == expectedTop) {
+                "Radiance tile row $rowIndex starts at ${orderedRow.first().outputCore.top}, " +
+                    "expected $expectedTop"
             }
+            val rowBottom = orderedRow.first().outputCore.bottom
+            var expectedLeft = 0
+            orderedRow.forEach { tile ->
+                require(tile.index == expectedIndex++) {
+                    "Radiance tiles must be row-major"
+                }
+                require(tile.outputCore.left == expectedLeft && tile.outputCore.top == expectedTop) {
+                    "Radiance tile ${tile.index} leaves a gap or overlaps another tile"
+                }
+                require(tile.outputCore.bottom == rowBottom) {
+                    "Radiance tile row $rowIndex has inconsistent heights"
+                }
+                expectedLeft = tile.outputCore.right
+            }
+            require(expectedLeft == imageWidth) {
+                "Radiance tile row $rowIndex covers width $expectedLeft, expected $imageWidth"
+            }
+            expectedTop = rowBottom
         }
-        layerWidth = tiles.maxOf { it.outputCore.width }
-        layerHeight = tiles.maxOf { it.outputCore.height }
+        require(expectedTop == imageHeight) {
+            "Radiance tiles cover height $expectedTop, expected $imageHeight"
+        }
+        readbackTileWidth = tiles.maxOf { it.outputCore.width }
+        readbackTileHeight = tiles.maxOf { it.outputCore.height }
     }
 
     fun initPrograms() {
-        if (captureProgram != 0) return
-        captureProgram = backend.linkComputeProgram(
-            GlesRadianceVgnChromaShaders.capture,
-            "raw_radiance_vgn_chroma_capture",
-        )
+        if (seedProgram != 0) return
         seedProgram = backend.linkComputeProgram(
             GlesRadianceVgnChromaShaders.seed,
             "raw_radiance_vgn_chroma_seed",
@@ -163,75 +166,68 @@ internal class GlesRadianceVgnChromaPostprocessor(
             GlesRadianceVgnChromaShaders.colorNoiseFilter,
             "raw_radiance_vgn_chroma_filter",
         )
-        finalProgram = if (gpuExportEnabled) {
-            runCatching {
-                backend.linkComputeProgram(
-                    GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = true),
-                    "raw_radiance_vgn_chroma_final_camera_rgb_2d",
-                )
-            }.onFailure { error ->
-                gpuExportEnabled = false
-                PLog.w(TAG, "Full-size Radiance GPU export shader unavailable; using CPU handoff", error)
-            }.getOrElse {
-                backend.linkComputeProgram(
-                    GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false),
-                    "raw_radiance_vgn_chroma_final_camera_rgb_array",
-                )
-            }
-        } else {
-            backend.linkComputeProgram(
-                GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false),
-                "raw_radiance_vgn_chroma_final_camera_rgb_array",
-            )
-        }
+        finalProgram = backend.linkComputeProgram(
+            GlesRadianceVgnChromaShaders.finalCameraRgb,
+            "raw_radiance_vgn_chroma_final_camera_rgb_2d",
+        )
     }
 
     fun initStorage() {
-        check(captureProgram != 0) { "Radiance VGN chroma programs are not initialized" }
-        if (capturedRgb != 0) return
-        val maxLayers = IntArray(1)
-        GLES30.glGetIntegerv(GLES30.GL_MAX_ARRAY_TEXTURE_LAYERS, maxLayers, 0)
-        require(tiles.size <= maxLayers[0]) {
-            "Radiance VGN chroma requires ${tiles.size} array layers; GLES supports ${maxLayers[0]}"
+        check(seedProgram != 0) { "Radiance VGN chroma programs are not initialized" }
+        if (assembledRgb != 0) return
+        val maxTextureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
+        require(imageWidth <= maxTextureSize[0] && imageHeight <= maxTextureSize[0]) {
+            "Radiance VGN chroma requires ${imageWidth}x$imageHeight 2D textures; " +
+                "GLES supports up to ${maxTextureSize[0]}"
         }
-        capturedRgb = createArrayTexture()
-        val ids = IntArray(1)
-        GLES30.glGenFramebuffers(1, ids, 0)
-        readbackFbo = ids[0]
-        check(readbackFbo != 0) { "Failed to allocate Radiance VGN chroma readback framebuffer" }
+        assembledRgb = createFullSizeTexture("assembled camera RGB")
+        writtenTileCount = 0
         backend.checkGlError("Radiance VGN chroma storage")
     }
 
-    fun capture(normalizedTileTexture: Int, tile: RadianceTile) {
-        check(capturedRgb != 0) { "Radiance VGN chroma storage is not initialized" }
-        GLES31.glUseProgram(captureProgram)
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, normalizedTileTexture)
-        GLES31.glUniform1i(backend.uniformLocation(captureProgram, "uSource"), 0)
-        GLES31.glUniform2i(
-            backend.uniformLocation(captureProgram, "uTileSize"),
-            tile.outputCore.width,
-            tile.outputCore.height,
-        )
-        GLES31.glUniform1i(backend.uniformLocation(captureProgram, "uLayer"), tile.index)
-        bindArrayImage(0, capturedRgb, GLES31.GL_WRITE_ONLY)
-        GLES31.glDispatchCompute(groupCount(tile.outputCore.width), groupCount(tile.outputCore.height), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
-        backend.checkGlError("Radiance VGN chroma capture tile ${tile.index}")
+    /**
+     * Full-size integer render target owned by this stage.
+     *
+     * The normalize fragment pass renders each tile directly into its global viewport on this
+     * texture. Keeping assembly as framebuffer writes removes the former tile texture -> compute
+     * image copy while preserving the exact RGBA16UI boundary between fusion and chroma.
+     */
+    fun normalizationTargetTexture(): Int {
+        check(assembledRgb != 0) { "Radiance VGN chroma storage is not initialized" }
+        return assembledRgb
     }
 
-    fun processAndReadback(outputBuffer: ByteBuffer): ProcessResult {
-        check(capturedRgb != 0) { "Radiance VGN chroma has no captured Radiance output" }
-        originalYccd = createArrayTexture()
-        smoothYccd = createArrayTexture()
+    fun markTileWritten(tile: RadianceTile) {
+        check(writtenTileCount < tiles.size) { "All Radiance VGN tiles are already assembled" }
+        check(tiles[writtenTileCount].index == tile.index) {
+            "Radiance VGN tile ${tile.index} was written out of row-major order; " +
+                "expected ${tiles[writtenTileCount].index}"
+        }
+        writtenTileCount += 1
+    }
+
+    fun process(
+        obtainOutputBuffer: () -> ByteBuffer,
+        deferFullSizeReadback: Boolean,
+        onChromaSubmitted: (() -> Unit)? = null,
+        onFinalSubmitted: (() -> Unit)? = null,
+    ): ProcessResult {
+        check(assembledRgb != 0) { "Radiance VGN chroma has no assembled Radiance output" }
+        check(writtenTileCount == tiles.size) {
+            "Radiance VGN chroma input is incomplete: $writtenTileCount/${tiles.size} tiles"
+        }
+        val chromaSubmissionStartNs = System.nanoTime()
+        originalYccd = createFullSizeTexture("original YCCD")
+        smoothYccd = createFullSizeTexture("smooth YCCD")
 
         dispatchSeed()
-        dispatchLocal(colorNoise1Program, originalYccd, capturedRgb, "color noise 1")
-        dispatchLocal(colorNoise2Program, capturedRgb, smoothYccd, "color noise 2")
+        dispatchLocal(colorNoise1Program, originalYccd, assembledRgb, "color noise 1")
+        dispatchLocal(colorNoise2Program, assembledRgb, smoothYccd, "color noise 2")
         dispatchColorNoise3()
         dispatchRestoreOriginal()
 
-        var scratch = capturedRgb
+        var scratch = assembledRgb
         runIirRgb(
             source = smoothYccd,
             destination = scratch,
@@ -265,45 +261,30 @@ internal class GlesRadianceVgnChromaPostprocessor(
             originalYccd = result.first
             scratch = result.second
         }
-        if (gpuExportEnabled) {
-            // One of the three working arrays is dead before the final conversion. Reclaim it so
-            // the full-size 2D handoff does not increase the legacy peak texture storage.
-            ownedTextures.firstOrNull { it != originalYccd && it != scratch }?.let { disposable ->
-                deleteTexture(disposable)
-                if (capturedRgb == disposable) capturedRgb = 0
-                if (smoothYccd == disposable) smoothYccd = 0
-            }
-        }
-        val gpuTiming = if (gpuExportEnabled) {
-            runCatching {
-                fullSizeCameraRgb = createFullSizeTexture()
-                dispatchFinal(destination = 0, fullSize = true)
-                readbackFullSize(outputBuffer)
-            }.onFailure { error ->
-                deleteTexture(fullSizeCameraRgb)
-                fullSizeCameraRgb = 0
-                gpuExportEnabled = false
-                PLog.w(TAG, "Full-size Radiance GPU export failed; using CPU handoff", error)
-                finalProgram = backend.linkComputeProgram(
-                    GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false),
-                    "raw_radiance_vgn_chroma_final_camera_rgb_array_fallback",
-                )
-            }.getOrNull()
+        val chromaSubmissionMs = (System.nanoTime() - chromaSubmissionStartNs) / 1_000_000L
+        onChromaSubmitted?.invoke()
+        val finalSubmissionStartNs = System.nanoTime()
+        dispatchFinal(scratch)
+        val finalSubmissionMs =
+            (System.nanoTime() - finalSubmissionStartNs) / 1_000_000L
+        onFinalSubmitted?.invoke()
+
+        val cpuBufferPopulated = !exportFullSizeTexture || !deferFullSizeReadback
+        val timing = if (cpuBufferPopulated) {
+            readbackFullSize(scratch, obtainOutputBuffer())
         } else {
-            null
+            ReadbackTiming(
+                elapsedMs = 0L,
+                gpuQueueWaitMs = 0L,
+                pixelTransferMs = 0L,
+                cpuPackMs = 0L,
+                allocMs = 0L,
+            )
         }
-        val timing = gpuTiming ?: run {
-            dispatchFinal(scratch)
-            originalYccd = scratch.also { scratch = originalYccd }
-            readback(outputBuffer)
-        }
-        if (gpuTiming != null) {
-            val releasedScratch = scratch
-            deleteTexture(releasedScratch)
-            if (capturedRgb == releasedScratch) capturedRgb = 0
-            if (originalYccd == releasedScratch) originalYccd = 0
-            if (smoothYccd == releasedScratch) smoothYccd = 0
-            scratch = 0
+
+        val exportedTextureId = if (exportFullSizeTexture) scratch else 0
+        if (exportedTextureId != 0) {
+            ownedTextures.removeAll { it == exportedTextureId }
         }
         for (unit in 0..2) {
             GLES31.glBindImageTexture(
@@ -316,20 +297,19 @@ internal class GlesRadianceVgnChromaPostprocessor(
                 GLES30.GL_RGBA16UI,
             )
         }
-        setOf(capturedRgb, originalYccd, smoothYccd, scratch)
-            .filter { it != 0 }
+        setOf(assembledRgb, originalYccd, smoothYccd, scratch)
+            .filter { it != 0 && it != exportedTextureId }
             .forEach(::deleteTexture)
-        capturedRgb = 0
+        assembledRgb = 0
         originalYccd = 0
         smoothYccd = 0
-        val exportedTextureId = fullSizeCameraRgb
-        if (exportedTextureId != 0) {
-            ownedTextures.removeAll { it == exportedTextureId }
-            fullSizeCameraRgb = 0
-        }
+        writtenTileCount = 0
         return ProcessResult(
             readbackTiming = timing,
             exportedTextureId = exportedTextureId,
+            chromaSubmissionMs = chromaSubmissionMs,
+            finalSubmissionMs = finalSubmissionMs,
+            cpuBufferPopulated = cpuBufferPopulated,
         )
     }
 
@@ -338,10 +318,10 @@ internal class GlesRadianceVgnChromaPostprocessor(
             GLES30.glDeleteTextures(ownedTextures.size, ownedTextures.toIntArray(), 0)
             ownedTextures.clear()
         }
-        capturedRgb = 0
+        assembledRgb = 0
         originalYccd = 0
         smoothYccd = 0
-        fullSizeCameraRgb = 0
+        writtenTileCount = 0
         if (readbackFbo != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(readbackFbo), 0)
             readbackFbo = 0
@@ -350,7 +330,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
 
     private fun dispatchSeed() {
         GLES31.glUseProgram(seedProgram)
-        setTiledUniforms(seedProgram)
+        setImageUniforms(seedProgram)
         GLES31.glUniform3fv(
             backend.uniformLocation(seedProgram, "uCalculationGains"),
             1,
@@ -361,34 +341,34 @@ internal class GlesRadianceVgnChromaPostprocessor(
             backend.uniformLocation(seedProgram, "uMinimumDirectionGradient"),
             8f,
         )
-        bindArrayImage(0, capturedRgb, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, originalYccd, GLES31.GL_WRITE_ONLY)
+        bindImage(0, assembledRgb, GLES31.GL_READ_ONLY)
+        bindImage(1, originalYccd, GLES31.GL_WRITE_ONLY)
         dispatchImage(seedProgram, "seed")
     }
 
     private fun dispatchLocal(program: Int, source: Int, destination: Int, label: String) {
         GLES31.glUseProgram(program)
-        setTiledUniforms(program)
-        bindArrayImage(0, source, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, destination, GLES31.GL_WRITE_ONLY)
+        setImageUniforms(program)
+        bindImage(0, source, GLES31.GL_READ_ONLY)
+        bindImage(1, destination, GLES31.GL_WRITE_ONLY)
         dispatchImage(program, label)
     }
 
     private fun dispatchColorNoise3() {
         GLES31.glUseProgram(colorNoise3SmoothProgram)
-        setTiledUniforms(colorNoise3SmoothProgram)
-        bindArrayImage(0, capturedRgb, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, smoothYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(2, originalYccd, GLES31.GL_WRITE_ONLY)
+        setImageUniforms(colorNoise3SmoothProgram)
+        bindImage(0, assembledRgb, GLES31.GL_READ_ONLY)
+        bindImage(1, smoothYccd, GLES31.GL_READ_ONLY)
+        bindImage(2, originalYccd, GLES31.GL_WRITE_ONLY)
         dispatchImage(colorNoise3SmoothProgram, "color noise 3 smooth")
     }
 
     private fun dispatchRestoreOriginal() {
         GLES31.glUseProgram(restoreOriginalProgram)
-        setTiledUniforms(restoreOriginalProgram)
-        bindArrayImage(0, originalYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, capturedRgb, GLES31.GL_READ_ONLY)
-        bindArrayImage(2, smoothYccd, GLES31.GL_WRITE_ONLY)
+        setImageUniforms(restoreOriginalProgram)
+        bindImage(0, originalYccd, GLES31.GL_READ_ONLY)
+        bindImage(1, assembledRgb, GLES31.GL_READ_ONLY)
+        bindImage(2, smoothYccd, GLES31.GL_WRITE_ONLY)
         dispatchImage(restoreOriginalProgram, "restore directional YCCD")
         val temporary = originalYccd
         originalYccd = smoothYccd
@@ -397,55 +377,38 @@ internal class GlesRadianceVgnChromaPostprocessor(
 
     private fun dispatchCalculateError(destination: Int) {
         GLES31.glUseProgram(calculateErrorProgram)
-        setTiledUniforms(calculateErrorProgram)
-        bindArrayImage(0, originalYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, smoothYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(2, destination, GLES31.GL_WRITE_ONLY)
+        setImageUniforms(calculateErrorProgram)
+        bindImage(0, originalYccd, GLES31.GL_READ_ONLY)
+        bindImage(1, smoothYccd, GLES31.GL_READ_ONLY)
+        bindImage(2, destination, GLES31.GL_WRITE_ONLY)
         dispatchImage(calculateErrorProgram, "calculate color noise error")
     }
 
     private fun dispatchColorNoiseFilter(destination: Int) {
         GLES31.glUseProgram(colorNoiseFilterProgram)
-        setTiledUniforms(colorNoiseFilterProgram)
-        bindArrayImage(0, originalYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(1, smoothYccd, GLES31.GL_READ_ONLY)
-        bindArrayImage(2, destination, GLES31.GL_WRITE_ONLY)
+        setImageUniforms(colorNoiseFilterProgram)
+        bindImage(0, originalYccd, GLES31.GL_READ_ONLY)
+        bindImage(1, smoothYccd, GLES31.GL_READ_ONLY)
+        bindImage(2, destination, GLES31.GL_WRITE_ONLY)
         dispatchImage(colorNoiseFilterProgram, "color noise filter")
     }
 
-    private fun dispatchFinal(destination: Int, fullSize: Boolean = false) {
+    private fun dispatchFinal(destination: Int) {
         GLES31.glUseProgram(finalProgram)
-        setTiledUniforms(finalProgram)
+        setImageUniforms(finalProgram)
         GLES31.glUniform3fv(
             backend.uniformLocation(finalProgram, "uCalculationGains"),
             1,
             calculationRgbGains,
             0,
         )
-        bindArrayImage(0, originalYccd, GLES31.GL_READ_ONLY)
-        if (fullSize) {
-            GLES31.glBindImageTexture(
-                2,
-                fullSizeCameraRgb,
-                0,
-                false,
-                0,
-                GLES31.GL_WRITE_ONLY,
-                GLES30.GL_RGBA16UI,
-            )
-        } else {
-            bindArrayImage(1, destination, GLES31.GL_WRITE_ONLY)
-        }
-        val nextAccessBarrier = if (fullSize) {
-            // The full-size texture leaves this component and is consumed as both an FBO
-            // attachment (CPU readback) and a sampler by the persistent RAW renderer. Declaring
-            // only image access visibility can leave stale texture-cache blocks on some drivers.
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
-        } else {
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
-        }
+        bindImage(0, originalYccd, GLES31.GL_READ_ONLY)
+        bindImage(1, destination, GLES31.GL_WRITE_ONLY)
+        // The result leaves this component and can be consumed as both an FBO attachment and a
+        // sampler by the persistent RAW renderer.
+        val nextAccessBarrier = GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+            GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
+            GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
         dispatchImage(finalProgram, "final camera RGB", nextAccessBarrier)
     }
 
@@ -466,7 +429,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         var output = destination
         directions.forEachIndexed { index, direction ->
             GLES31.glUseProgram(iirRgbProgram)
-            setTiledUniforms(iirRgbProgram)
+            setImageUniforms(iirRgbProgram)
             setIirCoefficients(iirRgbProgram, pass)
             GLES31.glUniform1i(backend.uniformLocation(iirRgbProgram, "uFilterLuma"), if (filterLuma) 1 else 0)
             GLES31.glUniform1i(backend.uniformLocation(iirRgbProgram, "uDirection"), direction[0])
@@ -475,8 +438,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
                 backend.uniformLocation(iirRgbProgram, "uBoundaryWarmup"),
                 ceil(16f * safeOutputScale).toInt().coerceIn(16, 48),
             )
-            bindArrayImage(0, input, GLES31.GL_READ_ONLY)
-            bindArrayImage(1, output, GLES31.GL_WRITE_ONLY)
+            bindImage(0, input, GLES31.GL_READ_ONLY)
+            bindImage(1, output, GLES31.GL_WRITE_ONLY)
             dispatchIir(direction[1], "$label direction $index")
             input = output.also { output = input }
         }
@@ -499,7 +462,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         var output = destination
         directions.forEachIndexed { index, direction ->
             GLES31.glUseProgram(iirErrorProgram)
-            setTiledUniforms(iirErrorProgram)
+            setImageUniforms(iirErrorProgram)
             GLES31.glUniform4fv(backend.uniformLocation(iirErrorProgram, "uA10"), 1, a10, 0)
             GLES31.glUniform4fv(backend.uniformLocation(iirErrorProgram, "uB10"), 1, b10, 0)
             GLES31.glUniform1i(backend.uniformLocation(iirErrorProgram, "uDirection"), direction[0])
@@ -508,8 +471,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
                 backend.uniformLocation(iirErrorProgram, "uBoundaryWarmup"),
                 ceil(16f * safeOutputScale).toInt().coerceIn(16, 48),
             )
-            bindArrayImage(0, input, GLES31.GL_READ_ONLY)
-            bindArrayImage(1, output, GLES31.GL_WRITE_ONLY)
+            bindImage(0, input, GLES31.GL_READ_ONLY)
+            bindImage(1, output, GLES31.GL_WRITE_ONLY)
             dispatchIir(direction[1], "IIR2 direction $index")
             input = output.also { output = input }
         }
@@ -547,67 +510,27 @@ internal class GlesRadianceVgnChromaPostprocessor(
         backend.yieldToUiRenderer()
     }
 
-    private fun setTiledUniforms(program: Int) {
+    private fun setImageUniforms(program: Int) {
         GLES31.glUniform2i(backend.uniformLocation(program, "uImageSize"), imageWidth, imageHeight)
-        GLES31.glUniform1i(backend.uniformLocation(program, "uTileColumns"), tileColumns)
-        GLES31.glUniform1i(backend.uniformLocation(program, "uTileRows"), tileRows)
-        GLES31.glUniform1iv(
-            backend.uniformLocation(program, "uTileLefts[0]"),
-            tileLefts.size,
-            tileLefts,
-            0,
-        )
-        GLES31.glUniform1iv(
-            backend.uniformLocation(program, "uTileTops[0]"),
-            tileTops.size,
-            tileTops,
-            0,
-        )
     }
 
-    private fun bindArrayImage(unit: Int, texture: Int, access: Int) {
+    private fun bindImage(unit: Int, texture: Int, access: Int) {
         GLES31.glBindImageTexture(
             unit,
             texture,
             0,
-            true,
+            false,
             0,
             access,
             GLES30.GL_RGBA16UI,
         )
     }
 
-    private fun createArrayTexture(): Int {
+    private fun createFullSizeTexture(label: String): Int {
         val ids = IntArray(1)
         GLES30.glGenTextures(1, ids, 0)
         val texture = ids[0]
-        check(texture != 0) { "Failed to allocate Radiance VGN chroma array texture" }
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, texture)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexStorage3D(
-            GLES30.GL_TEXTURE_2D_ARRAY,
-            1,
-            GLES30.GL_RGBA16UI,
-            layerWidth,
-            layerHeight,
-            tiles.size,
-        )
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, 0)
-        ownedTextures += texture
-        backend.checkGlError(
-            "Radiance VGN chroma array ${layerWidth}x$layerHeight layers=${tiles.size}",
-        )
-        return texture
-    }
-
-    private fun createFullSizeTexture(): Int {
-        val ids = IntArray(1)
-        GLES30.glGenTextures(1, ids, 0)
-        val texture = ids[0]
-        check(texture != 0) { "Failed to allocate full-size Radiance RGB texture" }
+        check(texture != 0) { "Failed to allocate Radiance VGN chroma $label texture" }
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
@@ -622,7 +545,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
         )
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         ownedTextures += texture
-        backend.checkGlError("full-size Radiance RGB ${imageWidth}x$imageHeight")
+        backend.checkGlError("Radiance VGN chroma $label ${imageWidth}x$imageHeight")
         return texture
     }
 
@@ -632,89 +555,14 @@ internal class GlesRadianceVgnChromaPostprocessor(
         ownedTextures.removeAll { it == texture }
     }
 
-    private fun readback(outputBuffer: ByteBuffer): ReadbackTiming {
-        val allocationStart = System.currentTimeMillis()
-        val scratchBytes = layerWidth.toLong() * layerHeight.toLong() * 8L
-        val scratch = LargeDirectBuffer.allocate(scratchBytes, "Radiance VGN chroma tile readback")
-            ?: throw IllegalStateException("Unable to allocate Radiance VGN chroma readback scratch")
-        val allocationMs = System.currentTimeMillis() - allocationStart
-        outputBuffer.clear()
-        var glReadMs = 0L
-        var copyMs = 0L
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
+    private fun readbackFullSize(texture: Int, outputBuffer: ByteBuffer): ReadbackTiming {
+        val gpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+            label = "Radiance full-size RGB output",
+            checkGlError = backend::checkGlError,
         )
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readbackFbo)
-        try {
-            tiles.forEach { tile ->
-                GLES30.glFramebufferTextureLayer(
-                    GLES30.GL_FRAMEBUFFER,
-                    GLES30.GL_COLOR_ATTACHMENT0,
-                    originalYccd,
-                    0,
-                    tile.index,
-                )
-                GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
-                val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-                check(status == GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                    "Radiance VGN chroma framebuffer incomplete: 0x${status.toString(16)}"
-                }
-                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
-                scratch.clear()
-                val readStart = System.currentTimeMillis()
-                GLES30.glReadPixels(
-                    0,
-                    0,
-                    tile.outputCore.width,
-                    tile.outputCore.height,
-                    GLES30.GL_RGBA_INTEGER,
-                    GLES30.GL_UNSIGNED_SHORT,
-                    scratch,
-                )
-                glReadMs += System.currentTimeMillis() - readStart
-                backend.checkGlError("Radiance VGN chroma read tile ${tile.index}")
-
-                val copyStart = System.currentTimeMillis()
-                check(
-                    DirectBufferPixelPacker.unpackRgba16TileToRgb16(
-                        source = scratch,
-                        sourceWidth = tile.outputCore.width,
-                        sourceHeight = tile.outputCore.height,
-                        destination = outputBuffer,
-                        destinationWidth = imageWidth,
-                        destinationHeight = imageHeight,
-                        destinationLeft = tile.outputCore.left,
-                        destinationTop = tile.outputCore.top,
-                    )
-                ) {
-                    "Unable to pack Radiance VGN chroma tile ${tile.index} into RGB16 output"
-                }
-                copyMs += System.currentTimeMillis() - copyStart
-                backend.yieldToUiRenderer()
-            }
-        } finally {
-            GLES30.glFramebufferTextureLayer(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                0,
-                0,
-                0,
-            )
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            LargeDirectBuffer.free(scratch)
-        }
-        outputBuffer.rewind()
-        return ReadbackTiming(
-            elapsedMs = allocationMs + glReadMs + copyMs,
-            glReadMs = glReadMs,
-            copyMs = copyMs,
-            allocMs = allocationMs,
-        )
-    }
-
-    private fun readbackFullSize(outputBuffer: ByteBuffer): ReadbackTiming {
+        ensureReadbackFramebuffer()
         val allocationStart = System.currentTimeMillis()
-        val scratchBytes = layerWidth.toLong() * layerHeight.toLong() * 8L
+        val scratchBytes = readbackTileWidth.toLong() * readbackTileHeight.toLong() * 8L
         val scratch = LargeDirectBuffer.allocate(scratchBytes, "Radiance full-size RGB readback")
             ?: throw IllegalStateException("Unable to allocate full-size Radiance readback scratch")
         val allocationMs = System.currentTimeMillis() - allocationStart
@@ -730,7 +578,7 @@ internal class GlesRadianceVgnChromaPostprocessor(
                 GLES30.GL_FRAMEBUFFER,
                 GLES30.GL_COLOR_ATTACHMENT0,
                 GLES30.GL_TEXTURE_2D,
-                fullSizeCameraRgb,
+                texture,
                 0,
             )
             GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
@@ -782,18 +630,24 @@ internal class GlesRadianceVgnChromaPostprocessor(
         }
         outputBuffer.rewind()
         return ReadbackTiming(
-            elapsedMs = allocationMs + glReadMs + copyMs,
-            glReadMs = glReadMs,
-            copyMs = copyMs,
+            elapsedMs = gpuQueueWaitMs + allocationMs + glReadMs + copyMs,
+            gpuQueueWaitMs = gpuQueueWaitMs,
+            pixelTransferMs = glReadMs,
+            cpuPackMs = copyMs,
             allocMs = allocationMs,
         )
     }
 
-    private fun groupCount(value: Int): Int = (value + 15) / 16
-
-    private companion object {
-        const val TAG = "GlesRadianceVgnChroma"
+    private fun ensureReadbackFramebuffer() {
+        if (readbackFbo != 0) return
+        val ids = IntArray(1)
+        GLES30.glGenFramebuffers(1, ids, 0)
+        readbackFbo = ids[0]
+        check(readbackFbo != 0) { "Failed to allocate Radiance VGN chroma readback framebuffer" }
+        backend.checkGlError("Radiance VGN chroma readback framebuffer")
     }
+
+    private fun groupCount(value: Int): Int = (value + 15) / 16
 }
 
 internal data class RadianceVgnChromaIirCoefficients(
@@ -870,37 +724,11 @@ internal data class RadianceVgnChromaIirCoefficients(
 }
 
 internal object GlesRadianceVgnChromaShaders {
-    const val MAX_TILE_AXIS = 64
-    const val MAX_TILE_LAYERS = MAX_TILE_AXIS * MAX_TILE_AXIS
-
-    private val tiledImageCommon = """
+    private val imageCommon = """
         uniform ivec2 uImageSize;
-        uniform int uTileColumns;
-        uniform int uTileRows;
-        uniform int uTileLefts[$MAX_TILE_AXIS];
-        uniform int uTileTops[$MAX_TILE_AXIS];
 
-        ivec2 clampGlobal(ivec2 p) {
+        ivec2 imagePosition(ivec2 p) {
             return clamp(p, ivec2(0), uImageSize - ivec2(1));
-        }
-
-        ivec3 tiledPosition(ivec2 unclampedP) {
-            ivec2 p = clampGlobal(unclampedP);
-            int tileX = 0;
-            int tileY = 0;
-            for (int i = 1; i < $MAX_TILE_AXIS; ++i) {
-                if (i >= uTileColumns || p.x < uTileLefts[i]) break;
-                tileX = i;
-            }
-            for (int i = 1; i < $MAX_TILE_AXIS; ++i) {
-                if (i >= uTileRows || p.y < uTileTops[i]) break;
-                tileY = i;
-            }
-            return ivec3(
-                p.x - uTileLefts[tileX],
-                p.y - uTileTops[tileY],
-                tileY * uTileColumns + tileX
-            );
         }
 
         int chromaSigned(uint c) {
@@ -922,42 +750,22 @@ internal object GlesRadianceVgnChromaShaders {
         }
     """.trimIndent()
 
-    val capture = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        precision highp usampler2D;
-        precision highp uimage2DArray;
-        layout(local_size_x = 16, local_size_y = 16) in;
-
-        uniform highp usampler2D uSource;
-        layout(rgba16ui, binding = 0) writeonly uniform highp uimage2DArray uDestination;
-        uniform ivec2 uTileSize;
-        uniform int uLayer;
-
-        void main() {
-            ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-            if (any(greaterThanEqual(p, uTileSize))) return;
-            imageStore(uDestination, ivec3(p, uLayer), texelFetch(uSource, p, 0));
-        }
-    """.trimIndent()
-
     val seed = """
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uCameraRgb;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uYccd;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uCameraRgb;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uYccd;
         uniform vec3 uCalculationGains;
         uniform float uMinimumDirectionGradient;
 
-        $tiledImageCommon
+        $imageCommon
 
         vec3 calculationRgbAt(ivec2 p) {
-            uvec3 encoded = imageLoad(uCameraRgb, tiledPosition(p)).rgb;
+            uvec3 encoded = imageLoad(uCameraRgb, imagePosition(p)).rgb;
             vec3 cameraRgb = vec3(
                 uint16ToFloat(encoded.r),
                 uint16ToFloat(encoded.g),
@@ -1027,7 +835,7 @@ internal object GlesRadianceVgnChromaShaders {
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            imageStore(uYccd, tiledPosition(p), rgbToYccd(calculationRgbAt(p), directionMaskAt(p)));
+            imageStore(uYccd, imagePosition(p), rgbToYccd(calculationRgbAt(p), directionMaskAt(p)));
         }
     """.trimIndent()
 
@@ -1035,22 +843,22 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uInput;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
 
-        $tiledImageCommon
+        $imageCommon
 
         uint yAt(ivec2 p) {
-            return imageLoad(uInput, tiledPosition(p)).r;
+            return imageLoad(uInput, imagePosition(p)).r;
         }
 
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            uvec4 result = imageLoad(uInput, tiledPosition(p));
+            uvec4 result = imageLoad(uInput, imagePosition(p));
             uint yMin = 65535u;
             uint yMax = 0u;
             for (int y = -1; y <= 1; ++y) {
@@ -1062,7 +870,7 @@ internal object GlesRadianceVgnChromaShaders {
                 }
             }
             result.r = clamp(result.r, yMin, yMax);
-            imageStore(uOutput, tiledPosition(p), result);
+            imageStore(uOutput, imagePosition(p), result);
         }
     """.trimIndent()
 
@@ -1070,16 +878,16 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uInput;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
 
-        $tiledImageCommon
+        $imageCommon
 
         ivec3 signedYccdAt(ivec2 p) {
-            uvec4 value = imageLoad(uInput, tiledPosition(p));
+            uvec4 value = imageLoad(uInput, imagePosition(p));
             return ivec3(int(value.r), chromaSigned(value.g), chromaSigned(value.b));
         }
 
@@ -1115,8 +923,8 @@ internal object GlesRadianceVgnChromaShaders {
             chromaSum += rowChroma - min(chromaMin, rowChroma) - max(chromaMax, rowChroma);
             ySum += row0.x + 2 * row1.x + row2.x;
 
-            uvec4 center = imageLoad(uInput, tiledPosition(p));
-            imageStore(uOutput, tiledPosition(p), uvec4(
+            uvec4 center = imageLoad(uInput, imagePosition(p));
+            imageStore(uOutput, imagePosition(p), uvec4(
                 uint(max(ySum / 16, 0)),
                 chromaUnsigned(chromaSum.x),
                 chromaUnsigned(chromaSum.y),
@@ -1129,17 +937,17 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uYccd;
-        layout(rgba16ui, binding = 1) readonly uniform highp uimage2DArray uSmooth;
-        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2DArray uOutputSmooth;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uYccd;
+        layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uSmooth;
+        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2D uOutputSmooth;
 
-        $tiledImageCommon
+        $imageCommon
 
         vec3 smoothAt(ivec2 p) {
-            uvec4 value = imageLoad(uSmooth, tiledPosition(p));
+            uvec4 value = imageLoad(uSmooth, imagePosition(p));
             return vec3(
                 uint16ToFloat(value.r),
                 float(chromaSigned(value.g)),
@@ -1202,7 +1010,7 @@ internal object GlesRadianceVgnChromaShaders {
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            uvec4 encoded = imageLoad(uYccd, tiledPosition(p));
+            uvec4 encoded = imageLoad(uYccd, imagePosition(p));
             vec4 filtered = vec4(
                 uint16ToFloat(encoded.r),
                 float(chromaSigned(encoded.g)),
@@ -1214,14 +1022,14 @@ internal object GlesRadianceVgnChromaShaders {
             }
             uint error = uint(clamp(filtered.w, 0.0, 65504.0));
 
-            uvec4 smoothValue = imageLoad(uSmooth, tiledPosition(p));
+            uvec4 smoothValue = imageLoad(uSmooth, imagePosition(p));
             ivec2 smoothChroma = ivec2(chromaSigned(smoothValue.g), chromaSigned(smoothValue.b));
             ivec2 filteredChroma = ivec2(filtered.yz);
             if (abs(smoothChroma.x) + abs(smoothChroma.y) <
                 abs(filteredChroma.x) + abs(filteredChroma.y)) {
                 filteredChroma = smoothChroma;
             }
-            imageStore(uOutputSmooth, tiledPosition(p), uvec4(
+            imageStore(uOutputSmooth, imagePosition(p), uvec4(
                 uint(clamp(filtered.x, 0.0, 65504.0)),
                 chromaUnsigned(filteredChroma.x),
                 chromaUnsigned(filteredChroma.y),
@@ -1233,19 +1041,19 @@ internal object GlesRadianceVgnChromaShaders {
     val restoreOriginal = """
         #version 310 es
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uSmooth;
-        layout(rgba16ui, binding = 1) readonly uniform highp uimage2DArray uDirectionalSource;
-        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2DArray uOriginal;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uSmooth;
+        layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uDirectionalSource;
+        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2D uOriginal;
 
-        $tiledImageCommon
+        $imageCommon
 
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            ivec3 storage = tiledPosition(p);
+            ivec2 storage = p;
             uvec4 smoothValue = imageLoad(uSmooth, storage);
             uint direction = imageLoad(uDirectionalSource, storage).a;
             imageStore(uOriginal, storage, uvec4(smoothValue.rgb, direction));
@@ -1256,11 +1064,11 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 1, local_size_y = 1) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uInput;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
         uniform vec4 uA10;
         uniform vec4 uB10;
         uniform vec4 uADyn1;
@@ -1272,7 +1080,7 @@ internal object GlesRadianceVgnChromaShaders {
         uniform int uFilterLuma;
         uniform int uBoundaryWarmup;
 
-        $tiledImageCommon
+        $imageCommon
 
         struct Delayer {
             float x0;
@@ -1328,7 +1136,7 @@ internal object GlesRadianceVgnChromaShaders {
             Delayer cbState1 = Delayer(0.0, 0.0, 0.0, 0.0);
             Delayer crState2 = Delayer(0.0, 0.0, 0.0, 0.0);
             Delayer cbState2 = Delayer(0.0, 0.0, 0.0, 0.0);
-            uvec4 boundary = imageLoad(uInput, tiledPosition(linePosition(start, outer)));
+            uvec4 boundary = imageLoad(uInput, linePosition(start, outer));
             float y;
             float cr;
             float cb;
@@ -1347,7 +1155,7 @@ internal object GlesRadianceVgnChromaShaders {
             }
             for (int i = 0; i < innerSize; ++i) {
                 ivec2 p = linePosition(start + i * step, outer);
-                ivec3 storage = tiledPosition(p);
+                ivec2 storage = p;
                 uvec4 pixel = imageLoad(uInput, storage);
                 filterSample(
                     pixel,
@@ -1374,18 +1182,18 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 1, local_size_y = 1) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uInput;
-        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
         uniform vec4 uA10;
         uniform vec4 uB10;
         uniform int uDirection;
         uniform int uAxis;
         uniform int uBoundaryWarmup;
 
-        $tiledImageCommon
+        $imageCommon
 
         struct Delayer {
             float x0;
@@ -1416,13 +1224,13 @@ internal object GlesRadianceVgnChromaShaders {
             int start = uDirection == 0 ? 0 : innerSize - 1;
             int step = uDirection == 0 ? 1 : -1;
             Delayer state = Delayer(0.0, 0.0, 0.0, 0.0);
-            uvec4 boundary = imageLoad(uInput, tiledPosition(linePosition(start, outer)));
+            uvec4 boundary = imageLoad(uInput, linePosition(start, outer));
             for (int warmup = 0; warmup < uBoundaryWarmup; ++warmup) {
                 applyFilter(state, uint16ToFloat(boundary.a));
             }
             for (int i = 0; i < innerSize; ++i) {
                 ivec2 p = linePosition(start + i * step, outer);
-                ivec3 storage = tiledPosition(p);
+                ivec2 storage = p;
                 uvec4 pixel = imageLoad(uInput, storage);
                 pixel.a = uint(applyFilter(state, uint16ToFloat(pixel.a)));
                 imageStore(uOutput, storage, pixel);
@@ -1434,14 +1242,14 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uOriginal;
-        layout(rgba16ui, binding = 1) readonly uniform highp uimage2DArray uSmooth;
-        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2DArray uOutput;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uOriginal;
+        layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uSmooth;
+        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2D uOutput;
 
-        $tiledImageCommon
+        $imageCommon
 
         int directionCount(int encoded) {
             return (encoded >> 8) & 0x0F;
@@ -1450,7 +1258,7 @@ internal object GlesRadianceVgnChromaShaders {
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            ivec3 storage = tiledPosition(p);
+            ivec2 storage = p;
             uvec4 original = imageLoad(uOriginal, storage);
             uvec4 smoothValue = imageLoad(uSmooth, storage);
             if (p.x == 0 || p.y == 0 || p.x + 1 >= uImageSize.x || p.y + 1 >= uImageSize.y) {
@@ -1474,7 +1282,7 @@ internal object GlesRadianceVgnChromaShaders {
             int cbSum = 0;
             for (int i = 0; i < 8; ++i) {
                 if ((encodedDirection & (1 << i)) != 0) {
-                    uvec4 neighbor = imageLoad(uOriginal, tiledPosition(p + directions[i]));
+                    uvec4 neighbor = imageLoad(uOriginal, p + directions[i]);
                     ySum += int(original.r) - int(neighbor.r);
                     crSum += chromaSigned(original.g) - chromaSigned(neighbor.g);
                     cbSum += chromaSigned(original.b) - chromaSigned(neighbor.b);
@@ -1497,14 +1305,14 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
+        precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uOriginal;
-        layout(rgba16ui, binding = 1) readonly uniform highp uimage2DArray uSmooth;
-        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2DArray uOutput;
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uOriginal;
+        layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uSmooth;
+        layout(rgba16ui, binding = 2) writeonly uniform highp uimage2D uOutput;
 
-        $tiledImageCommon
+        $imageCommon
 
         float minMaxScale(float low, float value, float high) {
             return (clamp(value, low, high) - low) / (high - low);
@@ -1513,7 +1321,7 @@ internal object GlesRadianceVgnChromaShaders {
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            ivec3 storage = tiledPosition(p);
+            ivec2 storage = p;
             uvec4 original = imageLoad(uOriginal, storage);
             uvec4 smoothValue = imageLoad(uSmooth, storage);
             int cr = chromaSigned(original.g);
@@ -1532,33 +1340,18 @@ internal object GlesRadianceVgnChromaShaders {
         }
     """.trimIndent()
 
-    val finalCameraRgb: String
-        get() = finalCameraRgb(exportFullSizeTexture = false)
-
-    fun finalCameraRgb(exportFullSizeTexture: Boolean): String {
-        val outputDeclaration = if (exportFullSizeTexture) {
-            "layout(rgba16ui, binding = 2) writeonly uniform highp uimage2D uFullSizeOutput;"
-        } else {
-            "layout(rgba16ui, binding = 1) writeonly uniform highp uimage2DArray uOutput;"
-        }
-        val outputStore = if (exportFullSizeTexture) {
-            "imageStore(uFullSizeOutput, p, outputPixel);"
-        } else {
-            "imageStore(uOutput, storage, outputPixel);"
-        }
-        return """
+    val finalCameraRgb = """
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp uimage2DArray;
         precision highp uimage2D;
         layout(local_size_x = 16, local_size_y = 16) in;
 
-        layout(rgba16ui, binding = 0) readonly uniform highp uimage2DArray uInput;
-        $outputDeclaration
+        layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
+        layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
         uniform vec3 uCalculationGains;
 
-        $tiledImageCommon
+        $imageCommon
 
         vec3 yccdToCalculationRgb(uvec4 encoded) {
             float y = clamp(uint16ToFloat(encoded.r), 0.0, 65504.0);
@@ -1573,16 +1366,14 @@ internal object GlesRadianceVgnChromaShaders {
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (any(greaterThanEqual(p, uImageSize))) return;
-            ivec3 storage = tiledPosition(p);
-            uvec4 encoded = imageLoad(uInput, storage);
+            uvec4 encoded = imageLoad(uInput, p);
             vec3 cameraRgb = yccdToCalculationRgb(encoded) /
                 max(uCalculationGains, vec3(1e-6));
             uvec4 outputPixel = uvec4(
                 uvec3(clamp(cameraRgb, vec3(0.0), vec3(65504.0)) + vec3(0.5)),
                 65535u
             );
-            $outputStore
+            imageStore(uOutput, p, outputPixel);
         }
-        """.trimIndent()
-    }
+    """.trimIndent()
 }

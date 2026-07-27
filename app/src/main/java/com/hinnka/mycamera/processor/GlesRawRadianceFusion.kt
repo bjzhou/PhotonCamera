@@ -29,6 +29,7 @@ internal object RawRadianceExposurePlanner {
         frameRoles: List<RawBurstFrameRole> = List(exposureProducts.size) {
             RawBurstFrameRole.NORMAL
         },
+        enableHdrFusion: Boolean = true,
     ): RawRadianceExposurePlan {
         require(frameRoles.size == exposureProducts.size) {
             "Exposure products and frame roles must have the same size"
@@ -37,6 +38,15 @@ internal object RawRadianceExposurePlanner {
             return RawRadianceExposurePlan(
                 baseExposureProduct = null,
                 normalIndices = IntArray(0),
+                shortIndex = null,
+                longIndices = IntArray(0),
+                excludedIndices = IntArray(0),
+            )
+        }
+        if (!enableHdrFusion) {
+            return RawRadianceExposurePlan(
+                baseExposureProduct = null,
+                normalIndices = exposureProducts.indices.toList().toIntArray(),
                 shortIndex = null,
                 longIndices = IntArray(0),
                 excludedIndices = IntArray(0),
@@ -255,6 +265,7 @@ class GlesRawRadianceFusion(
     private val fusionTuning: RawRadianceFusionTuning = RawRadianceFusionTuning(),
     private val useCurrentGlContext: Boolean = false,
     private val exportGpuLinearRgbSource: Boolean = false,
+    private val enableHdrFusion: Boolean = true,
 ) {
     private val outputScale = MultiFrameConfig.normalizeOutputScale(outputScale)
 
@@ -263,6 +274,7 @@ class GlesRawRadianceFusion(
         val exposurePlan = RawRadianceExposurePlanner.plan(
             exposureProducts = frames.map { it.exposureProduct },
             frameRoles = frames.map { it.role },
+            enableHdrFusion = enableHdrFusion,
         )
         exposurePlan.excludedIndices.forEach { index ->
             frames[index].image.close()
@@ -306,8 +318,14 @@ class GlesRawRadianceFusion(
                 "Radiance short frame has no usable exposure ratio; highlight reconstruction disabled",
             )
             shortFrame.image.close()
-        } else {
+        } else if (enableHdrFusion) {
             PLog.w(TAG, "Radiance fusion received no valid one-third short frame")
+        } else {
+            PLog.i(
+                TAG,
+                "RAWmax HDR fusion disabled; processing ${fusionFrames.size} same-exposure frames " +
+                    "without highlight or long-exposure resources",
+            )
         }
 
         val longFramePlans = if (PROCESS_LONG_FRAMES) {
@@ -886,12 +904,8 @@ internal object GlesRawRadianceFusionShaders {
         precision highp float;
         precision highp int;
         layout(local_size_x = 16, local_size_y = 16) in;
-        layout(r32ui, binding = 0) writeonly uniform highp uimage2D uNrSumRg;
-        layout(r32ui, binding = 1) writeonly uniform highp uimage2D uNrSumBw;
-        layout(r32ui, binding = 2) writeonly uniform highp uimage2D uNrWeightRg;
-        layout(r32ui, binding = 3) writeonly uniform highp uimage2D uDetailSumRg;
-        layout(r32ui, binding = 4) writeonly uniform highp uimage2D uDetailSumBw;
-        layout(r32ui, binding = 5) writeonly uniform highp uimage2D uDetailWeightRg;
+        layout(rgba16f, binding = 0) writeonly uniform highp image2D uNrAccumulator;
+        layout(rgba16f, binding = 1) writeonly uniform highp image2D uDetailAccumulator;
         $rejectionDeclaration
         $longParticipationDeclaration
         uniform ivec2 uImageSize;
@@ -899,12 +913,8 @@ internal object GlesRawRadianceFusionShaders {
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
-            imageStore(uNrSumRg, p, uvec4(0u));
-            imageStore(uNrSumBw, p, uvec4(0u));
-            imageStore(uNrWeightRg, p, uvec4(0u));
-            imageStore(uDetailSumRg, p, uvec4(0u));
-            imageStore(uDetailSumBw, p, uvec4(0u));
-            imageStore(uDetailWeightRg, p, uvec4(0u));
+            imageStore(uNrAccumulator, p, vec4(0.0));
+            imageStore(uDetailAccumulator, p, vec4(0.0));
             $rejectionClear
             $longParticipationClear
         }
@@ -1143,8 +1153,11 @@ internal object GlesRawRadianceFusionShaders {
         }
         return """
         #version 310 es
+        precision highp float;
+        precision highp int;
         $rawCommon
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(location = 0) out highp vec4 nrContribution;
+        layout(location = 1) out highp vec4 detailContribution;
         uniform sampler2D uRcdRgbTile;
         uniform sampler2D uFlowGrid;
         uniform sampler2D uRobustness;
@@ -1153,12 +1166,6 @@ internal object GlesRawRadianceFusionShaders {
         uniform sampler2D uLensShadingMap;
         uniform sampler2D uReferenceBase;
         uniform highp usampler2D uRawRegion;
-        layout(r32ui, binding = 0) uniform highp uimage2D uNrSumRg;
-        layout(r32ui, binding = 1) uniform highp uimage2D uNrSumBw;
-        layout(r32ui, binding = 2) uniform highp uimage2D uNrWeightRg;
-        layout(r32ui, binding = 3) uniform highp uimage2D uDetailSumRg;
-        layout(r32ui, binding = 4) uniform highp uimage2D uDetailSumBw;
-        layout(r32ui, binding = 5) uniform highp uimage2D uDetailWeightRg;
         $rejectionDeclaration
         $longParticipationDeclaration
         $participationDeclaration
@@ -1460,7 +1467,9 @@ internal object GlesRawRadianceFusionShaders {
         }
 
         void main() {
-            ivec2 accumulatorP = ivec2(gl_GlobalInvocationID.xy);
+            nrContribution = vec4(0.0);
+            detailContribution = vec4(0.0);
+            ivec2 accumulatorP = ivec2(gl_FragCoord.xy);
             ivec2 outputP = accumulatorP + uAccumulatorOrigin;
             if (accumulatorP.x >= uAccumulatorSize.x ||
                 accumulatorP.y >= uAccumulatorSize.y ||
@@ -1607,54 +1616,8 @@ internal object GlesRawRadianceFusionShaders {
             $participationStore
             $longParticipationStore
 
-            if (any(greaterThan(nrWeight, vec3(1e-7)))) {
-                vec2 nrRg = unpackHalf2x16(imageLoad(uNrSumRg, accumulatorP).r);
-                vec2 nrBw = unpackHalf2x16(imageLoad(uNrSumBw, accumulatorP).r);
-                vec2 nrWeightRg = unpackHalf2x16(imageLoad(uNrWeightRg, accumulatorP).r);
-                nrRg += rgb.denoise.rg * nrWeight.rg;
-                nrBw += vec2(rgb.denoise.b * nrWeight.b, nrWeight.b);
-                nrWeightRg += nrWeight.rg;
-                imageStore(
-                    uNrSumRg,
-                    accumulatorP,
-                    uvec4(packHalf2x16(nrRg), 0u, 0u, 0u)
-                );
-                imageStore(
-                    uNrSumBw,
-                    accumulatorP,
-                    uvec4(packHalf2x16(nrBw), 0u, 0u, 0u)
-                );
-                imageStore(
-                    uNrWeightRg,
-                    accumulatorP,
-                    uvec4(packHalf2x16(nrWeightRg), 0u, 0u, 0u)
-                );
-            }
-            if (any(greaterThan(detailWeight, vec3(1e-7)))) {
-                vec2 detailRg = unpackHalf2x16(imageLoad(uDetailSumRg, accumulatorP).r);
-                vec2 detailBw = unpackHalf2x16(imageLoad(uDetailSumBw, accumulatorP).r);
-                vec2 detailWeightRg = unpackHalf2x16(
-                    imageLoad(uDetailWeightRg, accumulatorP).r
-                );
-                detailRg += rgb.detail.rg * detailWeight.rg;
-                detailBw += vec2(rgb.detail.b * detailWeight.b, detailWeight.b);
-                detailWeightRg += detailWeight.rg;
-                imageStore(
-                    uDetailSumRg,
-                    accumulatorP,
-                    uvec4(packHalf2x16(detailRg), 0u, 0u, 0u)
-                );
-                imageStore(
-                    uDetailSumBw,
-                    accumulatorP,
-                    uvec4(packHalf2x16(detailBw), 0u, 0u, 0u)
-                );
-                imageStore(
-                    uDetailWeightRg,
-                    accumulatorP,
-                    uvec4(packHalf2x16(detailWeightRg), 0u, 0u, 0u)
-                );
-            }
+            nrContribution = vec4(rgb.denoise * nrWeight.x, nrWeight.x);
+            detailContribution = vec4(rgb.detail * detailWeight.x, detailWeight.x);
         }
         """.trimIndent()
     }
@@ -1663,28 +1626,20 @@ internal object GlesRawRadianceFusionShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        precision highp usampler2D;
         layout(local_size_x = 16, local_size_y = 16) in;
-        uniform highp usampler2D uNrSumRg;
-        uniform highp usampler2D uNrSumBw;
-        uniform highp usampler2D uNrWeightRg;
+        uniform highp sampler2D uNrAccumulator;
         layout(rgba16f, binding = 0) writeonly uniform highp image2D uReferenceBase;
         uniform ivec2 uImageSize;
 
         void main() {
             ivec2 p = ivec2(gl_GlobalInvocationID.xy);
             if (p.x >= uImageSize.x || p.y >= uImageSize.y) return;
-            vec2 rg = unpackHalf2x16(texelFetch(uNrSumRg, p, 0).r);
-            vec2 bw = unpackHalf2x16(texelFetch(uNrSumBw, p, 0).r);
-            vec2 weightRg = max(
-                unpackHalf2x16(texelFetch(uNrWeightRg, p, 0).r),
-                vec2(1e-6)
-            );
-            float weightB = max(bw.y, 1e-6);
+            vec4 accumulated = texelFetch(uNrAccumulator, p, 0);
+            float weight = max(accumulated.a, 1e-6);
             imageStore(
                 uReferenceBase,
                 p,
-                vec4(clamp(vec3(rg / weightRg, bw.x / weightB), 0.0, 1.0), 1.0)
+                vec4(clamp(accumulated.rgb / weight, 0.0, 1.0), 1.0)
             );
         }
     """.trimIndent()
@@ -2036,15 +1991,10 @@ internal object GlesRawRadianceFusionShaders {
         #version 300 es
         precision highp float;
         precision highp int;
-        precision highp usampler2D;
         in vec2 vTexCoord;
         layout(location = 0) out highp uvec4 fragColor;
-        uniform highp usampler2D uNrSumRg;
-        uniform highp usampler2D uNrSumBw;
-        uniform highp usampler2D uNrWeightRg;
-        uniform highp usampler2D uDetailSumRg;
-        uniform highp usampler2D uDetailSumBw;
-        uniform highp usampler2D uDetailWeightRg;
+        uniform highp sampler2D uNrAccumulator;
+        uniform highp sampler2D uDetailAccumulator;
         uniform sampler2D uReferenceBase;
         $rejectionUniforms
         $longParticipationUniform
@@ -2105,37 +2055,19 @@ internal object GlesRawRadianceFusionShaders {
             ), vec3(1e-10));
         }
 
-        WeightedRgb packedRgbWeightAt(
-            highp usampler2D rgTexture,
-            highp usampler2D bwTexture,
-            highp usampler2D weightRgTexture,
-            ivec2 p
-        ) {
+        WeightedRgb accumulatedRgbAt(highp sampler2D accumulator, ivec2 p) {
             p = clampAccumulatorPos(p);
-            vec2 rg = unpackHalf2x16(texelFetch(rgTexture, p, 0).r);
-            vec2 bw = unpackHalf2x16(texelFetch(bwTexture, p, 0).r);
-            vec2 weightRg = max(
-                unpackHalf2x16(texelFetch(weightRgTexture, p, 0).r),
-                vec2(0.0)
-            );
-            vec3 weight = vec3(weightRg, max(bw.y, 0.0));
-            vec3 value = vec3(
-                weight.r > 1e-7 ? rg.r / weight.r : 0.0,
-                weight.g > 1e-7 ? rg.g / weight.g : 0.0,
-                weight.b > 1e-7 ? bw.x / weight.b : 0.0
-            );
-            return WeightedRgb(clamp(value, 0.0, 1.0), weight);
+            vec4 accumulated = texelFetch(accumulator, p, 0);
+            float sharedWeight = max(accumulated.a, 0.0);
+            vec3 value = sharedWeight > 1e-7 ?
+                accumulated.rgb / sharedWeight : vec3(0.0);
+            return WeightedRgb(clamp(value, 0.0, 1.0), vec3(sharedWeight));
         }
 
         NrState nrStateAt(ivec2 p) {
             p = clampAccumulatorPos(p);
             vec3 base = referenceBaseAt(p);
-            WeightedRgb sampleValue = packedRgbWeightAt(
-                uNrSumRg,
-                uNrSumBw,
-                uNrWeightRg,
-                p
-            );
+            WeightedRgb sampleValue = accumulatedRgbAt(uNrAccumulator, p);
             vec3 weight = sampleValue.weight;
             vec3 nr = vec3(
                 weight.r > 1e-7 ? sampleValue.value.r : base.r,
@@ -2209,12 +2141,7 @@ internal object GlesRawRadianceFusionShaders {
                 gradient
             );
 
-            WeightedRgb detailSample = packedRgbWeightAt(
-                uDetailSumRg,
-                uDetailSumBw,
-                uDetailWeightRg,
-                p
-            );
+            WeightedRgb detailSample = accumulatedRgbAt(uDetailAccumulator, p);
             vec3 detail = vec3(
                 detailSample.weight.r > 1e-7 ? detailSample.value.r : center.base.r,
                 detailSample.weight.g > 1e-7 ? detailSample.value.g : center.base.g,

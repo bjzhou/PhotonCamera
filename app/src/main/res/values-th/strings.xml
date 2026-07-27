@@ -885,4 +885,6 @@
     <string name="preset_custom_badge">ปรับแต่ง</string>
     <string name="preset_builtin_badge">ในตัว</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ระบบจัดการสีที่ Hasselblad พัฒนาขึ้นอย่างอิสระ</string>
+    <string name="settings_raw_max_hdr_composition">การรวม HDR ของ RAWmax</string>
+    <string name="settings_raw_max_hdr_composition_description">ใช้การถ่ายคร่อมแสงสำหรับการรวม HDR ใน RAWmax ปิดเพื่อเพิ่มความเร็วในการประมวลผล</string>
 </resources>

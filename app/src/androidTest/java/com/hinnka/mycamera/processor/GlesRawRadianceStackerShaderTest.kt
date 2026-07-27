@@ -111,20 +111,15 @@ class GlesRawRadianceStackerShaderTest {
             invokePrivate(stacker, "normalizeRadianceTile", tile, 1, 1)
             val chromaPostprocessor = readPrivateAny(stacker, "radianceVgnChromaPostprocessor")
             assertNotNull("Radiance must initialize its VGN chroma postprocessor", chromaPostprocessor)
-            val postprocessor = checkNotNull(chromaPostprocessor)
-            invokePrivate(
-                postprocessor,
-                "capture",
-                readPrivateInt(stacker, "outputTexture"),
-                tile,
-            )
+            val postprocessor =
+                checkNotNull(chromaPostprocessor) as GlesRadianceVgnChromaPostprocessor
+            postprocessor.markTileWritten(tile)
             val chromaOutput = ByteBuffer.allocateDirect(96 * 96 * 3 * 2)
                 .order(ByteOrder.nativeOrder())
-            val chromaResult = invokePrivate(
-                postprocessor,
-                "processAndReadback",
-                chromaOutput,
-            ) as GlesRadianceVgnChromaPostprocessor.ProcessResult
+            val chromaResult = postprocessor.process(
+                obtainOutputBuffer = { chromaOutput },
+                deferFullSizeReadback = false,
+            )
             assertNotNull(chromaResult)
             assertEquals(0, chromaOutput.position())
             assertTrue(chromaResult.exportedTextureId != 0)

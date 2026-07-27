@@ -22,12 +22,15 @@ import com.hinnka.mycamera.lut.ChromaDenoiseDefaults
 import com.hinnka.mycamera.lut.ChromaDenoiseShaders
 import com.hinnka.mycamera.lut.ShadowsHighlightsShader
 import com.hinnka.mycamera.ml.SharedDepthEstimator
+import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.processor.GlesRawRadianceStacker
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
+import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackResult
 import com.hinnka.mycamera.utils.BitmapUtils
+import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.RawProcessor
@@ -298,6 +301,7 @@ class RawDemosaicProcessor {
         captureHeight: Int,
         rawMaxFrameCount: Int,
         rawMaxEnabled: Boolean,
+        rawMaxHdrCompositionEnabled: Boolean,
     ): Boolean =
         withContext(glDispatcher) {
             val start = System.currentTimeMillis()
@@ -345,8 +349,8 @@ class RawDemosaicProcessor {
                         lensShadingHeight = 0,
                         useCurrentGlContext = true,
                         exportGpuLinearRgbSource = true,
-                        prewarmHighlightPrograms = true,
-                        prewarmLongPrograms = true,
+                        prewarmHighlightPrograms = rawMaxHdrCompositionEnabled,
+                        prewarmLongPrograms = rawMaxHdrCompositionEnabled,
                     ).prewarmCapturePipeline(rawMaxFrameCount)
                     true
                 }.onFailure { error ->
@@ -362,7 +366,7 @@ class RawDemosaicProcessor {
                 "RAW capture pipeline prewarmed ready=$ready engine=$colorEngine " +
                     "profileToneMap=$profileToneMapMode " +
                     "capture=${warmupWidth}x$warmupHeight rawMax=$rawMaxEnabled " +
-                    "frames=$rawMaxFrameCount " +
+                    "rawMaxHdr=$rawMaxHdrCompositionEnabled frames=$rawMaxFrameCount " +
                     "took=${System.currentTimeMillis() - start}ms",
             )
             ready
@@ -637,9 +641,166 @@ class RawDemosaicProcessor {
     internal suspend fun releaseGpuLinearRgbSource(source: GpuLinearRgbSource?) {
         if (source == null) return
         withContext(glDispatcher) {
+            source.stackCompletionTimeline?.releasePending()
             if (exportedStackTextureIds.remove(source.textureId)) {
                 GLES30.glDeleteTextures(1, intArrayOf(source.textureId), 0)
                 checkGlError("release stacked LinearRaw texture")
+            }
+        }
+    }
+
+    /**
+     * Materializes a stacked RGBA16UI texture as packed RGB16 only when a CPU/DNG consumer asks
+     * for it. The foreground RAW renderer consumes the texture directly before this work starts.
+     */
+    internal suspend fun materializeGpuLinearRgbSource(
+        source: GpuLinearRgbSource,
+    ): ByteBuffer? = withContext(glDispatcher) {
+        val valid = source.textureId != 0 &&
+            source.width > 0 && source.height > 0 &&
+            source.samplesPerPixel == 4 &&
+            exportedStackTextureIds.contains(source.textureId)
+        if (!valid) {
+            PLog.e(
+                TAG,
+                "Unable to materialize invalid stacked GPU source texture=${source.textureId} " +
+                    "size=${source.width}x${source.height}x${source.samplesPerPixel}",
+            )
+            return@withContext null
+        }
+
+        val totalStartNs = System.nanoTime()
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+        )
+        val upstreamStackTiming = source.stackCompletionTimeline?.awaitPending(
+            syncPoint = "DNG_MATERIALIZATION",
+            checkGlError = ::checkGlError,
+        )
+        val gpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+            label = "stacked LinearRaw before DNG materialization",
+            checkGlError = ::checkGlError,
+        )
+
+        val tileEdge = 1024
+        val scratchWidth = min(source.width, tileEdge)
+        val scratchHeight = min(source.height, tileEdge)
+        val outputBytes = source.width.toLong() * source.height.toLong() * 3L * Short.SIZE_BYTES
+        val scratchBytes = scratchWidth.toLong() * scratchHeight.toLong() * 4L * Short.SIZE_BYTES
+        val allocationStartNs = System.nanoTime()
+        val output = LargeDirectBuffer.allocate(
+            outputBytes,
+            "Stacked LinearRaw deferred RGB16 materialization",
+        )?.order(ByteOrder.nativeOrder()) ?: return@withContext null
+        val scratch = LargeDirectBuffer.allocate(
+            scratchBytes,
+            "Stacked LinearRaw deferred RGBA16 tile",
+        )?.order(ByteOrder.nativeOrder())
+        if (scratch == null) {
+            LargeDirectBuffer.free(output)
+            return@withContext null
+        }
+        val allocationMs = (System.nanoTime() - allocationStartNs) / 1_000_000L
+
+        val framebufferIds = IntArray(1)
+        GLES30.glGenFramebuffers(1, framebufferIds, 0)
+        val framebuffer = framebufferIds[0]
+        if (framebuffer == 0) {
+            LargeDirectBuffer.free(scratch)
+            LargeDirectBuffer.free(output)
+            return@withContext null
+        }
+
+        var pixelTransferMs = 0L
+        var cpuPackMs = 0L
+        var completed = false
+        try {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                source.textureId,
+                0,
+            )
+            GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
+            check(
+                GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
+                    GLES30.GL_FRAMEBUFFER_COMPLETE
+            ) { "Stacked LinearRaw materialization framebuffer is incomplete" }
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
+
+            for (top in 0 until source.height step tileEdge) {
+                val tileHeight = min(tileEdge, source.height - top)
+                for (left in 0 until source.width step tileEdge) {
+                    val tileWidth = min(tileEdge, source.width - left)
+                    scratch.clear()
+                    val transferStartNs = System.nanoTime()
+                    GLES30.glReadPixels(
+                        left,
+                        top,
+                        tileWidth,
+                        tileHeight,
+                        GLES30.GL_RGBA_INTEGER,
+                        GLES30.GL_UNSIGNED_SHORT,
+                        scratch,
+                    )
+                    pixelTransferMs += (System.nanoTime() - transferStartNs) / 1_000_000L
+                    checkGlError("materialize stacked LinearRaw tile ($left,$top)")
+
+                    val packStartNs = System.nanoTime()
+                    check(
+                        DirectBufferPixelPacker.unpackRgba16TileToRgb16(
+                            source = scratch,
+                            sourceWidth = tileWidth,
+                            sourceHeight = tileHeight,
+                            destination = output,
+                            destinationWidth = source.width,
+                            destinationHeight = source.height,
+                            destinationLeft = left,
+                            destinationTop = top,
+                        )
+                    ) { "Unable to pack stacked LinearRaw tile ($left,$top)" }
+                    cpuPackMs += (System.nanoTime() - packStartNs) / 1_000_000L
+                    GlesGpuScheduler.yieldToUiRenderer()
+                }
+            }
+            output.rewind()
+            completed = true
+            val totalMs = (System.nanoTime() - totalStartNs) / 1_000_000L
+            val upstreamStackWaitMs = upstreamStackTiming?.totalWaitMs ?: 0L
+            val accountedMs = upstreamStackWaitMs + gpuQueueWaitMs + allocationMs +
+                pixelTransferMs + cpuPackMs
+            PLog.i(
+                TAG,
+                "Stacked LinearRaw DNG materialization timing total=${totalMs}ms " +
+                    "upstreamStackGpuWait=${upstreamStackWaitMs}ms " +
+                    "materializationGpuWait=${gpuQueueWaitMs}ms " +
+                    "pixelTransfer=${pixelTransferMs}ms " +
+                    "cpuPack=${cpuPackMs}ms allocation=${allocationMs}ms " +
+                    "setup=${(totalMs - accountedMs).coerceAtLeast(0L)}ms " +
+                    "bytes=$outputBytes",
+            )
+            output
+        } catch (error: Exception) {
+            PLog.e(TAG, "Failed to materialize stacked LinearRaw GPU source", error)
+            null
+        } finally {
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glDeleteFramebuffers(1, framebufferIds, 0)
+            LargeDirectBuffer.free(scratch)
+            if (!completed) {
+                LargeDirectBuffer.free(output)
             }
         }
     }
@@ -1313,7 +1474,7 @@ class RawDemosaicProcessor {
      */
     suspend fun processLinearDngBufferForHdrSources(
         context: Context,
-        rawData: ByteBuffer,
+        rawData: ByteBuffer?,
         width: Int,
         height: Int,
         rowStride: Int,
@@ -1353,7 +1514,9 @@ class RawDemosaicProcessor {
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
         onMetadata: ((RawMetadata) -> Unit)? = null,
     ): RawHdrRenderResult? = withContext(glDispatcher) {
-        if (samplesPerPixel !in 3..4 || width <= 0 || height <= 0 || rowStride <= 0) {
+        if ((rawData == null && gpuLinearRgbSource == null) ||
+            samplesPerPixel !in 3..4 || width <= 0 || height <= 0 || rowStride <= 0
+        ) {
             PLog.e(
                 TAG,
                 "Invalid in-memory LinearRaw DNG source: ${width}x$height " +
@@ -1376,7 +1539,9 @@ class RawDemosaicProcessor {
         onMetadata?.invoke(renderMetadata)
         PLog.i(
             TAG,
-            "RAW_LINEAR_DNG_BYPASS source=IN_MEMORY_RGB16 metadata=SHARED_DNG_PARAMS " +
+            "RAW_LINEAR_DNG_BYPASS source=" +
+                "${if (gpuLinearRgbSource != null) "GPU_STACK_TEXTURE" else "CPU_RGB16_BUFFER"} " +
+                "metadata=SHARED_DNG_PARAMS " +
                 "size=${width}x$height samplesPerPixel=$samplesPerPixel rowStride=$rowStride " +
                 "baselineExposure=${renderMetadata.baselineExposure} " +
                 "defaultCrop=${renderMetadata.defaultCrop} " +
@@ -1394,7 +1559,7 @@ class RawDemosaicProcessor {
         try {
             processInternal(
                 context = context,
-                rawData = rawData.duplicate().order(ByteOrder.nativeOrder()),
+                rawData = rawData?.duplicate()?.order(ByteOrder.nativeOrder()),
                 width = width,
                 height = height,
                 rowStride = rowStride,
@@ -1603,7 +1768,7 @@ class RawDemosaicProcessor {
             onMetadata?.invoke(actualMetadata)
         }
 
-        if (actualRawData == null || actualMetadata == null) {
+        if ((actualRawData == null && borrowedGpuSource == null) || actualMetadata == null) {
             PLog.e(TAG, "Missing source data or metadata")
             return@withContext null
         }
@@ -1768,7 +1933,14 @@ class RawDemosaicProcessor {
         } else {
             emptyList()
         }
-        if (highResolutionOutput && tileBlockingReason != null) {
+        if (highResolutionOutput && borrowedGpuSource != null) {
+            PLog.i(
+                TAG,
+                "RAW render path=GPU_FULL_FRAME source=STACKED_TEXTURE " +
+                    "size=${outputSourceBounds.width()}x${outputSourceBounds.height()} " +
+                    "tiledCpuUpload=false",
+            )
+        } else if (highResolutionOutput && tileBlockingReason != null) {
             PLog.w(
                 TAG,
                 "RAW tiled rendering unavailable for this pipeline: $tileBlockingReason; " +
@@ -1811,7 +1983,7 @@ class RawDemosaicProcessor {
                 )
             } else if (actualSamplesPerPixel in 3..4) {
                 uploadLinearRawRgbTextureFromBuffer(
-                    actualRawData,
+                    requireNotNull(actualRawData),
                     actualWidth,
                     actualHeight,
                     actualRowStride,
@@ -1819,7 +1991,7 @@ class RawDemosaicProcessor {
                 )
             } else {
                 uploadRawTextureFromBuffer(
-                    actualRawData,
+                    requireNotNull(actualRawData),
                     actualWidth,
                     actualHeight,
                     actualRowStride,
@@ -2208,6 +2380,7 @@ class RawDemosaicProcessor {
                         supportProfileOverrange = supportProfileOverrange,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
                         hncsCameraDomainGains = hncsCameraDomainGains,
+                        stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
                     )
                 }
                 solvedExposureEv?.let { exposureEv ->
@@ -2559,10 +2732,25 @@ class RawDemosaicProcessor {
             }
             sharpenWidth = 0; sharpenHeight = 0
 
-            // 8. 读取结果
+            // 8. 读取结果。先单独等待 GPU，避免把前面所有异步 shader 工作记到 readPixels。
+            val upstreamStackTiming = borrowedGpuSource?.stackCompletionTimeline?.awaitPending(
+                syncPoint = "RAW_DISPLAY_OUTPUT",
+                checkGlError = ::checkGlError,
+            )
+            val outputGpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                label = "RAW display output",
+                checkGlError = ::checkGlError,
+            )
             val readStart = System.currentTimeMillis()
             val finalBitmap = readPixels(finalWidth, finalHeight, workingColorSpace)
-            PLog.d(TAG, "readPixels took: ${System.currentTimeMillis() - readStart}ms")
+            val outputMaterializationMs = System.currentTimeMillis() - readStart
+            PLog.d(
+                TAG,
+                "RAW output materialization timing " +
+                    "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
+                    "renderGpuQueueWait=${outputGpuQueueWaitMs}ms " +
+                    "pixelTransferAndBitmap=${outputMaterializationMs}ms",
+            )
 
             PLog.d(TAG, "RAW processing complete: ${finalBitmap?.width}x${finalBitmap?.height}")
             finalBitmap?.let {
@@ -11097,6 +11285,7 @@ class RawDemosaicProcessor {
         supportProfileOverrange: Boolean,
         hueSatMapSupportsOverrange: Boolean,
         hncsCameraDomainGains: FloatArray? = null,
+        stackCompletionTimeline: GpuStackCompletionTimeline? = null,
     ): Float? {
         val previewSize = resolveLongEdgePreviewSize(
             sourceWidth = metadata.width,
@@ -11162,7 +11351,11 @@ class RawDemosaicProcessor {
             PLog.i(
                 TAG,
                 "RAW_VIEWFINDER_BASELINE stage=METERING_SOURCE " +
-                    "source=WRITER_INPUT_BUFFER " +
+                    "source=${if (exportedStackTextureIds.contains(sourceTextureId)) {
+                        "GPU_STACK_TEXTURE"
+                    } else {
+                        "WRITER_INPUT_BUFFER"
+                    }} " +
                     "layout=${if (samplesPerPixel >= 3) "LINEAR_RAW_RGB" else "CFA_RAW"} " +
                     "samplesPerPixel=$samplesPerPixel size=${metadata.width}x${metadata.height} " +
                     "sourceBaselineEv=$sourceBaselineEv " +
@@ -11240,6 +11433,7 @@ class RawDemosaicProcessor {
                         readbackHeight = request.height.coerceAtLeast(1),
                         outputRotation = outputRotation,
                         readbackBuffer = readbackBuffer,
+                        stackCompletionTimeline = stackCompletionTimeline,
                     )
                 }
             } finally {
@@ -11353,7 +11547,8 @@ class RawDemosaicProcessor {
         readbackWidth: Int,
         readbackHeight: Int,
         outputRotation: Int,
-        readbackBuffer: ByteBuffer
+        readbackBuffer: ByteBuffer,
+        stackCompletionTimeline: GpuStackCompletionTimeline?,
     ): RawExposurePreviewFrame? {
         val clampedExposureEv = exposureEv.coerceIn(-4f, 4f)
         val profileExposureUniforms = computeProfileExposureUniforms(
@@ -11401,7 +11596,8 @@ class RawDemosaicProcessor {
         return readExposurePreviewFrame(
             width = readbackWidth,
             height = readbackHeight,
-            pixelBuffer = readbackBuffer
+            pixelBuffer = readbackBuffer,
+            stackCompletionTimeline = stackCompletionTimeline,
         )
     }
 
@@ -11468,7 +11664,8 @@ class RawDemosaicProcessor {
     private fun readExposurePreviewFrame(
         width: Int,
         height: Int,
-        pixelBuffer: ByteBuffer
+        pixelBuffer: ByteBuffer,
+        stackCompletionTimeline: GpuStackCompletionTimeline?,
     ): RawExposurePreviewFrame? {
         if (width <= 0 || height <= 0) {
             return null
@@ -11478,6 +11675,15 @@ class RawDemosaicProcessor {
         pixelBuffer.limit(pixelCount * 4)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, srgbExposurePreviewFramebufferId)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
+        val upstreamStackTiming = stackCompletionTimeline?.awaitPending(
+            syncPoint = "RAW_EXPOSURE_PREVIEW",
+            checkGlError = ::checkGlError,
+        )
+        val previewGpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+            label = "RAW exposure preview ${width}x$height",
+            checkGlError = ::checkGlError,
+        )
+        val pixelTransferStartNs = System.nanoTime()
         GLES30.glReadPixels(
             0,
             0,
@@ -11487,9 +11693,11 @@ class RawDemosaicProcessor {
             GLES30.GL_UNSIGNED_BYTE,
             pixelBuffer
         )
+        val pixelTransferMs = (System.nanoTime() - pixelTransferStartNs) / 1_000_000L
         checkGlError("RAW exposure preview readback")
         pixelBuffer.position(0)
 
+        val cpuPackStartNs = System.nanoTime()
         val argbPixels = IntArray(pixelCount)
         for (i in 0 until pixelCount) {
             val r = pixelBuffer.get().toInt() and 0xff
@@ -11498,6 +11706,15 @@ class RawDemosaicProcessor {
             val a = pixelBuffer.get().toInt() and 0xff
             argbPixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
+        val cpuPackMs = (System.nanoTime() - cpuPackStartNs) / 1_000_000L
+        PLog.d(
+            TAG,
+            "RAW exposure preview timing size=${width}x$height " +
+                "upstreamStackGpuWait=${upstreamStackTiming?.totalWaitMs ?: 0L}ms " +
+                "previewGpuQueueWait=${previewGpuQueueWaitMs}ms " +
+                "pixelTransfer=${pixelTransferMs}ms " +
+                "cpuPack=${cpuPackMs}ms",
+        )
         return RawExposurePreviewFrame(
             width = width,
             height = height,

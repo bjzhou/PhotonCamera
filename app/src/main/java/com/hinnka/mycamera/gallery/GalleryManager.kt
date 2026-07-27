@@ -2786,9 +2786,12 @@ object GalleryManager {
         frameExposureProducts: List<Double?> = emptyList(),
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
+        rawMaxHdrFusionEnabled: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         var stackProcessor: RawDemosaicProcessor? = null
         var gpuSourceToRelease: GpuLinearRgbSource? = null
+        var pendingDngWrite: Deferred<Boolean>? = null
+        var releaseStackCpuBuffer: (() -> Unit)? = null
         try {
             val photoDir = getPhotoDir(context, photoId, true)
 
@@ -2885,6 +2888,7 @@ object GalleryManager {
                     applyLensShadingCorrection = applyRawLensShading,
                     useCurrentGlContext = true,
                     exportGpuLinearRgbSource = true,
+                    enableHdrFusion = rawMaxHdrFusionEnabled,
                 )
             }
 
@@ -2909,24 +2913,21 @@ object GalleryManager {
                         "output=$outputRawBlackBorderCrop"
                 )
             }
-            val fusedBayerBuffer = finalStackResult.fusedBayerBuffer ?: return@withContext
-            var fusedBufferReleased = false
-            fun releaseFusedBuffer() {
-                if (fusedBufferReleased) return
-                fusedBufferReleased = true
+            fun releaseInitialFusedBuffer() {
+                val buffer = finalStackResult.fusedBayerBuffer ?: return
                 finalStackResult.fusedBayerBuffer = null
                 if (finalStackResult.fusedBayerUsesNativeAllocator) {
-                    LargeDirectBuffer.free(fusedBayerBuffer)
-                    PLog.d(TAG, "Released stacked RAW fused Bayer buffer")
+                    LargeDirectBuffer.free(buffer)
+                    PLog.d(TAG, "Released initial stacked RAW CPU buffer")
                 }
             }
+            releaseStackCpuBuffer = ::releaseInitialFusedBuffer
 
             var updatedMetadata: MediaMetadata = stackedMetadata
             val rawSharpening = updatedMetadata.sharpening ?: RawSharpeningDefaults.forCapture(sharpeningValue)
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
             val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
-            var pendingDngWrite: Deferred<Boolean>? = null
             val rawResult = try {
                 val imageLayout = finalStackResult.bufferLayout.toDngImageLayout()
                 val inputSamplesPerPixel = finalStackResult.inputColStepSamples
@@ -2948,8 +2949,9 @@ object GalleryManager {
                     capturePreviewThumbnail = capturePreviewThumbnail,
                     captureResult = captureResult,
                 )
+                val profileStartMs = System.currentTimeMillis()
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
-                    rawBuffer = fusedBayerBuffer,
+                    rawBuffer = finalStackResult.fusedBayerBuffer,
                     gpuLinearRgbSource = finalStackResult.gpuLinearRgbSource,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
@@ -2975,35 +2977,59 @@ object GalleryManager {
                     PLog.e(TAG, "Failed to prepare shared RAW render/DNG profile")
                     return@withContext
                 }
+                val profileElapsedMs = System.currentTimeMillis() - profileStartMs
 
-                suspend fun persistDng(): Boolean = trySaveStackedRawDng(
-                    context = context,
-                    photoId = photoId,
-                    dngFile = dngFile,
-                    fusedBayerBuffer = fusedBayerBuffer,
-                    width = finalStackResult.width,
-                    height = finalStackResult.height,
-                    rawMetadata = rawMetadata,
-                    stackBlackLevel = finalStackResult.blackLevel,
-                    stackWhiteLevel = stackWhiteLevel,
-                    isNormalizedSensorData = finalStackResult.isNormalizedSensorData,
-                    characteristics = characteristics,
-                    captureResult = captureResult,
-                    rotation = rotation,
-                    aspectRatio = aspectRatio,
-                    capturePreviewThumbnail = capturePreviewThumbnail,
-                    thumbnail = null,
-                    metadata = stackedMetadata,
-                    shouldAutoSave = shouldAutoSave,
-                    exportDngWithRawExport = exportDngWithRawExport,
-                    imageLayout = imageLayout,
-                    compression = finalStackResult.bufferLayout.toDngCompression(),
-                    inputRowStepSamples = inputRowStepSamples,
-                    inputColStepSamples = inputSamplesPerPixel,
-                    baselineExposureEv = finalStackResult.baselineExposureEv,
-                    preparedDngProfile = dngProfilePreparation,
-                    preparedProfileOptions = profileOptions,
-                )
+                suspend fun persistDng(fusedBayerBuffer: ByteBuffer): Boolean =
+                    trySaveStackedRawDng(
+                        context = context,
+                        photoId = photoId,
+                        dngFile = dngFile,
+                        fusedBayerBuffer = fusedBayerBuffer,
+                        width = finalStackResult.width,
+                        height = finalStackResult.height,
+                        rawMetadata = rawMetadata,
+                        stackBlackLevel = finalStackResult.blackLevel,
+                        stackWhiteLevel = stackWhiteLevel,
+                        isNormalizedSensorData = finalStackResult.isNormalizedSensorData,
+                        characteristics = characteristics,
+                        captureResult = captureResult,
+                        rotation = rotation,
+                        aspectRatio = aspectRatio,
+                        capturePreviewThumbnail = capturePreviewThumbnail,
+                        thumbnail = null,
+                        metadata = stackedMetadata,
+                        shouldAutoSave = shouldAutoSave,
+                        exportDngWithRawExport = exportDngWithRawExport,
+                        imageLayout = imageLayout,
+                        compression = finalStackResult.bufferLayout.toDngCompression(),
+                        inputRowStepSamples = inputRowStepSamples,
+                        inputColStepSamples = inputSamplesPerPixel,
+                        baselineExposureEv = finalStackResult.baselineExposureEv,
+                        preparedDngProfile = dngProfilePreparation,
+                        preparedProfileOptions = profileOptions,
+                    )
+
+                suspend fun materializeAndPersistDng(): Boolean {
+                    val initialBuffer = finalStackResult.fusedBayerBuffer
+                    val materializedBuffer = initialBuffer
+                        ?: finalStackResult.gpuLinearRgbSource?.let { source ->
+                            processor.materializeGpuLinearRgbSource(source)
+                        }
+                    if (materializedBuffer == null) {
+                        PLog.e(TAG, "No CPU LinearRaw source available for stacked DNG")
+                        return false
+                    }
+                    return try {
+                        persistDng(materializedBuffer)
+                    } finally {
+                        if (materializedBuffer === finalStackResult.fusedBayerBuffer) {
+                            releaseInitialFusedBuffer()
+                        } else if (finalStackResult.fusedBayerUsesNativeAllocator) {
+                            LargeDirectBuffer.free(materializedBuffer)
+                            PLog.d(TAG, "Released deferred stacked RAW CPU buffer")
+                        }
+                    }
+                }
 
                 suspend fun renderPersistedDng() = processor.processForHdrSources(
                     context,
@@ -3081,12 +3107,10 @@ object GalleryManager {
                     renderMetadata != null && embeddedRenderPlan != null
 
                 if (canBypassDngPixels) {
-                    val parallelStartMs = System.currentTimeMillis()
-                    val dngWrite = async(Dispatchers.IO) { persistDng() }
-                    pendingDngWrite = dngWrite
+                    val renderStartMs = System.currentTimeMillis()
                     val inMemoryResult = processor.processLinearDngBufferForHdrSources(
                         context = context,
-                        rawData = fusedBayerBuffer,
+                        rawData = finalStackResult.fusedBayerBuffer,
                         width = finalStackResult.width,
                         height = finalStackResult.height,
                         rowStride = checkNotNull(inputRowStepSamples) * Short.SIZE_BYTES,
@@ -3130,26 +3154,39 @@ object GalleryManager {
                         onMetadata = { raw -> updatedMetadata = updatedMetadata.merge(raw) },
                     )
                     val renderCompletedMs = System.currentTimeMillis()
-                    val dngWritten = dngWrite.await()
-                    val parallelCompletedMs = System.currentTimeMillis()
                     PLog.i(
                         TAG,
-                        "RAW_LINEAR_DNG_BYPASS timing render=${renderCompletedMs - parallelStartMs}ms " +
-                            "parallelTotal=${parallelCompletedMs - parallelStartMs}ms " +
-                            "writeTail=${parallelCompletedMs - renderCompletedMs}ms"
+                        "RAW GPU handoff timing profile=${profileElapsedMs}ms " +
+                            "render=${renderCompletedMs - renderStartMs}ms " +
+                            "cpuMaterializationBeforeRender=false",
                     )
-                    if (!dngWritten) {
-                        inMemoryResult?.sdrBitmap?.takeIf { !it.isRecycled }?.recycle()
-                        inMemoryResult?.hdrReferenceBitmap?.takeIf { !it.isRecycled }?.recycle()
-                        PLog.e(TAG, "Failed to persist stacked RAW DNG")
-                        return@withContext
-                    }
                     if (inMemoryResult != null) {
-                        PLog.i(TAG, "RAW_LINEAR_DNG_BYPASS completed with concurrent DNG write")
+                        pendingDngWrite = async(Dispatchers.IO) {
+                            try {
+                                val dngStartMs = System.currentTimeMillis()
+                                val written = materializeAndPersistDng()
+                                PLog.i(
+                                    TAG,
+                                    "Deferred stacked DNG timing total=" +
+                                        "${System.currentTimeMillis() - dngStartMs}ms success=$written",
+                                )
+                                written
+                            } catch (error: Exception) {
+                                PLog.e(TAG, "Deferred stacked DNG task failed", error)
+                                false
+                            }
+                        }
+                        PLog.i(
+                            TAG,
+                            "RAW GPU render completed; deferred DNG materialization started",
+                        )
                         inMemoryResult
                     } else {
                         PLog.w(TAG, "In-memory LinearRaw render failed; using persisted DNG fallback")
-                        releaseFusedBuffer()
+                        if (!materializeAndPersistDng()) {
+                            PLog.e(TAG, "Failed to persist stacked RAW DNG for render fallback")
+                            return@withContext
+                        }
                         @Suppress("ExplicitGarbageCollectionCall")
                         System.gc()
                         renderPersistedDng() ?: return@withContext
@@ -3162,27 +3199,20 @@ object GalleryManager {
                             "bufferCompatible=$directBufferCompatible embeddedProfile=${embeddedRenderPlan != null}; " +
                             "using persisted DNG"
                     )
-                    if (!persistDng()) {
+                    if (!materializeAndPersistDng()) {
                         PLog.e(TAG, "Failed to persist stacked RAW DNG before rendering preview")
                         return@withContext
                     }
-                    releaseFusedBuffer()
                     @Suppress("ExplicitGarbageCollectionCall")
                     System.gc()
                     renderPersistedDng() ?: return@withContext
                 }
             } finally {
-                pendingDngWrite?.let { write ->
-                    if (!write.isCompleted) {
-                        withContext(NonCancellable) {
-                            runCatching { write.await() }
-                                .onFailure { error ->
-                                    PLog.w(TAG, "Waiting for concurrent DNG write failed", error)
-                                }
-                        }
-                    }
+                // A deferred DNG owns its materialized buffer. The initial buffer is released
+                // here only when no DNG task consumed it (for example, an early render failure).
+                if (pendingDngWrite == null) {
+                    releaseInitialFusedBuffer()
                 }
-                releaseFusedBuffer()
             }
             var bitmap = rawResult.sdrBitmap
 
@@ -3283,6 +3313,18 @@ object GalleryManager {
             PLog.e(TAG, "Failed to savePhoto", e)
         } finally {
             withContext(NonCancellable) {
+                pendingDngWrite?.let { write ->
+                    runCatching { write.await() }
+                        .onSuccess { written ->
+                            if (!written) {
+                                PLog.e(TAG, "Deferred stacked DNG write did not complete successfully")
+                            }
+                        }
+                        .onFailure { error ->
+                            PLog.e(TAG, "Deferred stacked DNG write failed", error)
+                        }
+                }
+                releaseStackCpuBuffer?.invoke()
                 stackProcessor?.releaseGpuLinearRgbSource(gpuSourceToRelease)
             }
         }
@@ -3664,6 +3706,7 @@ object GalleryManager {
         frameExposureProducts: List<Double?> = emptyList(),
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
+        rawMaxHdrFusionEnabled: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -3707,6 +3750,7 @@ object GalleryManager {
                     frameExposureProducts,
                     frameFocusDistances,
                     rawStackFrames,
+                    rawMaxHdrFusionEnabled,
                 )
             }
 

@@ -247,4 +247,6 @@
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Aktifkan output YUV 10-bit untuk presisi data gambar yang lebih baik. Efektif pada perangkat yang didukung saat RAW dinonaktifkan.</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: sistem manajemen warna yang dikembangkan secara independen oleh Hasselblad</string>
+    <string name="settings_raw_max_hdr_composition">Penggabungan HDR RAWmax</string>
+    <string name="settings_raw_max_hdr_composition_description">Gunakan pencahayaan bertingkat untuk penggabungan HDR di RAWmax. Nonaktifkan untuk meningkatkan kecepatan pemrosesan.</string>
 </resources>

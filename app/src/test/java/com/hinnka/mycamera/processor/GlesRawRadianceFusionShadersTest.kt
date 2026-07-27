@@ -334,12 +334,14 @@ class GlesRawRadianceFusionShadersTest {
 
         val rawCommonStub = "int bayerIndexAt(int cfaPattern, ivec2 p) { return 0; }"
         val sources = listOf(
-            "compute" to GlesRawRadianceFusionShaders.accumulate(
+            "fragment" to GlesRawRadianceFusionShaders.accumulate(
                 rawCommon = rawCommonStub,
                 trackRejections = true,
                 trackParticipation = true,
                 trackLongParticipation = true,
             ),
+            "compute" to GlesRawRadianceStacker.FLOW_BOUNDS_SUMMARY_COMPUTE_SHADER,
+            "fragment" to GlesRawRadianceStacker.ROBUSTNESS_FRAGMENT_SHADER,
             "fragment" to GlesRawRadianceFusionShaders.longEligibility,
             "fragment" to GlesRawRadianceFusionShaders.normalize(showRejections = false),
             "fragment" to GlesRadianceHighlightShaders.buildSupport,
@@ -404,18 +406,20 @@ class GlesRawRadianceFusionShadersTest {
         val reference = GlesRawRadianceFusionShaders.captureReferenceBase
         val normalize = GlesRawRadianceFusionShaders.normalize(showRejections = false)
 
-        assertTrue(clear.contains("uNrWeightRg"))
-        assertTrue(clear.contains("uDetailWeightRg"))
+        assertTrue(clear.contains("layout(rgba16f, binding = 0)"))
+        assertTrue(clear.contains("image2D uNrAccumulator"))
+        assertTrue(clear.contains("layout(rgba16f, binding = 1)"))
+        assertTrue(clear.contains("image2D uDetailAccumulator"))
+        assertFalse(clear.contains("layout(r32ui"))
         assertTrue(accumulate.contains("vec3 nrWeight"))
         assertTrue(accumulate.contains("nrWeight = vec3(sharedNrWeight)"))
         assertTrue(accumulate.contains("detailWeight = vec3(sharedDetailWeight)"))
-        assertTrue(accumulate.contains("rgb.denoise.rg * nrWeight.rg"))
-        assertTrue(accumulate.contains("rgb.denoise.b * nrWeight.b"))
-        assertTrue(reference.contains("rg / weightRg"))
-        assertTrue(reference.contains("bw.x / weightB"))
-        assertTrue(normalize.contains("uniform highp usampler2D uNrWeightRg"))
-        assertTrue(normalize.contains("uniform highp usampler2D uDetailWeightRg"))
-        assertTrue(normalize.contains("vec3 weight = vec3(weightRg, max(bw.y, 0.0))"))
+        assertTrue(accumulate.contains("rgb.denoise * nrWeight.x"))
+        assertTrue(accumulate.contains("rgb.detail * detailWeight.x"))
+        assertTrue(reference.contains("accumulated.rgb / weight"))
+        assertTrue(normalize.contains("uniform highp sampler2D uNrAccumulator"))
+        assertTrue(normalize.contains("uniform highp sampler2D uDetailAccumulator"))
+        assertTrue(normalize.contains("vec3(sharedWeight)"))
         assertTrue(normalize.contains("vec3 confidence = vec3(sharedConfidence)"))
     }
 

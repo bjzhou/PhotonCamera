@@ -7,6 +7,31 @@
 本文，并在代表设备上运行实际的 compile、bind、dispatch、readback 和后续采样测试。不能仅凭
 GLES 版本号、扩展列表或桌面 GLSL 编译结果判断移动端可用性。
 
+## Graphics program 的 GLSL ES 版本必须一致
+
+已确认设备会严格拒绝使用不同 GLSL ES 版本的 vertex/fragment shader 链接：
+
+```text
+Shader languages do not match.
+```
+
+shader 分别编译成功不代表可以跨版本链接。例如 `#version 300 es` 的 fullscreen vertex
+不能与使用 image/SSBO 能力的 `#version 310 es` fragment 组成同一个 program。
+
+### 错误做法
+
+- 所有 fullscreen fragment 固定复用一份 `#version 300 es` vertex shader。
+- 为了继续复用 vertex shader，把需要 3.1 能力的 fragment 降级到 300。
+- 只检查 fragment 的编译结果，不检查 program 两端的版本契约。
+
+### 正确做法
+
+- 从 fragment 的 `#version` 生成相同版本的 fullscreen vertex shader。
+- 创建 program 前显式校验 vertex/fragment 的 GLSL ES 版本相同，让错误在进入驱动前暴露。
+- 需要 image、SSBO 或其他 GLES 3.1 能力的 fragment 保持 `#version 310 es`，配套使用
+  `#version 310 es` vertex；普通 3.0 fragment 继续使用 300 配对。
+- 新增动态生成的 fragment shader 时，将 300/310 两种来源都纳入版本配对单元测试。
+
 ## SSBO binding 点数量
 
 ### 问题
@@ -106,6 +131,19 @@ write-only 可用不代表同格式的 read/write 也可用。
 - destination 仅作为 `writeonly image` 写入；
 - dispatch 后交换两张纹理的角色；
 - 每个 pass 都显式区分只读 source 和只写 destination。
+
+如果算法只是逐帧加法累加，不需要在 shader 中读取旧值，优先使用 framebuffer additive
+blending：
+
+- 将 NR sum/weight 和 detail sum/weight 分别存入两张 `RGBA16F` attachment；
+- fragment shader 只输出本帧的 `vec4(rgb * weight, weight)` contribution；
+- MRT 的两个 draw buffer 都使用 `GL_FUNC_ADD + GL_ONE, GL_ONE`；
+- 每次 draw 后恢复 blend 状态，切回单 attachment 前显式 detach 第二个 attachment；
+- accumulator 由 write-only image 清零后，进入 framebuffer blending 前必须包含
+  `GL_FRAMEBUFFER_BARRIER_BIT`。
+
+这条路径保留每帧写回 FP16 的舍入语义，同时避免非法的 `RGBA16F` image 原位读写。不能把
+包含非加法更新、次序相关替换或任意读改写的算法机械改成 blending。
 
 同时还应查询 image unit 上限，保证单个 compute pass 的并发 image 数量不超过设备能力。
 
@@ -258,6 +296,60 @@ image load/store 访问。若同一纹理接下来改由 sampler 读取，或作
 
 研究来源见
 [`research/phocus_glsl/04_color_tone/README.md`](../research/phocus_glsl/04_color_tone/README.md)。
+
+## GPU 纹理交接与延迟 CPU 回读
+
+### 问题
+
+`glReadPixels` 往往是异步 GPU 命令后的第一个 CPU 同步点。直接用它的调用耗时表示
+“readback”会把此前尚未完成的 compute、fragment、barrier 和实际像素传输混在一起，既无法
+判断真正瓶颈，也会错误地让只需要 GPU texture 的后续显影等待 CPU Buffer。
+
+### 正确做法
+
+- 同一 EGL context 和 GL dispatcher 内，stacker 通过 `imageStore` 写完输出并声明
+  `GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT |
+  GL_FRAMEBUFFER_BARRIER_BIT` 后，直接把 texture 所有权交给 RAW 显影。
+- 需要整行/整列递归扫描的全帧滤波，输入必须是连续的全尺寸 `uimage2D`。上游 tile fragment
+  pass 应直接用全局 viewport 写入这张完整 texture；不要先写临时 tile texture，再为每个 tile
+  dispatch 一次 capture/copy。不能在 IIR 内循环里通过 uniform 数组动态查找 tile，再访问
+  `uimage2DArray` layer；不同移动驱动对这类动态循环的展开和分支 lowering 差异很大，而且会
+  破坏跨 layer 的缓存局部性。
+- 分配全尺寸工作纹理前查询 `GL_MAX_TEXTURE_SIZE`。Radiance VGN 色度链使用三张
+  `RGBA16UI` 2D texture 做 ping-pong，最终 YCCD → RGB 写入已经空闲的工作纹理并移交所有权，
+  不再为 GPU handoff 分配第四张同尺寸纹理。
+- CPU/DNG Buffer 不是 GPU 交接结果的必填字段。DNG 消费者应在前台显影完成后单独请求
+  materialization，并保持 texture 存活到该消费者结束。
+- 已完成且后续只读的 flow、robustness 和 tile mask 应直接转移 texture 所有权，立即为下一帧
+  分配工作纹理；不要为了形成 cache 再执行三次全表面 copy。诊断采样必须发生在所有权转移前。
+- 普通对齐帧只需要 flow bounds 时，在 GPU 上将每帧 grid 归约成一个
+  `vec4(minX,maxX,minY,maxY)`，所有帧提交结束后一次 map 小型 SSBO。不能逐帧回读完整
+  `RGBA16F` flow grid 并在 CPU 上扫描。
+- 需要拆分计时时，在读回前插入 `glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)`，提交后使用
+  `glClientWaitSync` 单独记录 `gpuQueueWait`；fence 已完成后再分别记录 `glReadPixels` 的
+  `pixelTransfer` 和 RGBA16 → RGB16 的 `cpuPack`。
+- 需要继续定位 stacker 的异步队列尾部时，在 normal alignment、long alignment、
+  highlight alignment、tiled reconstruction、chroma postprocess 和 final export 的命令边界
+  插入有序 fence，但不能在 stacker 内逐段等待。fence 所有权随导出的 texture 传给消费者，
+  首个 CPU 同步点再按顺序等待并记录各阶段尚未完成的队列时间。
+- 阶段 fence 的结果表示“到达首个同步点时仍待执行的 queue tail”，不是该阶段从头到尾的完整
+  GPU 执行时长。已经在 CPU 提交期间完成的阶段会记录为 `0ms`；如需完整 shader GPU duration，
+  应另行使用驱动支持的非阻塞 timer query，并处理 disjoint 状态。
+- 首个消费者必须分别记录 `upstreamStackGpuWait` 和自身的 GPU 等待，例如曝光预览使用
+  `previewGpuQueueWait`、DNG materialization 使用 `materializationGpuWait`，不能再次把两者
+  合并为笼统的 `gpuQueueWait`。
+- 同一 context 内的显影依赖命令队列顺序，不要为了 GPU→GPU 交接调用 `glFinish`。跨共享
+  context 才需要额外验证 sync object 的共享和等待行为。
+- fence 必须在所有退出路径调用 `glDeleteSync`；framebuffer、scratch buffer 和导出的 texture
+  也必须按消费者生命周期分别释放。
+
+### 验证
+
+- 日志必须明确区分 CPU 命令提交、`gpuQueueWait`、`pixelTransfer`、`cpuPack` 和 allocation。
+- 真机确认 stacker 返回 GPU texture 时没有发生全尺寸 `glReadPixels`。
+- 真机确认 RAW 显影完成后才开始 DNG materialization，并验证取消、写入失败和显影失败路径
+  不泄漏 texture、sync、framebuffer 或 native buffer。
+- 对同一输出比较延迟 materialization DNG 与原同步路径的 RGB16 数值，要求逐通道一致。
 
 ## 通用验证要求
 

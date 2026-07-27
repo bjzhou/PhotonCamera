@@ -247,4 +247,6 @@
     <string name="settings_use_p010">P010 (10-Bit YUV)</string>
     <string name="settings_use_p010_description">Aktiviert die 10-Bit YUV-Ausgabe für eine bessere Bildpräzision. Wirksam auf unterstützten Geräten, wenn RAW deaktiviert ist.</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: ein von Hasselblad unabhängig entwickeltes Farbmanagementsystem</string>
+    <string name="settings_raw_max_hdr_composition">RAWmax-HDR-Zusammenführung</string>
+    <string name="settings_raw_max_hdr_composition_description">Verwendet Belichtungsreihen für die HDR-Zusammenführung in RAWmax. Das Deaktivieren verbessert die Verarbeitungsgeschwindigkeit.</string>
 </resources>

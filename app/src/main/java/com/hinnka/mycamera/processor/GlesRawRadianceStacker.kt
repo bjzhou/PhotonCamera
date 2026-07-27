@@ -22,6 +22,47 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+internal object GlesGraphicsShaderSources {
+    fun languageVersionOf(source: String): Int {
+        val directive = source.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("#version ") }
+            ?: throw IllegalArgumentException("GLSL ES source is missing a #version directive")
+        val tokens = directive.split(Regex("\\s+"))
+        require(tokens.size >= 3 && tokens[0] == "#version" && tokens[2] == "es") {
+            "Unsupported GLSL version directive: $directive"
+        }
+        return tokens[1].toIntOrNull()
+            ?: throw IllegalArgumentException("Invalid GLSL version directive: $directive")
+    }
+
+    fun fullscreenVertexFor(fragmentSource: String): String {
+        val version = languageVersionOf(fragmentSource)
+        require(version == 300 || version == 310) {
+            "Unsupported fullscreen GLSL ES version: $version"
+        }
+        return """
+            #version $version es
+            precision highp float;
+            out vec2 vTexCoord;
+            void main() {
+                vec2 positions[3] = vec2[3](
+                    vec2(-1.0, -1.0),
+                    vec2( 3.0, -1.0),
+                    vec2(-1.0,  3.0)
+                );
+                vec2 texCoords[3] = vec2[3](
+                    vec2(0.0, 0.0),
+                    vec2(2.0, 0.0),
+                    vec2(0.0, 2.0)
+                );
+                gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+                vTexCoord = texCoords[gl_VertexID];
+            }
+        """.trimIndent()
+    }
+}
+
 internal class GlesRawRadianceStacker(
     private val width: Int,
     private val height: Int,
@@ -59,10 +100,11 @@ internal class GlesRawRadianceStacker(
         val flowTexture: Int,
         val robustnessTexture: Int,
         val tileMaskTexture: Int,
-        val minFlowXPlanePx: Float,
-        val maxFlowXPlanePx: Float,
-        val minFlowYPlanePx: Float,
-        val maxFlowYPlanePx: Float,
+        val flowBoundsSummaryIndex: Int,
+        var minFlowXPlanePx: Float = 0f,
+        var maxFlowXPlanePx: Float = 0f,
+        var minFlowYPlanePx: Float = 0f,
+        var maxFlowYPlanePx: Float = 0f,
     )
     private data class RadianceHighlightAlignment(
         val frame: RawRadianceHighlightFrame,
@@ -141,14 +183,19 @@ internal class GlesRawRadianceStacker(
     )
     private data class ReadOutputTiming(
         val elapsedMs: Long,
-        val glReadMs: Long,
-        val copyMs: Long,
+        val gpuQueueWaitMs: Long,
+        val pixelTransferMs: Long,
+        val cpuPackMs: Long,
         val allocMs: Long,
         val mode: String,
     )
     private data class ReconstructionResult(
         val readTiming: ReadOutputTiming,
         val exportedTextureId: Int = 0,
+        val tileSubmissionMs: Long,
+        val chromaSubmissionMs: Long,
+        val finalSubmissionMs: Long,
+        val cpuBufferPopulated: Boolean,
     )
     private data class RadianceVgnImageBinding(
         val unit: Int,
@@ -226,6 +273,9 @@ internal class GlesRawRadianceStacker(
     private val uniformLocations = HashMap<Int, MutableMap<String, Int>>()
     private var readbackScratchBuffer = 0
     private var readbackScratchCapacityBytes = 0
+    private var flowBoundsSummaryBuffer = 0
+    private var flowBoundsSummaryCapacity = 0
+    private var flowBoundsSummaryCount = 0
 
     private val normalizedBlackLevel = FloatArray(4) { index ->
         blackLevel.getOrElse(index) { blackLevel.firstOrNull() ?: 0f }
@@ -325,6 +375,7 @@ internal class GlesRawRadianceStacker(
     private var downsampleProgram = 0
     private var alignProgram = 0
     private var flowReadbackProgram = 0
+    private var flowBoundsSummaryProgram = 0
     private var registrationGlobalAlignProgram = 0
     private var lkRefineProgram = 0
     private var smoothFlowProgram = 0
@@ -370,8 +421,13 @@ internal class GlesRawRadianceStacker(
     private var renderFbo = 0
     private var readbackFbo = 0
     private var renderFboTargetTexture = 0
+    private var renderFboHasSecondAttachment = false
     private val checkedRenderTargetTextures = HashSet<Int>()
     private val colorAttachment0 = intArrayOf(GLES30.GL_COLOR_ATTACHMENT0)
+    private val radianceAccumulatorAttachments = intArrayOf(
+        GLES30.GL_COLOR_ATTACHMENT0,
+        GLES30.GL_COLOR_ATTACHMENT1,
+    )
 
     private var refRaw = 0
     private var curRaw = 0
@@ -386,12 +442,8 @@ internal class GlesRawRadianceStacker(
     private var kernelTexture = 0
     private var robustnessTexture = 0
     private var tileMaskTexture = 0
-    private var superResolutionAccumulatorTexture = 0
-    private var superResolutionAccumulatorBwTexture = 0
-    private var radianceNrWeightRgTexture = 0
-    private var superResolutionAccumulatorBTexture = 0
-    private var radianceDetailBwTexture = 0
-    private var radianceDetailWeightRgTexture = 0
+    private var radianceNrAccumulatorTexture = 0
+    private var radianceDetailAccumulatorTexture = 0
     private var radianceReferenceBaseTexture = 0
     private var radianceFusionRejectionTexture = 0
     private var radianceFusionRejectionScratchTexture = 0
@@ -571,16 +623,16 @@ internal class GlesRawRadianceStacker(
         val frameExposureScales = List(frames.size) { 1f }
         var outputBuffer: ByteBuffer? = null
         var exportedTextureId = 0
+        val gpuTimelineRecorder = if (exportGpuLinearRgbSource) {
+            GlesGpuCompletion.StackTimelineRecorder()
+        } else {
+            null
+        }
+        var exportedCompletionTimeline: GpuStackCompletionTimeline? = null
         var returned = false
         val startTime = System.currentTimeMillis()
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
         return try {
-            outputBuffer = LargeDirectBuffer.allocate(
-                outputByteCount,
-                "GLES RAW Radiance fused linear RGB16",
-            )
-                ?.order(ByteOrder.nativeOrder()) ?: return null
-
             if (useCurrentGlContext) {
                 attachCurrentEgl()
             } else {
@@ -659,6 +711,7 @@ internal class GlesRawRadianceStacker(
             superResolutionPhaseTracker.reset()
             resetSuperResolutionDecisionStats()
             val acceptedSuperResolutionFrames = ArrayList<AcceptedSuperResolutionFrame>()
+            prepareFlowBoundsSummaryBuffer((images.size - 1).coerceAtLeast(1))
             GlesGpuScheduler.yieldToUiRenderer()
 
             var alignedFrameCount = 0
@@ -697,6 +750,11 @@ internal class GlesRawRadianceStacker(
                     GlesGpuScheduler.yieldToUiRenderer()
                     continue
                 }
+                if (hwmfDebug.collectMetrics) {
+                    // The accepted frame may transfer ownership of the current working textures.
+                    // Diagnostics must inspect them before that transfer.
+                    recordAlignmentDiagnostics()
+                }
                 if (shouldAccumulateSuperResolutionFrame()) {
                     // Phase novelty is a ranking signal, not an admission gate. Temporal graph
                     // summaries may legitimately quantize the global phase to zero while the
@@ -715,12 +773,10 @@ internal class GlesRawRadianceStacker(
                     )
                     recordAccumulatedSuperResolutionPhase()
                 }
-                if (hwmfDebug.collectMetrics) {
-                    recordAlignmentDiagnostics()
-                }
                 alignedFrameCount += 1
                 GlesGpuScheduler.yieldToUiRenderer()
             }
+            gpuTimelineRecorder?.mark(GpuStackCompletionStage.NORMAL_ALIGNMENT)
 
             val longAlignmentStartMs = System.currentTimeMillis()
             val longAlignments = prepareRadianceLongAlignments(
@@ -731,8 +787,10 @@ internal class GlesRawRadianceStacker(
                 currentPyramid = curPyramid,
             )
             val longAlignmentElapsedMs = System.currentTimeMillis() - longAlignmentStartMs
+            gpuTimelineRecorder?.mark(GpuStackCompletionStage.LONG_ALIGNMENT)
             // Highlight is prepared last because its composed flow currently occupies the shared
-            // auxiliary-flow texture. Long flows have already been copied into dedicated caches.
+            // auxiliary-flow texture. Accepted long alignments already own their completed
+            // working textures, so later passes cannot overwrite them.
             val highlightAlignmentStartMs = System.currentTimeMillis()
             val highlightAlignment = activeRadianceHighlightFrame?.let { highlight ->
                 prepareRadianceHighlightAlignment(
@@ -742,6 +800,7 @@ internal class GlesRawRadianceStacker(
                 )
             }
             val highlightAlignmentElapsedMs = System.currentTimeMillis() - highlightAlignmentStartMs
+            gpuTimelineRecorder?.mark(GpuStackCompletionStage.HIGHLIGHT_ALIGNMENT)
             RawStackRuntimeDebug.i(TAG) {
                 "Radiance long/highlight alignment completed " +
                     "long=${longAlignmentElapsedMs}ms " +
@@ -751,20 +810,43 @@ internal class GlesRawRadianceStacker(
                     "highlightAccepted=${highlightAlignment != null}"
             }
             val superResolutionDecision = decideSuperResolutionOutput(alignedFrameCount)
+            // Bounds are required only for tiled source-region planning. Resolve all normal-frame
+            // summaries together at the last responsible moment so normal alignment never inserts
+            // a CPU wait before long/highlight command submission.
+            resolveFlowBoundsSummaries(acceptedSuperResolutionFrames)
             val reconstructionResult = reconstructRadianceTiles(
                 referenceImage = images[0],
                 frames = frames,
                 acceptedFrames = acceptedSuperResolutionFrames,
                 candidateFrameCount = (images.size - 1).coerceAtLeast(0) +
                     activeRadianceLongFrames.size,
-                outputBuffer = outputBuffer,
+                obtainOutputBuffer = {
+                    outputBuffer ?: LargeDirectBuffer.allocate(
+                        outputByteCount,
+                        "GLES RAW Radiance fused linear RGB16",
+                    )?.order(ByteOrder.nativeOrder())?.also { allocated ->
+                        outputBuffer = allocated
+                    } ?: throw IllegalStateException(
+                        "Failed to allocate GLES RAW Radiance fused linear RGB16 buffer",
+                    )
+                },
                 highlightAlignment = highlightAlignment,
                 longAlignments = longAlignments,
+                deferGpuReadback = exportGpuLinearRgbSource,
+                gpuTimelineRecorder = gpuTimelineRecorder,
             )
             GlesGpuScheduler.yieldToUiRenderer()
             val readTiming = reconstructionResult.readTiming
             exportedTextureId = reconstructionResult.exportedTextureId
-            outputBuffer.rewind()
+            exportedCompletionTimeline = if (exportedTextureId != 0) {
+                gpuTimelineRecorder?.finish()
+            } else {
+                gpuTimelineRecorder?.releasePending()
+                null
+            }
+            if (reconstructionResult.cpuBufferPopulated) {
+                checkNotNull(outputBuffer).rewind()
+            }
             val diagnostics = if (hwmfDebug.collectMetrics) {
                 collectFinalDiagnostics(
                     frameCount = images.size,
@@ -777,10 +859,22 @@ internal class GlesRawRadianceStacker(
             }
             returned = true
             RawStackRuntimeDebug.i(TAG) {
-                "GLES RAW stacking completed in ${System.currentTimeMillis() - startTime}ms " +
-                    "readback=${readTiming.elapsedMs}ms glRead=${readTiming.glReadMs}ms " +
-                    "copy=${readTiming.copyMs}ms alloc=${readTiming.allocMs}ms " +
-                    "gpuHandoff=${exportedTextureId != 0} mode=${readTiming.mode}"
+                "GLES RAW stacking submitted in ${System.currentTimeMillis() - startTime}ms " +
+                    "tileCpuSubmit=${reconstructionResult.tileSubmissionMs}ms " +
+                    "chromaCpuSubmit=${reconstructionResult.chromaSubmissionMs}ms " +
+                    "finalCpuSubmit=${reconstructionResult.finalSubmissionMs}ms " +
+                    "gpuHandoff=${exportedTextureId != 0} " +
+                    "cpuMaterialized=${reconstructionResult.cpuBufferPopulated} " +
+                    "mode=${readTiming.mode}"
+            }
+            if (reconstructionResult.cpuBufferPopulated) {
+                RawStackRuntimeDebug.i(TAG) {
+                    "GLES RAW stacking CPU materialization " +
+                        "total=${readTiming.elapsedMs}ms " +
+                        "gpuQueueWait=${readTiming.gpuQueueWaitMs}ms " +
+                        "pixelTransfer=${readTiming.pixelTransferMs}ms " +
+                        "cpuPack=${readTiming.cpuPackMs}ms alloc=${readTiming.allocMs}ms"
+                }
             }
             RawStackResult(
                 fusedBayerBuffer = outputBuffer,
@@ -799,6 +893,7 @@ internal class GlesRawRadianceStacker(
                         textureId = textureId,
                         width = outputWidth,
                         height = outputHeight,
+                        stackCompletionTimeline = exportedCompletionTimeline,
                     )
                 },
             )
@@ -811,6 +906,8 @@ internal class GlesRawRadianceStacker(
             GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, TAG)
             if (!returned) {
                 LargeDirectBuffer.free(outputBuffer)
+                exportedCompletionTimeline?.releasePending()
+                gpuTimelineRecorder?.releasePending()
                 if (exportedTextureId != 0) {
                     GLES30.glDeleteTextures(1, intArrayOf(exportedTextureId), 0)
                 }
@@ -897,15 +994,21 @@ internal class GlesRawRadianceStacker(
         val needsLongPrograms = activeRadianceLongFrames.isNotEmpty() || prewarmLongPrograms
         proxyProgram = linkComputeProgram(RAW_PROXY_COMPUTE_SHADER, "raw_proxy")
         trackingProxyProgram = linkComputeProgram(RAW_TRACKING_PROXY_COMPUTE_SHADER, "raw_tracking_proxy")
-        downsampleProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, DOWNSAMPLE_FRAGMENT_SHADER, "raw_downsample")
-        alignProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, ALIGN_FRAGMENT_SHADER, "raw_align")
+        downsampleProgram = linkFullscreenProgram(DOWNSAMPLE_FRAGMENT_SHADER, "raw_downsample")
+        alignProgram = linkFullscreenProgram(ALIGN_FRAGMENT_SHADER, "raw_align")
         flowReadbackProgram = linkComputeProgram(FLOW_READBACK_COMPUTE_SHADER, "raw_flow_readback")
+        flowBoundsSummaryProgram = linkComputeProgram(
+            FLOW_BOUNDS_SUMMARY_COMPUTE_SHADER,
+            "raw_flow_bounds_summary",
+        )
         lkRefineProgram = linkComputeProgram(LK_REFINE_COMPUTE_SHADER, "raw_lk_refine")
-        smoothFlowProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, SMOOTH_FLOW_FRAGMENT_SHADER, "raw_smooth_flow")
+        smoothFlowProgram = linkFullscreenProgram(SMOOTH_FLOW_FRAGMENT_SHADER, "raw_smooth_flow")
         structureProgram = linkComputeProgram(STRUCTURE_COMPUTE_SHADER, "raw_structure")
-        robustnessProgram = linkComputeProgram(ROBUSTNESS_COMPUTE_SHADER, "raw_robustness")
-        tileMaskProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
+        robustnessProgram = linkFullscreenProgram(
+            ROBUSTNESS_FRAGMENT_SHADER,
+            "raw_robustness",
+        )
+        tileMaskProgram = linkFullscreenProgram(
             tileMaskFragmentShader(
                 dualConfidence = true,
                 trackRejectionReasons = visualizeRadianceFusionRejections,
@@ -924,13 +1027,11 @@ internal class GlesRawRadianceStacker(
             REGISTRATION_GLOBAL_ALIGN_COMPUTE_SHADER,
             "raw_registration_global_align",
         )
-        copyScalarProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
+        copyScalarProgram = linkFullscreenProgram(
             COPY_SCALAR_FRAGMENT_SHADER,
             "raw_copy_scalar",
         )
-        copyRgbaProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
+        copyRgbaProgram = linkFullscreenProgram(
             COPY_RGBA_FRAGMENT_SHADER,
             "raw_copy_rgba",
         )
@@ -940,12 +1041,12 @@ internal class GlesRawRadianceStacker(
                 trackLongParticipation = visualizeRadianceLongParticipation,
             ),
             if (visualizeRadianceFusionRejections) {
-                "raw_radiance_clear_r32ui_rgba16f_writeonly"
+                "raw_radiance_clear_rgba16f_with_rejections"
             } else {
-                "raw_radiance_clear_r32ui_writeonly"
+                "raw_radiance_clear_rgba16f"
             },
         )
-        accumulateSuperResolutionProgram = linkComputeProgram(
+        accumulateSuperResolutionProgram = linkFullscreenProgram(
             GlesRawRadianceFusionShaders.accumulate(
                 RAW_COMMON,
                 trackRejections = visualizeRadianceFusionRejections,
@@ -953,27 +1054,25 @@ internal class GlesRawRadianceStacker(
                 trackLongParticipation = visualizeRadianceLongParticipation,
             ),
             if (visualizeRadianceFusionRejections) {
-                "raw_radiance_accumulate_r32ui_read_write_rgba16f_ping_pong_writeonly"
+                "raw_radiance_accumulate_rgba16f_with_rejections"
             } else {
-                "raw_radiance_accumulate_r32ui_read_write"
+                "raw_radiance_accumulate_rgba16f"
             },
         )
         radianceReferenceBaseProgram = linkComputeProgram(
             GlesRawRadianceFusionShaders.captureReferenceBase,
             "raw_radiance_reference_base_rgba16f_writeonly",
         )
-        normalizeSuperResolutionProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
+        normalizeSuperResolutionProgram = linkFullscreenProgram(
             GlesRawRadianceFusionShaders.normalize(
                 showRejections = visualizeRadianceFusionRejections,
                 showSrDetail = visualizeRadianceSrDetail,
                 showLongParticipation = visualizeRadianceLongParticipation,
             ),
-            "raw_radiance_normalize_r32ui_usampler",
+            "raw_radiance_normalize_rgba16f_sampler",
         )
         if (needsHighlightPrograms) {
-            radianceHighlightNormalizeProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
+            radianceHighlightNormalizeProgram = linkFullscreenProgram(
                 GlesRawRadianceFusionShaders.normalize(
                     showRejections = visualizeRadianceFusionRejections,
                     showSrDetail = visualizeRadianceSrDetail,
@@ -985,57 +1084,47 @@ internal class GlesRawRadianceStacker(
             )
         }
         if (needsHighlightPrograms || needsLongPrograms) {
-            radianceHighlightValidateFlowProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
+            radianceHighlightValidateFlowProgram = linkFullscreenProgram(
                 GlesRawRadianceFusionShaders.validateHighlightFlow,
                 "raw_radiance_highlight_validate_flow",
             )
-            radianceHighlightPropagateFlowProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
+            radianceHighlightPropagateFlowProgram = linkFullscreenProgram(
                 GlesRawRadianceFusionShaders.propagateHighlightFlow,
                 "raw_radiance_highlight_propagate_flow",
             )
-            radianceHighlightComposeFlowProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
+            radianceHighlightComposeFlowProgram = linkFullscreenProgram(
                 GlesRawRadianceFusionShaders.composeHighlightFlow,
                 "raw_radiance_highlight_compose_flow",
             )
             if (needsHighlightPrograms) {
-                radianceHighlightSupportProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
+                radianceHighlightSupportProgram = linkFullscreenProgram(
                     GlesRadianceHighlightShaders.buildSupport,
                     "raw_radiance_highlight_support",
                 )
-                radianceHighlightInferFlowProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
+                radianceHighlightInferFlowProgram = linkFullscreenProgram(
                     GlesRadianceHighlightShaders.inferFlowFromCollar,
                     "raw_radiance_highlight_infer_flow",
                 )
-                radianceHighlightRejectionSeedProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
+                radianceHighlightRejectionSeedProgram = linkFullscreenProgram(
                     GlesRadianceHighlightShaders.buildHoleRejectionSeed,
                     "raw_radiance_highlight_rejection_seed",
                 )
-                radianceHighlightRejectionPropagateProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
+                radianceHighlightRejectionPropagateProgram = linkFullscreenProgram(
                     GlesRadianceHighlightShaders.propagateHoleRejection,
                     "raw_radiance_highlight_rejection_propagate",
                 )
-                radianceHighlightApplyHoleDecisionProgram = linkGraphicsProgram(
-                    FULLSCREEN_VERTEX_SHADER,
+                radianceHighlightApplyHoleDecisionProgram = linkFullscreenProgram(
                     GlesRadianceHighlightShaders.applyHoleDecision,
                     "raw_radiance_highlight_apply_hole_decision",
                 )
             }
         }
         if (needsLongPrograms) {
-            radianceLongEligibilityProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
+            radianceLongEligibilityProgram = linkFullscreenProgram(
                 GlesRawRadianceFusionShaders.longEligibility,
                 "raw_radiance_long_eligibility",
             )
-            radianceLongObservabilityDiagnosticProgram = linkGraphicsProgram(
-                FULLSCREEN_VERTEX_SHADER,
+            radianceLongObservabilityDiagnosticProgram = linkFullscreenProgram(
                 RAW_LONG_OBSERVABILITY_DIAGNOSTIC_FRAGMENT_SHADER,
                 "raw_radiance_long_observability_diagnostic",
             )
@@ -1167,7 +1256,7 @@ internal class GlesRawRadianceStacker(
             )
         }
         if (RawStackRuntimeDebug.enabled) {
-            val accumulatorBytesPerPixel = 4L * 4L + 8L +
+            val accumulatorBytesPerPixel = 2L * 8L +
                 (if (visualizeRadianceFusionRejections) 16L else 0L) +
                 (if (visualizeRadianceLongParticipation) 4L else 0L)
             val accumulatorBytes = superResolutionAccumulatorWidth.toLong() *
@@ -1237,53 +1326,29 @@ internal class GlesRawRadianceStacker(
             }
         }
         kernelTexture = createTexture2D(planeWidth, planeHeight, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
-        robustnessTexture = createTexture2D(planeWidth, planeHeight, GLES30.GL_R32F, GLES30.GL_NEAREST)
+        robustnessTexture = createTexture2D(planeWidth, planeHeight, GLES30.GL_R16F, GLES30.GL_NEAREST)
         tileMaskTexture = createTexture2D(
             gridWidth,
             gridHeight,
             GLES30.GL_RGBA16F,
             GLES30.GL_LINEAR,
         )
-        superResolutionAccumulatorTexture = createTexture2D(
+        radianceNrAccumulatorTexture = createTexture2D(
             superResolutionAccumulatorWidth,
             superResolutionAccumulatorHeight,
-            GLES30.GL_R32UI,
+            GLES30.GL_RGBA16F,
             GLES30.GL_NEAREST,
         )
-        superResolutionAccumulatorBwTexture = createTexture2D(
+        radianceDetailAccumulatorTexture = createTexture2D(
             superResolutionAccumulatorWidth,
             superResolutionAccumulatorHeight,
-            GLES30.GL_R32UI,
-            GLES30.GL_NEAREST,
-        )
-        superResolutionAccumulatorBTexture = createTexture2D(
-            superResolutionAccumulatorWidth,
-            superResolutionAccumulatorHeight,
-            GLES30.GL_R32UI,
-            GLES30.GL_NEAREST,
-        )
-        radianceNrWeightRgTexture = createTexture2D(
-            superResolutionAccumulatorWidth,
-            superResolutionAccumulatorHeight,
-            GLES30.GL_R32UI,
-            GLES30.GL_NEAREST,
-        )
-        radianceDetailBwTexture = createTexture2D(
-            superResolutionAccumulatorWidth,
-            superResolutionAccumulatorHeight,
-            GLES30.GL_R32UI,
+            GLES30.GL_RGBA16F,
             GLES30.GL_NEAREST,
         )
         radianceReferenceBaseTexture = createTexture2D(
             superResolutionAccumulatorWidth,
             superResolutionAccumulatorHeight,
             GLES30.GL_RGBA16F,
-            GLES30.GL_NEAREST,
-        )
-        radianceDetailWeightRgTexture = createTexture2D(
-            superResolutionAccumulatorWidth,
-            superResolutionAccumulatorHeight,
-            GLES30.GL_R32UI,
             GLES30.GL_NEAREST,
         )
         if (visualizeRadianceFusionRejections) {
@@ -1308,12 +1373,14 @@ internal class GlesRawRadianceStacker(
                 GLES30.GL_NEAREST,
             )
         }
-        outputTexture = createTexture2D(
-            radianceOutputTileWidth,
-            radianceOutputTileHeight,
-            GLES30.GL_RGBA16UI,
-            GLES30.GL_NEAREST,
-        )
+        if (radianceVgnChromaPostprocessor == null) {
+            outputTexture = createTexture2D(
+                radianceOutputTileWidth,
+                radianceOutputTileHeight,
+                GLES30.GL_RGBA16UI,
+                GLES30.GL_NEAREST,
+            )
+        }
         lensShadingTexture = createLensShadingTexture()
         renderFbo = createFramebuffer()
         readbackFbo = createFramebuffer()
@@ -2285,6 +2352,98 @@ internal class GlesRawRadianceStacker(
         }
     }
 
+    private fun prepareFlowBoundsSummaryBuffer(capacity: Int) {
+        require(capacity > 0)
+        check(flowBoundsSummaryCount == 0) {
+            "Flow-bound summaries cannot be resized after GPU submissions"
+        }
+        if (flowBoundsSummaryBuffer == 0) {
+            val ids = IntArray(1)
+            GLES31.glGenBuffers(1, ids, 0)
+            flowBoundsSummaryBuffer = ids[0]
+            check(flowBoundsSummaryBuffer != 0) {
+                "Failed to allocate flow-bound summary buffer"
+            }
+            buffers += flowBoundsSummaryBuffer
+        }
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, flowBoundsSummaryBuffer)
+        GLES31.glBufferData(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            capacity * FLOW_BOUNDS_SUMMARY_BYTES,
+            null,
+            GLES31.GL_DYNAMIC_READ,
+        )
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+        flowBoundsSummaryCapacity = capacity
+        checkGlError("prepare flow-bound summary buffer capacity=$capacity")
+    }
+
+    private fun queueFlowBoundsSummary(texture: Int, label: String): Int {
+        check(flowBoundsSummaryBuffer != 0) { "Flow-bound summary buffer is unavailable" }
+        check(flowBoundsSummaryCount < flowBoundsSummaryCapacity) {
+            "Flow-bound summary capacity exhausted: " +
+                "$flowBoundsSummaryCount/$flowBoundsSummaryCapacity"
+        }
+        val summaryIndex = flowBoundsSummaryCount++
+        GLES31.glBindBufferBase(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            FLOW_READBACK_BUFFER_BINDING,
+            flowBoundsSummaryBuffer,
+        )
+        GLES31.glUseProgram(flowBoundsSummaryProgram)
+        bindTexture(flowBoundsSummaryProgram, "uFlow", 0, texture)
+        GLES31.glUniform2i(
+            uniformLocation(flowBoundsSummaryProgram, "uGridSize"),
+            gridWidth,
+            gridHeight,
+        )
+        GLES31.glUniform1i(
+            uniformLocation(flowBoundsSummaryProgram, "uSummaryIndex"),
+            summaryIndex,
+        )
+        GLES31.glDispatchCompute(1, 1, 1)
+        GLES31.glBindBufferBase(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            FLOW_READBACK_BUFFER_BINDING,
+            0,
+        )
+        checkGlError("queue flow-bound summary $label")
+        return summaryIndex
+    }
+
+    private fun resolveFlowBoundsSummaries(frames: List<AcceptedSuperResolutionFrame>) {
+        if (frames.isEmpty()) return
+        check(frames.size == flowBoundsSummaryCount) {
+            "Flow-bound summary count ${flowBoundsSummaryCount} does not match " +
+                "${frames.size} accepted frames"
+        }
+        val byteCount = flowBoundsSummaryCount * FLOW_BOUNDS_SUMMARY_BYTES
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
+        )
+        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, flowBoundsSummaryBuffer)
+        val mapped = GLES31.glMapBufferRange(
+            GLES31.GL_SHADER_STORAGE_BUFFER,
+            0,
+            byteCount,
+            GLES31.GL_MAP_READ_BIT,
+        ) as? ByteBuffer ?: throw IllegalStateException("Flow-bound summary map failed")
+        try {
+            val values = mapped.order(ByteOrder.nativeOrder()).asFloatBuffer()
+            frames.forEach { frame ->
+                val offset = frame.flowBoundsSummaryIndex * FLOW_BOUNDS_SUMMARY_FLOATS
+                frame.minFlowXPlanePx = values.get(offset)
+                frame.maxFlowXPlanePx = values.get(offset + 1)
+                frame.minFlowYPlanePx = values.get(offset + 2)
+                frame.maxFlowYPlanePx = values.get(offset + 3)
+            }
+        } finally {
+            GLES31.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER)
+            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+        }
+        checkGlError("resolve ${frames.size} flow-bound summaries")
+    }
+
     private fun uploadTemporalSeedTexture(field: RawTemporalFrameFlowField): Int {
         val texture = createTexture2D(
             field.width,
@@ -2594,66 +2753,41 @@ internal class GlesRawRadianceStacker(
         registrationWeight: Float,
         detailWeight: Float,
     ): AcceptedSuperResolutionFrame {
-        val cachedFlow = createTexture2D(gridWidth, gridHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
-        val cachedRobustnessBytesPerPixel = 2L
-        val cachedRobustness = createTexture2D(
+        // Preserve the existing final cache-smoothing pass, but write it into the current scratch
+        // texture and rotate ownership instead of copying into another allocation.
+        copyFlow(flowTexture, flowScratchTexture, "finalize Radiance flow frame $frameIndex")
+        val cachedFlow = flowScratchTexture
+        flowScratchTexture = flowTexture
+        flowTexture = createTexture2D(
+            gridWidth,
+            gridHeight,
+            GLES30.GL_RGBA16F,
+            GLES30.GL_LINEAR,
+        )
+        val cachedRobustness = robustnessTexture
+        robustnessTexture = createTexture2D(
             planeWidth,
             planeHeight,
             GLES30.GL_R16F,
             GLES30.GL_NEAREST,
         )
-        val cachedTileMaskBytesPerPixel = 8L
-        val cachedTileMask = createTexture2D(
+        val cachedTileMask = tileMaskTexture
+        tileMaskTexture = createTexture2D(
             gridWidth,
             gridHeight,
             GLES30.GL_RGBA16F,
             GLES30.GL_LINEAR,
         )
         RawStackRuntimeDebug.d(TAG) {
-            val cacheBytes = planeWidth.toLong() * planeHeight * cachedRobustnessBytesPerPixel +
-                gridWidth.toLong() * gridHeight * (8L + cachedTileMaskBytesPerPixel)
+            val cacheBytes = planeWidth.toLong() * planeHeight * 2L +
+                gridWidth.toLong() * gridHeight * 16L
             "Cache Radiance frame=$frameIndex alignment=${cacheBytes.mibString()} " +
-                "robustness=R16F flow=RGBA16F tile=RGBA16F"
+                "ownership=transferred robustness=R16F flow=RGBA16F tile=RGBA16F"
         }
-        copyFlow(flowTexture, cachedFlow, "cache Radiance flow frame $frameIndex")
-        copyScalarTexture(
-            robustnessTexture,
-            cachedRobustness,
-            planeWidth,
-            planeHeight,
-            "cache Radiance robustness frame $frameIndex",
-        )
-        copyRgbaTexture(
-            tileMaskTexture,
-            cachedTileMask,
-            gridWidth,
-            gridHeight,
-            "cache Radiance dual tile confidence frame $frameIndex",
-        )
-        val flowValues = readFlowTexture(
+        val flowBoundsSummaryIndex = queueFlowBoundsSummary(
             texture = cachedFlow,
-            textureWidth = gridWidth,
-            textureHeight = gridHeight,
-            label = "cache Radiance flow bounds frame $frameIndex",
+            label = "frame $frameIndex",
         )
-        var minFlowX = 0f
-        var maxFlowX = 0f
-        var minFlowY = 0f
-        var maxFlowY = 0f
-        var index = 0
-        while (index < flowValues.size) {
-            val flowX = flowValues[index]
-            val flowY = flowValues[index + 1]
-            if (flowX.isFinite()) {
-                minFlowX = minOf(minFlowX, flowX)
-                maxFlowX = maxOf(maxFlowX, flowX)
-            }
-            if (flowY.isFinite()) {
-                minFlowY = minOf(minFlowY, flowY)
-                maxFlowY = maxOf(maxFlowY, flowY)
-            }
-            index += 4
-        }
         return AcceptedSuperResolutionFrame(
             frameIndex = frameIndex,
             image = image,
@@ -2663,10 +2797,7 @@ internal class GlesRawRadianceStacker(
             flowTexture = cachedFlow,
             robustnessTexture = cachedRobustness,
             tileMaskTexture = cachedTileMask,
-            minFlowXPlanePx = minFlowX,
-            maxFlowXPlanePx = maxFlowX,
-            minFlowYPlanePx = minFlowY,
-            maxFlowYPlanePx = maxFlowY,
+            flowBoundsSummaryIndex = flowBoundsSummaryIndex,
         )
     }
 
@@ -3077,44 +3208,29 @@ internal class GlesRawRadianceStacker(
                     computeRobustness(referenceProxyTexture = referenceGuideProxyTexture)
                     computeTileMask(referenceProxyTexture = referenceGuideProxyTexture)
 
-                    val cachedFlow = createTexture2D(
+                    // These textures are complete, immutable alignment products from this point
+                    // forward. Transfer their ownership to reconstruction and allocate the next
+                    // working set instead of copying all three surfaces.
+                    val cachedFlow = flowTexture
+                    flowTexture = createTexture2D(
                         gridWidth,
                         gridHeight,
                         GLES30.GL_RGBA16F,
                         GLES30.GL_LINEAR,
                     )
-                    val cachedRobustness = createTexture2D(
+                    val cachedRobustness = robustnessTexture
+                    robustnessTexture = createTexture2D(
                         planeWidth,
                         planeHeight,
                         GLES30.GL_R16F,
                         GLES30.GL_NEAREST,
                     )
-                    val cachedTileMask = createTexture2D(
+                    val cachedTileMask = tileMaskTexture
+                    tileMaskTexture = createTexture2D(
                         gridWidth,
                         gridHeight,
                         GLES30.GL_RGBA16F,
                         GLES30.GL_LINEAR,
-                    )
-                    copyRgbaTexture(
-                        flowTexture,
-                        cachedFlow,
-                        gridWidth,
-                        gridHeight,
-                        "Radiance long cached flow ${plan.sourceFrameIndex}",
-                    )
-                    copyScalarTexture(
-                        robustnessTexture,
-                        cachedRobustness,
-                        planeWidth,
-                        planeHeight,
-                        "Radiance long cached robustness ${plan.sourceFrameIndex}",
-                    )
-                    copyRgbaTexture(
-                        tileMaskTexture,
-                        cachedTileMask,
-                        gridWidth,
-                        gridHeight,
-                        "Radiance long cached tile mask ${plan.sourceFrameIndex}",
                     )
                     RadianceLongAlignment(
                         plan = plan,
@@ -4074,19 +4190,19 @@ internal class GlesRawRadianceStacker(
         referenceProxyTexture: Int = refProxy,
         currentProxyTexture: Int = curProxy,
     ) {
-        GLES31.glUseProgram(robustnessProgram)
+        bindFramebufferOutput(robustnessTexture, "computeRobustness")
+        GLES30.glViewport(0, 0, planeWidth, planeHeight)
+        GLES30.glUseProgram(robustnessProgram)
         bindTexture(robustnessProgram, "uReference", 0, referenceProxyTexture)
         bindTexture(robustnessProgram, "uCurrent", 1, currentProxyTexture)
         bindTexture(robustnessProgram, "uFlowGrid", 2, flowTexture)
-        bindImage(3, robustnessTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F)
         setCommonUniforms(robustnessProgram)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(robustnessProgram, "uPlaneSize"), planeWidth, planeHeight)
         GLES31.glUniform2i(GLES31.glGetUniformLocation(robustnessProgram, "uGridSize"), gridWidth, gridHeight)
         GLES31.glUniform1i(GLES31.glGetUniformLocation(robustnessProgram, "uTileSize"), flowGridSpacing)
         setNrRobustnessUniforms(robustnessProgram)
-        GLES31.glDispatchCompute(groupCount(planeWidth), groupCount(planeHeight), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
-        checkGlError("computeRobustness")
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("computeRobustness")
     }
 
     private fun computeTileMask(
@@ -5093,12 +5209,18 @@ internal class GlesRawRadianceStacker(
 
     private fun clearSuperResolutionAccumulator() {
         GLES31.glUseProgram(clearSuperResolutionAccumulatorProgram)
-        bindImage(0, superResolutionAccumulatorTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        bindImage(1, superResolutionAccumulatorBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        bindImage(2, radianceNrWeightRgTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        bindImage(3, superResolutionAccumulatorBTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        bindImage(4, radianceDetailBwTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
-        bindImage(5, radianceDetailWeightRgTexture, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindImage(
+            0,
+            radianceNrAccumulatorTexture,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA16F,
+        )
+        bindImage(
+            1,
+            radianceDetailAccumulatorTexture,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA16F,
+        )
         if (visualizeRadianceFusionRejections) {
             bindImage(
                 6,
@@ -5125,7 +5247,11 @@ internal class GlesRawRadianceStacker(
             groupCount(superResolutionAccumulatorHeight),
             1,
         )
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
+        )
         checkGlError("clearSuperResolutionAccumulator")
     }
 
@@ -5148,7 +5274,9 @@ internal class GlesRawRadianceStacker(
         fusionStatsCoreRegion: RadianceTileRect,
         recordFusionRejections: Boolean,
     ) {
-        GLES31.glUseProgram(accumulateSuperResolutionProgram)
+        bindRadianceAccumulatorFramebuffer()
+        GLES30.glViewport(0, 0, accumulatorRegion.width, accumulatorRegion.height)
+        GLES30.glUseProgram(accumulateSuperResolutionProgram)
         bindTexture(accumulateSuperResolutionProgram, "uRcdRgbTile", 0, radianceRgbTileTexture)
         bindTexture(accumulateSuperResolutionProgram, "uFlowGrid", 1, frameFlowTexture)
         bindTexture(accumulateSuperResolutionProgram, "uRobustness", 2, frameRobustnessTexture)
@@ -5166,42 +5294,6 @@ internal class GlesRawRadianceStacker(
             "uRawRegion",
             8,
             rcdRawRegionTexture,
-        )
-        bindImage(
-            0,
-            superResolutionAccumulatorTexture,
-            GLES31.GL_READ_WRITE,
-            GLES30.GL_R32UI,
-        )
-        bindImage(
-            1,
-            superResolutionAccumulatorBwTexture,
-            GLES31.GL_READ_WRITE,
-            GLES30.GL_R32UI,
-        )
-        bindImage(
-            2,
-            radianceNrWeightRgTexture,
-            GLES31.GL_READ_WRITE,
-            GLES30.GL_R32UI,
-        )
-        bindImage(
-            3,
-            superResolutionAccumulatorBTexture,
-            GLES31.GL_READ_WRITE,
-            GLES30.GL_R32UI,
-        )
-        bindImage(
-            4,
-            radianceDetailBwTexture,
-            GLES31.GL_READ_WRITE,
-            GLES30.GL_R32UI,
-        )
-        bindImage(
-            5,
-            radianceDetailWeightRgTexture,
-            GLES31.GL_READ_WRITE,
-            GLES30.GL_R32UI,
         )
         if (visualizeRadianceFusionRejections) {
             bindTexture(
@@ -5414,14 +5506,19 @@ internal class GlesRawRadianceStacker(
             accumulatorRegion.width,
             accumulatorRegion.height,
         )
-        GLES31.glDispatchCompute(
-            groupCount(accumulatorRegion.width),
-            groupCount(accumulatorRegion.height),
-            1,
-        )
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+            GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
                 GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                (if (visualizeRadianceFusionRejections ||
+                    visualizeRadianceLongParticipation
+                ) {
+                    GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
+                } else {
+                    0
+                }) or
                 (if (logRadianceFusionParticipation) {
                     GLES31.GL_SHADER_STORAGE_BARRIER_BIT
                 } else {
@@ -5430,7 +5527,7 @@ internal class GlesRawRadianceStacker(
         )
         checkGlError(
             if (visualizeRadianceFusionRejections) {
-                "accumulateRadianceFusionFrame RGBA16F ping-pong write-only"
+                "accumulateRadianceFusionFrame RGBA16F MRT with rejection ping-pong"
             } else {
                 "accumulateRadianceFusionFrame"
             },
@@ -5452,21 +5549,9 @@ internal class GlesRawRadianceStacker(
         GLES31.glUseProgram(radianceReferenceBaseProgram)
         bindTexture(
             radianceReferenceBaseProgram,
-            "uNrSumRg",
+            "uNrAccumulator",
             0,
-            superResolutionAccumulatorTexture,
-        )
-        bindTexture(
-            radianceReferenceBaseProgram,
-            "uNrSumBw",
-            1,
-            superResolutionAccumulatorBwTexture,
-        )
-        bindTexture(
-            radianceReferenceBaseProgram,
-            "uNrWeightRg",
-            2,
-            radianceNrWeightRgTexture,
+            radianceNrAccumulatorTexture,
         )
         bindImage(
             0,
@@ -5762,9 +5847,11 @@ internal class GlesRawRadianceStacker(
         frames: List<RawStackFrame>,
         acceptedFrames: List<AcceptedSuperResolutionFrame>,
         candidateFrameCount: Int,
-        outputBuffer: ByteBuffer,
+        obtainOutputBuffer: () -> ByteBuffer,
         highlightAlignment: RadianceHighlightAlignment?,
         longAlignments: List<RadianceLongAlignment>,
+        deferGpuReadback: Boolean,
+        gpuTimelineRecorder: GlesGpuCompletion.StackTimelineRecorder?,
     ): ReconstructionResult {
         check(radianceTiles.isNotEmpty())
         var requiredRcdWidth = 1
@@ -5802,7 +5889,7 @@ internal class GlesRawRadianceStacker(
         }
         var readbackAllocMs = System.currentTimeMillis() - readbackAllocStart
         val output = readbackScratch?.let {
-            outputBuffer.apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
+            obtainOutputBuffer().apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
         }
         val fusionStatsFrameLabels = buildList {
             add("normal:0")
@@ -5830,9 +5917,13 @@ internal class GlesRawRadianceStacker(
                     if (!hasRejectionFrame) "unavailable" else "",
             )
         }
-        var totalGlReadMs = 0L
-        var totalCopyMs = 0L
+        var totalGpuQueueWaitMs = 0L
+        var totalPixelTransferMs = 0L
+        var totalCpuPackMs = 0L
         var exportedTextureId = 0
+        var chromaSubmissionMs = 0L
+        var finalSubmissionMs = 0L
+        var cpuBufferPopulated = chromaPostprocessor == null
         val referenceFrameNoiseModel = frameNoiseModel(frames.first())
         RawStackRuntimeDebug.i(TAG) {
             "Radiance tiled reconstruction tiles=${radianceTiles.size} " +
@@ -5850,6 +5941,7 @@ internal class GlesRawRadianceStacker(
                 "longNrScale=${radianceFusionTuning.longNrWeightScale} " +
                 "longPrecisionCap=${radianceFusionTuning.longPrecisionWeightCap}"
         }
+        val tileSubmissionStartNs = System.nanoTime()
         try {
             radianceTiles.forEach { tile ->
                 RawStackRuntimeDebug.d(TAG) {
@@ -5961,18 +6053,23 @@ internal class GlesRawRadianceStacker(
                     highlightSourceRegion = highlightSourceRegion,
                 )
                 if (chromaPostprocessor != null) {
-                    chromaPostprocessor.capture(outputTexture, tile)
+                    chromaPostprocessor.markTileWritten(tile)
                 } else {
                     val timing = readRadianceOutputTile(
                         checkNotNull(readbackScratch),
                         checkNotNull(output),
                         tile.outputCore,
                     )
-                    totalGlReadMs += timing.glReadMs
-                    totalCopyMs += timing.copyMs
+                    totalGpuQueueWaitMs += timing.gpuQueueWaitMs
+                    totalPixelTransferMs += timing.pixelTransferMs
+                    totalCpuPackMs += timing.cpuPackMs
                 }
                 GlesGpuScheduler.yieldToUiRenderer()
             }
+            if (chromaPostprocessor != null) {
+                GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+            }
+            gpuTimelineRecorder?.mark(GpuStackCompletionStage.TILED_RECONSTRUCTION)
             if (logRadianceFusionParticipation) {
                 logRadianceFusionStats(
                     buffer = fusionStatsBuffer,
@@ -5980,43 +6077,73 @@ internal class GlesRawRadianceStacker(
                     candidateFrameCount = candidateFrameCount,
                 )
             }
-            chromaPostprocessor?.processAndReadback(outputBuffer)?.let { result ->
+            val tileSubmissionMs = (System.nanoTime() - tileSubmissionStartNs) / 1_000_000L
+            chromaPostprocessor?.process(
+                obtainOutputBuffer = obtainOutputBuffer,
+                deferFullSizeReadback = deferGpuReadback,
+                onChromaSubmitted = {
+                    gpuTimelineRecorder?.mark(GpuStackCompletionStage.CHROMA_POSTPROCESS)
+                },
+                onFinalSubmitted = {
+                    gpuTimelineRecorder?.mark(GpuStackCompletionStage.FINAL_EXPORT)
+                },
+            )?.let { result ->
                 val timing = result.readbackTiming
                 readbackAllocMs += timing.allocMs
-                totalGlReadMs += timing.glReadMs
-                totalCopyMs += timing.copyMs
+                totalGpuQueueWaitMs += timing.gpuQueueWaitMs
+                totalPixelTransferMs += timing.pixelTransferMs
+                totalCpuPackMs += timing.cpuPackMs
                 exportedTextureId = result.exportedTextureId
+                chromaSubmissionMs = result.chromaSubmissionMs
+                finalSubmissionMs = result.finalSubmissionMs
+                cpuBufferPopulated = result.cpuBufferPopulated
             }
+            return ReconstructionResult(
+                readTiming = ReadOutputTiming(
+                    elapsedMs = readbackAllocMs + totalGpuQueueWaitMs +
+                        totalPixelTransferMs + totalCpuPackMs,
+                    gpuQueueWaitMs = totalGpuQueueWaitMs,
+                    pixelTransferMs = totalPixelTransferMs,
+                    cpuPackMs = totalCpuPackMs,
+                    allocMs = readbackAllocMs,
+                    mode = if (radianceUsesVgnSemanticBackend) {
+                        when {
+                            chromaPostprocessor != null && deferGpuReadback &&
+                                exportedTextureId != 0 -> {
+                                "radiance-vgn-semantic-chroma-iir-gpu-only"
+                            }
+
+                            chromaPostprocessor != null && highlightAlignment != null -> {
+                                "radiance-vgn-semantic-highlight-chroma-iir-rgb16-tiled"
+                            }
+
+                            chromaPostprocessor != null -> {
+                                "radiance-vgn-semantic-chroma-iir-rgb16-tiled"
+                            }
+
+                            highlightAlignment != null -> {
+                                "radiance-vgn-semantic-highlight-rgb16-tiled"
+                            }
+
+                            else -> "radiance-vgn-semantic-rgb16-tiled"
+                        }
+                    } else {
+                        if (highlightAlignment != null) {
+                            "radiance-rcd-fallback-highlight-rgb16-tiled"
+                        } else {
+                            "radiance-rcd-fallback-rgb16-tiled"
+                        }
+                    },
+                ),
+                exportedTextureId = exportedTextureId,
+                tileSubmissionMs = tileSubmissionMs,
+                chromaSubmissionMs = chromaSubmissionMs,
+                finalSubmissionMs = finalSubmissionMs,
+                cpuBufferPopulated = cpuBufferPopulated,
+            )
         } finally {
             LargeDirectBuffer.free(readbackScratch)
         }
-        outputBuffer.rewind()
-        return ReconstructionResult(
-            readTiming = ReadOutputTiming(
-                elapsedMs = readbackAllocMs + totalGlReadMs + totalCopyMs,
-                glReadMs = totalGlReadMs,
-                copyMs = totalCopyMs,
-                allocMs = readbackAllocMs,
-                mode = if (radianceUsesVgnSemanticBackend) {
-                    if (chromaPostprocessor != null && highlightAlignment != null) {
-                        "radiance-vgn-semantic-highlight-chroma-iir-rgb16-tiled"
-                    } else if (chromaPostprocessor != null) {
-                        "radiance-vgn-semantic-chroma-iir-rgb16-tiled"
-                    } else if (highlightAlignment != null) {
-                        "radiance-vgn-semantic-highlight-rgb16-tiled"
-                    } else {
-                        "radiance-vgn-semantic-rgb16-tiled"
-                    }
-                } else {
-                    if (highlightAlignment != null) {
-                        "radiance-rcd-fallback-highlight-rgb16-tiled"
-                    } else {
-                        "radiance-rcd-fallback-rgb16-tiled"
-                    }
-                },
-            ),
-            exportedTextureId = exportedTextureId,
-        )
     }
 
     private fun AcceptedSuperResolutionFrame.flowBounds(): RadianceFlowBounds {
@@ -6566,16 +6693,22 @@ internal class GlesRawRadianceStacker(
         } else {
             normalizeSuperResolutionProgram
         }
-        bindFramebufferOutput(outputTexture, "normalizeRadianceTile")
-        GLES30.glViewport(0, 0, tile.outputCore.width, tile.outputCore.height)
+        val chromaTarget = radianceVgnChromaPostprocessor?.normalizationTargetTexture()
+        bindFramebufferOutput(chromaTarget ?: outputTexture, "normalizeRadianceTile")
+        if (chromaTarget != null) {
+            GLES30.glViewport(
+                tile.outputCore.left,
+                tile.outputCore.top,
+                tile.outputCore.width,
+                tile.outputCore.height,
+            )
+        } else {
+            GLES30.glViewport(0, 0, tile.outputCore.width, tile.outputCore.height)
+        }
         GLES30.glUseProgram(program)
-        bindTexture(program, "uNrSumRg", 0, superResolutionAccumulatorTexture)
-        bindTexture(program, "uNrSumBw", 1, superResolutionAccumulatorBwTexture)
-        bindTexture(program, "uNrWeightRg", 2, radianceNrWeightRgTexture)
-        bindTexture(program, "uDetailSumRg", 3, superResolutionAccumulatorBTexture)
-        bindTexture(program, "uDetailSumBw", 4, radianceDetailBwTexture)
-        bindTexture(program, "uDetailWeightRg", 5, radianceDetailWeightRgTexture)
-        bindTexture(program, "uReferenceBase", 6, radianceReferenceBaseTexture)
+        bindTexture(program, "uNrAccumulator", 0, radianceNrAccumulatorTexture)
+        bindTexture(program, "uDetailAccumulator", 1, radianceDetailAccumulatorTexture)
+        bindTexture(program, "uReferenceBase", 2, radianceReferenceBaseTexture)
         if (visualizeRadianceFusionRejections) {
             bindTexture(
                 program,
@@ -6605,8 +6738,8 @@ internal class GlesRawRadianceStacker(
         )
         GLES31.glUniform2i(
             uniformLocation(program, "uOutputOrigin"),
-            tile.outputCore.left,
-            tile.outputCore.top,
+            if (chromaTarget != null) 0 else tile.outputCore.left,
+            if (chromaTarget != null) 0 else tile.outputCore.top,
         )
         if (visualizeRadianceFusionRejections || visualizeRadianceSrDetail) {
             if (visualizeRadianceFusionRejections) {
@@ -6752,6 +6885,10 @@ internal class GlesRawRadianceStacker(
             checkFramebuffer("readRadianceOutputTile")
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 8)
             scratch.clear()
+            val gpuQueueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
+                label = "Radiance output tile $outputCore",
+                checkGlError = ::checkGlError,
+            )
             val readStart = System.currentTimeMillis()
             GLES30.glReadPixels(
                 0,
@@ -6780,9 +6917,10 @@ internal class GlesRawRadianceStacker(
             }
             val copyMs = System.currentTimeMillis() - copyStart
             ReadOutputTiming(
-                elapsedMs = readMs + copyMs,
-                glReadMs = readMs,
-                copyMs = copyMs,
+                elapsedMs = gpuQueueWaitMs + readMs + copyMs,
+                gpuQueueWaitMs = gpuQueueWaitMs,
+                pixelTransferMs = readMs,
+                cpuPackMs = copyMs,
                 allocMs = 0L,
                 mode = "radiance-rgb16-tile",
             )
@@ -7332,6 +7470,16 @@ internal class GlesRawRadianceStacker(
 
     private fun bindFramebufferOutput(texture: Int, label: String) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, renderFbo)
+        if (renderFboHasSecondAttachment) {
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT1,
+                GLES30.GL_TEXTURE_2D,
+                0,
+                0,
+            )
+            renderFboHasSecondAttachment = false
+        }
         if (renderFboTargetTexture != texture) {
             GLES30.glFramebufferTexture2D(
                 GLES30.GL_FRAMEBUFFER,
@@ -7348,6 +7496,38 @@ internal class GlesRawRadianceStacker(
         if (checkedRenderTargetTextures.add(texture)) {
             checkFramebuffer(label)
         }
+    }
+
+    private fun bindRadianceAccumulatorFramebuffer() {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, renderFbo)
+        if (!renderFboHasSecondAttachment) {
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                radianceNrAccumulatorTexture,
+                0,
+            )
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT1,
+                GLES30.GL_TEXTURE_2D,
+                radianceDetailAccumulatorTexture,
+                0,
+            )
+            renderFboTargetTexture = 0
+            renderFboHasSecondAttachment = true
+            checkFramebuffer("Radiance accumulator MRT")
+        }
+        GLES30.glDrawBuffers(
+            radianceAccumulatorAttachments.size,
+            radianceAccumulatorAttachments,
+            0,
+        )
+        GLES30.glDisable(GLES30.GL_DITHER)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
     }
 
     private fun finishFramebufferPass(label: String) {
@@ -7669,7 +7849,20 @@ internal class GlesRawRadianceStacker(
         GLES31.glBindImageTexture(unit, texture, 0, false, 0, access, format)
     }
 
+    private fun linkFullscreenProgram(fragmentSource: String, name: String): Int {
+        return linkGraphicsProgram(
+            vertexSource = GlesGraphicsShaderSources.fullscreenVertexFor(fragmentSource),
+            fragmentSource = fragmentSource,
+            name = name,
+        )
+    }
+
     private fun linkGraphicsProgram(vertexSource: String, fragmentSource: String, name: String): Int {
+        val vertexVersion = GlesGraphicsShaderSources.languageVersionOf(vertexSource)
+        val fragmentVersion = GlesGraphicsShaderSources.languageVersionOf(fragmentSource)
+        require(vertexVersion == fragmentVersion) {
+            "Program $name mixes GLSL ES versions: vertex=$vertexVersion fragment=$fragmentVersion"
+        }
         val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, vertexSource, "$name vertex")
         val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource, "$name fragment")
         val program = GLES30.glCreateProgram()
@@ -7836,6 +8029,9 @@ internal class GlesRawRadianceStacker(
         private const val REGISTRATION_SAMPLE_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
         private const val REGISTRATION_GLOBAL_SCORE_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
         private const val FLOW_READBACK_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
+        private const val FLOW_BOUNDS_SUMMARY_LOCAL_SIZE = 128
+        private const val FLOW_BOUNDS_SUMMARY_FLOATS = 4
+        private const val FLOW_BOUNDS_SUMMARY_BYTES = FLOW_BOUNDS_SUMMARY_FLOATS * 4
         private const val RADIANCE_FUSION_STATS_BUFFER_BINDING = TRANSIENT_SSBO_BINDING
         private const val RADIANCE_FUSION_STATS_STRIDE = 5
         private const val RADIANCE_FUSION_WEIGHT_QUANTIZATION = 63f
@@ -7917,26 +8113,6 @@ internal class GlesRawRadianceStacker(
         private const val DIAGNOSTIC_RESIDUAL_QUANTIZATION = 10000f
         private const val DIAGNOSTIC_NOISE_RESIDUAL_QUANTIZATION = 100f
         private const val DIAGNOSTIC_POST_RESIDUAL_QUANTIZATION = 100f
-
-        private val FULLSCREEN_VERTEX_SHADER = """
-            #version 300 es
-            precision highp float;
-            out vec2 vTexCoord;
-            void main() {
-                vec2 positions[3] = vec2[3](
-                    vec2(-1.0, -1.0),
-                    vec2( 3.0, -1.0),
-                    vec2(-1.0,  3.0)
-                );
-                vec2 texCoords[3] = vec2[3](
-                    vec2(0.0, 0.0),
-                    vec2(2.0, 0.0),
-                    vec2(0.0, 2.0)
-                );
-                gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
-                vTexCoord = texCoords[gl_VertexID];
-            }
-        """.trimIndent()
 
         private val RAW_COMMON = """
             precision highp float;
@@ -8562,6 +8738,73 @@ internal class GlesRawRadianceStacker(
             }
         """.trimIndent()
 
+        internal val FLOW_BOUNDS_SUMMARY_COMPUTE_SHADER = """
+            #version 310 es
+            precision highp float;
+            precision highp int;
+            layout(local_size_x = $FLOW_BOUNDS_SUMMARY_LOCAL_SIZE) in;
+            uniform sampler2D uFlow;
+            uniform ivec2 uGridSize;
+            uniform int uSummaryIndex;
+            layout(std430, binding = $FLOW_READBACK_BUFFER_BINDING) buffer FlowBoundsSummary {
+                vec4 summaries[];
+            };
+            shared vec4 laneBounds[$FLOW_BOUNDS_SUMMARY_LOCAL_SIZE];
+
+            void main() {
+                uint lane = gl_LocalInvocationID.x;
+                uint sampleCount = uint(uGridSize.x * uGridSize.y);
+                vec4 bounds = vec4(0.0);
+                for (
+                    uint sampleIndex = lane;
+                    sampleIndex < sampleCount;
+                    sampleIndex += uint($FLOW_BOUNDS_SUMMARY_LOCAL_SIZE)
+                ) {
+                    ivec2 p = ivec2(
+                        int(sampleIndex) % uGridSize.x,
+                        int(sampleIndex) / uGridSize.x
+                    );
+                    vec2 flow = texelFetch(uFlow, p, 0).rg;
+                    if (!isnan(flow.x) && !isinf(flow.x)) {
+                        bounds.xy = vec2(
+                            min(bounds.x, flow.x),
+                            max(bounds.y, flow.x)
+                        );
+                    }
+                    if (!isnan(flow.y) && !isinf(flow.y)) {
+                        bounds.zw = vec2(
+                            min(bounds.z, flow.y),
+                            max(bounds.w, flow.y)
+                        );
+                    }
+                }
+                laneBounds[lane] = bounds;
+                memoryBarrierShared();
+                barrier();
+
+                for (
+                    uint stride = uint($FLOW_BOUNDS_SUMMARY_LOCAL_SIZE / 2);
+                    stride > 0u;
+                    stride /= 2u
+                ) {
+                    if (lane < stride) {
+                        vec4 other = laneBounds[lane + stride];
+                        laneBounds[lane] = vec4(
+                            min(laneBounds[lane].x, other.x),
+                            max(laneBounds[lane].y, other.y),
+                            min(laneBounds[lane].z, other.z),
+                            max(laneBounds[lane].w, other.w)
+                        );
+                    }
+                    memoryBarrierShared();
+                    barrier();
+                }
+                if (lane == 0u) {
+                    summaries[uSummaryIndex] = laneBounds[0];
+                }
+            }
+        """.trimIndent()
+
         private val REGISTRATION_GLOBAL_ALIGN_COMPUTE_SHADER = """
             #version 310 es
             precision highp float;
@@ -8929,15 +9172,14 @@ internal class GlesRawRadianceStacker(
             }
         """.trimIndent()
 
-        private val ROBUSTNESS_COMPUTE_SHADER = """
-            #version 310 es
+        internal val ROBUSTNESS_FRAGMENT_SHADER = """
+            #version 300 es
             precision highp float;
             precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
             uniform sampler2D uReference;
             uniform sampler2D uCurrent;
             uniform sampler2D uFlowGrid;
-            layout(r32f, binding = 3) writeonly uniform highp image2D uRobustness;
+            layout(location = 0) out highp float fragRobustness;
             uniform ivec2 uPlaneSize;
             uniform ivec2 uGridSize;
             uniform int uTileSize;
@@ -9000,14 +9242,13 @@ internal class GlesRawRadianceStacker(
             $LOCAL_FLOW_WARP_GLSL
 
             void main() {
-                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-                if (p.x >= uPlaneSize.x || p.y >= uPlaneSize.y) return;
+                ivec2 p = ivec2(gl_FragCoord.xy);
+                fragRobustness = 0.0;
                 vec2 flow = flowAt(vec2(p));
                 vec2 curCenter = localFlowSourcePlane(vec2(p));
                 if (curCenter.x < 1.0 || curCenter.y < 1.0 ||
                     curCenter.x > float(uPlaneSize.x - 2) ||
                     curCenter.y > float(uPlaneSize.y - 2)) {
-                    imageStore(uRobustness, p, vec4(0.0));
                     return;
                 }
 
@@ -9098,7 +9339,7 @@ internal class GlesRawRadianceStacker(
                 float minMix = mix(uRobustMinMixFlat, uRobustMinMixEdge, edgeRelax);
                 float centerMix = mix(uRobustCenterMixFlat, uRobustCenterMixEdge, edgeRelax);
                 float outR = clamp(minMix * minR + centerMix * centerR + (1.0 - minMix - centerMix) * avgR, 0.0, 1.0);
-                imageStore(uRobustness, p, vec4(outR));
+                fragRobustness = outR;
             }
         """.trimIndent()
 

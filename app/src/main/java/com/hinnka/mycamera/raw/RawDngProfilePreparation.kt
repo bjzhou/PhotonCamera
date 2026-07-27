@@ -16,7 +16,7 @@ fun interface RawDngCaptureProfilePreparer {
 }
 
 data class RawDngCaptureProfileInput(
-    val rawData: ByteBuffer,
+    val rawData: ByteBuffer?,
     val width: Int,
     val height: Int,
     val rowStride: Int,

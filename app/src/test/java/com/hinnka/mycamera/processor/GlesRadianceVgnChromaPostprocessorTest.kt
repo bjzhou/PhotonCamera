@@ -24,7 +24,7 @@ class GlesRadianceVgnChromaPostprocessorTest {
     }
 
     @Test
-    fun everyFilterUsesGlobalCoordinatesOverTiledStorage() {
+    fun everyFilterUsesDirectCoordinatesOverFullSize2dStorage() {
         val globalShaders = listOf(
             GlesRadianceVgnChromaShaders.seed,
             GlesRadianceVgnChromaShaders.colorNoise1,
@@ -39,26 +39,27 @@ class GlesRadianceVgnChromaPostprocessorTest {
         )
 
         globalShaders.forEach { shader ->
-            assertTrue(shader.contains("ivec3 tiledPosition"))
-            assertTrue(shader.contains("uTileLefts"))
-            assertTrue(shader.contains("uTileTops"))
+            assertTrue(shader.contains("uimage2D"))
+            assertTrue(!shader.contains("uimage2DArray"))
+            assertTrue(!shader.contains("uTileLefts"))
+            assertTrue(!shader.contains("uTileTops"))
+            assertTrue(!shader.contains("tiledPosition"))
         }
         assertTrue(GlesRadianceVgnChromaShaders.iirRgb.contains("innerSize = uAxis == 0 ? uImageSize.x"))
         assertTrue(GlesRadianceVgnChromaShaders.iirRgb.contains("for (int i = 0; i < innerSize; ++i)"))
+        assertTrue(GlesRadianceVgnChromaShaders.iirRgb.contains("ivec2 storage = p;"))
+        assertTrue(GlesRadianceVgnChromaShaders.iirRgb.contains("imageStore(uOutput, storage"))
         assertTrue(GlesRadianceVgnChromaShaders.iirError.contains("for (int i = 0; i < innerSize; ++i)"))
     }
 
     @Test
-    fun gpuHandoffVariantWritesTheSameFinalPixelToAFullSizeTexture() {
-        val tiled = GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = false)
-        val fullSize = GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = true)
+    fun finalHandoffUsesOneGlobal2dSurface() {
+        val finish = GlesRadianceVgnChromaShaders.finalCameraRgb
 
-        assertTrue(tiled.contains("uimage2DArray uOutput"))
-        assertTrue(tiled.contains("imageStore(uOutput, storage, outputPixel)"))
-        assertTrue(!tiled.contains("uFullSizeOutput"))
-        assertTrue(fullSize.contains("uimage2D uFullSizeOutput"))
-        assertTrue(fullSize.contains("imageStore(uFullSizeOutput, p, outputPixel)"))
-        assertTrue(!fullSize.contains("uimage2DArray uOutput"))
+        assertTrue(finish.contains("uimage2D uInput"))
+        assertTrue(finish.contains("uimage2D uOutput"))
+        assertTrue(finish.contains("imageStore(uOutput, p, outputPixel)"))
+        assertTrue(!finish.contains("uimage2DArray"))
     }
 
     @Test
@@ -97,7 +98,6 @@ class GlesRadianceVgnChromaPostprocessorTest {
         assumeTrue("Android NDK glslc is unavailable", validator != null)
 
         val sources = listOf(
-            GlesRadianceVgnChromaShaders.capture,
             GlesRadianceVgnChromaShaders.seed,
             GlesRadianceVgnChromaShaders.colorNoise1,
             GlesRadianceVgnChromaShaders.colorNoise2,
@@ -108,7 +108,6 @@ class GlesRadianceVgnChromaPostprocessorTest {
             GlesRadianceVgnChromaShaders.iirError,
             GlesRadianceVgnChromaShaders.colorNoiseFilter,
             GlesRadianceVgnChromaShaders.finalCameraRgb,
-            GlesRadianceVgnChromaShaders.finalCameraRgb(exportFullSizeTexture = true),
         )
         sources.forEachIndexed { index, source ->
             val sourceFile = File.createTempFile("radiance-vgn-chroma-$index-", ".compute")

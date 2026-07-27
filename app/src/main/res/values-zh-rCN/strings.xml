@@ -196,6 +196,8 @@
     <string name="settings_jpg_max_hdr_composition">JPGmax HDR 合成</string>
     <string name="settings_jpg_max_hdr_composition_description">在 JPGmax 中使用包围曝光进行 HDR 融合。拍摄时请保持手部稳定或使用三脚架。关闭时，JPGmax 只进行多帧降噪。</string>
     <string name="settings_use_raw_max">RAWmax</string>
+    <string name="settings_raw_max_hdr_composition">RAWmax HDR 合成</string>
+    <string name="settings_raw_max_hdr_composition_description">在 RAWmax 中使用包围曝光进行 HDR 融合。关闭可提升处理性能。</string>
     <string name="settings_use_multiple_exposure">多重曝光</string>
     <string name="multiple_exposure_finish">完成</string>
     <string name="multiple_exposure_undo">撤销</string>
