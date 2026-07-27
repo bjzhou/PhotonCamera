@@ -6,6 +6,7 @@ import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.livephoto.resolveLivePhotoRotationDegrees
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsNaturalLightGl
@@ -2916,18 +2917,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     /**
-     * 计算相对于“竖屏正向”状态需要额外应用的旋转角度
-     * 因为 stMatrix 已经处理了 sensorOrientation，所以我们只需要根据设备旋转和校正量进行增量旋转
+     * 计算 Live Photo 相对于竖屏编码画布需要应用的显示旋转。
+     *
+     * FBO 已经经过 SurfaceTexture 矩阵处理，镜头朝向及前摄镜像不会改变这里的显示旋转方向。
+     * 因此必须与普通视频的 orientation hint 一致，直接使用设备旋转；前摄横屏若反向取角度，
+     * 90/270 度会相差 180 度。
      */
     private fun getApplyRotation(): Int {
-        // 对于后置摄像头，设备旋转 90 (Landscape Left) 需要将画面顺时针旋转 90 度
-        // 对于前置摄像头，由于镜像关系，设备旋转 90 (Landscape Left) 需要将画面逆时针旋转 90 度 (即 CW 270)
-        val rotation = if (lensFacing == 0 /* FRONT */) {
-            (360 - deviceRotation) % 360
-        } else {
-            deviceRotation
-        }
-        return (rotation + calibrationOffset) % 360
+        return resolveLivePhotoRotationDegrees(deviceRotation, calibrationOffset)
     }
 
     /**
