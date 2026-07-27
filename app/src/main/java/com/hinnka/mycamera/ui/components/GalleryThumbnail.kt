@@ -1,8 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -11,9 +9,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -38,14 +35,11 @@ fun GalleryThumbnail(
     val context = LocalContext.current
     val refreshKey = latestPhoto?.id?.let { viewModel.getPreparedPhotoThumbnailRefreshKey(it) } ?: 0L
     
-    Box(
+    PhysicalButton(
         modifier = modifier
-            .size(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black.copy(alpha = 0.5f))
-            .border(2.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
+            .size(48.dp),
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp)
     ) {
         if (latestPhoto != null) {
             AsyncImage(
@@ -68,6 +62,19 @@ fun GalleryThumbnail(
                     modifier = Modifier.size(20.dp)
                 )
             }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.08f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.14f)
+                            )
+                        )
+                    )
+            )
         } else {
             // 没有照片时显示图标
             Icon(

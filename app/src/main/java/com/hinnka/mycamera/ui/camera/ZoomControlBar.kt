@@ -7,8 +7,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -236,8 +234,8 @@ fun ZoomControlBar(
                 Icon(
                     imageVector = AppIcons.SwapHoriz,
                     contentDescription = stringResource(R.string.toggle_display_mode),
-                    modifier = Modifier.size(32.dp)
-                        .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                    modifier = Modifier
+                        .size(32.dp)
                         .padding(8.dp),
                     tint = Color.White
                 )
@@ -258,8 +256,8 @@ fun ZoomControlBar(
                 Icon(
                     imageVector = AppIcons.AutoAwesome,
                     contentDescription = stringResource(R.string.filters_panel),
-                    modifier = Modifier.size(32.dp)
-                        .background(Color.Black.copy(alpha = 0.3f), CircleShape)
+                    modifier = Modifier
+                        .size(32.dp)
                         .padding(8.dp),
                     tint = Color.Yellow
                 )
@@ -373,8 +371,7 @@ private fun ZoomRuler(
         Row(
             modifier = Modifier
                 .width(adaptiveMetrics.rulerLength)
-                .fillMaxHeight()
-                .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
+                .fillMaxHeight(),
             horizontalArrangement = Arrangement.spacedBy(adaptiveMetrics.spacing, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -504,10 +501,7 @@ fun ZoomContinuousRuler(
     val yellow = Color(0xFFFFD700)
     val textMeasurer = rememberTextMeasurer()
 
-    Box(
-        modifier = modifier
-            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-    ) {
+    Box(modifier = modifier) {
         Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 4.dp)) {
             val width = size.width
             val height = size.height

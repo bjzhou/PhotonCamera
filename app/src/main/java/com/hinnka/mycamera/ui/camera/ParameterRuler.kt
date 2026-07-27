@@ -43,6 +43,8 @@ enum class CameraParameter {
     WHITE_BALANCE          // AWB
 }
 
+internal val CameraParameterRulerHeight = 40.dp
+
 /**
  * Parameter ruler component for adjusting camera parameters
  */
@@ -81,7 +83,7 @@ fun ParameterRuler(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(CameraParameterRulerHeight)
             .padding(horizontal = 8.dp)
     ) {
         Row(
@@ -249,7 +251,7 @@ private fun RulerScale(
     val yellow = Color(0xFFFFD700)
     val textMeasurer = rememberTextMeasurer()
 
-    Canvas(modifier = Modifier.fillMaxSize().padding(vertical = 8.dp)) {
+    Canvas(modifier = Modifier.fillMaxSize().padding(vertical = 4.dp)) {
         val width = size.width
         val height = size.height
         val stepCount = scaleValues.size

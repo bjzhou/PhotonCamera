@@ -7,6 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.view.OrientationEventListener
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlin.math.abs
@@ -28,6 +29,11 @@ object OrientationObserver {
     var rotationDegrees by mutableStateOf(0f)
         private set
 
+    // 连续的设备姿态传感器角，用于材质高光等不应按横竖屏档位跳变的视觉效果。
+    // 消费方负责将传感器的顺时针角度转换到自己的屏幕坐标系。
+    var continuousOrientationDegrees by mutableFloatStateOf(0f)
+        private set
+
     // 存储拍摄方向，包含反向竖屏，用于照片保存/处理
     var captureRotationDegrees by mutableStateOf(0f)
         private set
@@ -41,6 +47,8 @@ object OrientationObserver {
         if (isNearFlat) {
             return
         }
+
+        continuousOrientationDegrees = orientation.toFloat()
 
         // 右侧朝上（手机顺时针旋转90°）
         when (orientation) {
