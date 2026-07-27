@@ -183,7 +183,7 @@ internal object PreviewColorShader {
 
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
+                    color.g -= uTint * 0.05;
                     color.rgb = sanitizeColor(color.rgb);
 
                     if (abs(uSaturation - 1.0) > 0.001) {

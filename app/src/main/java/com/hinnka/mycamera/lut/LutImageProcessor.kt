@@ -3687,7 +3687,7 @@ class LutImageProcessor(context: Context? = null) {
                     // 4. 白平衡调整（色温 + 色调）
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
+                    color.g -= uTint * 0.05;
                     color.rgb = sanitizeColor(color.rgb);
 
                     // 5. 饱和度（基于 Luma 的快速算法）

@@ -552,7 +552,7 @@ private class VideoLutShaderProgram(
 
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
-                    color.g += uTint * 0.05;
+                    color.g -= uTint * 0.05;
                     color.rgb = sanitizeColor(color.rgb);
 
                     float gray = getLuma(color.rgb);
