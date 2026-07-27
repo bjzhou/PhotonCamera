@@ -436,7 +436,17 @@ internal class GlesRadianceVgnChromaPostprocessor(
         } else {
             bindArrayImage(1, destination, GLES31.GL_WRITE_ONLY)
         }
-        dispatchImage(finalProgram, "final camera RGB")
+        val nextAccessBarrier = if (fullSize) {
+            // The full-size texture leaves this component and is consumed as both an FBO
+            // attachment (CPU readback) and a sampler by the persistent RAW renderer. Declaring
+            // only image access visibility can leave stale texture-cache blocks on some drivers.
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+        } else {
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
+        }
+        dispatchImage(finalProgram, "final camera RGB", nextAccessBarrier)
     }
 
     private fun runIirRgb(
@@ -515,9 +525,13 @@ internal class GlesRadianceVgnChromaPostprocessor(
         GLES31.glUniform4fv(backend.uniformLocation(program, "uBDyn2"), 1, pass.bDyn2, 0)
     }
 
-    private fun dispatchImage(program: Int, label: String) {
+    private fun dispatchImage(
+        program: Int,
+        label: String,
+        barrierBits: Int = GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT,
+    ) {
         GLES31.glDispatchCompute(groupCount(imageWidth), groupCount(imageHeight), 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+        GLES31.glMemoryBarrier(barrierBits)
         backend.checkGlError("Radiance VGN chroma $label")
         backend.yieldToUiRenderer()
     }

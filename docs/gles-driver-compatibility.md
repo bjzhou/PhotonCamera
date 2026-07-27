@@ -213,6 +213,31 @@ void main() {
 - 保持 pass 间的颜色空间契约；线性 RGB 必须经过对应的输出转换后再显示或进入要求 sRGB
   输入的处理。
 
+## `imageStore` 结果交给 sampler 或 framebuffer
+
+### 问题
+
+compute shader 通过 `imageStore` 写完纹理后，`GL_SHADER_IMAGE_ACCESS_BARRIER_BIT` 只覆盖后续
+image load/store 访问。若同一纹理接下来改由 sampler 读取，或作为 framebuffer attachment
+回读，还必须声明对应的 consumer barrier。部分驱动在缺失 barrier 时仍会碰巧刷新全部缓存；
+另一些驱动会保留局部旧块，表现为偶发的轴对齐黑色矩形。
+
+### 错误做法
+
+- 写完 GPU 纹理后只调用 `glFlush`；提交命令不等于建立内存可见性。
+- 只保留 `GL_SHADER_IMAGE_ACCESS_BARRIER_BIT`，随后直接用 `sampler2D` / `usampler2D` 采样。
+- 因 CPU `glReadPixels` 已得到正确内容，就推断后续 texture fetch 也必然可见。
+
+### 正确做法
+
+- image load/store consumer 使用 `GL_SHADER_IMAGE_ACCESS_BARRIER_BIT`。
+- sampler consumer 使用 `GL_TEXTURE_FETCH_BARRIER_BIT`。
+- framebuffer attachment/readback consumer 使用 `GL_FRAMEBUFFER_BARRIER_BIT`。
+- 在生产者明确知道下一访问类型的所有权交接点一次性组合所需 bits；不能依赖后续无关命令
+  偶然刷新缓存。
+- GPU 纹理跨组件交接的真机测试必须实际执行 `imageStore -> barrier -> sampler fetch`，并覆盖
+  左上角、图像内部和右下角，不能只验证 program 编译或 CPU readback。
+
 ## IMG/PowerVR `imageSize` 研究线索
 
 ### 问题
