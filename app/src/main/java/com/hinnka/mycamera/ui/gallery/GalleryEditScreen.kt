@@ -165,6 +165,7 @@ fun GalleryEditScreen(
     val editPhotoRecipeParams by viewModel.editPhotoRecipeParams.collectAsState()
     val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.availableLuts
+    val lutNameOverlayState = rememberLutNameOverlayState()
     val showPaymentDialog = viewModel.showPaymentDialog
     val isPurchased by viewModel.isPurchased.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState()
@@ -648,10 +649,13 @@ fun GalleryEditScreen(
                             detectHorizontalDragGestures(
                                 onDragEnd = {
                                     if (kotlin.math.abs(totalDrag) > 100) {
-                                        if (totalDrag > 0) {
+                                        val selectedLut = if (totalDrag > 0) {
                                             viewModel.switchToPreviousLut()
                                         } else {
                                             viewModel.switchToNextLut()
+                                        }
+                                        selectedLut?.let {
+                                            lutNameOverlayState.show(it.getName())
                                         }
                                     }
                                     totalDrag = 0f
@@ -785,6 +789,11 @@ fun GalleryEditScreen(
                         modifier = Modifier.size(48.dp)
                     )
                 }
+
+                LutNameOverlay(
+                    state = lutNameOverlayState,
+                    modifier = Modifier.align(Alignment.Center),
+                )
             }
 
             AnimatedVisibility(

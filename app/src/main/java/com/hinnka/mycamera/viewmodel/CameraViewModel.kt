@@ -3565,23 +3565,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 切换到下一个滤镜
      */
-    fun switchToNextLut() {
-        if (availableLutList.isEmpty()) return
+    fun switchToNextLut(): LutInfo? {
+        if (availableLutList.isEmpty()) return null
         val currentIndex = availableLutList.indexOfFirst { it.id == currentLutId.value }
         val nextIndex = if (currentIndex == -1 || currentIndex == availableLutList.size - 1) 0 else currentIndex + 1
-        setLut(availableLutList[nextIndex].id)
+        val nextLut = availableLutList[nextIndex]
+        setLut(nextLut.id)
         vibrationHelper.vibrate()
+        return nextLut
     }
 
     /**
      * 切换到上一个滤镜
      */
-    fun switchToPreviousLut() {
-        if (availableLutList.isEmpty()) return
+    fun switchToPreviousLut(): LutInfo? {
+        if (availableLutList.isEmpty()) return null
         val currentIndex = availableLutList.indexOfFirst { it.id == currentLutId.value }
         val prevIndex = if (currentIndex <= 0) availableLutList.size - 1 else currentIndex - 1
-        setLut(availableLutList[prevIndex].id)
+        val previousLut = availableLutList[prevIndex]
+        setLut(previousLut.id)
         vibrationHelper.vibrate()
+        return previousLut
     }
 
     fun updateLut() {

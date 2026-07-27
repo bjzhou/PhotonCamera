@@ -211,6 +211,7 @@ fun CameraScreen(
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
+    val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
     val currentEffectParams by viewModel.currentEffectParams.collectAsState()
@@ -985,10 +986,13 @@ fun CameraScreen(
                                         } else {
                                             // onDragEnd logic
                                             if (abs(totalDrag) > 100) {
-                                                if (totalDrag > 0) {
+                                                val selectedLut = if (totalDrag > 0) {
                                                     viewModel.switchToPreviousLut()
                                                 } else {
                                                     viewModel.switchToNextLut()
+                                                }
+                                                selectedLut?.let {
+                                                    lutNameOverlayState.show(it.getName())
                                                 }
                                             }
                                             totalDrag = 0f
@@ -1219,6 +1223,11 @@ fun CameraScreen(
                         modifier = Modifier.fillMaxSize(),
                         radius = if (isVideoMode) 0.dp else 4.dp,
                         color = Color.Black
+                    )
+
+                    LutNameOverlay(
+                        state = lutNameOverlayState,
+                        modifier = Modifier.align(Alignment.Center),
                     )
                 }
                 if (isPhotoStyleMode) {

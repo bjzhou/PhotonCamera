@@ -2155,20 +2155,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun switchToNextLut() {
-        if (availableLuts.isEmpty()) return
+    fun switchToNextLut(): LutInfo? {
+        if (availableLuts.isEmpty()) return null
         val currentLut = editLutId.value
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
         val nextIndex = (currentIndex + 1) % availableLuts.size
-        setEditLut(availableLuts[nextIndex].id)
+        val nextLut = availableLuts[nextIndex]
+        setEditLut(nextLut.id)
+        return nextLut
     }
 
-    fun switchToPreviousLut() {
-        if (availableLuts.isEmpty()) return
+    fun switchToPreviousLut(): LutInfo? {
+        if (availableLuts.isEmpty()) return null
         val currentLut = editLutId.value
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
         val prevIndex = if (currentIndex <= 0) availableLuts.size - 1 else currentIndex - 1
-        setEditLut(availableLuts[prevIndex].id)
+        val previousLut = availableLuts[prevIndex]
+        setEditLut(previousLut.id)
+        return previousLut
     }
 
 
