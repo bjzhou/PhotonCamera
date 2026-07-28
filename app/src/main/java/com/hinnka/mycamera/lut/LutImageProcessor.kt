@@ -10,9 +10,11 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
-import com.hinnka.mycamera.model.ColorRecipeParams
+import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.lut.ChromaDenoiseShaders
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.raw.DenoiseProfileNlmConfig
 import com.hinnka.mycamera.raw.DenoiseProfileShaders
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
@@ -24,8 +26,8 @@ import com.hinnka.mycamera.raw.RawShaders
 import com.hinnka.mycamera.raw.RawSrgbPassShaders
 import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.raw.RawToneMappingParameters
-import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.LargeDirectBuffer
+import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -36,7 +38,6 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.Executors
-import androidx.core.graphics.createBitmap
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
@@ -313,6 +314,9 @@ class LutImageProcessor(context: Context? = null) {
             // 激活上下文
             if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
                 PLog.e(TAG, "Unable to make EGL current")
+                return false
+            }
+            if (!logAndValidateComputeCapabilities()) {
                 return false
             }
 
@@ -2585,7 +2589,11 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     private fun dispatchBitmapDenoiseImage(width: Int, height: Int, tag: String) {
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(
+            GlesComputeWorkGroup.imageGroupCount(width),
+            GlesComputeWorkGroup.imageGroupCount(height),
+            1,
+        )
         GLES31.glMemoryBarrier(
             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
                 GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
@@ -3163,6 +3171,7 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     private fun compileComputeProgram(source: String, name: String): Int {
+        GlesComputeWorkGroup.requireBaselineCompatible(source, name)
         val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)
         GLES31.glShaderSource(shader, source)
         GLES31.glCompileShader(shader)
@@ -3186,6 +3195,57 @@ class LutImageProcessor(context: Context? = null) {
         }
         GLES31.glDeleteShader(shader)
         return program
+    }
+
+    private fun logAndValidateComputeCapabilities(): Boolean {
+        val vendor = GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()
+        val renderer = GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()
+        val version = GLES30.glGetString(GLES30.GL_VERSION).orEmpty()
+        val shadingLanguageVersion =
+            GLES30.glGetString(GLES30.GL_SHADING_LANGUAGE_VERSION).orEmpty()
+        PLog.i(
+            TAG,
+            "GL compute device: vendor=$vendor renderer=$renderer version=$version " +
+                "glsl=$shadingLanguageVersion",
+        )
+        if (!version.contains("OpenGL ES 3.1") && !version.contains("OpenGL ES 3.2")) {
+            PLog.e(TAG, "Bitmap denoise requires OpenGL ES 3.1+, got: $version")
+            return false
+        }
+
+        val value = IntArray(1)
+        GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, value, 0)
+        val maxInvocations = value[0]
+        GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, value, 0)
+        val maxSharedMemory = value[0]
+        val maxSize = IntArray(3)
+        for (axis in maxSize.indices) {
+            GLES30.glGetIntegeri_v(
+                GLES31.GL_MAX_COMPUTE_WORK_GROUP_SIZE,
+                axis,
+                value,
+                0,
+            )
+            maxSize[axis] = value[0]
+        }
+        PLog.i(
+            TAG,
+            "GL compute limits: workGroupInvocations=$maxInvocations " +
+                "workGroupSize=${maxSize.contentToString()} sharedMemory=$maxSharedMemory",
+        )
+        val supported =
+            maxInvocations >= GlesComputeWorkGroup.BASELINE_MAX_INVOCATIONS &&
+                maxSize[0] >= GlesComputeWorkGroup.LINEAR_SIZE &&
+                maxSize[1] >= GlesComputeWorkGroup.IMAGE_TILE_SIZE &&
+                maxSize[2] >= 1
+        if (!supported) {
+            PLog.e(
+                TAG,
+                "Bitmap denoise requires the OpenGL ES 3.1 compute baseline; " +
+                    "got invocations=$maxInvocations size=${maxSize.contentToString()}",
+            )
+        }
+        return supported
     }
 
     private fun initBuffers() {

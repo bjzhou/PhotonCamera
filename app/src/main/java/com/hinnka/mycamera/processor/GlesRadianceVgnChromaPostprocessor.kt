@@ -647,7 +647,8 @@ internal class GlesRadianceVgnChromaPostprocessor(
         backend.checkGlError("Radiance VGN chroma readback framebuffer")
     }
 
-    private fun groupCount(value: Int): Int = (value + 15) / 16
+    private fun groupCount(value: Int): Int =
+        GlesComputeWorkGroup.imageGroupCount(value)
 }
 
 internal data class RadianceVgnChromaIirCoefficients(
@@ -755,7 +756,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uCameraRgb;
         layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uYccd;
@@ -844,7 +845,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
         layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
@@ -879,7 +880,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
         layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;
@@ -938,7 +939,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uYccd;
         layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uSmooth;
@@ -1042,7 +1043,7 @@ internal object GlesRadianceVgnChromaShaders {
         #version 310 es
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uSmooth;
         layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uDirectionalSource;
@@ -1243,7 +1244,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uOriginal;
         layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uSmooth;
@@ -1306,7 +1307,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uOriginal;
         layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uSmooth;
@@ -1345,7 +1346,7 @@ internal object GlesRadianceVgnChromaShaders {
         precision highp float;
         precision highp int;
         precision highp uimage2D;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uInput;
         layout(rgba16ui, binding = 1) writeonly uniform highp uimage2D uOutput;

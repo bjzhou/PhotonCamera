@@ -5,7 +5,7 @@ internal object DngHdrProfileGainTableGpuShaders {
     val CELL_STATS = """
         #version 310 es
 
-        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        layout(local_size_x = 16, local_size_y = 8, local_size_z = 1) in;
 
         precision highp float;
         precision highp int;
@@ -50,6 +50,8 @@ internal object DngHdrProfileGainTableGpuShaders {
             float warpParameters[];
         };
 
+        const uint CELL_SAMPLE_COUNT = 256u;
+        const uint CELL_LANE_COUNT = 128u;
         shared float inputSamples[256];
 
         ${DcpHueSatMapGl.SHADER_FUNCTIONS}
@@ -236,20 +238,26 @@ internal object DngHdrProfileGainTableGpuShaders {
             return clamp(sourcePixel, vec2(0.0), vec2(uImageSize - ivec2(1)));
         }
 
-        void sortSamples(uint localIndex) {
+        void sortSamples(uint laneIndex) {
             for (uint sequenceSize = 2u; sequenceSize <= 256u; sequenceSize <<= 1u) {
                 for (uint compareDistance = sequenceSize >> 1u;
                     compareDistance > 0u;
                     compareDistance >>= 1u
                 ) {
-                    uint partner = localIndex ^ compareDistance;
-                    if (partner > localIndex) {
-                        float first = inputSamples[localIndex];
-                        float second = inputSamples[partner];
-                        bool ascending = (localIndex & sequenceSize) == 0u;
-                        if ((first > second) == ascending) {
-                            inputSamples[localIndex] = second;
-                            inputSamples[partner] = first;
+                    for (
+                        uint localIndex = laneIndex;
+                        localIndex < CELL_SAMPLE_COUNT;
+                        localIndex += CELL_LANE_COUNT
+                    ) {
+                        uint partner = localIndex ^ compareDistance;
+                        if (partner > localIndex) {
+                            float first = inputSamples[localIndex];
+                            float second = inputSamples[partner];
+                            bool ascending = (localIndex & sequenceSize) == 0u;
+                            if ((first > second) == ascending) {
+                                inputSamples[localIndex] = second;
+                                inputSamples[partner] = first;
+                            }
                         }
                     }
                     barrier();
@@ -277,23 +285,29 @@ internal object DngHdrProfileGainTableGpuShaders {
             endY = min(endY & ~1, uStatsBounds.w);
             bool validCell = endX - startX >= 2 && endY - startY >= 2;
 
-            float inputValue = 0.0;
-            if (validCell) {
-                int localX = int(localIndex & 15u);
-                int localY = int(localIndex >> 4u);
-                int cellWidth = max(endX - startX, 2);
-                int cellHeight = max(endY - startY, 2);
-                int x = startX + ((localX * 2 + 1) * cellWidth) / 32;
-                int y = startY + ((localY * 2 + 1) * cellHeight) / 32;
-                vec2 sourcePixel = warpDestinationToSource(vec2(x, y));
-                ivec2 sourceCoord = ivec2(round(sourcePixel)) & ~ivec2(1);
-                sourceCoord = clamp(sourceCoord, ivec2(0), uImageSize - ivec2(2));
-                inputValue = sampleSceneInput(sourceCoord);
+            for (
+                uint sampleIndex = localIndex;
+                sampleIndex < CELL_SAMPLE_COUNT;
+                sampleIndex += CELL_LANE_COUNT
+            ) {
+                float inputValue = 0.0;
+                if (validCell) {
+                    int localX = int(sampleIndex & 15u);
+                    int localY = int(sampleIndex >> 4u);
+                    int cellWidth = max(endX - startX, 2);
+                    int cellHeight = max(endY - startY, 2);
+                    int x = startX + ((localX * 2 + 1) * cellWidth) / 32;
+                    int y = startY + ((localY * 2 + 1) * cellHeight) / 32;
+                    vec2 sourcePixel = warpDestinationToSource(vec2(x, y));
+                    ivec2 sourceCoord = ivec2(round(sourcePixel)) & ~ivec2(1);
+                    sourceCoord = clamp(sourceCoord, ivec2(0), uImageSize - ivec2(2));
+                    inputValue = sampleSceneInput(sourceCoord);
+                }
+                if (uWriteCellSamples != 0) {
+                    cellSamples[cellIndex * 256 + int(sampleIndex)] = inputValue;
+                }
+                inputSamples[sampleIndex] = inputValue;
             }
-            if (uWriteCellSamples != 0) {
-                cellSamples[cellIndex * 256 + int(localIndex)] = inputValue;
-            }
-            inputSamples[localIndex] = inputValue;
             barrier();
 
             sortSamples(localIndex);

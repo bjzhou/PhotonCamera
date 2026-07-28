@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+
 /**
  * OpenGL ES 3.1 compute port of darktable's denoiseprofile NLM path.
  *
@@ -15,8 +17,8 @@ object DenoiseProfileShaders {
     // darktable's neutral bias setting makes finish_v2 the exact inverse when NLM leaves a
     // transformed sample unchanged. This is required to keep sensor black and channel ratios.
     const val BLACK_PRESERVING_BIAS = 0.0f
-    const val IMAGE_LOCAL_X = 16
-    const val IMAGE_LOCAL_Y = 16
+    const val IMAGE_LOCAL_X = GlesComputeWorkGroup.IMAGE_TILE_SIZE
+    const val IMAGE_LOCAL_Y = GlesComputeWorkGroup.IMAGE_TILE_SIZE
     private const val FUSED_TILE_X = IMAGE_LOCAL_X + SEARCH_RADIUS + 2 * PATCH_RADIUS
     private const val FUSED_TILE_Y = IMAGE_LOCAL_Y + SEARCH_RADIUS + 2 * PATCH_RADIUS
 

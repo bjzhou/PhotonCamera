@@ -62,7 +62,7 @@ object QuadBayerShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout (binding = 0) uniform highp usampler2D uRawTexture;
         layout (binding = 1) uniform highp sampler2D uLensShadingMap;
@@ -220,7 +220,7 @@ object QuadBayerShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf  { float cfa[]; };
         layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
@@ -309,7 +309,7 @@ object QuadBayerShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf  { float cfa[]; };
         layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
@@ -378,7 +378,7 @@ object QuadBayerShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
         layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
@@ -435,7 +435,7 @@ object QuadBayerShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 2) buffer RGB1_Buf { float rgb1[]; };
         layout(std430, binding = 4) buffer TMP_R_Buf { float tmpR[]; };

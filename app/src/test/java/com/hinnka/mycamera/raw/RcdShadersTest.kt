@@ -1,10 +1,26 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RcdShadersTest {
+    @Test
+    fun sharedGradientTileFitsTheBaselineAndKeepsItsFourPixelHalo() {
+        val shader = RcdShaders.STEP_1
+
+        assertEquals(
+            GlesComputeWorkGroup.Size(x = 8, y = 8, z = 1),
+            GlesComputeWorkGroup.declaredSize(shader),
+        )
+        assertTrue(shader.contains("shared float sh_buffer[256];"))
+        assertTrue(shader.contains("int stride = 16;"))
+        assertTrue(shader.contains("int buf_offset = (ylid + 4) * stride + (xlid + 4);"))
+        GlesComputeWorkGroup.requireBaselineCompatible(shader, "RCD_STEP_1")
+    }
+
     @Test
     fun ordinaryBayerBorderUsesPpgWithParityPreservingMirroring() {
         val shader = RcdShaders.WRITE_OUTPUT

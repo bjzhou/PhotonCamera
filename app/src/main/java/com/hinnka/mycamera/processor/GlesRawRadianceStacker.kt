@@ -987,6 +987,34 @@ internal class GlesRawRadianceStacker(
         if (!version.contains("OpenGL ES 3.1") && !version.contains("OpenGL ES 3.2")) {
             throw IllegalStateException("GLES RAW stack requires OpenGL ES 3.1+, got: $version")
         }
+        val value = IntArray(1)
+        GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, value, 0)
+        val maxInvocations = value[0]
+        val maxSize = IntArray(3)
+        for (axis in maxSize.indices) {
+            GLES30.glGetIntegeri_v(
+                GLES31.GL_MAX_COMPUTE_WORK_GROUP_SIZE,
+                axis,
+                value,
+                0,
+            )
+            maxSize[axis] = value[0]
+        }
+        PLog.i(
+            TAG,
+            "GL compute device: vendor=${GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()} " +
+                "renderer=${GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()} version=$version " +
+                "workGroupInvocations=$maxInvocations workGroupSize=${maxSize.contentToString()}",
+        )
+        check(
+            maxInvocations >= GlesComputeWorkGroup.BASELINE_MAX_INVOCATIONS &&
+                maxSize[0] >= GlesComputeWorkGroup.LINEAR_SIZE &&
+                maxSize[1] >= GlesComputeWorkGroup.IMAGE_TILE_SIZE &&
+                maxSize[2] >= 1
+        ) {
+            "GLES RAW stack requires the OpenGL ES 3.1 compute baseline; " +
+                "got invocations=$maxInvocations size=${maxSize.contentToString()}"
+        }
     }
 
     private fun initPrograms() {
@@ -7883,6 +7911,7 @@ internal class GlesRawRadianceStacker(
     }
 
     private fun linkComputeProgram(source: String, name: String): Int {
+        GlesComputeWorkGroup.requireBaselineCompatible(source, name)
         val shader = compileShader(GLES31.GL_COMPUTE_SHADER, source, "$name compute")
         val program = GLES31.glCreateProgram()
         GLES31.glAttachShader(program, shader)
@@ -7940,10 +7969,11 @@ internal class GlesRawRadianceStacker(
         GLES30.glDisable(GLES30.GL_CULL_FACE)
     }
 
-    private fun groupCount(value: Int): Int = (value + LOCAL_SIZE - 1) / LOCAL_SIZE
+    private fun groupCount(value: Int): Int =
+        GlesComputeWorkGroup.imageGroupCount(value)
 
     private fun groupCount(value: Int, groupSize: Int): Int =
-        (value + groupSize - 1) / groupSize
+        GlesComputeWorkGroup.groupCount(value, groupSize)
 
     private fun transposeMatrix3x3(matrix: FloatArray): FloatArray {
         return floatArrayOf(
@@ -7998,7 +8028,7 @@ internal class GlesRawRadianceStacker(
         private const val TAG = "GlesRawRadianceStacker"
 
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
-        private const val LOCAL_SIZE = 16
+        private const val LOCAL_SIZE = GlesComputeWorkGroup.IMAGE_TILE_SIZE
         private const val RAW_BYTES_PER_PIXEL = 2
         private const val PREWARM_TRACKING_SCALE = 4
         private const val PREWARM_TRACKING_WIDTH = 64
@@ -8182,7 +8212,7 @@ internal class GlesRawRadianceStacker(
         private val RAW_PROXY_COMPUTE_SHADER = """
             #version 310 es
             $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform highp usampler2D uRaw;
             layout(rgba16f, binding = 1) writeonly uniform highp image2D uProxy;
             uniform ivec2 uProxySize;
@@ -8477,7 +8507,7 @@ internal class GlesRawRadianceStacker(
         private val RAW_TRACKING_PROXY_COMPUTE_SHADER = """
             #version 310 es
             $RAW_COMMON
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform highp usampler2D uRaw;
             layout(rgba16f, binding = 1) writeonly uniform highp image2D uTrackingProxy;
             uniform ivec2 uPlaneSize;
@@ -8723,7 +8753,7 @@ internal class GlesRawRadianceStacker(
             #version 310 es
             precision highp float;
             precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform sampler2D uFlow;
             uniform ivec2 uGridSize;
             uniform int uSampleOffset;
@@ -8939,7 +8969,7 @@ internal class GlesRawRadianceStacker(
             #version 310 es
             precision highp float;
             precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform sampler2D uReference;
             uniform sampler2D uCurrent;
             uniform sampler2D uInputFlow;
@@ -9098,7 +9128,7 @@ internal class GlesRawRadianceStacker(
             #version 310 es
             precision highp float;
             precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform sampler2D uProxy;
             layout(rgba16f, binding = 1) writeonly uniform highp image2D uKernel;
             uniform ivec2 uProxySize;
@@ -9632,7 +9662,7 @@ internal class GlesRawRadianceStacker(
             #version 310 es
             precision highp float;
             precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform sampler2D uFlowGrid;
             uniform sampler2D uRobustness;
             uniform sampler2D uTileMask;
@@ -9738,7 +9768,7 @@ internal class GlesRawRadianceStacker(
             #version 310 es
             precision highp float;
             precision highp int;
-            layout(local_size_x = 16, local_size_y = 16) in;
+            layout(local_size_x = 8, local_size_y = 8) in;
             uniform sampler2D uFlowGrid;
             uniform sampler2D uRobustness;
             uniform sampler2D uTileMask;

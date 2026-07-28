@@ -7,6 +7,57 @@
 本文，并在代表设备上运行实际的 compile、bind、dispatch、readback 和后续采样测试。不能仅凭
 GLES 版本号、扩展列表或桌面 GLSL 编译结果判断移动端可用性。
 
+## Compute work-group 必须满足 GLES 3.1 最低保证
+
+已确认设备：Xiaomi M2101K7BNY，Android 13。
+
+### 问题
+
+OpenGL ES 3.1 只保证：
+
+- `GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS >= 128`；
+- `GL_MAX_COMPUTE_WORK_GROUP_SIZE` 的 X/Y/Z 轴分别至少为 `128/128/64`。
+
+不能假设所有 GLES 3.1 设备都允许 256 个 invocation。超限可能在 shader 编译或 program
+链接阶段以不同形式失败：
+
+```text
+'local_size_x' qualifier value (256) exceeds the maximum supported size (128)
+Max number of total work group invocations exceeded.
+```
+
+### 错误做法
+
+- 图像 compute shader 固定使用 `16x16`。
+- 一维 compute shader 固定使用 `256x1`。
+- 只根据开发设备或 GLES 版本号判断工作组可用。
+- 只修改 shader 的 `local_size`，但仍按旧尺寸计算 `glDispatchCompute`。
+- 对依赖 `gl_LocalInvocationID`、shared memory 或 barrier 的算法机械缩小工作组。
+- 在关键 shader 编译完成后才查询能力；失败设备将无法留下 renderer 和限制信息。
+
+### 正确做法
+
+- 通用二维图像 pass 使用 `8x8`，一维 pass 和归约使用 `128x1`。
+- shader 编译入口统一验证每轴尺寸及三轴乘积不超过 GLES 3.1 最低保证。
+- dispatch group count 与 shader 工作组尺寸共用
+  `GlesComputeWorkGroup` 中的常量和整除上取整逻辑。
+- EGL context `makeCurrent` 后、编译任何 shader 前，记录 vendor、renderer、GL version、
+  `GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS` 和三轴
+  `GL_MAX_COMPUTE_WORK_GROUP_SIZE`。
+- 修改包含 shared memory 或 barrier 的 shader 时，同步检查共享数组几何、lane 索引、
+  数据装载次数和每次 barrier 前后的完整参与关系。
+
+`DNG_PGTM_CELL_STATS` 需要对每个 cell 的 256 个样本进行排序。兼容路径保留 256 项共享数组，
+由 128 个 lane 各装载两个样本，并在 bitonic sort 的每个阶段各处理两个 comparator；不能通过
+减少样本数量或只运行半个排序网络来规避工作组限制。
+
+### 验证
+
+- 静态确认所有 compute shader 的 invocation 乘积不超过 128。
+- 覆盖不能整除工作组尺寸的宽高，确认 dispatch 不遗漏边缘。
+- 真机执行 shader compile/link、dispatch、barrier 和 readback。
+- 对共享算法比较修改前后的输出，包括 PGTM cell 分位数、NLM、RCD、Quad Bayer 和 Radiance。
+
 ## Graphics program 的 GLSL ES 版本必须一致
 
 已确认设备会严格拒绝使用不同 GLSL ES 版本的 vertex/fragment shader 链接：

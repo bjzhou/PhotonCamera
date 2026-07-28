@@ -58,7 +58,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val prepareSource = """
         #version 310 es
-        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -92,7 +92,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val normalizeLog = """
         #version 310 es
-        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -130,7 +130,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val clearUint = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp int;
 
         layout(std430, binding = 0) writeonly buffer Destination {
@@ -147,7 +147,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val downsample = """
         #version 310 es
-        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -195,7 +195,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val remap = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -240,7 +240,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val accumulateLaplacian = """
         #version 310 es
-        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -306,7 +306,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val copyRange = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -331,7 +331,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val reconstruct = """
         #version 310 es
-        layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -387,7 +387,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val logHistogram = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -443,7 +443,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val finalizeSdrTarget = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -547,7 +547,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val bguBlurZ = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -588,7 +588,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val bguBlurY = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -632,7 +632,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val bguBlurX = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -676,7 +676,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val bguSolve = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 
@@ -707,7 +707,7 @@ internal object DngPhotonLocalToneMapGpuShaders {
 
     private val gainCurves = """
         #version 310 es
-        layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
         precision highp float;
         precision highp int;
 

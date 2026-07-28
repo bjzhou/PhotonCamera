@@ -24,6 +24,7 @@ import com.hinnka.mycamera.lut.ShadowsHighlightsShader
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
+import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.GlesRawRadianceStacker
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
@@ -3884,7 +3885,7 @@ class RawDemosaicProcessor {
                 uniformLocation(activeProgram, "uValue"),
                 value,
             )
-            dispatch1d(count, 256)
+            dispatch1d(count, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
         }
 
@@ -3910,7 +3911,7 @@ class RawDemosaicProcessor {
             bindStorage(2, buffers[sourceRangeBuffer])
             uniform2i(activeProgram, "uGridSize", gridWidth, gridHeight)
             uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
-            dispatch2d(sampleWidth, sampleHeight, 16, 16)
+            dispatch2d(sampleWidth, sampleHeight, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
             storageBarrier()
 
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.NORMALIZE_LOG)
@@ -3921,7 +3922,7 @@ class RawDemosaicProcessor {
             uniform2i(activeProgram, "uSampleSize", sampleWidth, sampleHeight)
             uniform1i(activeProgram, "uOutputOffset", pyramid.levels.first().offset)
             uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch2d(sampleWidth, sampleHeight, 16, 16)
+            dispatch2d(sampleWidth, sampleHeight, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
             storageBarrier()
 
             val sourceRange = readUintStorageBuffer(
@@ -3978,7 +3979,7 @@ class RawDemosaicProcessor {
             uniform1i(activeProgram, "uSourceOffset", pyramid.levels.first().offset)
             uniform1i(activeProgram, "uBinCount", histogramBinCount)
             uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-            dispatch1d(sampleCount, 256)
+            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             val sourceHistogram = readUintStorageBuffer(
@@ -4032,8 +4033,8 @@ class RawDemosaicProcessor {
                 dispatch2d(
                     destinationLevel.width,
                     destinationLevel.height,
-                    16,
-                    16,
+                    GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                    GlesComputeWorkGroup.IMAGE_TILE_SIZE,
                 )
                 storageBarrier()
             }
@@ -4071,7 +4072,7 @@ class RawDemosaicProcessor {
                 )
                 uniform1f(activeProgram, "uEdgeSlope", edgeSlope)
                 uniform1f(activeProgram, "uExposureGain", preToneMapExposureGain)
-                dispatch1d(sampleCount, 256)
+                dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
                 storageBarrier()
 
                 activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.DOWNSAMPLE)
@@ -4102,8 +4103,8 @@ class RawDemosaicProcessor {
                     dispatch2d(
                         destinationLevel.width,
                         destinationLevel.height,
-                        16,
-                        16,
+                        GlesComputeWorkGroup.IMAGE_TILE_SIZE,
+                        GlesComputeWorkGroup.IMAGE_TILE_SIZE,
                     )
                     storageBarrier()
                 }
@@ -4136,7 +4137,7 @@ class RawDemosaicProcessor {
                     uniform1i(activeProgram, "uOutputOffset", currentLevel.offset)
                     uniform1f(activeProgram, "uReference", reference)
                     uniform1f(activeProgram, "uIntensityStep", intensityStep)
-                    dispatch2d(currentLevel.width, currentLevel.height, 16, 16)
+                    dispatch2d(currentLevel.width, currentLevel.height, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
                 }
                 storageBarrier()
             }
@@ -4149,7 +4150,7 @@ class RawDemosaicProcessor {
             uniform1i(activeProgram, "uCount", coarsestLevel.size)
             uniform1i(activeProgram, "uSourceOffset", coarsestLevel.offset)
             uniform1i(activeProgram, "uDestinationOffset", coarsestLevel.offset)
-            dispatch1d(coarsestLevel.size, 256)
+            dispatch1d(coarsestLevel.size, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.RECONSTRUCT)
@@ -4174,7 +4175,7 @@ class RawDemosaicProcessor {
                 uniform1i(activeProgram, "uLaplacianOffset", currentLevel.offset)
                 uniform1i(activeProgram, "uCurrentOffset", currentLevel.offset)
                 uniform1i(activeProgram, "uNextOffset", nextLevel.offset)
-                dispatch2d(currentLevel.width, currentLevel.height, 16, 16)
+                dispatch2d(currentLevel.width, currentLevel.height, GlesComputeWorkGroup.IMAGE_TILE_SIZE, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
                 storageBarrier()
             }
 
@@ -4204,7 +4205,7 @@ class RawDemosaicProcessor {
                 "uPreToneMapExposureGain",
                 preToneMapExposureGain,
             )
-            dispatch1d(sampleCount, 256)
+            dispatch1d(sampleCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             allocate(buffers[bguBufferA], extendedBguFloatCount * Float.SIZE_BYTES)
@@ -4248,7 +4249,7 @@ class RawDemosaicProcessor {
             )
             uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
             uniform1i(activeProgram, "uElementCount", extendedBguFloatCount)
-            dispatch1d(extendedBguFloatCount, 256)
+            dispatch1d(extendedBguFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_Y)
@@ -4264,7 +4265,7 @@ class RawDemosaicProcessor {
             uniform1i(activeProgram, "uOutputHeight", gridHeight)
             uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
             uniform1i(activeProgram, "uElementCount", yBlurFloatCount)
-            dispatch1d(yBlurFloatCount, 256)
+            dispatch1d(yBlurFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_BLUR_X)
@@ -4275,7 +4276,7 @@ class RawDemosaicProcessor {
             uniform1i(activeProgram, "uInputWidth", extendedGridWidth)
             uniform1i(activeProgram, "uRangePlaneCount", rangePlaneCount)
             uniform1i(activeProgram, "uElementCount", fittedBguFloatCount)
-            dispatch1d(fittedBguFloatCount, 256)
+            dispatch1d(fittedBguFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             activeProgram = program(DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE)
@@ -4293,7 +4294,7 @@ class RawDemosaicProcessor {
                 "uIdentitySlope",
                 1f,
             )
-            dispatch1d(coefficientCount, 256)
+            dispatch1d(coefficientCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             allocate(
@@ -4337,7 +4338,7 @@ class RawDemosaicProcessor {
                 "uDiagnosticFeather",
                 plan.diagnosticBand?.feather ?: 0f,
             )
-            dispatch1d(gainFloatCount, 256)
+            dispatch1d(gainFloatCount, GlesComputeWorkGroup.LINEAR_SIZE)
             storageBarrier()
 
             checkGlError("generatePhotonProfileGainCurvesOnGpu")
@@ -4847,6 +4848,10 @@ class RawDemosaicProcessor {
                 return false
             }
 
+            if (!logGlResourceLimits()) {
+                return false
+            }
+
             // 初始化着色器和缓冲区
             initShaderProgram()
             if (sharpenProgram == 0 || passthroughProgram == 0 ||
@@ -4868,13 +4873,6 @@ class RawDemosaicProcessor {
 
             // 创建静默遮挡图
             dummyShadingTextureId = createDummyShadingTexture()
-
-            // Query hardware texture size limit
-            val maxTexSizeArr = IntArray(1)
-            GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTexSizeArr, 0)
-            maxTextureSize = maxTexSizeArr[0]
-            PLog.d(TAG, "GL_MAX_TEXTURE_SIZE = $maxTextureSize")
-            logGlResourceLimits()
 
             isInitialized = true
             PLog.d(TAG, "RawDemosaicProcessor initialized, took=${System.currentTimeMillis() - initializeStart}ms")
@@ -5243,7 +5241,7 @@ class RawDemosaicProcessor {
         precision highp image2D;
         precision highp uimage2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(rgba16ui, binding = 0) readonly uniform highp uimage2D uLinearRawInput;
         layout(rgba16f, binding = 1) writeonly uniform highp image2D uLinearRawOutput;
         uniform int uOutputY;
@@ -5273,7 +5271,7 @@ class RawDemosaicProcessor {
         precision highp usampler2D;
         precision highp uimage2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         uniform highp usampler2D uLinearRawRgbInput;
         layout(rgba16ui, binding = 0) writeonly uniform highp uimage2D uLinearRawRgbaOutput;
         uniform int uSourceY;
@@ -5614,6 +5612,7 @@ class RawDemosaicProcessor {
     }
 
     private fun compileComputeProgram(source: String, name: String): Int {
+        GlesComputeWorkGroup.requireBaselineCompatible(source, name)
         val compileStart = System.currentTimeMillis()
         val shader = GLES31.glCreateShader(GLES31.GL_COMPUTE_SHADER)
         GLES31.glShaderSource(shader, source)
@@ -6379,7 +6378,7 @@ class RawDemosaicProcessor {
     }
 
     private fun dispatchDenoiseImage(width: Int, height: Int, tag: String) {
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
         GLES31.glMemoryBarrier(
             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
                     GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
@@ -6872,7 +6871,7 @@ class RawDemosaicProcessor {
             GLES31.GL_WRITE_ONLY,
             GLES31.GL_RGBA16UI,
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (rowCount + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(rowCount), 1)
     }
 
     private fun dispatchLinearRawUint16ToFloat(
@@ -6909,7 +6908,7 @@ class RawDemosaicProcessor {
             GLES31.GL_WRITE_ONLY,
             GLES31.GL_RGBA16F
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (rowCount + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(rowCount), 1)
     }
 
     private fun finishLinearRawUint16ToFloat() {
@@ -7364,12 +7363,12 @@ class RawDemosaicProcessor {
         val workWidth = packedWidth * 4
         val workHeight = ((roiBottom + VGN_WORK_HALO + 1) / 2) * 2
         val halfHeight = workHeight / 2
-        val groupsPackedX = (packedWidth + 15) / 16
-        val groupsWorkX = (workWidth + 15) / 16
-        val groupsWorkY = (workHeight + 15) / 16
-        val groupsHalfHeight = (halfHeight + 15) / 16
-        val groupsOutputX = (width + 15) / 16
-        val groupsOutputY = (height + 15) / 16
+        val groupsPackedX = GlesComputeWorkGroup.imageGroupCount(packedWidth)
+        val groupsWorkX = GlesComputeWorkGroup.imageGroupCount(workWidth)
+        val groupsWorkY = GlesComputeWorkGroup.imageGroupCount(workHeight)
+        val groupsHalfHeight = GlesComputeWorkGroup.imageGroupCount(halfHeight)
+        val groupsOutputX = GlesComputeWorkGroup.imageGroupCount(width)
+        val groupsOutputY = GlesComputeWorkGroup.imageGroupCount(height)
         val calculationGains = demosaicCalculationWbGains(metadata)
         val blackLevel4 = FloatArray(4) { index ->
             metadata.blackLevel.getOrElse(index) { metadata.blackLevel.firstOrNull() ?: 0f }
@@ -7921,33 +7920,33 @@ class RawDemosaicProcessor {
                     "white=${metadata.whiteLevel} metadataWb=${metadataWbGains.contentToString()} " +
                     "calculationWb=${calculationWbGains.contentToString()} lsc=$lscSize"
             )
-            GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Populate")
 
             GLES31.glUseProgram(rcdStep1Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep1Program, "uImageSize"), width, height)
-            GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 1")
 
             GLES31.glUseProgram(rcdStep2Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep2Program, "uImageSize"), width, height)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep2Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute((width / 2 + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 2")
 
             GLES31.glUseProgram(rcdStep3Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep3Program, "uImageSize"), width, height)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep3Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute((width / 2 + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 3")
 
             GLES31.glUseProgram(rcdStep40Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep40Program, "uImageSize"), width, height)
-            GLES31.glDispatchCompute((width / 2 + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 4_0")
 
@@ -7955,7 +7954,7 @@ class RawDemosaicProcessor {
             GLES31.glUseProgram(rcdStep41Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep41Program, "uImageSize"), width, height)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep41Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute((width / 2 + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 4_1")
 
@@ -7963,7 +7962,7 @@ class RawDemosaicProcessor {
             GLES31.glUseProgram(rcdStep42Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep42Program, "uImageSize"), width, height)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep42Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute((width / 2 + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 4_2")
 
@@ -7971,7 +7970,7 @@ class RawDemosaicProcessor {
             GLES31.glUseProgram(rcdStep43Program)
             GLES31.glUniform2i(GLES31.glGetUniformLocation(rcdStep43Program, "uImageSize"), width, height)
             GLES31.glUniform1i(GLES31.glGetUniformLocation(rcdStep43Program, "uCfaPattern"), metadata.cfaPattern)
-            GLES31.glDispatchCompute((width / 2 + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width / 2), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
             checkGlError("Linear RCD Step 4_3")
 
@@ -7993,7 +7992,7 @@ class RawDemosaicProcessor {
                 GLES31.GL_WRITE_ONLY,
                 GLES31.GL_RGBA16F
             )
-            GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+            GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
             GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
             checkGlError("Linear RCD Write Output")
             GLES31.glBindImageTexture(
@@ -8108,7 +8107,7 @@ class RawDemosaicProcessor {
                     "highlightThreshold=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_THRESHOLD} " +
                     "highlightCeiling=${RcdShaders.HIGHLIGHT_RECONSTRUCTION_CEILING}"
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
         checkGlError("Quad Bayer Populate")
 
@@ -8118,7 +8117,7 @@ class RawDemosaicProcessor {
             GLES31.glGetUniformLocation(quadGreenProgram, "uCfaPattern"),
             metadata.cfaPattern
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
         checkGlError("Quad Bayer Green")
 
@@ -8128,7 +8127,7 @@ class RawDemosaicProcessor {
             GLES31.glGetUniformLocation(quadChromaProgram, "uCfaPattern"),
             metadata.cfaPattern
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
         checkGlError("Quad Bayer Chroma")
 
@@ -8138,7 +8137,7 @@ class RawDemosaicProcessor {
             GLES31.glGetUniformLocation(quadRefineProgram, "uCfaPattern"),
             metadata.cfaPattern
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
         checkGlError("Quad Bayer Refine")
 
@@ -8163,7 +8162,7 @@ class RawDemosaicProcessor {
             GLES31.GL_WRITE_ONLY,
             GLES31.GL_RGBA16F
         )
-        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(width), GlesComputeWorkGroup.imageGroupCount(height), 1)
         GLES31.glMemoryBarrier(GLES31.GL_ALL_BARRIER_BITS)
         checkGlError("Quad Bayer Write Output")
 
@@ -8259,7 +8258,7 @@ class RawDemosaicProcessor {
         }
     }
 
-    private fun logGlResourceLimits() {
+    private fun logGlResourceLimits(): Boolean {
         val vendor = GLES30.glGetString(GLES30.GL_VENDOR).orEmpty()
         val renderer = GLES30.glGetString(GLES30.GL_RENDERER).orEmpty()
         val version = GLES30.glGetString(GLES30.GL_VERSION).orEmpty()
@@ -8272,6 +8271,8 @@ class RawDemosaicProcessor {
         )
 
         val value = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, value, 0)
+        maxTextureSize = value[0]
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_IMAGE_UNITS, value, 0)
         val textureImageUnits = value[0]
         GLES30.glGetIntegerv(GLES31.GL_MAX_IMAGE_UNITS, value, 0)
@@ -8280,11 +8281,43 @@ class RawDemosaicProcessor {
         val ssboBindings = value[0]
         GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, value, 0)
         val computeSsboBlocks = value[0]
+        GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, value, 0)
+        val maxWorkGroupInvocations = value[0]
+        GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, value, 0)
+        val maxComputeSharedMemory = value[0]
+        val maxWorkGroupSize = IntArray(3)
+        for (axis in maxWorkGroupSize.indices) {
+            GLES30.glGetIntegeri_v(
+                GLES31.GL_MAX_COMPUTE_WORK_GROUP_SIZE,
+                axis,
+                value,
+                0,
+            )
+            maxWorkGroupSize[axis] = value[0]
+        }
         PLog.d(
             TAG,
-            "GL limits: textureImageUnits=$textureImageUnits imageUnits=$imageUnits " +
-                    "ssboBindings=$ssboBindings computeSsboBlocks=$computeSsboBlocks"
+            "GL limits: maxTextureSize=$maxTextureSize textureImageUnits=$textureImageUnits " +
+                "imageUnits=$imageUnits ssboBindings=$ssboBindings " +
+                "computeSsboBlocks=$computeSsboBlocks " +
+                "computeWorkGroupInvocations=$maxWorkGroupInvocations " +
+                "computeWorkGroupSize=${maxWorkGroupSize.contentToString()} " +
+                "computeSharedMemory=$maxComputeSharedMemory",
         )
+        val supportsRequiredWorkGroups =
+            maxWorkGroupInvocations >= GlesComputeWorkGroup.BASELINE_MAX_INVOCATIONS &&
+                maxWorkGroupSize[0] >= GlesComputeWorkGroup.LINEAR_SIZE &&
+                maxWorkGroupSize[1] >= GlesComputeWorkGroup.IMAGE_TILE_SIZE &&
+                maxWorkGroupSize[2] >= 1
+        if (!supportsRequiredWorkGroups) {
+            PLog.e(
+                TAG,
+                "GLES compute limits do not satisfy the OpenGL ES 3.1 baseline required by " +
+                    "the RAW pipeline: invocations=$maxWorkGroupInvocations " +
+                    "size=${maxWorkGroupSize.contentToString()}",
+            )
+        }
+        return supportsRequiredWorkGroups
     }
 
     private fun createDummyShadingTexture(): Int {

@@ -903,7 +903,7 @@ internal object GlesRawRadianceFusionShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(rgba16f, binding = 0) writeonly uniform highp image2D uNrAccumulator;
         layout(rgba16f, binding = 1) writeonly uniform highp image2D uDetailAccumulator;
         $rejectionDeclaration
@@ -1626,7 +1626,7 @@ internal object GlesRawRadianceFusionShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         uniform highp sampler2D uNrAccumulator;
         layout(rgba16f, binding = 0) writeonly uniform highp image2D uReferenceBase;
         uniform ivec2 uImageSize;

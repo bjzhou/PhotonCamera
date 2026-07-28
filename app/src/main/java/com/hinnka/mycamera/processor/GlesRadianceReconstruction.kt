@@ -138,7 +138,7 @@ internal object GlesRadianceReconstructionShaders {
         precision highp int;
         precision highp image2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(binding = 0) uniform highp usampler2D uRawRegion;
         layout(binding = 1) uniform highp sampler2D uLensShadingMap;
         layout(rgba16f, binding = 0) writeonly uniform image2D uPackedRaw;
@@ -210,7 +210,7 @@ internal object GlesRadianceReconstructionShaders {
         precision highp uimage2D;
         precision highp image2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(rgba16ui, binding = 0) readonly uniform uimage2D uYccd;
         layout(rgba16f, binding = 1) writeonly uniform image2D uCameraRgb;
         uniform ivec2 uOutputSize;
@@ -248,7 +248,7 @@ internal object GlesRadianceReconstructionShaders {
         precision highp int;
         precision highp image2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(binding = 0) uniform highp usampler2D uRawRegion;
         layout(binding = 1) uniform highp sampler2D uLensShadingMap;
         layout(rgba16f, binding = 0) writeonly uniform image2D uSemanticSeed;
@@ -325,7 +325,7 @@ internal object GlesRadianceReconstructionShaders {
         precision highp int;
         precision highp image2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(rgba16f, binding = 0) readonly uniform image2D uSemanticSeed;
         layout(rgba16f, binding = 1) writeonly uniform image2D uSemanticOutput;
         uniform ivec2 uRegionSize;

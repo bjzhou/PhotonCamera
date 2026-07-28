@@ -13,7 +13,7 @@ internal object GlesRawRcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         layout(std430, binding = 1) readonly buffer RcdRgb0_Buf { float rcdRgb0[]; };
         layout(std430, binding = 2) readonly buffer RcdRgb1_Buf { float rcdRgb1[]; };
         layout(std430, binding = 3) readonly buffer RcdRgb2_Buf { float rcdRgb2[]; };

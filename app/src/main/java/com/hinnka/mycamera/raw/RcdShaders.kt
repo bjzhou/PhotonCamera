@@ -149,7 +149,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout (binding = 0) uniform highp usampler2D uRawTexture; // 单通道 R16UI 原始图像
         layout (binding = 1) uniform highp sampler2D uLensShadingMap; // R, Gr, Gb, B 增益图
@@ -363,7 +363,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
         layout(std430, binding = 4) buffer VH_Dir_Buf { float VH_dir[]; };
@@ -372,7 +372,8 @@ object RcdShaders {
 
         #define epssq 1e-10f
 
-        shared float sh_buffer[576]; // 24 * 24
+        // 8x8 output tile plus a four-pixel halo on every edge.
+        shared float sh_buffer[256]; // 16 * 16
 
         float fsquare(float x) {
             return x * x;
@@ -391,16 +392,16 @@ object RcdShaders {
         }
 
         void main() {
-            int xlsz = 16;
-            int ylsz = 16;
+            int xlsz = 8;
+            int ylsz = 8;
             int xlid = int(gl_LocalInvocationID.x);
             int ylid = int(gl_LocalInvocationID.y);
             int xgid = int(gl_WorkGroupID.x);
             int ygid = int(gl_WorkGroupID.y);
             int l = ylid * xlsz + xlid;
-            int lsz = xlsz * ylsz; // 256
-            int stride = 24;
-            int maxbuf = 576;
+            int lsz = xlsz * ylsz; // 64
+            int stride = 16;
+            int maxbuf = 256;
             int xul = xgid * xlsz - 2;
             int yul = ygid * ylsz - 2;
 
@@ -439,7 +440,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf { float cfa[]; };
         layout(std430, binding = 5) buffer LPF_Buf { float lpf[]; };
@@ -486,7 +487,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
         layout(std430, binding = 2) buffer RGB1_Buf   { float rgb1[]; };
@@ -558,7 +559,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
         layout(std430, binding = 6) buffer P_Diff_Buf { float p_diff[]; };
@@ -593,7 +594,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 6) buffer P_Diff_Buf { float p_diff[]; };
         layout(std430, binding = 7) buffer Q_Diff_Buf { float q_diff[]; };
@@ -646,7 +647,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
         layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; }; // R
@@ -742,7 +743,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
         layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; }; // R
@@ -852,7 +853,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) buffer CFA_Buf    { float cfa[]; };
         layout(std430, binding = 1) buffer RGB0_Buf   { float rgb0[]; };
@@ -945,7 +946,7 @@ object RcdShaders {
         #version 310 es
         precision highp float;
         precision highp int;
-        layout (local_size_x = 16, local_size_y = 16) in;
+        layout (local_size_x = 8, local_size_y = 8) in;
 
         layout(std430, binding = 0) readonly buffer CFA_Buf { float cfa[]; };
         layout(std430, binding = 1) buffer RGB0_Buf { float rgb0[]; };
@@ -1051,7 +1052,7 @@ object RcdShaders {
     fun regionPopulate(rawCommon: String): String = """
         #version 310 es
         $rawCommon
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
         uniform highp usampler2D uRawRegion;
         uniform sampler2D uLensShadingMap;
         uniform ivec2 uRegionSize;
@@ -1161,7 +1162,7 @@ object VgnShaders {
 precision highp float;
 precision highp int;
 precision highp uimage2D;
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
 layout(rgba16ui, binding = 1) readonly  uniform uimage2D ycceSmoothTex;
@@ -1242,7 +1243,7 @@ void main() {
 precision highp float;
 precision highp int;
 precision highp uimage2D;
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
 layout(rgba16ui, binding = 1) writeonly uniform uimage2D dstTex;
@@ -1297,7 +1298,7 @@ precision highp float;
 precision highp int;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
 layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
@@ -1362,7 +1363,7 @@ precision highp float;
 precision highp int;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
 layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
@@ -1483,7 +1484,7 @@ precision highp float;
 precision highp int;
 precision highp uimage2D;
 precision highp image2D;
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
 layout(rgba16ui, binding = 1) readonly  uniform uimage2D smoothTex;
@@ -1663,7 +1664,7 @@ void main() {
 precision highp float;
 precision highp int;
 precision highp uimage2D;
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
 layout(rgba16ui, binding = 1) readonly  uniform uimage2D smoothTex;
@@ -2120,7 +2121,7 @@ precision highp float;
 precision highp int;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
 layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
@@ -2268,7 +2269,7 @@ precision highp int;
 precision highp image2D;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly uniform uimage2D inTex;
 layout(rgba16f,  binding = 1) writeonly uniform image2D outTex;
@@ -2378,7 +2379,7 @@ precision highp int;
 precision highp image2D;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16f, binding = 0) readonly  uniform image2D inTex;   // textureScale (width, height/2)
 layout(rgba16f, binding = 1) writeonly uniform image2D outTex;  // textureMedian (width/4, height/2)
@@ -2456,7 +2457,7 @@ precision highp int;
 precision highp iimage2D;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D  inTex;
 layout(rgba16i, binding = 1) writeonly uniform iimage2D  outTex;
@@ -2555,7 +2556,7 @@ precision highp image2D;
 precision highp uimage2D;
 precision highp iimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly uniform uimage2D uInputTexture0;
 layout(rgba16i, binding = 1) readonly uniform iimage2D uInputTexture1;
@@ -2951,7 +2952,7 @@ precision highp float;
 precision highp int;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D inTex;
 layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
@@ -3070,7 +3071,7 @@ precision highp int;
 precision highp uimage2D;
 precision highp iimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D rgbdTex;
 layout(rgba16ui, binding = 1) readonly  uniform uimage2D bayerTex;
@@ -3411,7 +3412,7 @@ precision highp int;
 precision highp image2D;
 precision highp uimage2D;
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16f,  binding = 0) readonly  uniform image2D  inTex;
 layout(rgba16ui, binding = 1) writeonly uniform uimage2D outTex;
@@ -3475,7 +3476,7 @@ precision highp float;
 precision highp int;
 precision highp uimage2D;
 precision highp image2D;
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16ui, binding = 0) readonly  uniform uimage2D yccdTex;
 layout(rgba16f,  binding = 1) writeonly uniform image2D  outTex;
@@ -3536,7 +3537,7 @@ void main() {
         precision highp int;
         precision highp image2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(binding = 0) uniform highp usampler2D uRawTexture;
         layout(binding = 1) uniform highp sampler2D uLensShadingMap;
@@ -3697,7 +3698,7 @@ void main() {
         precision highp int;
         precision highp image2D;
 
-        layout(local_size_x = 16, local_size_y = 16) in;
+        layout(local_size_x = 8, local_size_y = 8) in;
 
         layout(rgba16f, binding = 0) readonly uniform image2D vgnTex;
         layout(rgba16f, binding = 1) writeonly uniform image2D outTex;
