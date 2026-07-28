@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -119,7 +120,7 @@ object PhysicalButtonDefaults {
  */
 @Composable
 fun PhysicalButton(
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier.size(48.dp),
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true,
     shape: Shape = CircleShape,
@@ -127,6 +128,7 @@ fun PhysicalButton(
     highlightBorderWidth: Dp = 1.dp,
     backgroundBrush: Brush = PhysicalButtonDefaults.backgroundBrush(enabled),
     contentAlignment: Alignment = Alignment.Center,
+    contentShape: Shape = shape,
     content: @Composable BoxScope.() -> Unit
 ) {
     val orientationDegrees = OrientationObserver.continuousOrientationDegrees
@@ -177,7 +179,7 @@ fun PhysicalButton(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(outerBorderWidth + highlightBorderWidth)
-                .clip(shape),
+                .clip(contentShape),
             contentAlignment = contentAlignment,
             content = content
         )

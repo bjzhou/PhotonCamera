@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -23,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.ui.components.PhysicalButton
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.QuickShotCapabilities
 import com.hinnka.mycamera.video.QuickShotConfig
@@ -95,11 +97,14 @@ fun CameraTopBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 32.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(top = 32.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onFlashToggle) {
+        PhysicalButton(
+            modifier = Modifier.size(36.dp),
+            onClick = onFlashToggle
+        ) {
             Icon(
                 imageVector = when (flashMode) {
                     0 -> AppIcons.FlashOff
@@ -113,7 +118,10 @@ fun CameraTopBar(
             )
         }
 
-        IconButton(onClick = onTimerToggle) {
+        PhysicalButton(
+            modifier = Modifier.size(36.dp),
+            onClick = onTimerToggle
+        ) {
             if (timerSeconds > 0) {
                 Text(
                     text = "${timerSeconds}s",
@@ -132,7 +140,10 @@ fun CameraTopBar(
             }
         }
 
-        IconButton(onClick = onLivePhotoToggle) {
+        PhysicalButton(
+            modifier = Modifier.size(36.dp),
+            onClick = onLivePhotoToggle
+        ) {
             Icon(
                 painterResource(R.drawable.ic_live_photo),
                 contentDescription = stringResource(R.string.settings_use_live_photo),
@@ -141,7 +152,10 @@ fun CameraTopBar(
             )
         }
 
-        IconButton(onClick = onHistogramToggle) {
+        PhysicalButton(
+            modifier = Modifier.size(36.dp),
+            onClick = onHistogramToggle
+        ) {
             Icon(
                 imageVector = AppIcons.BarChart,
                 contentDescription = stringResource(R.string.histogram),
@@ -150,7 +164,10 @@ fun CameraTopBar(
             )
         }
 
-        IconButton(onClick = onSettingsClick) {
+        PhysicalButton(
+            modifier = Modifier.size(36.dp),
+            onClick = onSettingsClick
+        ) {
             Icon(
                 imageVector = Icons.Default.Settings,
                 contentDescription = stringResource(R.string.settings),

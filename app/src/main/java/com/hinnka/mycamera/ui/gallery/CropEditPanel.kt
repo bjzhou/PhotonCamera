@@ -133,8 +133,8 @@ fun CropEditPanel(
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = Color.White.copy(alpha = 0.08f),
-                    contentColor = Color.White
+                    containerColor = Color.White.copy(alpha = 0.05f),
+                    contentColor = Color.White.copy(alpha = 0.6f)
                 )
             ) {
                 Icon(
@@ -153,9 +153,9 @@ fun CropEditPanel(
                     containerColor = if (isHorizontallyMirrored) {
                         AccentOrange.copy(alpha = 0.18f)
                     } else {
-                        Color.White.copy(alpha = 0.08f)
+                        Color.White.copy(alpha = 0.05f)
                     },
-                    contentColor = if (isHorizontallyMirrored) AccentOrange else Color.White
+                    contentColor = if (isHorizontallyMirrored) AccentOrange else Color.White.copy(0.6f)
                 )
             ) {
                 Icon(

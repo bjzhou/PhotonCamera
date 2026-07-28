@@ -34,12 +34,15 @@ fun GalleryThumbnail(
 ) {
     val context = LocalContext.current
     val refreshKey = latestPhoto?.id?.let { viewModel.getPreparedPhotoThumbnailRefreshKey(it) } ?: 0L
-    
+    val buttonShape = RoundedCornerShape(10.dp)
+    val thumbnailShape = RoundedCornerShape(7.dp)
+
     PhysicalButton(
         modifier = modifier
             .size(48.dp),
         onClick = onClick,
-        shape = RoundedCornerShape(10.dp)
+        shape = buttonShape,
+        contentShape = thumbnailShape
     ) {
         if (latestPhoto != null) {
             AsyncImage(

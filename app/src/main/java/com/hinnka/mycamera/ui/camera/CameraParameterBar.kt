@@ -3,6 +3,7 @@ package com.hinnka.mycamera.ui.camera
 import android.hardware.camera2.CameraMetadata
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +32,7 @@ fun CameraParameterBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, top = 4.dp, end = 16.dp),
+            .padding(start = 16.dp, top = 12.dp, end = 16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -79,11 +80,11 @@ fun ParameterItem(
 ) {
     PhysicalButton(
         modifier = modifier
-            .width(if (vertical) 40.dp else 60.dp)
-            .height(if (vertical) 60.dp else 40.dp),
+            .width(if (vertical) 32.dp else 56.dp)
+            .height(if (vertical) 56.dp else 32.dp),
         onClick = onClick,
         enabled = isEnabled,
-        shape = RoundedCornerShape(18.dp)
+        shape = RoundedCornerShape(8.dp)
     ) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -139,12 +140,12 @@ fun CameraParameterValuesOverlay(
 
         Row(
             modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             values.forEach { item ->
                 Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.Center,
+                    horizontalArrangement = Arrangement.Start,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (showLabels) {
