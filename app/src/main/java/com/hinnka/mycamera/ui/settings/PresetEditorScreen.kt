@@ -29,14 +29,13 @@ import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
-import com.hinnka.mycamera.ui.components.LutSelectorWithRecipeAction
+import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.CurveChannel
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
-import com.hinnka.mycamera.ui.components.EffectsBottomSheet
 import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
 import com.hinnka.mycamera.ui.components.RawDcpSelector
@@ -128,8 +127,7 @@ fun PresetEditorScreen(
     var expandSettings by remember { mutableStateOf(false) }
     var expandQuickRaw by remember { mutableStateOf(false) }
     var expandBaseline by remember { mutableStateOf(false) }
-    var showColorRecipeSheet by remember { mutableStateOf(false) }
-    var showEffectsSheet by remember { mutableStateOf(false) }
+    var showEditSheet by remember { mutableStateOf(false) }
     var baselineRecipeEditLutId by remember { mutableStateOf<String?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<LutEditorTarget?>(null) }
 
@@ -244,16 +242,30 @@ fun PresetEditorScreen(
             }
 
             SettingsSection(title = stringResource(R.string.filter), isExpandable = false) {
-                LutSelectorWithRecipeAction(
+                LutSelector(
                     availableLuts = availableLuts,
                     currentLutId = selectedLutId,
                     thumbnail = null,
                     onLutSelected = { selectedLutId = it },
-                    onEditRecipeClick = { showColorRecipeSheet = true },
-                    onEditEffectClick = { showEffectsSheet = true },
-                    recipeIsCustomized = !colorRecipe.isDefault(),
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+
+            SettingsSection(title = stringResource(R.string.edit), isExpandable = false) {
+                OutlinedButton(
+                    onClick = { showEditSheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.18f)
+                    )
+                ) {
+                    Text(
+                        text = stringResource(R.string.edit_color_and_effects),
+                        fontSize = 13.sp
+                    )
+                }
             }
 
             SettingsSection(title = stringResource(R.string.settings_section_frame), isExpandable = false) {
@@ -316,9 +328,9 @@ fun PresetEditorScreen(
 
             }
 
-            if (showColorRecipeSheet) {
+            if (showEditSheet) {
                 ModalBottomSheet(
-                    onDismissRequest = { showColorRecipeSheet = false },
+                    onDismissRequest = { showEditSheet = false },
                     containerColor = Color.Black.copy(alpha = 0.86f),
                     scrimColor = Color.Transparent,
                     dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
@@ -357,19 +369,14 @@ fun PresetEditorScreen(
                             }
                         },
                         hideNonBakeable = true,
+                        showLutIntensity = true,
+                        currentEffects = effects,
+                        onEffectsChange = { effects = it },
                         modifier = Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
                     )
                 }
-            }
-
-            if (showEffectsSheet) {
-                EffectsBottomSheet(
-                    currentParams = effects,
-                    onParamsChange = { effects = it },
-                    onDismiss = { showEffectsSheet = false }
-                )
             }
 
             val editBaselineRecipe: (String, LutEditorTarget) -> Unit = { lutId, target ->

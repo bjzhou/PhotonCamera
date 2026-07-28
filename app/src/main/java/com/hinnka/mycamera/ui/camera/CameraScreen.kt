@@ -94,7 +94,7 @@ enum class ActivePanel {
     NONE,
     SETTINGS,
     FILTERS,
-    LUT_EDIT,
+    EDIT,
     PRESETS
 }
 
@@ -320,6 +320,12 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(currentRecipeParams) {
+        if (previewRecipeParamsOverride?.isSameAs(currentRecipeParams) == true) {
+            previewRecipeParamsOverride = null
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             flushEffectParamsSave()
@@ -342,7 +348,6 @@ fun CameraScreen(
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
-    var showEffectsSheet by remember { mutableStateOf(false) }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showVideoParameterRuler by remember { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
@@ -1033,7 +1038,8 @@ fun CameraScreen(
                         baselineLut = viewModel.currentBaselineLutConfig,
                         currentLut = viewModel.currentLutConfig,
                         baselineColorRecipeParams = currentBaselineRecipeParams,
-                        colorRecipeParams = previewRecipeParamsOverride ?: mergedRecipeParams,
+                        colorRecipeParams = previewRecipeParamsOverride?.let(previewEffectParams::applyTo)
+                            ?: mergedRecipeParams,
                         focusPoint = state.focusPoint,
                         focusPointSource = state.focusPointSource,
                         isFocusLocked = state.isFocusLocked,
@@ -1668,7 +1674,7 @@ fun CameraScreen(
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(Color.White.copy(alpha = 0.15f))
                                     .clickable {
-                                        activePanel = ActivePanel.LUT_EDIT
+                                        activePanel = ActivePanel.EDIT
                                     }
                                     .padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1676,21 +1682,17 @@ fun CameraScreen(
                             ) {
                                 Icon(
                                     imageVector = AppIcons.Tune,
-                                    contentDescription = stringResource(R.string.color_recipe),
+                                    contentDescription = stringResource(R.string.edit),
                                     tint = Color(0xFFFFD700), // Gold color to match VIP/Premium feel
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = stringResource(R.string.color_recipe),
+                                    text = stringResource(R.string.edit),
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
-
-                            EffectsActionChip(
-                                onClick = { showEffectsSheet = true }
-                            )
                         }
                     }
 
@@ -1722,7 +1724,7 @@ fun CameraScreen(
                         },
                         onPresetManagementClick = onPresetManagementClick,
                         onEditClick = {
-                            activePanel = ActivePanel.LUT_EDIT
+                            activePanel = ActivePanel.EDIT
                         },
                         onManageClick = { lutId ->
                             activePanel = ActivePanel.NONE
@@ -1734,25 +1736,18 @@ fun CameraScreen(
             }
         }
 
-        if (activePanel == ActivePanel.LUT_EDIT) {
+        if (activePanel == ActivePanel.EDIT) {
             LutEditBottomSheet(
                 lutId = currentLutId,
+                initialParams = previewRecipeParamsOverride ?: currentRecipeParams,
                 onParamsPreviewChange = { previewRecipeParamsOverride = it },
+                effectParams = previewEffectParams,
+                onEffectParamsChange = { saveEffectParamsDebounced(it) },
                 onDismiss = {
+                    flushEffectParamsSave()
                     previewRecipeParamsOverride = null
                     viewModel.refreshActivePresetMatch()
                     activePanel = ActivePanel.FILTERS
-                }
-            )
-        }
-
-        if (showEffectsSheet) {
-            EffectsBottomSheet(
-                currentParams = previewEffectParams,
-                onParamsChange = { saveEffectParamsDebounced(it) },
-                onDismiss = {
-                    flushEffectParamsSave()
-                    showEffectsSheet = false
                 }
             )
         }

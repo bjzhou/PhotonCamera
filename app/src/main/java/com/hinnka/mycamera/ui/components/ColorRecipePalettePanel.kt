@@ -5,10 +5,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
@@ -141,17 +139,6 @@ fun ColorRecipePalettePanel(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        PaletteDensitySlider(
-            value = paletteState.density,
-            onValueChange = {
-                currentOnPaletteStateChange.value(
-                    currentPaletteState.value.copy(density = it)
-                )
-            },
-            modifier = Modifier.padding(horizontal = 8.dp)
-        )
     }
 }
 
@@ -173,85 +160,6 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPaletteGrid(siz
                 color = Color.White.copy(alpha = alpha.coerceIn(0.14f, 0.62f)),
                 radius = dotRadius,
                 center = Offset(x, y)
-            )
-        }
-    }
-}
-
-@Composable
-private fun PaletteDensitySlider(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(28.dp)
-        ) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val trackHeight = 14.dp.toPx()
-                val thumbRadius = trackHeight * 0.62f
-                val top = (size.height - trackHeight) * 0.5f
-                val corner = CornerRadius(trackHeight / 2f, trackHeight / 2f)
-                val thumbTravelWidth = (size.width - thumbRadius * 2f).coerceAtLeast(1f)
-                drawRoundRect(
-                    brush = Brush.horizontalGradient(
-                        listOf(
-                            Color(0xFF5BC1FF),
-                            Color(0xFFDFD3B0),
-                            Color(0xFFFFB064),
-                            Color(0xFFF0526A)
-                        )
-                    ),
-                    topLeft = Offset(0f, top),
-                    size = Size(size.width, trackHeight),
-                    cornerRadius = corner
-                )
-                drawRoundRect(
-                    color = Color.Black.copy(alpha = 0.18f),
-                    topLeft = Offset(0f, top),
-                    size = Size(size.width, trackHeight),
-                    cornerRadius = corner,
-                    style = Stroke(width = 1.dp.toPx())
-                )
-
-                val thumbX = thumbRadius + value.coerceIn(0f, 1f) * thumbTravelWidth
-                val center = Offset(thumbX, size.height / 2f)
-                drawCircle(
-                    color = Color.White,
-                    radius = thumbRadius,
-                    center = center
-                )
-                drawCircle(
-                    color = Color(0xFFE95A78),
-                    radius = thumbRadius,
-                    center = center,
-                    style = Stroke(width = 2.dp.toPx())
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            val trackHeight = 14.dp.toPx()
-                            val thumbRadius = trackHeight * 0.62f
-                            val width = (size.width.toFloat() - thumbRadius * 2f).coerceAtLeast(1f)
-                            onValueChange(((offset.x - thumbRadius) / width).coerceIn(0f, 1f))
-                        }
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, _ ->
-                            change.consume()
-                            val trackHeight = 14.dp.toPx()
-                            val thumbRadius = trackHeight * 0.62f
-                            val width = (size.width.toFloat() - thumbRadius * 2f).coerceAtLeast(1f)
-                            onValueChange(((change.position.x - thumbRadius) / width).coerceIn(0f, 1f))
-                        }
-                    }
             )
         }
     }

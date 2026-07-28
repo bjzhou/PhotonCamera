@@ -103,11 +103,9 @@ import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
-import com.hinnka.mycamera.ui.camera.LutIntensitySlider
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.CurveChannel
-import com.hinnka.mycamera.ui.components.EffectsPanel
-import com.hinnka.mycamera.ui.components.LutSelectorWithRecipeAction
+import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.icons.AppIcons
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CancellationException
@@ -207,7 +205,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private var expanded by mutableStateOf(false)
     private var showFilterPicker by mutableStateOf(false)
     private var showRecipeEditor by mutableStateOf(false)
-    private var showEffectsEditor by mutableStateOf(false)
     private var floatingWindowYBeforeEditor: Int? = null
 
     private val contentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -918,7 +915,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     }
 
     private fun updateWindowParams(hidden: Boolean) {
-        val editorVisible = showRecipeEditor || showEffectsEditor
+        val editorVisible = showRecipeEditor
         if (hidden) {
             windowParams.width = 1
             windowParams.height = 1
@@ -1001,7 +998,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
                 }
 
-                if (!showRecipeEditor && !showEffectsEditor) {
+                if (!showRecipeEditor) {
                     Row(
                         modifier = Modifier
                             .padding(4.dp)
@@ -1106,34 +1103,26 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     composeView?.let { windowManager.updateViewLayout(it, windowParams) }
                                 }
 
-                                LutSelectorWithRecipeAction(
-                                    availableLuts = availableLuts,
-                                    currentLutId = currentLutId,
-                                    thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled },
-                                    onLutSelected = { lutId ->
-                                        scope.launch {
-                                            userPreferencesRepository.saveLutConfig(lutId)
-                                            syncScreenCaptureRenderConfig(lutId)
-                                            closeFilterPicker()
-                                        }
-                                    },
-                                    onEditRecipeClick = if (currentLutId != null) {
-                                        {
-                                            showRecipeEditor = true
-                                            updateWindowParams(false)
-                                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                                        }
-                                    } else null,
-                                    onEditEffectClick = {
-                                        showEffectsEditor = true
-                                        updateWindowParams(false)
-                                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                                    },
-                                    categoryOrder = categoryOrder,
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(top = 32.dp)
-                                )
+                                ) {
+                                    LutSelector(
+                                        availableLuts = availableLuts,
+                                        currentLutId = currentLutId,
+                                        thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled },
+                                        onLutSelected = { lutId ->
+                                            scope.launch {
+                                                userPreferencesRepository.saveLutConfig(lutId)
+                                                syncScreenCaptureRenderConfig(lutId)
+                                                closeFilterPicker()
+                                            }
+                                        },
+                                        categoryOrder = categoryOrder,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
 
                                 Row(
                                     modifier = Modifier
@@ -1178,6 +1167,35 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                             imageVector = AppIcons.AutoAwesome,
                                             contentDescription = "LUT",
                                             tint = Color.White
+                                        )
+                                    }
+                                }
+
+                                Box(
+                                    modifier = Modifier.width(48.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            if (currentLutId != null) {
+                                                showRecipeEditor = true
+                                                updateWindowParams(false)
+                                                composeView?.let {
+                                                    windowManager.updateViewLayout(it, windowParams)
+                                                }
+                                            }
+                                        },
+                                        enabled = currentLutId != null,
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = AppIcons.Tune,
+                                            contentDescription = stringResource(R.string.edit),
+                                            tint = if (currentLutId != null) {
+                                                Color.White
+                                            } else {
+                                                Color.White.copy(alpha = 0.3f)
+                                            }
                                         )
                                     }
                                 }
@@ -1252,9 +1270,10 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
 
                     LaunchedEffect(editingLutId) {
-                        val params = ContentRepository.getInstance(context)
-                            .lutManager
-                            .loadColorRecipeParams(editingLutId)
+                        val params = recipePreviewParams
+                            ?: ContentRepository.getInstance(context)
+                                .lutManager
+                                .loadColorRecipeParams(editingLutId)
                         editingParams = params
                         paletteState = ColorPaletteState(
                             x = params.paletteX,
@@ -1270,14 +1289,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         PhantomEditorHeader(
-                            title = stringResource(R.string.color_recipe),
+                            title = stringResource(R.string.edit),
                             onClose = { closeRecipeEditor() }
-                        )
-                        LutIntensitySlider(
-                            intensity = editingParams.lutIntensity,
-                            onIntensityChange = {
-                                updateRecipeParams(editingParams.copy(lutIntensity = it))
-                            }
                         )
                         ColorRecipePanel(
                             currentParams = editingParams,
@@ -1316,38 +1329,14 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     }
                                 )
                             },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-
-                if (showEffectsEditor) {
-                    fun closeEffectsEditor() {
-                        showEffectsEditor = false
-                        scope.launch {
-                            syncScreenCaptureRenderConfig(currentLutId)
-                            updateWindowParams(false)
-                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.88f))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        PhantomEditorHeader(
-                            title = stringResource(R.string.effects_title),
-                            onClose = { closeEffectsEditor() }
-                        )
-                        EffectsPanel(
-                            currentParams = currentEffectParams,
-                            onParamsChange = { effects ->
+                            showLutIntensity = true,
+                            currentEffects = currentEffectParams,
+                            onEffectsChange = { effects ->
                                 scope.launch {
                                     userPreferencesRepository.saveActiveEffectParams(effects)
                                     syncScreenCaptureRenderConfig(
                                         lutId = currentLutId,
+                                        creativeRecipeParamsOverride = editingParams,
                                         effectParamsOverride = effects
                                     )
                                 }
@@ -1441,7 +1430,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             expanded = false
             showFilterPicker = false
             showRecipeEditor = false
-            showEffectsEditor = false
             floatingWindowYBeforeEditor = null
         }
     }

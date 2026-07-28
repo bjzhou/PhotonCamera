@@ -288,11 +288,6 @@
     <!-- Color Recipe -->
     <string name="color_recipe">สูตรสี (Color Recipe)</string>
     <string name="effects_title">ผล</string>
-    <string name="recipe_scope_lut">ค่าเริ่มต้นของ LUT</string>
-    <string name="recipe_scope_photo">เฉพาะรูปนี้เท่านั้น</string>
-    <string name="recipe_scope_photo_reset">คืนค่าเริ่มต้น LUT</string>
-    <string name="color_recipe_reset_all">รีเซ็ตพารามิเตอร์ทั้งหมด</string>
-    <string name="recipe_scope_photo_hint">การปรับเปลี่ยนมีผลกับรูปภาพนี้เท่านั้น</string>
 
     <!-- Color Recipe Parameters -->
     <string name="recipe_param_exposure">การรับแสง</string>
@@ -353,7 +348,12 @@
     <string name="recipe_param_primary_blue_lightness">ความสว่างของสีหลักสีน้ำเงิน</string>
 
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">อัปเดต LUT ปัจจุบันด้วย</string>
+    <string name="edit_sync_lut_recipe_description">สี เอฟเฟกต์ และความเข้ม LUT จะบันทึกไปยัง LUT ที่เลือกด้วย</string>
+    <string name="edit_select_lut_hint">เลือก LUT ก่อนปรับสีและเอฟเฟกต์</string>
+    <string name="edit_color_and_effects">ปรับสีและเอฟเฟกต์</string>
     <string name="recipe_tab_color">สี</string>
+    <string name="recipe_color_basic">พื้นฐาน</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">แสง</string>
     <string name="recipe_tab_curve">เส้นโค้ง</string>

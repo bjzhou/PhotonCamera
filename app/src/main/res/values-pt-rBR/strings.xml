@@ -168,7 +168,12 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">Atualizar também a LUT atual</string>
+    <string name="edit_sync_lut_recipe_description">Cor, efeitos e intensidade da LUT também são salvos na LUT selecionada.</string>
+    <string name="edit_select_lut_hint">Selecione uma LUT antes de ajustar cor e efeitos.</string>
+    <string name="edit_color_and_effects">Ajustar cor e efeitos</string>
     <string name="recipe_tab_color">Cor</string>
+    <string name="recipe_color_basic">Básico</string>
     <string name="recipe_tab_light">Luz</string>
     <string name="recipe_tab_texture">Textura</string>
     <string name="recipe_tab_post">Pós</string>

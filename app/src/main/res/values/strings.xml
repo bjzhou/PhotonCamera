@@ -407,11 +407,11 @@
     <!-- Color Recipe -->
     <string name="color_recipe">Color Recipe</string>
     <string name="effects_title">Effects</string>
-    <string name="recipe_scope_lut">LUT Default</string>
-    <string name="recipe_scope_photo">This Photo</string>
-    <string name="recipe_scope_photo_reset">Reset to LUT Default</string>
-    <string name="color_recipe_reset_all">Reset all parameters</string>
-    <string name="recipe_scope_photo_hint">Adjustments apply to this photo only</string>
+    <string name="color_recipe_reset_all">Reset</string>
+    <string name="edit_sync_lut_recipe">Update current LUT too</string>
+    <string name="edit_sync_lut_recipe_description">Color, effects, and LUT intensity are also saved to the selected LUT.</string>
+    <string name="edit_select_lut_hint">Select a LUT before adjusting color and effects.</string>
+    <string name="edit_color_and_effects">Adjust color and effects</string>
 
     <!-- Color Recipe Parameters -->
     <string name="recipe_param_exposure">Exposure</string>
@@ -473,6 +473,7 @@
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">Color</string>
+    <string name="recipe_color_basic">Basic</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">Light</string>
     <string name="recipe_tab_curve">Curve</string>

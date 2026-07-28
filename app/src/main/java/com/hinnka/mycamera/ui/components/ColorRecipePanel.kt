@@ -1,14 +1,11 @@
 package com.hinnka.mycamera.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -23,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
@@ -34,12 +32,30 @@ import androidx.compose.ui.text.input.ImeAction
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.RecipeParam
+
+private enum class RecipePanelTab {
+    PALETTE,
+    LIGHT,
+    CURVE,
+    COLOR,
+    TEXTURE,
+    LENS,
+    EFFECTS,
+    REMARKS,
+}
+
+private enum class ColorPanelSection {
+    BASIC,
+    CALIBRATION,
+    LCH,
+}
 
 /**
  * 色彩配方控制面板
  *
- * 使用顶部 Tab 切换不同参数组
+ * 色彩调整与物理效果共用同一组一级菜单。校准和 LCH 收纳在颜色的二级菜单中。
  */
 @Composable
 fun ColorRecipePanel(
@@ -52,6 +68,10 @@ fun ColorRecipePanel(
     onCurveChange: (CurveChannel, FloatArray?) -> Unit = { _, _ -> },
     imageHistogram: ImageHistogram? = null,
     hideNonBakeable: Boolean = true,
+    showLutIntensity: Boolean = false,
+    currentEffects: EffectParams? = null,
+    onEffectsChange: ((EffectParams) -> Unit)? = null,
+    optionControls: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isBakeable: (RecipeParam) -> Boolean = { param ->
@@ -66,46 +86,42 @@ fun ColorRecipePanel(
         param != RecipeParam.LOW_RES
     }
 
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
+    var selectedTab by remember { mutableStateOf(RecipePanelTab.PALETTE) }
+    var selectedColorSection by remember { mutableStateOf(ColorPanelSection.BASIC) }
     var selectedLchTabIndex by remember { mutableIntStateOf(0) }
     var selectedCalibrationTabIndex by remember { mutableIntStateOf(0) }
-    var isExpanded by remember { mutableStateOf(true) }
+    val showEffects = currentEffects != null && onEffectsChange != null
 
-    val tabs = listOf(
-        R.string.recipe_tab_palette,  // 0
-        R.string.recipe_tab_light,    // 1
-        R.string.recipe_tab_curve,    // 2 (曲线)
-        R.string.recipe_tab_color,    // 3
-        R.string.recipe_tab_calibration, // 4
-        R.string.recipe_tab_lch,      // 5
-        R.string.recipe_tab_texture,  // 6
-        R.string.recipe_tab_lens,     // 7
-        R.string.recipe_tab_remarks,  // 8
-    )
-    val parameterGroups = listOf(
-        emptyList(),       // 0 palette
-        listOf(            // 1 light
+    val tabs = buildList {
+        add(RecipePanelTab.PALETTE to R.string.recipe_tab_palette)
+        add(RecipePanelTab.LIGHT to R.string.recipe_tab_light)
+        add(RecipePanelTab.CURVE to R.string.recipe_tab_curve)
+        add(RecipePanelTab.COLOR to R.string.recipe_tab_color)
+        add(RecipePanelTab.TEXTURE to R.string.recipe_tab_texture)
+        if (!hideNonBakeable) add(RecipePanelTab.LENS to R.string.recipe_tab_lens)
+        if (showEffects) add(RecipePanelTab.EFFECTS to R.string.effects_title)
+        if (!hideNonBakeable) add(RecipePanelTab.REMARKS to R.string.recipe_tab_remarks)
+    }
+    val parameterGroups = mapOf(
+        RecipePanelTab.LIGHT to listOf(
             RecipeParam.EXPOSURE,
             RecipeParam.CONTRAST,
             RecipeParam.HIGHLIGHTS,
             RecipeParam.SHADOWS,
         ),
-        emptyList(),       // 2 curve (handled specially)
-        listOf(            // 3 color
+        RecipePanelTab.COLOR to listOf(
             RecipeParam.SATURATION,
             RecipeParam.TEMPERATURE,
             RecipeParam.TINT,
             RecipeParam.COLOR
         ),
-        emptyList(),       // 4 calibration (handled specially)
-        emptyList(),       // 5 lch (handled specially)
-        listOf(            // 6 texture
+        RecipePanelTab.TEXTURE to listOf(
             RecipeParam.VIGNETTE,
             RecipeParam.FILM_GRAIN,
             RecipeParam.FADE,
             RecipeParam.BLEACH_BYPASS,
         ),
-        listOf(            // 7 lens
+        RecipePanelTab.LENS to listOf(
             RecipeParam.HALATION,
             RecipeParam.CHROMATIC_ABERRATION,
             RecipeParam.NOISE,
@@ -174,9 +190,9 @@ fun ColorRecipePanel(
         ),
     )
 
-    fun resetTab(tabIndex: Int) {
-        when (tabIndex) {
-            0 -> {
+    fun resetTab(tab: RecipePanelTab) {
+        when (tab) {
+            RecipePanelTab.PALETTE -> {
                 val defaultPaletteState = ColorPaletteState.DEFAULT
                 onParamsChange(
                     currentParams.copy(
@@ -186,7 +202,7 @@ fun ColorRecipePanel(
                     )
                 )
             }
-            2 -> onParamsChange(
+            RecipePanelTab.CURVE -> onParamsChange(
                 currentParams.copy(
                     masterCurvePoints = null,
                     redCurvePoints = null,
@@ -194,11 +210,18 @@ fun ColorRecipePanel(
                     blueCurvePoints = null
                 )
             )
-            4 -> onParamsChange(resetParams(currentParams, calibrationGroups.flatMap { it.second }))
-            5 -> onParamsChange(resetParams(currentParams, lchGroups.flatMap { it.second }))
-            8 -> Unit
+            RecipePanelTab.COLOR -> onParamsChange(
+                resetParams(
+                    currentParams,
+                    parameterGroups[RecipePanelTab.COLOR].orEmpty() +
+                        calibrationGroups.flatMap { it.second } +
+                        lchGroups.flatMap { it.second }
+                )
+            )
+            RecipePanelTab.EFFECTS -> onEffectsChange?.invoke(EffectParams.DEFAULT)
+            RecipePanelTab.REMARKS -> Unit
             else -> {
-                val allParams = parameterGroups.getOrNull(tabIndex).orEmpty()
+                val allParams = parameterGroups[tab].orEmpty()
                 val params = if (hideNonBakeable) allParams.filter(isBakeable) else allParams
                 if (params.isNotEmpty()) {
                     onParamsChange(resetParams(currentParams, params))
@@ -210,13 +233,18 @@ fun ColorRecipePanel(
     fun resetAllParams() {
         if (!hideNonBakeable) {
             onParamsChange(ColorRecipeParams.DEFAULT)
+            onEffectsChange?.invoke(EffectParams.DEFAULT)
             return
         }
 
         val defaultPaletteState = ColorPaletteState.DEFAULT
         val visibleParams = parameterGroups
+            .values
             .flatten()
-            .filter(isBakeable) + calibrationGroups.flatMap { it.second } + lchGroups.flatMap { it.second }
+            .filter(isBakeable) +
+            calibrationGroups.flatMap { it.second } +
+            lchGroups.flatMap { it.second } +
+            if (showLutIntensity) listOf(RecipeParam.LUT_INTENSITY) else emptyList()
         onParamsChange(
             resetParams(
                 currentParams.copy(
@@ -231,218 +259,307 @@ fun ColorRecipePanel(
                 visibleParams
             )
         )
+        onEffectsChange?.invoke(EffectParams.DEFAULT)
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-    ) {
+    val sectionBackgroundColor = Color.Transparent
 
-        // 当前选中的内容
-        AnimatedVisibility(isExpanded) {
-            Box(
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (showLutIntensity) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(8.dp),
-                contentAlignment = Alignment.TopCenter
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(sectionBackgroundColor)
             ) {
-                if (selectedTabIndex < parameterGroups.size) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        when (selectedTabIndex) {
-                            0 -> {
-                                // 调色盘
-                                ColorRecipePalettePanel(
-                                    paletteState = paletteState,
-                                    onPaletteStateChange = onPaletteStateChange,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                            2 -> {
-                                // 曲线编辑器
-                                CurveEditorPanel(
-                                    currentParams = currentParams,
-                                    onCurveChange = onCurveChange,
-                                    imageHistogram = imageHistogram,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                            4 -> {
-                                // Calibration 颜色校准
-                                ColorRingTabs(
-                                    count = calibrationGroups.size,
-                                    selectedTabIndex = selectedCalibrationTabIndex,
-                                    onTabSelected = { selectedCalibrationTabIndex = it },
-                                    getColor = { index -> 
-                                        when (index) {
-                                            0 -> Color(0xFFE53935) // Red
-                                            1 -> Color(0xFF43A047) // Green
-                                            2 -> Color(0xFF1E88E5) // Blue
-                                            else -> Color.White
-                                        }
-                                    }
-                                )
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                calibrationGroups[selectedCalibrationTabIndex].second.forEach { param ->
-                                    key(param) {
-                                        ColorRecipeSlider(
-                                            param = param,
-                                            value = param.getValue(currentParams),
-                                            onValueChange = { newValue ->
-                                                onParamChange(param, newValue)
-                                            },
-                                            onDoubleTap = {
-                                                onParamChange(param, param.defaultValue)
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            5 -> {
-                                // LCH 颜色混合
-                                ColorRingTabs(
-                                    count = lchGroups.size,
-                                    selectedTabIndex = selectedLchTabIndex,
-                                    onTabSelected = { selectedLchTabIndex = it },
-                                    getColor = { getLchTabColor(it) }
-                                )
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                lchGroups[selectedLchTabIndex].second.forEach { param ->
-                                    key(param) {
-                                        ColorRecipeSlider(
-                                            param = param,
-                                            value = param.getValue(currentParams),
-                                            onValueChange = { newValue ->
-                                                onParamChange(param, newValue)
-                                            },
-                                            onDoubleTap = {
-                                                onParamChange(param, param.defaultValue)
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            else -> {
-                                val allParams = parameterGroups.getOrNull(selectedTabIndex).orEmpty()
-                                val visibleParams = remember(selectedTabIndex, hideNonBakeable) {
-                                    if (hideNonBakeable) {
-                                        allParams.filter(isBakeable)
-                                    } else {
-                                        allParams
-                                    }
-                                }
-                                visibleParams.forEach { param ->
-                                    key(param) {
-                                        ColorRecipeSlider(
-                                            param = param,
-                                            value = param.getValue(currentParams),
-                                            onValueChange = { newValue ->
-                                                onParamChange(param, newValue)
-                                            },
-                                            onDoubleTap = {
-                                                onParamChange(param, param.defaultValue)
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                LutIntensitySlider(
+                    intensity = currentParams.lutIntensity,
+                    onIntensityChange = {
+                        onParamChange(RecipeParam.LUT_INTENSITY, it)
                     }
-                } else {
-                    // 备注 Tab
-                    ColorRecipeRemarksBar(
-                        remarks = currentParams.remarks ?: "",
-                        onRemarksChange = onRemarksChange,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // 自定义 Tab 选择器 (Pill style)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .background(Color.Black)
-                .padding(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxSize(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .horizontalScroll(rememberScrollState())
-                ) {
-                    tabs.forEachIndexed { index, title ->
-                        if (hideNonBakeable && (title == R.string.recipe_tab_lens || title == R.string.recipe_tab_remarks)) {
-                            return@forEachIndexed
-                        }
-                        val isSelected = selectedTabIndex == index && isExpanded
-                        val backgroundColor by animateColorAsState(
-                            if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
-                            label = "tabBackground"
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .widthIn(min = 48.dp)
-                                .fillMaxHeight()
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(backgroundColor)
-                                .pointerInput(index, currentParams) {
-                                    detectTapGestures(
-                                        onTap = {
-                                            selectedTabIndex = index
-                                            isExpanded = true
-                                        },
-                                        onDoubleTap = {
-                                            selectedTabIndex = index
-                                            isExpanded = true
-                                            resetTab(index)
-                                        }
-                                    )
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = stringResource(title),
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                        }
-                    }
-                }
-
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.color_recipe_reset_all),
-                    tint = Color.White.copy(alpha = 0.72f),
-                    modifier = Modifier
-                        .padding(start = 8.dp)
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.12f))
-                        .clickable { resetAllParams() }
-                        .padding(7.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp).background(Color.Black))
+        optionControls?.let { controls ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(sectionBackgroundColor)
+            ) {
+                controls()
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(sectionBackgroundColor)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, top = 9.dp, end = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.edit),
+                    color = Color.White.copy(alpha = 0.82f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(
+                    modifier = Modifier
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.1f))
+                        .clickable { resetAllParams() }
+                        .padding(horizontal = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.78f),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.color_recipe_reset_all),
+                        color = Color.White.copy(alpha = 0.78f),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                tabs.forEach { (tab, title) ->
+                    val isSelected = selectedTab == tab
+                    val backgroundColor by animateColorAsState(
+                        if (isSelected) Color.White.copy(alpha = 0.18f) else Color.Transparent,
+                        label = "tabBackground"
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(backgroundColor)
+                            .pointerInput(tab, currentParams, currentEffects) {
+                                detectTapGestures(
+                                    onTap = {
+                                        selectedTab = tab
+                                    },
+                                    onDoubleTap = {
+                                        selectedTab = tab
+                                        resetTab(tab)
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = stringResource(title),
+                            fontSize = if (tabs.size > 6) 9.sp else 10.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.58f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Clip,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 1.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    when (selectedTab) {
+                        RecipePanelTab.PALETTE -> {
+                            ColorRecipePalettePanel(
+                                paletteState = paletteState,
+                                onPaletteStateChange = onPaletteStateChange,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        RecipePanelTab.CURVE -> {
+                            CurveEditorPanel(
+                                currentParams = currentParams,
+                                onCurveChange = onCurveChange,
+                                imageHistogram = imageHistogram,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        RecipePanelTab.COLOR -> {
+                            ColorSectionTabs(
+                                selectedSection = selectedColorSection,
+                                onSectionSelected = { selectedColorSection = it }
+                            )
+                            when (selectedColorSection) {
+                                ColorPanelSection.BASIC -> {
+                                    parameterGroups[RecipePanelTab.COLOR].orEmpty().forEach { param ->
+                                        RecipeParamSlider(
+                                            param = param,
+                                            currentParams = currentParams,
+                                            onParamChange = onParamChange
+                                        )
+                                    }
+                                }
+                                ColorPanelSection.CALIBRATION -> {
+                                    ColorRingTabs(
+                                        count = calibrationGroups.size,
+                                        selectedTabIndex = selectedCalibrationTabIndex,
+                                        onTabSelected = { selectedCalibrationTabIndex = it },
+                                        getColor = { index ->
+                                            when (index) {
+                                                0 -> Color(0xFFE53935)
+                                                1 -> Color(0xFF43A047)
+                                                2 -> Color(0xFF1E88E5)
+                                                else -> Color.White
+                                            }
+                                        }
+                                    )
+                                    calibrationGroups[selectedCalibrationTabIndex].second.forEach { param ->
+                                        RecipeParamSlider(
+                                            param = param,
+                                            currentParams = currentParams,
+                                            onParamChange = onParamChange
+                                        )
+                                    }
+                                }
+                                ColorPanelSection.LCH -> {
+                                    ColorRingTabs(
+                                        count = lchGroups.size,
+                                        selectedTabIndex = selectedLchTabIndex,
+                                        onTabSelected = { selectedLchTabIndex = it },
+                                        getColor = { getLchTabColor(it) }
+                                    )
+                                    lchGroups[selectedLchTabIndex].second.forEach { param ->
+                                        RecipeParamSlider(
+                                            param = param,
+                                            currentParams = currentParams,
+                                            onParamChange = onParamChange
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        RecipePanelTab.EFFECTS -> {
+                            if (currentEffects != null && onEffectsChange != null) {
+                                EffectsPanel(
+                                    currentParams = currentEffects,
+                                    onParamsChange = onEffectsChange,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        RecipePanelTab.REMARKS -> {
+                            ColorRecipeRemarksBar(
+                                remarks = currentParams.remarks ?: "",
+                                onRemarksChange = onRemarksChange,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        else -> {
+                            val allParams = parameterGroups[selectedTab].orEmpty()
+                            val visibleParams = if (hideNonBakeable) {
+                                allParams.filter(isBakeable)
+                            } else {
+                                allParams
+                            }
+                            visibleParams.forEach { param ->
+                                RecipeParamSlider(
+                                    param = param,
+                                    currentParams = currentParams,
+                                    onParamChange = onParamChange
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColorSectionTabs(
+    selectedSection: ColorPanelSection,
+    onSectionSelected: (ColorPanelSection) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val tabs = listOf(
+        ColorPanelSection.BASIC to R.string.recipe_color_basic,
+        ColorPanelSection.CALIBRATION to R.string.recipe_tab_calibration,
+        ColorPanelSection.LCH to R.string.recipe_tab_lch,
+    )
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        tabs.forEach { (section, title) ->
+            val selected = section == selectedSection
+            Text(
+                text = stringResource(title),
+                color = if (selected) Color.White else Color.White.copy(alpha = 0.5f),
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) Color.White.copy(alpha = 0.14f) else Color.Transparent)
+                    .clickable { onSectionSelected(section) }
+                    .padding(vertical = 7.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecipeParamSlider(
+    param: RecipeParam,
+    currentParams: ColorRecipeParams,
+    onParamChange: (RecipeParam, Float) -> Unit
+) {
+    key(param) {
+        ColorRecipeSlider(
+            param = param,
+            value = param.getValue(currentParams),
+            onValueChange = { onParamChange(param, it) },
+            onDoubleTap = { onParamChange(param, param.defaultValue) }
+        )
     }
 }
 

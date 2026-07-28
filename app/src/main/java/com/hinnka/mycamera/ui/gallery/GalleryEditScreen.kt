@@ -53,6 +53,8 @@ import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import com.hinnka.mycamera.gallery.MediaData
+import com.hinnka.mycamera.model.ColorPaletteMapper
+import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -60,7 +62,6 @@ import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
-import com.hinnka.mycamera.ui.camera.RecipeScope
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.ui.components.RawEditPanel
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionBottomSheet
@@ -94,11 +95,16 @@ import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
 import com.hinnka.mycamera.ui.icons.AppIcons
 
+private const val EDIT_TAB_LUT = 0
+private const val EDIT_TAB_ADJUSTMENTS = 1
+private const val EDIT_TAB_DETAIL = 2
+private const val EDIT_TAB_RAW = 3
+private const val EDIT_TAB_CROP = 4
+
 private data class PreviewRenderSignature(
     val photoId: String,
     val refreshKey: Long,
     val editLutId: String?,
-    val previewRecipeParamsOverride: ColorRecipeParams?,
     val editPhotoRecipeParams: ColorRecipeParams?,
     val editLutRecipeParams: ColorRecipeParams?,
     val editLutConfig: Any?,
@@ -172,14 +178,11 @@ fun GalleryEditScreen(
 
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
-    val lutScrollState = rememberLazyListState()
     val frameScrollState = rememberLazyListState()
-    var showLutEditDialog by remember { mutableStateOf(false) }
     var showBaselineLutEditSheet by remember { mutableStateOf(false) }
     var baselineLutEditId by remember { mutableStateOf<String?>(null) }
     var showRawBaselineLutSelectorSheet by remember { mutableStateOf(false) }
-    var previewRecipeParamsOverride by remember(editLutId) { mutableStateOf<ColorRecipeParams?>(null) }
-    var showEffectsSheet by remember { mutableStateOf(false) }
+    var syncAdjustmentsToLut by remember(editLutId) { mutableStateOf(false) }
 
     BackHandler {
         viewModel.exitEditMode()
@@ -246,15 +249,13 @@ fun GalleryEditScreen(
     var showOrigin by remember { mutableStateOf(false) }
 
     // 编辑标签页状态
-    var editTab by remember { mutableIntStateOf(0) } // 0: 滤镜/边框, 1: 细节处理, 2: RAW, 3: 裁剪
+    var editTab by remember { mutableIntStateOf(EDIT_TAB_LUT) }
     var showControls by remember { mutableStateOf(true) }
     var isZoomed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val refreshKey = editSourcePhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
     val isBaselineLutEditSheetVisible = showBaselineLutEditSheet && baselineLutEditId != null
-    val isLutEditSheetVisible = (showLutEditDialog || showEffectsSheet) && editLutId != null
     val shouldShowEditControls = showControls &&
-        !isLutEditSheetVisible &&
         !isBaselineLutEditSheetVisible &&
         !showRawBaselineLutSelectorSheet
 
@@ -263,7 +264,7 @@ fun GalleryEditScreen(
     )
     var previewRenderRequestId by remember { mutableLongStateOf(0L) }
     val shouldCalculateImageHistogram =
-        (showLutEditDialog && editLutId != null) || isBaselineLutEditSheetVisible
+        (editTab == EDIT_TAB_ADJUSTMENTS && editLutId != null) || isBaselineLutEditSheetVisible
 
     fun currentPreviewSignature(fast: Boolean = false): PreviewRenderSignature? {
         val photo = editSourcePhoto ?: return null
@@ -272,7 +273,6 @@ fun GalleryEditScreen(
             photoId = photo.id,
             refreshKey = refreshKey,
             editLutId = editLutId,
-            previewRecipeParamsOverride = previewRecipeParamsOverride,
             editPhotoRecipeParams = editPhotoRecipeParams,
             editLutRecipeParams = editLutRecipeParams,
             editLutConfig = editLutConfig,
@@ -327,8 +327,7 @@ fun GalleryEditScreen(
                 photo,
                 useGlobalEdit = true,
                 showOrigin = showOrigin,
-                ignoreCrop = editTab == 3,
-                recipeParamsOverride = previewRecipeParamsOverride,
+                ignoreCrop = editTab == EDIT_TAB_CROP,
                 maxEdge = maxEdge
             )
         }
@@ -432,15 +431,6 @@ fun GalleryEditScreen(
                 error,
             )
             null
-        }
-    }
-
-    LaunchedEffect(editLutId) {
-        editLutId?.let { lutId ->
-            val selectedIndex = availableLuts.indexOfFirst { it.id == lutId }
-            if (selectedIndex >= 2) {
-                lutScrollState.animateScrollToItem(selectedIndex - 2)
-            }
         }
     }
 
@@ -705,7 +695,7 @@ fun GalleryEditScreen(
                                     if (!isMultiTouch && !isMoved) {
                                         if (upEvent != null) {
                                             // 快速点击：切换控制区域显隐，或者调整景深焦点
-                                            if (editTab == 1 && viewModel.editComputationalAperture.value != null && previewBitmap != null) {
+                                            if (editTab == EDIT_TAB_DETAIL && viewModel.editComputationalAperture.value != null && previewBitmap != null) {
                                                 val tapPosition = upEvent.changes[0].position
                                                 val boxWidth = size.width.toFloat()
                                                 val boxHeight = size.height.toFloat()
@@ -758,10 +748,10 @@ fun GalleryEditScreen(
                     VideoEditPlayer(
                         photo = currentPhoto,
                         lutConfig = editLutConfig,
-                        recipeParams = if (showOrigin) null else (previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams),
+                        recipeParams = if (showOrigin) null else (editPhotoRecipeParams ?: editLutRecipeParams),
                         modifier = Modifier.fillMaxSize()
                     )
-                } else if (editTab == 3 && previewBitmap != null) {
+                } else if (editTab == EDIT_TAB_CROP && previewBitmap != null) {
                     CropOverlay(
                         bitmap = previewBitmap,
                         cropRect = editCropRect ?: android.graphics.RectF(0f, 0f, 1f, 1f),
@@ -773,7 +763,7 @@ fun GalleryEditScreen(
                 } else {
                     ZoomableEditImage(
                         previewBitmap = previewBitmap,
-                        isLutEditing = isLutEditSheetVisible || isBaselineLutEditSheetVisible,
+                        isLutEditing = editTab == EDIT_TAB_ADJUSTMENTS || isBaselineLutEditSheetVisible,
                         contentDescription = stringResource(R.string.edit),
                         onZoomChange = {
                             isZoomed = it
@@ -905,78 +895,54 @@ fun GalleryEditScreen(
                     ) {
                         // 标签页切换
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(top = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(24.dp)
                         ) {
                             TabItem(
                                 title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
-                                isSelected = editTab == 0,
-                                onClick = { editTab = 0 }
+                                isSelected = editTab == EDIT_TAB_LUT,
+                                onClick = { editTab = EDIT_TAB_LUT }
+                            )
+                            TabItem(
+                                title = stringResource(R.string.edit),
+                                isSelected = editTab == EDIT_TAB_ADJUSTMENTS,
+                                onClick = { editTab = EDIT_TAB_ADJUSTMENTS }
                             )
                             TabItem(
                                 title = stringResource(R.string.recipe_tab_post),
-                                isSelected = editTab == 1,
-                                onClick = { editTab = 1 }
+                                isSelected = editTab == EDIT_TAB_DETAIL,
+                                onClick = { editTab = EDIT_TAB_DETAIL }
                             )
                             if (isRaw) {
                                 TabItem(
                                     title = "RAW",
-                                    isSelected = editTab == 2,
-                                    onClick = { editTab = 2 }
+                                    isSelected = editTab == EDIT_TAB_RAW,
+                                    onClick = { editTab = EDIT_TAB_RAW }
                                 )
                             }
                             if (!currentPhoto.isVideo) {
                                 TabItem(
                                     title = stringResource(R.string.crop),
-                                    isSelected = editTab == 3,
-                                    onClick = { editTab = 3 }
+                                    isSelected = editTab == EDIT_TAB_CROP,
+                                    onClick = { editTab = EDIT_TAB_CROP }
                                 )
                             }
                         }
                         Column(modifier = Modifier.heightIn(max = 550.dp).verticalScroll(rememberScrollState())) {
                             when (editTab) {
-                                0 -> {
-                                    if (currentPhoto.isMotionPhoto) {
-                                        val applyEffectsToVideo by viewModel.editApplyEffectsToVideo.collectAsState()
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(top = 12.dp, bottom = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Checkbox(
-                                                checked = applyEffectsToVideo,
-                                                onCheckedChange = { viewModel.setApplyEffectsToVideo(it) },
-                                                colors = CheckboxDefaults.colors(
-                                                    checkedColor = AccentOrange,
-                                                    uncheckedColor = Color.White.copy(alpha = 0.6f),
-                                                    checkmarkColor = Color.Black
-                                                )
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = stringResource(R.string.edit_embedded_video_simultaneously),
-                                                color = Color.White,
-                                                fontSize = 14.sp
-                                            )
-                                        }
-                                    }
-
+                                EDIT_TAB_LUT -> {
                                     Spacer(modifier = Modifier.height(16.dp))
-                                    LutSelectorWithRecipeAction(
+                                    LutSelector(
                                         availableLuts = viewModel.availableLuts,
                                         currentLutId = editLutId,
                                         thumbnail = thumbnailBitmap,
                                         onLutSelected = { viewModel.setEditLut(it) },
-                                        onEditRecipeClick = if (editLutId != null) {
-                                            { showLutEditDialog = true }
-                                        } else null,
-                                        onEditEffectClick = if (editLutId != null) {
-                                            { showEffectsSheet = true }
-                                        } else null,
-                                        recipeIsCustomized = editPhotoRecipeParams != null,
                                         onManageClick = { onFilterManagementClick(it) },
-                                        categoryOrder = categoryOrder
+                                        categoryOrder = categoryOrder,
+                                        modifier = Modifier.fillMaxWidth()
                                     )
 
                                     if (!currentPhoto.isVideo) {
@@ -1060,7 +1026,171 @@ fun GalleryEditScreen(
                                         }
                                     }
                                 }
-                                1 -> {
+                                EDIT_TAB_ADJUSTMENTS -> {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    if (editLutId == null) {
+                                        Text(
+                                            text = stringResource(R.string.edit_select_lut_hint),
+                                            color = Color.White.copy(alpha = 0.55f),
+                                            fontSize = 13.sp,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 24.dp, vertical = 28.dp)
+                                        )
+                                    } else {
+                                        val effectiveRecipe = editPhotoRecipeParams ?: editLutRecipeParams
+                                        val paletteState = ColorPaletteState(
+                                            x = effectiveRecipe.paletteX,
+                                            y = effectiveRecipe.paletteY,
+                                            density = effectiveRecipe.paletteDensity
+                                        ).normalized()
+                                        val applyEffectsToVideo by viewModel.editApplyEffectsToVideo.collectAsState()
+
+                                        ColorRecipePanel(
+                                            currentParams = effectiveRecipe,
+                                            paletteState = paletteState,
+                                            onPaletteStateChange = { state ->
+                                                viewModel.setPhotoRecipeParams(
+                                                    ColorPaletteMapper.updatePaletteState(
+                                                        effectiveRecipe,
+                                                        state.normalized()
+                                                    ),
+                                                    syncToCurrentLut = syncAdjustmentsToLut
+                                                )
+                                            },
+                                            onParamChange = { param, value ->
+                                                viewModel.setPhotoRecipeParams(
+                                                    param.setValue(effectiveRecipe, value),
+                                                    syncToCurrentLut = syncAdjustmentsToLut
+                                                )
+                                            },
+                                            onParamsChange = { params ->
+                                                viewModel.setPhotoRecipeParams(
+                                                    params,
+                                                    syncToCurrentLut = syncAdjustmentsToLut
+                                                )
+                                            },
+                                            onRemarksChange = { remarks ->
+                                                viewModel.setPhotoRecipeParams(
+                                                    effectiveRecipe.copy(remarks = remarks),
+                                                    syncToCurrentLut = syncAdjustmentsToLut
+                                                )
+                                            },
+                                            onCurveChange = { channel, points ->
+                                                val updated = when (channel) {
+                                                    CurveChannel.MASTER -> effectiveRecipe.copy(masterCurvePoints = points)
+                                                    CurveChannel.RED -> effectiveRecipe.copy(redCurvePoints = points)
+                                                    CurveChannel.GREEN -> effectiveRecipe.copy(greenCurvePoints = points)
+                                                    CurveChannel.BLUE -> effectiveRecipe.copy(blueCurvePoints = points)
+                                                }
+                                                viewModel.setPhotoRecipeParams(
+                                                    updated,
+                                                    syncToCurrentLut = syncAdjustmentsToLut
+                                                )
+                                            },
+                                            imageHistogram = imageHistogram,
+                                            showLutIntensity = true,
+                                            currentEffects = effectiveRecipe.toEffectParams(),
+                                            onEffectsChange = { effects ->
+                                                val latestRecipe = viewModel.editPhotoRecipeParams.value
+                                                    ?: viewModel.editLutRecipeParams.value
+                                                viewModel.setPhotoRecipeParams(
+                                                    effects.applyTo(latestRecipe),
+                                                    syncToCurrentLut = syncAdjustmentsToLut
+                                                )
+                                            },
+                                            optionControls = {
+                                                Column(modifier = Modifier.fillMaxWidth()) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Column(
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .padding(end = 10.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = stringResource(R.string.edit_sync_lut_recipe),
+                                                                color = Color.White,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Medium
+                                                            )
+                                                            Text(
+                                                                text = stringResource(
+                                                                    R.string.edit_sync_lut_recipe_description
+                                                                ),
+                                                                color = Color.White.copy(alpha = 0.48f),
+                                                                fontSize = 9.sp,
+                                                                lineHeight = 12.sp
+                                                            )
+                                                        }
+                                                        Switch(
+                                                            checked = syncAdjustmentsToLut,
+                                                            onCheckedChange = { enabled ->
+                                                                syncAdjustmentsToLut = enabled
+                                                                if (enabled) {
+                                                                    viewModel.setPhotoRecipeParams(
+                                                                        effectiveRecipe,
+                                                                        syncToCurrentLut = true
+                                                                    )
+                                                                }
+                                                            },
+                                                            colors = SwitchDefaults.colors(
+                                                                checkedThumbColor = Color.Black,
+                                                                checkedTrackColor = AccentOrange,
+                                                                uncheckedThumbColor = Color.White.copy(alpha = 0.75f),
+                                                                uncheckedTrackColor = Color.White.copy(alpha = 0.16f),
+                                                                uncheckedBorderColor = Color.White.copy(alpha = 0.3f)
+                                                            )
+                                                        )
+                                                    }
+
+                                                    if (currentPhoto.isMotionPhoto) {
+                                                        HorizontalDivider(
+                                                            color = Color.White.copy(alpha = 0.08f)
+                                                        )
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Text(
+                                                                text = stringResource(
+                                                                    R.string.edit_embedded_video_simultaneously
+                                                                ),
+                                                                color = Color.White,
+                                                                fontSize = 12.sp,
+                                                                modifier = Modifier
+                                                                    .weight(1f)
+                                                                    .padding(end = 10.dp)
+                                                            )
+                                                            Switch(
+                                                                checked = applyEffectsToVideo,
+                                                                onCheckedChange = {
+                                                                    viewModel.setApplyEffectsToVideo(it)
+                                                                },
+                                                                colors = SwitchDefaults.colors(
+                                                                    checkedThumbColor = Color.Black,
+                                                                    checkedTrackColor = AccentOrange,
+                                                                    uncheckedThumbColor = Color.White.copy(alpha = 0.75f),
+                                                                    uncheckedTrackColor = Color.White.copy(alpha = 0.16f),
+                                                                    uncheckedBorderColor = Color.White.copy(alpha = 0.3f)
+                                                                )
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                EDIT_TAB_DETAIL -> {
                                     Spacer(modifier = Modifier.height(16.dp))
                                     if (!currentPhoto.isVideo) {
                                         val isDnCNNDenoising by viewModel.isAiDenoising.collectAsState()
@@ -1169,7 +1299,7 @@ fun GalleryEditScreen(
                                         }
                                     )
                                 }
-                                2 -> {
+                                EDIT_TAB_RAW -> {
                                     RawEditPanel(
                                         selectedDcpId = editRawDcpId,
                                         availableDcps = availableDcps,
@@ -1348,7 +1478,7 @@ fun GalleryEditScreen(
                                         }
                                     )
                                 }
-                                3 -> {
+                                EDIT_TAB_CROP -> {
                                     if (!currentPhoto.isVideo) {
                                         // 裁剪编辑
                                         val availablePhotoAspectRatios by cameraViewModel.availablePhotoAspectRatios.collectAsState()
@@ -1374,38 +1504,6 @@ fun GalleryEditScreen(
                 }
             }
         }
-    }
-
-    if (showEffectsSheet) {
-        val currentRecipe = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams
-        val currentEffectParams = currentRecipe.toEffectParams()
-        EffectsBottomSheet(
-            currentParams = currentEffectParams,
-            onParamsChange = { newParams ->
-                viewModel.setPhotoEffectParams(newParams, currentRecipe)
-            },
-            onDismiss = { showEffectsSheet = false },
-            containerColor = Color(0x151A1A1A)
-        )
-    }
-
-    if (showLutEditDialog && editLutId != null) {
-        LutEditBottomSheet(
-            lutId = editLutId!!,
-            initialParams = previewRecipeParamsOverride ?: editPhotoRecipeParams ?: editLutRecipeParams,
-            onParamsPreviewChange = {
-                previewRecipeParamsOverride = it
-            },
-            imageHistogram = imageHistogram,
-            onDismiss = {
-                previewRecipeParamsOverride = null
-                showLutEditDialog = false
-            },
-            photoRecipeParams = editPhotoRecipeParams,
-            onPhotoParamsChange = { viewModel.setPhotoRecipeParams(it) },
-            defaultScope = RecipeScope.PHOTO_LOCAL,
-            containerColor = Color(0x151A1A1A)
-        )
     }
 
     if (isBaselineLutEditSheetVisible) {

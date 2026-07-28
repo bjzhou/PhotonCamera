@@ -37,104 +37,10 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
-import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.hinnka.mycamera.ui.icons.AppIcons
-
-@Composable
-fun LutSelectorWithRecipeAction(
-    availableLuts: List<LutInfo>,
-    currentLutId: String?,
-    thumbnail: Bitmap?,
-    onLutSelected: (String?) -> Unit,
-    onEditRecipeClick: (() -> Unit)?,
-    onEditEffectClick: (() -> Unit)?,
-    modifier: Modifier = Modifier,
-    recipeIsCustomized: Boolean = false,
-    onManageClick: ((String) -> Unit)? = null,
-    categoryOrder: List<String> = emptyList()
-) {
-    val selectedLutName = availableLuts.find { it.id == currentLutId }?.getName().orEmpty()
-
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.filter).uppercase(),
-                    color = Color.White.copy(alpha = 0.4f),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-                Text(
-                    text = if (selectedLutName.isEmpty()) stringResource(R.string.none) else selectedLutName,
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.basicMarquee()
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (onEditRecipeClick != null) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(
-                                if (recipeIsCustomized) Color(0xFFFF9800).copy(alpha = 0.15f)
-                                else Color.White.copy(alpha = 0.1f)
-                            )
-                            .clickable { onEditRecipeClick() }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = AppIcons.Tune,
-                            contentDescription = null,
-                            tint = if (recipeIsCustomized) Color(0xFFFF9800) else Color(0xFFFFD700),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.color_recipe),
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-                if (onEditEffectClick != null) {
-                    EffectsActionChip(
-                        onClick = { onEditEffectClick() }
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        LutSelector(
-            availableLuts = availableLuts,
-            currentLutId = currentLutId,
-            thumbnail = thumbnail,
-            onLutSelected = onLutSelected,
-            onEditClick = onEditRecipeClick,
-            onManageClick = onManageClick,
-            categoryOrder = categoryOrder
-        )
-    }
-}
 
 private sealed class LutCategoryTab {
     data object Favorite : LutCategoryTab()
@@ -178,7 +84,6 @@ fun LutSelector(
 ) {
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-    var showLutEditDialogState by remember { mutableStateOf(false) }
     val favoriteText = stringResource(R.string.favorite)
     val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -258,8 +163,6 @@ fun LutSelector(
         }
     }
 
-    val actualShowLutEditDialog = onEditClick == null && showLutEditDialogState
-
     // 在组件首次加载时滚动到当前选中的 LUT
     LaunchedEffect(activeLutId, actualMode, filteredLuts) {
         if (actualMode == LutSelectorMode.Style) {
@@ -272,16 +175,6 @@ fun LutSelector(
                 }
             }
         }
-    }
-
-    // 全局 LUT 编辑底部弹窗
-    if (actualShowLutEditDialog && currentLutId != null) {
-        LutEditBottomSheet(
-            lutId = currentLutId,
-            onDismiss = {
-                showLutEditDialogState = false
-            }
-        )
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -384,11 +277,7 @@ fun LutSelector(
                         isCustom = !lut.isBuiltIn,
                         onClick = {
                             if (currentLutId == lut.id) {
-                                if (onEditClick != null) {
-                                    onEditClick()
-                                } else {
-                                    showLutEditDialogState = true
-                                }
+                                onEditClick?.invoke()
                             } else {
                                 onLutSelected(lut.id)
                             }
@@ -590,30 +479,6 @@ private fun LutItem(
                     tint = Color.White.copy(alpha = 0.7f),
                     modifier = Modifier.size(24.dp)
                 )
-            }
-
-            if (isSelected) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.3f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(Color.White.copy(alpha = 0.2f), CircleShape)
-                            .border(1.dp, Color.White.copy(alpha = 0.5f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = AppIcons.Tune,
-                            contentDescription = stringResource(R.string.edit),
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
             }
 
             if (isVip) {

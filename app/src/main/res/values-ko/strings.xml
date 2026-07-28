@@ -168,7 +168,12 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">현재 LUT도 업데이트</string>
+    <string name="edit_sync_lut_recipe_description">색상, 효과, LUT 강도도 선택한 LUT에 저장합니다.</string>
+    <string name="edit_select_lut_hint">색상과 효과를 조정하기 전에 LUT를 선택하세요.</string>
+    <string name="edit_color_and_effects">색상 및 효과 조정</string>
     <string name="recipe_tab_color">색상</string>
+    <string name="recipe_color_basic">기본</string>
     <string name="recipe_tab_light">빛</string>
     <string name="recipe_tab_texture">질감</string>
     <string name="recipe_tab_post">후보정</string>

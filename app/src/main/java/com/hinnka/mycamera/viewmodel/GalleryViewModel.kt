@@ -34,7 +34,6 @@ import com.hinnka.mycamera.lut.exportVideoWithEffects
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
@@ -254,6 +253,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 仅此照片的色彩配方覆盖，null 表示跟随 LUT 默认配方 */
     var editPhotoRecipeParams = MutableStateFlow<ColorRecipeParams?>(null)
         private set
+
+    private var editLutRecipeSyncJob: Job? = null
+    private var pendingEditLutRecipeSync: Pair<String, ColorRecipeParams>? = null
 
     var editLutConfig: LutConfig? by mutableStateOf(null)
         private set
@@ -2086,6 +2088,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 退出编辑模式
      */
     fun exitEditMode() {
+        viewModelScope.launch {
+            flushPendingEditLutRecipeSync()
+        }
         isEditing = false
         editLutId.value = null
         editLutConfig = null
@@ -2126,13 +2131,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 设置照片级别的色彩配方覆盖（null = 清除覆盖，跟随 LUT 默认）
      */
-    fun setPhotoRecipeParams(params: ColorRecipeParams?) {
+    fun setPhotoRecipeParams(
+        params: ColorRecipeParams?,
+        syncToCurrentLut: Boolean = false
+    ) {
         editPhotoRecipeParams.value = params
+        if (syncToCurrentLut && params != null) {
+            val lutId = editLutId.value ?: return
+            pendingEditLutRecipeSync = lutId to params
+            editLutRecipeSyncJob?.cancel()
+            editLutRecipeSyncJob = viewModelScope.launch {
+                delay(250)
+                editLutRecipeSyncJob = null
+                flushPendingEditLutRecipeSync()
+            }
+        }
     }
 
-    fun setPhotoEffectParams(params: EffectParams, baseRecipeOverride: ColorRecipeParams? = null) {
-        val baseRecipe = baseRecipeOverride ?: editPhotoRecipeParams.value ?: editLutRecipeParams.value
-        editPhotoRecipeParams.value = params.applyTo(baseRecipe)
+    private suspend fun flushPendingEditLutRecipeSync() {
+        editLutRecipeSyncJob?.cancel()
+        editLutRecipeSyncJob = null
+        val (lutId, params) = pendingEditLutRecipeSync ?: return
+        pendingEditLutRecipeSync = null
+        contentRepository.lutManager.saveColorRecipeParams(lutId, params)
     }
 
     /**
@@ -3074,6 +3095,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             try {
+                flushPendingEditLutRecipeSync()
                 val context = getApplication<Application>()
                 val wasSystemPhoto = selectedTab == GalleryTab.SYSTEM
 

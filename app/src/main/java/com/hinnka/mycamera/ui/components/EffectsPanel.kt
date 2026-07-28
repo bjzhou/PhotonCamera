@@ -1,17 +1,9 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +20,6 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.RecipeParam
 import kotlin.math.abs
-import com.hinnka.mycamera.ui.icons.AppIcons
 
 enum class EffectType(
     val recipeParam: RecipeParam,
@@ -74,66 +65,8 @@ enum class EffectType(
     }
 }
 
-@Composable
-fun EffectsActionChip(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(
-                Color(0xFF00FFCC).copy(alpha = 0.15f)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Icon(
-            imageVector = AppIcons.Layers,
-            contentDescription = stringResource(com.hinnka.mycamera.R.string.effects_title),
-            tint = Color(0xFF00FFCC),
-            modifier = Modifier.size(14.dp)
-        )
-        Text(
-            text = stringResource(com.hinnka.mycamera.R.string.effects_title),
-            color = Color.White,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun EffectsBottomSheet(
-    currentParams: EffectParams,
-    onParamsChange: (EffectParams) -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-    containerColor: Color = Color.Black.copy(alpha = 0.86f)
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = containerColor,
-        scrimColor = Color.Transparent,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) },
-        modifier = modifier
-    ) {
-        EffectsPanel(
-            currentParams = currentParams,
-            onParamsChange = onParamsChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp)
-                .navigationBarsPadding()
-        )
-    }
-}
-
 /**
- * 独立的物理画面效果控制面板
+ * 物理画面效果内容，由统一编辑面板作为“效果”参数组承载。
  */
 @Composable
 fun EffectsPanel(
@@ -146,13 +79,10 @@ fun EffectsPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState()),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             EffectType.entries.forEach { effect ->

@@ -167,7 +167,12 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">Perbarui juga LUT saat ini</string>
+    <string name="edit_sync_lut_recipe_description">Warna, efek, dan intensitas LUT juga disimpan ke LUT yang dipilih.</string>
+    <string name="edit_select_lut_hint">Pilih LUT sebelum menyesuaikan warna dan efek.</string>
+    <string name="edit_color_and_effects">Sesuaikan warna dan efek</string>
     <string name="recipe_tab_color">Warna</string>
+    <string name="recipe_color_basic">Dasar</string>
     <string name="recipe_tab_light">Cahaya</string>
     <string name="recipe_tab_texture">Tekstur</string>
     <string name="recipe_tab_post">Pasca</string>

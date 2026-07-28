@@ -167,7 +167,12 @@
     <string name="recipe_param_lut_intensity">LUT</string>
     
     <!-- Color Recipe Tabs -->
+    <string name="edit_sync_lut_recipe">現在の LUT も更新</string>
+    <string name="edit_sync_lut_recipe_description">カラー、エフェクト、LUT 強度も選択中の LUT に保存します。</string>
+    <string name="edit_select_lut_hint">カラーとエフェクトを調整する前に LUT を選択してください。</string>
+    <string name="edit_color_and_effects">カラーとエフェクトを調整</string>
     <string name="recipe_tab_color">カラー</string>
+    <string name="recipe_color_basic">基本</string>
     <string name="recipe_tab_light">ライト</string>
     <string name="recipe_tab_texture">テクスチャ</string>
     <string name="recipe_tab_post">現像</string>

@@ -402,11 +402,11 @@
     <!-- Color Recipe -->
     <string name="color_recipe">色彩配方</string>
     <string name="effects_title">效果</string>
-    <string name="recipe_scope_lut">LUT 默认</string>
-    <string name="recipe_scope_photo">仅此照片</string>
-    <string name="recipe_scope_photo_reset">恢复 LUT 默认</string>
-    <string name="color_recipe_reset_all">重置所有参数</string>
-    <string name="recipe_scope_photo_hint">调整仅作用于这张照片</string>
+    <string name="color_recipe_reset_all">重置</string>
+    <string name="edit_sync_lut_recipe">同时更新当前 LUT</string>
+    <string name="edit_sync_lut_recipe_description">色彩、效果和滤镜强度都会同时写入当前 LUT。</string>
+    <string name="edit_select_lut_hint">请先选择一个 LUT，再调整色彩与效果。</string>
+    <string name="edit_color_and_effects">调整色彩与效果</string>
 
     <!-- Color Recipe Parameters -->
     <string name="recipe_param_exposure">曝光</string>
@@ -468,6 +468,7 @@
 
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">颜色</string>
+    <string name="recipe_color_basic">基础</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">亮度</string>
     <string name="recipe_tab_curve">曲线</string>
@@ -481,7 +482,7 @@
     <string name="recipe_lch_blue">蓝</string>
     <string name="recipe_lch_purple">紫</string>
     <string name="recipe_lch_magenta">品红</string>
-    <string name="recipe_tab_texture">效果</string>
+    <string name="recipe_tab_texture">质感</string>
     <string name="recipe_tab_lens">氛围</string>
     <string name="recipe_tab_post">细节</string>
     <string name="recipe_tab_remarks">备注</string>
