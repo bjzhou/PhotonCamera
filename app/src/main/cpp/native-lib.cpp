@@ -585,6 +585,7 @@ struct DngRawTagInfo {
   std::vector<double> blackDeltaV;
   bool hasFixBadPixelsList = false;
   std::vector<float> warpRectilinear;
+  std::vector<int> warpRectilinearFlags;
 };
 
 static int bayerBlackLevelIndexForPattern(int cfaPattern, int col, int row) {
@@ -2513,6 +2514,7 @@ static void parseDngOpcodeList(const std::vector<unsigned char> &data,
     if (offset + 16 > data.size())
       return;
     const uint32_t id = dngOpcodeReadU32(data.data() + offset);
+    const uint32_t flags = dngOpcodeReadU32(data.data() + offset + 8);
     const uint32_t payloadSize = dngOpcodeReadU32(data.data() + offset + 12);
     offset += 16;
     if (payloadSize > data.size() - offset)
@@ -2544,8 +2546,10 @@ static void parseDngOpcodeList(const std::vector<unsigned char> &data,
           valid = valid && std::isfinite(value);
           warp[i] = static_cast<float>(value);
         }
-        if (valid)
+        if (valid) {
           info.warpRectilinear.insert(info.warpRectilinear.end(), warp.begin(), warp.end());
+          info.warpRectilinearFlags.push_back(static_cast<int>(flags));
+        }
       }
     }
     offset += payloadSize;
@@ -3313,7 +3317,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[FLandroid/graphics/Bitmap;)V");
+                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[F[ILandroid/graphics/Bitmap;)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -3616,12 +3620,20 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     env->SetFloatArrayRegion(noiseProfileArray, 0, 8, ed.noiseProfile);
   }
   jfloatArray warpRectilinearArray = nullptr;
+  jintArray warpRectilinearFlagsArray = nullptr;
   if (!dngRawTagInfo.warpRectilinear.empty() &&
-      dngRawTagInfo.warpRectilinear.size() % 8 == 0) {
+      dngRawTagInfo.warpRectilinear.size() % 8 == 0 &&
+      dngRawTagInfo.warpRectilinearFlags.size() ==
+          dngRawTagInfo.warpRectilinear.size() / 8) {
     warpRectilinearArray = env->NewFloatArray(dngRawTagInfo.warpRectilinear.size());
     env->SetFloatArrayRegion(warpRectilinearArray, 0,
                              dngRawTagInfo.warpRectilinear.size(),
                              dngRawTagInfo.warpRectilinear.data());
+    warpRectilinearFlagsArray =
+        env->NewIntArray(dngRawTagInfo.warpRectilinearFlags.size());
+    env->SetIntArrayRegion(warpRectilinearFlagsArray, 0,
+                           dngRawTagInfo.warpRectilinearFlags.size(),
+                           dngRawTagInfo.warpRectilinearFlags.data());
   }
 
   jobject dngData = env->NewObject(
@@ -3633,7 +3645,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       exportedLscHeight,
       exportedLscGridArray, exposureBias, iso,
       shutterSpeedLong, aperture, activeArray, defaultCropArray, noiseProfileArray,
-      warpRectilinearArray,
+      warpRectilinearArray, warpRectilinearFlagsArray,
       embeddedPreviewBitmap);
 
   // 释放资源

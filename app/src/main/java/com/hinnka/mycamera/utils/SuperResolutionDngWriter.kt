@@ -18,6 +18,7 @@ import com.hinnka.mycamera.raw.DcpProfile
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpRenderPlan
 import com.hinnka.mycamera.raw.DcpToneCurve
+import com.hinnka.mycamera.raw.DngWarpRectilinear
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -35,6 +36,35 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.math.sqrt
+
+/**
+ * Converts AOSP DngCreator's normalized Camera2 distortion vector into the six DNG 1.3
+ * WarpRectilinear coefficients.
+ *
+ * normalizeLensDistortion scales element zero as well as the higher-order terms. That first
+ * element is the zoom-out needed to keep the corrected frame inside the available RAW source;
+ * replacing it with 1.0 makes the edge of the warp sample outside the image.
+ */
+internal fun camera2DistortionToDngWarpCoefficients(
+    normalizedDistortion: DoubleArray,
+    maxRadius: Double,
+    focal: Double,
+): DoubleArray {
+    require(normalizedDistortion.size == 6)
+    require(maxRadius.isFinite() && maxRadius > 0.0)
+    require(focal.isFinite() && focal > 0.0)
+    val radiusOverFocal = maxRadius / focal
+    val radiusOverFocalSquared = radiusOverFocal * radiusOverFocal
+    return doubleArrayOf(
+        normalizedDistortion[0],
+        normalizedDistortion[1] * radiusOverFocalSquared,
+        normalizedDistortion[2] * radiusOverFocalSquared * radiusOverFocalSquared,
+        normalizedDistortion[3] * radiusOverFocalSquared * radiusOverFocalSquared *
+            radiusOverFocalSquared,
+        normalizedDistortion[4] * radiusOverFocal,
+        normalizedDistortion[5] * radiusOverFocal,
+    )
+}
 
 object SuperResolutionDngWriter {
     private const val TAG = "SuperResolutionDngWriter"
@@ -1124,38 +1154,76 @@ object SuperResolutionDngWriter {
         val normalizeCy = if (geometry.bufferIncludesPixelArray) cy + geometry.sourceOriginY else cy
         val xMin = if (geometry.bufferIncludesPixelArray) geometry.sourceOriginX else 0
         val yMin = if (geometry.bufferIncludesPixelArray) geometry.sourceOriginY else 0
-        normalizeLensDistortion(
-            normalizedDistortion,
-            normalizeCx.toDouble(),
-            normalizeCy.toDouble(),
-            focal.toDouble(),
-            geometry.sourceWidth,
-            geometry.sourceHeight,
-            xMin,
-            yMin,
-        )
+        if (!normalizeLensDistortion(
+                normalizedDistortion,
+                normalizeCx.toDouble(),
+                normalizeCy.toDouble(),
+                focal.toDouble(),
+                geometry.sourceWidth,
+                geometry.sourceHeight,
+                xMin,
+                yMin,
+            )
+        ) {
+            PLog.w(TAG, "Skipping WarpRectilinear because no source-covered normalization exists")
+            return null
+        }
 
         val maxX = maxOf(geometry.sourceWidth - cx, cx).toDouble()
         val maxY = maxOf(geometry.sourceHeight - cy, cy).toDouble()
         val maxRadius = sqrt(maxX * maxX + maxY * maxY)
-        val focalSquared = focal.toDouble() * focal.toDouble()
-        if (!maxRadius.isFinite() || maxRadius <= 0.0 || focalSquared <= 0.0) return null
-        val radiusSquared = maxRadius * maxRadius
-        val coefficients = doubleArrayOf(
-            1.0,
-            normalizedDistortion[1] * radiusSquared / focalSquared,
-            normalizedDistortion[2] * radiusSquared * radiusSquared / (focalSquared * focalSquared),
-            normalizedDistortion[3] * radiusSquared * radiusSquared * radiusSquared /
-                (focalSquared * focalSquared * focalSquared),
-            normalizedDistortion[4] * maxRadius / focal,
-            normalizedDistortion[5] * maxRadius / focal,
+        if (!maxRadius.isFinite() || maxRadius <= 0.0) return null
+        val coefficients = camera2DistortionToDngWarpCoefficients(
+            normalizedDistortion = normalizedDistortion,
+            maxRadius = maxRadius,
+            focal = focal.toDouble(),
         )
         if (coefficients.any { !it.isFinite() }) return null
+        val stage3Width = if (geometry.bufferIncludesPixelArray) {
+            geometry.sourceWidth
+        } else {
+            geometry.width
+        }
+        val stage3Height = if (geometry.bufferIncludesPixelArray) {
+            geometry.sourceHeight
+        } else {
+            geometry.height
+        }
+        val centerH = (cx / geometry.sourceWidth).toDouble().coerceIn(0.0, 1.0)
+        val centerV = (cy / geometry.sourceHeight).toDouble().coerceIn(0.0, 1.0)
+        val parameters = FloatArray(8) { index ->
+            when {
+                index < 6 -> coefficients[index].toFloat()
+                index == 6 -> centerH.toFloat()
+                else -> centerV.toFloat()
+            }
+        }
+        val cropRight = (geometry.defaultCropLeft + geometry.defaultCropWidth).roundToInt()
+        val cropBottom = (geometry.defaultCropTop + geometry.defaultCropHeight).roundToInt()
+        if (!DngWarpRectilinear.hasSourceCoverage(
+                parameters = parameters,
+                width = stage3Width,
+                height = stage3Height,
+                left = geometry.defaultCropLeft.roundToInt(),
+                top = geometry.defaultCropTop.roundToInt(),
+                right = cropRight,
+                bottom = cropBottom,
+            )
+        ) {
+            PLog.w(
+                TAG,
+                "Skipping WarpRectilinear because DefaultCrop lacks source coverage: " +
+                    "stage3=${stage3Width}x$stage3Height " +
+                    "crop=${geometry.defaultCropLeft},${geometry.defaultCropTop}," +
+                    "$cropRight,$cropBottom coefficients=${coefficients.contentToString()}",
+            )
+            return null
+        }
         val payload = ByteArrayOutputStream()
         payload.write(beUInt(1))
         coefficients.forEach { payload.write(beDouble(it)) }
-        payload.write(beDouble((cx / geometry.sourceWidth).toDouble().coerceIn(0.0, 1.0)))
-        payload.write(beDouble((cy / geometry.sourceHeight).toDouble().coerceIn(0.0, 1.0)))
+        payload.write(beDouble(centerH))
+        payload.write(beDouble(centerV))
         val opcode = buildOpcode(id = 1, flags = 1, payload = payload.toByteArray())
         return ByteArrayOutputStream().apply {
             write(beUInt(1))
@@ -1173,7 +1241,7 @@ object SuperResolutionDngWriter {
         preCorrectionHeight: Int,
         xMin: Int,
         yMin: Int,
-    ) {
+    ): Boolean {
         val scale = findPostCorrectionScale(
             distortion,
             cx,
@@ -1183,12 +1251,13 @@ object SuperResolutionDngWriter {
             preCorrectionHeight,
             xMin,
             yMin,
-        ) ?: return
+        ) ?: return false
         val scalePowers = intArrayOf(1, 3, 5, 7, 2, 2)
         distortion.indices.forEach { index ->
             distortion[index] *= Math.pow(scale, scalePowers[index].toDouble())
         }
         PLog.d(TAG, "DNG WarpRectilinear post-correction scale=$scale")
+        return true
     }
 
     private fun findPostCorrectionScale(

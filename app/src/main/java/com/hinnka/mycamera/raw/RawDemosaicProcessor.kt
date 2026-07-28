@@ -1686,6 +1686,7 @@ class RawDemosaicProcessor {
         var dngRawDataCleanup: DngRawData? = null
         var embeddedDngJpegPreview: Bitmap? = null
         var dngWarpRectilinear: FloatArray? = null
+        var dngWarpRectilinearFlags: IntArray? = null
         val requestedColorEngine = rawRenderingEngine
         val hasDcpSelection = dcpRenderPlan != null || rawDcpId != null
         val profileWorkingColorSpace = if (requestedColorEngine.isHncs) {
@@ -1731,10 +1732,12 @@ class RawDemosaicProcessor {
                 "RAW_CROP_TRACE stage=DNG_READ raw=${dngRawData.width}x${dngRawData.height} " +
                     "activeArray=${dngRawData.activeArray?.contentToString()} " +
                     "defaultCrop=${dngRawData.defaultCrop?.contentToString()} " +
-                    "warpCount=${dngRawData.warpRectilinear?.size?.div(8) ?: 0}"
+                    "warpCount=${dngRawData.warpRectilinear?.size?.div(8) ?: 0} " +
+                    "warpFlags=${dngRawData.warpRectilinearFlags?.contentToString()}"
             )
             embeddedDngJpegPreview = dngRawData.embeddedPreview
             dngWarpRectilinear = dngRawData.warpRectilinear
+            dngWarpRectilinearFlags = dngRawData.warpRectilinearFlags
             actualRawData = dngRawData.rawData
             actualWidth = dngRawData.width
             actualHeight = dngRawData.height
@@ -1890,19 +1893,20 @@ class RawDemosaicProcessor {
                 "aspectRatio=$aspectRatio rotation=$actualRotation outputSourceBounds=$outputSourceBounds"
         )
         val rawOutputBounds = outputSourceBounds.toOutputBounds(actualRotation)
+        val applicableDngWarpRectilinear = filterApplicableWarpRectilinear(
+            warps = dngWarpRectilinear,
+            flags = dngWarpRectilinearFlags,
+            width = actualWidth,
+            height = actualHeight,
+            outputSourceBounds = outputSourceBounds,
+        )
         // Photon has historically processed the whole sensor before the final crop, so a small
         // output crop does not make a 100 MP input cheap. Trigger on either effective output or
         // source processing footprint.
         val highResolutionOutput =
             RawTilePlanner.shouldTile(outputSourceBounds.width(), outputSourceBounds.height()) ||
                 RawTilePlanner.shouldTile(actualWidth, actualHeight)
-        val hasActiveWarp = dngWarpRectilinear
-            ?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }
-            ?.let { warps ->
-                warps.indices.step(8).any { offset ->
-                    !isNoOpWarpRectilinear(warps.copyOfRange(offset, offset + 8))
-                }
-            } == true
+        val hasActiveWarp = applicableDngWarpRectilinear?.isNotEmpty() == true
         val tileBlockingReason = when {
             !highResolutionOutput -> null
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
@@ -2058,7 +2062,7 @@ class RawDemosaicProcessor {
                 hueSatMapSupportsOverrange =
                     requestedProfileToneMapMode != RawProfileToneMapMode.Photon &&
                         resolvedDcpRenderPlan?.supportsOverrange == true,
-                warpRectilinear = dngWarpRectilinear,
+                warpRectilinear = applicableDngWarpRectilinear,
             )?.takeIf { it.isValid }
             if (generated != null) {
                 profileGainTableMap = generated
@@ -2313,7 +2317,7 @@ class RawDemosaicProcessor {
                         )
                     }
                 }
-                dngWarpRectilinear?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }?.let { warps ->
+                applicableDngWarpRectilinear?.let { warps ->
                     var appliedWarpCount = 0
                     for (offset in warps.indices step 8) {
                         val parameters = warps.copyOfRange(offset, offset + 8)
@@ -2321,13 +2325,6 @@ class RawDemosaicProcessor {
                         // transform with zero tangential terms. Preserve that Stage 3 behavior.
                         if (isNoOpWarpRectilinear(parameters)) {
                             PLog.d(TAG, "Skipping no-op DNG WarpRectilinear")
-                            continue
-                        }
-                        if (!isSafeWarpRectilinear(parameters, actualWidth, actualHeight)) {
-                            PLog.w(
-                                TAG,
-                                "Skipping unsafe optional DNG WarpRectilinear: ${parameters.contentToString()}"
-                            )
                             continue
                         }
                         PLog.d(TAG, "Applying DNG WarpRectilinear: ${parameters.contentToString()}")
@@ -2409,7 +2406,7 @@ class RawDemosaicProcessor {
                         cameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
                         hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
-                        warpRectilinear = dngWarpRectilinear,
+                        warpRectilinear = applicableDngWarpRectilinear,
                     )
                     else -> null
                 }
@@ -3378,9 +3375,6 @@ class RawDemosaicProcessor {
                 for (offset in warps.indices step 8) {
                     val parameters = warps.copyOfRange(offset, offset + 8)
                     if (isNoOpWarpRectilinear(parameters)) continue
-                    if (!isSafeWarpRectilinear(parameters, rawTextureWidth, rawTextureHeight)) {
-                        continue
-                    }
                     parameters.forEach { activeWarpParameters += it }
                 }
             }
@@ -6475,45 +6469,67 @@ class RawDemosaicProcessor {
         return parameters[0] == 1f && (1..5).all { index -> parameters[index] == 0f }
     }
 
-    private fun isSafeWarpRectilinear(
-        parameters: FloatArray,
+    private fun filterApplicableWarpRectilinear(
+        warps: FloatArray?,
+        flags: IntArray?,
         width: Int,
         height: Int,
-    ): Boolean {
-        if (parameters.size != 8 || parameters.any { !it.isFinite() }) return false
-        val centerX = parameters[6]
-        val centerY = parameters[7]
-        if (centerX !in 0f..1f || centerY !in 0f..1f || width <= 1 || height <= 1) return false
-        val centerPxX = centerX * width
-        val centerPxY = centerY * height
-        val farX = maxOf(centerPxX, width - centerPxX)
-        val farY = maxOf(centerPxY, height - centerPxY)
-        val normRadius = kotlin.math.sqrt(farX * farX + farY * farY).coerceAtLeast(1f)
-        for (gridY in 0..16) {
-            for (gridX in 0..16) {
-                val dstX = width * gridX / 16f
-                val dstY = height * gridY / 16f
-                val dx = (dstX - centerPxX) / normRadius
-                val dy = (dstY - centerPxY) / normRadius
-                val r2 = (dx * dx + dy * dy).coerceAtMost(1f)
-                val ratio = parameters[0] + parameters[1] * r2 +
-                    parameters[2] * r2 * r2 + parameters[3] * r2 * r2 * r2
-                if (!ratio.isFinite() || ratio !in 0.5f..2f) return false
-                val tangentX = parameters[5] * (r2 + 2f * dx * dx) +
-                    2f * parameters[4] * dx * dy
-                val tangentY = parameters[4] * (r2 + 2f * dy * dy) +
-                    2f * parameters[5] * dx * dy
-                val srcX = centerPxX + normRadius * (dx * ratio + tangentX)
-                val srcY = centerPxY + normRadius * (dy * ratio + tangentY)
-                if (!srcX.isFinite() || !srcY.isFinite()) return false
-                val toleranceX = width * 0.02f
-                val toleranceY = height * 0.02f
-                if (srcX !in -toleranceX..(width + toleranceX) ||
-                    srcY !in -toleranceY..(height + toleranceY)
-                ) return false
+        outputSourceBounds: Rect,
+    ): FloatArray? {
+        if (warps == null || warps.isEmpty()) return null
+        if (warps.size % 8 != 0) {
+            PLog.w(TAG, "Ignoring malformed DNG WarpRectilinear array size=${warps.size}")
+            return null
+        }
+        val opcodeCount = warps.size / 8
+        if (flags != null && flags.size != opcodeCount) {
+            PLog.w(
+                TAG,
+                "DNG WarpRectilinear flags count=${flags.size} does not match opcodes=$opcodeCount",
+            )
+        }
+
+        val applicable = ArrayList<Float>(warps.size)
+        for (opcodeIndex in 0 until opcodeCount) {
+            val offset = opcodeIndex * 8
+            val parameters = warps.copyOfRange(offset, offset + 8)
+            if (isNoOpWarpRectilinear(parameters)) {
+                PLog.d(TAG, "Skipping no-op DNG WarpRectilinear")
+                continue
+            }
+            val opcodeFlags = flags?.getOrNull(opcodeIndex) ?: 0
+            val decision = DngWarpRectilinear.decide(
+                parameters = parameters,
+                flags = opcodeFlags,
+                width = width,
+                height = height,
+                left = outputSourceBounds.left,
+                top = outputSourceBounds.top,
+                right = outputSourceBounds.right,
+                bottom = outputSourceBounds.bottom,
+            )
+            when (decision.rejection) {
+                DngWarpRectilinear.Rejection.NONE -> {
+                    parameters.forEach(applicable::add)
+                }
+                DngWarpRectilinear.Rejection.MALFORMED_OR_UNSAFE -> {
+                    PLog.w(
+                        TAG,
+                        "Skipping malformed or numerically unsafe DNG WarpRectilinear " +
+                            "flags=$opcodeFlags parameters=${parameters.contentToString()}",
+                    )
+                }
+                DngWarpRectilinear.Rejection.OPTIONAL_REQUIRES_EDGE_CLAMPING -> {
+                    PLog.w(
+                        TAG,
+                        "Skipping optional DNG WarpRectilinear without source coverage for " +
+                            "DefaultCrop=$outputSourceBounds; applying it would repeat edge pixels. " +
+                            "parameters=${parameters.contentToString()}",
+                    )
+                }
             }
         }
-        return true
+        return applicable.takeIf { it.isNotEmpty() }?.toFloatArray()
     }
 
     private fun roundUp(value: Int, multiple: Int): Int {

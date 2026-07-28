@@ -62,6 +62,7 @@ data class DngRawData @Keep constructor(
     val defaultCrop: IntArray?, // [left, top, right, bottom] relative to rawData
     val noiseProfile: FloatArray?, // NoiseProfile [S1, O1, S2, O2, ...]
     val warpRectilinear: FloatArray?, // repeated [k0, k1, k2, k3, t0, t1, centerH, centerV]
+    val warpRectilinearFlags: IntArray?, // one DNG opcode flags value per warp
     val embeddedPreview: Bitmap? = null,
 ) : AutoCloseable {
 
@@ -132,6 +133,10 @@ data class DngRawData @Keep constructor(
             if (other.warpRectilinear == null) return false
             if (!warpRectilinear.contentEquals(other.warpRectilinear)) return false
         } else if (other.warpRectilinear != null) return false
+        if (warpRectilinearFlags != null) {
+            if (other.warpRectilinearFlags == null) return false
+            if (!warpRectilinearFlags.contentEquals(other.warpRectilinearFlags)) return false
+        } else if (other.warpRectilinearFlags != null) return false
         if (embeddedPreview != null) {
             if (other.embeddedPreview == null) return false
             if (!embeddedPreview.sameAs(other.embeddedPreview)) return false
@@ -165,6 +170,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + (lensShadingMapGrid?.contentHashCode() ?: 0)
         result = 31 * result + (defaultCrop?.contentHashCode() ?: 0)
         result = 31 * result + (warpRectilinear?.contentHashCode() ?: 0)
+        result = 31 * result + (warpRectilinearFlags?.contentHashCode() ?: 0)
         result = 31 * result + (embeddedPreview?.hashCode() ?: 0)
         return result
     }

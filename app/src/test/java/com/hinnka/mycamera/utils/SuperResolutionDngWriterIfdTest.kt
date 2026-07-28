@@ -9,6 +9,22 @@ import java.nio.ByteOrder
 
 class SuperResolutionDngWriterIfdTest {
     @Test
+    fun `WarpRectilinear keeps DngCreator normalization scale as radial offset`() {
+        val coefficients = camera2DistortionToDngWarpCoefficients(
+            normalizedDistortion = doubleArrayOf(0.984, 0.01, 0.002, -0.0005, 0.0002, -0.0003),
+            maxRadius = 2.0,
+            focal = 4.0,
+        )
+
+        assertEquals(0.984, coefficients[0], 0.0)
+        assertEquals(0.0025, coefficients[1], 1e-12)
+        assertEquals(0.000125, coefficients[2], 1e-12)
+        assertEquals(-0.0000078125, coefficients[3], 1e-12)
+        assertEquals(0.0001, coefficients[4], 1e-12)
+        assertEquals(-0.00015, coefficients[5], 1e-12)
+    }
+
+    @Test
     fun `header links ExifIFD and keeps focal length out of IFD0`() {
         val primaryEntries = listOf(
             tiffEntry(TAG_STRIP_OFFSETS, TYPE_LONG, 1, uintBytes(0)),
