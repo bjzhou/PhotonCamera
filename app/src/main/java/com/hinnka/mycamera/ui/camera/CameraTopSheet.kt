@@ -4,6 +4,7 @@ import android.media.AudioDeviceInfo
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.compose.animation.*
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,12 +19,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
@@ -52,6 +58,42 @@ private enum class VideoSettingPanel {
 }
 
 private val CameraTopSheetContentTopPadding = 32.dp
+
+/**
+ * Keeps scroll-boundary drag and fling remainders inside the RAW sheet content.
+ *
+ * ModalBottomSheet otherwise settles its own anchors with those remainders. When the sheet is
+ * already expanded, repeated settling can still produce a visible bounce on some devices. The
+ * connection only consumes forward scrolling at the content bottom, so dragging down from the
+ * content top and dragging the sheet handle retain their standard collapse/dismiss behavior.
+ */
+private class RawSheetScrollBoundaryConnection(
+    private val scrollState: ScrollState
+) : NestedScrollConnection {
+    override fun onPostScroll(
+        consumed: Offset,
+        available: Offset,
+        source: NestedScrollSource
+    ): Offset {
+        return if (
+            source == NestedScrollSource.UserInput &&
+            available.y < 0f &&
+            !scrollState.canScrollForward
+        ) {
+            Offset(x = 0f, y = available.y)
+        } else {
+            Offset.Zero
+        }
+    }
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+        return if (available.y < 0f && !scrollState.canScrollForward) {
+            Velocity(x = 0f, y = available.y)
+        } else {
+            Velocity.Zero
+        }
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -621,6 +663,10 @@ fun CameraTopSheet(
     }
 
     if (showRawSheet) {
+        val rawSheetScrollState = rememberScrollState()
+        val rawSheetScrollBoundaryConnection = remember(rawSheetScrollState) {
+            RawSheetScrollBoundaryConnection(rawSheetScrollState)
+        }
         ModalBottomSheet(
             onDismissRequest = { showRawSheet = false },
             containerColor = Color(0xFF1E1E1E),
@@ -629,7 +675,8 @@ fun CameraTopSheet(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .nestedScroll(rawSheetScrollBoundaryConnection)
+                    .verticalScroll(rawSheetScrollState)
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
