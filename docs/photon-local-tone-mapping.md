@@ -29,7 +29,7 @@
 | BGU spatial bin | `s_sigma=16` | 每个 DNG 空间点 16×16 个 GPU RAW 样本 | DNG map origin/spacing 由实际 `statsBounds` 归一化，并平移半个 bin，使点精确位于采样 tile 中心 |
 | BGU histogram | RGB 3×4 affine normal equations，输入/输出为已完成变换的图像对 | 直接使用 source-linear `I` 与 Local Laplacian 的最终 SDR target `T`，求解 `T/BaselineExposure = gain × I` | BGU 只负责把已经确定的 `(I,T)` 图像对编码成 PGTM，不再定义第二套影调；DNG PGTM 只能存 RGB 共用乘法 gain，因此去掉 affine intercept，避免写表后退化为 `b/x` |
 | BGU blur | 7 taps：中心 `1`，距离 1/2/3 为 `1/8,1/27,1/64` | 相同，按 z/y/x 分离执行 | 无 |
-| BGU regularization | Halide 当前 BGU：固定 `lambda=0.1`，相当于 1/10 个样本并拉向 identity；上游已移除按 `N+1` 放大并拉向 cell average gain 的旧逻辑，因为其正则强度方向相反 | 直接 gain 模型的分母 `ΣI²` 加 `lambda`，分子 `Σ((T/BaselineExposure)·I)` 加 `lambda` | identity gain 为 1；BaselineExposure 只在目标换算时除一次 |
+| BGU regularization | Halide 当前 BGU：固定 `lambda=0.1`，相当于 1/10 个样本并拉向 identity；上游已移除按 `N+1` 放大并拉向 cell average gain 的旧逻辑，因为其正则强度方向相反 | 直接 gain 模型将 identity 先验按 cell 的 `mean(I²)=ΣI²/Σw` 缩放：`priorXX=lambda·mean(I²)`，再求解 `(Σ((T/BaselineExposure)·I)+priorXX)/(ΣI²+priorXX)`；无可观测输入能量的 cell 回退到 gain 1 | 在标量 `T=gain·I` 模型中，直接加未缩放的 `lambda` 等价于加入一个 `I=1` 的全尺度样本，会错误压制暗部 gain；BaselineExposure 只在目标换算时除一次 |
 | slice | 对空间与强度网格三线性插值 | DNG 负责空间双线性；每个表点执行强度线性 slice | 表格离散后与原三线性形式等价 |
 | DNG 合法性 | 不适用 | gain 仅限制为 `[1/4096,4096]` | DNG 表只要求有限正 gain；不在 BGU 输出后增加参考实现不存在的单调投影 |
 

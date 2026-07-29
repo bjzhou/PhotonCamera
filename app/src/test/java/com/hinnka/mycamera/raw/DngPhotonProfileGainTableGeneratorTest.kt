@@ -1,7 +1,10 @@
 package com.hinnka.mycamera.raw
 
+import java.io.File
 import kotlin.math.ln
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class DngPhotonProfileGainTableGeneratorTest {
@@ -87,6 +90,140 @@ class DngPhotonProfileGainTableGeneratorTest {
                 val gain = grid.gain(cell, guide)
                 assertEquals("cell=$cell guide=$guide", 1f, gain, 2e-4f)
             }
+        }
+    }
+
+    @Test
+    fun scalarGainBilateralGridPreservesDarkGainWithSampleScaledRegularization() {
+        val gridWidth = 1
+        val gridHeight = 1
+        val width = DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
+        val height = DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
+        val sourceLevel = 0.01f
+        val expectedGain = 4f
+        val source = FloatArray(width * height) { sourceLevel }
+        val target = FloatArray(width * height) { sourceLevel * expectedGain }
+
+        val grid = DngPhotonLocalToneMapper.fitScalarGainBilateralGrid(
+            source = source,
+            target = target,
+            width = width,
+            height = height,
+            gridWidth = gridWidth,
+            gridHeight = gridHeight,
+            parameters = PhotonLocalToneMappingParameters(),
+        )
+
+        // The 0.1-sample prior may pull the fitted gain slightly towards one, but its relative
+        // influence must remain below 0.1% even at a 1% scene-linear input.
+        assertEquals(
+            expectedGain,
+            grid.gain(cell = 0, source = sourceLevel),
+            expectedGain * 0.001f,
+        )
+    }
+
+    @Test
+    fun scalarGainRegularizationRepresentsOneTenthOfAnRmsInputSample() {
+        val sampleCount = 256f
+        val sourceLevel = 0.01f
+        val targetGain = 4f
+        val regularization = 0.1f
+        val sumXX = sampleCount * sourceLevel * sourceLevel
+        val sumYX = sampleCount * sourceLevel * (sourceLevel * targetGain)
+        val expected = (
+            sampleCount * targetGain + regularization
+            ) / (
+            sampleCount + regularization
+            )
+
+        val actual = DngPhotonLocalToneMapper.solveRegularizedScalarGain(
+            sumXX = sumXX,
+            sumWeight = sampleCount,
+            sumYX = sumYX,
+            identitySlope = 1f,
+            regularization = regularization,
+        )
+
+        assertEquals(expected, actual, 1e-6f)
+    }
+
+    @Test
+    fun scalarGainBilateralGridUsesIdentityForUnobservableBlackCells() {
+        val gridWidth = 1
+        val gridHeight = 1
+        val width = DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
+        val height = DngPhotonLocalToneMapper.SAMPLES_PER_CELL_SIDE
+        val source = FloatArray(width * height)
+        val unrepresentableTarget = FloatArray(width * height) { 0.1f }
+
+        val grid = DngPhotonLocalToneMapper.fitScalarGainBilateralGrid(
+            source = source,
+            target = unrepresentableTarget,
+            width = width,
+            height = height,
+            gridWidth = gridWidth,
+            gridHeight = gridHeight,
+            parameters = PhotonLocalToneMappingParameters(),
+        )
+
+        listOf(0f, 0.125f, 0.5f, 1f).forEach { guide ->
+            assertEquals(1f, grid.gain(cell = 0, source = guide), 0f)
+        }
+    }
+
+    @Test
+    fun gpuBguSolveUsesSampleScaledIdentityRegularization() {
+        val shader = DngPhotonLocalToneMapGpuShaders.sources[
+            DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE.ordinal
+        ]
+
+        assertTrue(shader.contains("float sumWeight = blurred[offset + 2];"))
+        assertTrue(
+            shader.contains(
+                "float identityPriorXX = uRegularization * (sumXX / sumWeight);"
+            )
+        )
+        assertTrue(shader.contains("coefficients[index] = uIdentitySlope;"))
+    }
+
+    @Test
+    fun gpuBguSolvePassesAvailableNdkValidator() {
+        val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
+        val validator = sdkRoot?.let(::File)
+            ?.resolve("ndk")
+            ?.listFiles()
+            ?.sortedByDescending { it.name }
+            ?.asSequence()
+            ?.mapNotNull { ndk ->
+                ndk.resolve("shader-tools")
+                    .walkTopDown()
+                    .firstOrNull { it.name == "glslc" && it.canExecute() }
+            }
+            ?.firstOrNull()
+        assumeTrue("Android NDK glslc is unavailable", validator != null)
+        val shader = DngPhotonLocalToneMapGpuShaders.sources[
+            DngPhotonLocalToneMapGpuShaders.Pass.BGU_SOLVE.ordinal
+        ]
+        val sourceFile = File.createTempFile("photon-bgu-solve-", ".compute")
+        val outputFile = File.createTempFile("photon-bgu-solve-", ".spv")
+        try {
+            sourceFile.writeText(shader)
+            val process = ProcessBuilder(
+                checkNotNull(validator).absolutePath,
+                "--target-env=opengl",
+                "-fauto-map-locations",
+                "-fauto-bind-uniforms",
+                "-fshader-stage=compute",
+                sourceFile.absolutePath,
+                "-o",
+                outputFile.absolutePath,
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertEquals(output, 0, process.waitFor())
+        } finally {
+            sourceFile.delete()
+            outputFile.delete()
         }
     }
 

@@ -695,13 +695,23 @@ internal object DngPhotonLocalToneMapGpuShaders {
             if (index >= uCoefficientCount) return;
             int offset = index * 5;
             float sumXX = blurred[offset];
+            float sumWeight = blurred[offset + 2];
             float sumYX = blurred[offset + 3];
             // ProfileGainTableMap can only express y = gain * x. Fit that model
             // directly instead of fitting an affine intercept that would later
             // become the unstable term intercept / x.
-            coefficients[index] =
-                (sumYX + uRegularization * uIdentitySlope) /
-                (sumXX + uRegularization);
+            //
+            // Halide's regularizer represents one tenth of an identity sample.
+            // Scale that synthetic sample by this cell's mean input energy;
+            // adding the raw lambda would be an x=1 sample that dominates dark cells.
+            if (sumXX > 0.0 && sumWeight > 0.0) {
+                float identityPriorXX = uRegularization * (sumXX / sumWeight);
+                coefficients[index] =
+                    (sumYX + identityPriorXX * uIdentitySlope) /
+                    (sumXX + identityPriorXX);
+            } else {
+                coefficients[index] = uIdentitySlope;
+            }
         }
     """.trimIndent()
 

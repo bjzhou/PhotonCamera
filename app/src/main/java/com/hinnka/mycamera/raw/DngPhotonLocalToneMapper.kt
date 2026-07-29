@@ -450,13 +450,16 @@ internal object DngPhotonLocalToneMapper {
                         rangePlanes = rangePlaneCount,
                     )
                     val sumXX = blurred[sourceOffset]
+                    val sumWeight = blurred[sourceOffset + 2]
                     val sumYX = blurred[sourceOffset + 3]
                     val coefficientOffset = (y * gridWidth + x) * rangePlaneCount + z
-                    val gain = (
-                        sumYX + lambda * identitySlope
-                        ) / (
-                        sumXX + lambda
-                        )
+                    val gain = solveRegularizedScalarGain(
+                        sumXX = sumXX,
+                        sumWeight = sumWeight,
+                        sumYX = sumYX,
+                        identitySlope = identitySlope,
+                        regularization = lambda,
+                    )
                     require(gain.isFinite() && gain >= 0f) {
                         "Invalid scalar BGU gain at ($x,$y,$z): $gain"
                     }
@@ -472,6 +475,34 @@ internal object DngPhotonLocalToneMapper {
             guideCurveAlpha = parameters.bilateralGuideCurveAlpha,
             gains = gains,
         )
+    }
+
+    /**
+     * Solves `y=gain*x` with Halide's [regularization]-sample identity prior.
+     *
+     * A synthetic identity observation at the cell's RMS input contributes
+     * `regularization * mean(x²)` to both normal-equation sides. Adding the raw regularization
+     * instead would be an `x=1` observation and would overwhelm real evidence in dark cells.
+     */
+    internal fun solveRegularizedScalarGain(
+        sumXX: Float,
+        sumWeight: Float,
+        sumYX: Float,
+        identitySlope: Float,
+        regularization: Float,
+    ): Float {
+        require(sumXX.isFinite() && sumXX >= 0f)
+        require(sumWeight.isFinite() && sumWeight >= 0f)
+        require(sumYX.isFinite() && sumYX >= 0f)
+        require(identitySlope.isFinite() && identitySlope > 0f)
+        require(regularization.isFinite() && regularization > 0f)
+        if (sumXX <= 0f || sumWeight <= 0f) return identitySlope
+        val identityPriorXX = regularization * (sumXX / sumWeight)
+        return (
+            sumYX + identityPriorXX * identitySlope
+            ) / (
+            sumXX + identityPriorXX
+            )
     }
 
     private fun buildGainCurves(
