@@ -82,7 +82,7 @@ internal data class PhotonLocalToneMappingParameters(
     val percentileClip: Float = 0.005f,
     val targetDynamicRange: Float = 100f,
     // Places scene-linear 0.18 at 0.18 * 2^1.25 before Local Laplacian processing.
-    val preToneMapExposureBoostEv: Float = 1.25f,
+    val preToneMapExposureBoostEv: Float = 0.7f,
     // Google BGU production estimates.
     val bilateralSpatialBinSize: Int = 16,
     val bilateralRangeSigma: Float = 1f / 8f,

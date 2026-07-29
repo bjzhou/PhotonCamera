@@ -81,30 +81,30 @@ internal object DngProfileToneCurve {
         0.97638f, 0.99517f, 0.98425f, 0.99686f, 0.99213f, 0.99845f, 1f, 1f
     )
 
-    // Shape-preserving resample of the original curve, pinned at (0.25, 0.15) and (0.75, 0.8).
-    // The original toe, midpoint, and shoulder remain fixed; scene-dependent contrast and
-    // exposure belong to PGTM.
+    // Monotonic output-domain rebase of the original curve, pinned at 18% middle gray.
+    // The original asymmetric toe/shoulder relationship is retained; scene-dependent contrast
+    // and exposure belong to PGTM.
     private val PHOTON_PGTM_TONE_CURVE_POINTS = floatArrayOf(
         0.00000000f, 0.000000000f,
-        0.00390625f, 0.000012401f,
-        0.00781250f, 0.000072635f,
-        0.01171875f, 0.000206685f,
-        0.01562500f, 0.000553325f,
-        0.01953125f, 0.001360578f,
-        0.02343750f, 0.002622200f,
-        0.02734375f, 0.004144829f,
-        0.03125000f, 0.005831674f,
-        0.04687500f, 0.013821328f,
-        0.06250000f, 0.023228984f,
-        0.09375000f, 0.045079457f,
-        0.12500000f, 0.069945026f,
-        0.17968750f, 0.118763626f,
-        0.25000000f, 0.188884780f,
-        0.37500000f, 0.327727005f,
-        0.50000000f, 0.479043320f,
-        0.62500000f, 0.636591673f,
-        0.75000000f, 0.779041231f,
-        0.87500000f, 0.896886647f,
+        0.00390625f, 0.000111219f,
+        0.00781250f, 0.000462170f,
+        0.01171875f, 0.001073441f,
+        0.01562500f, 0.002373597f,
+        0.01953125f, 0.004900927f,
+        0.02343750f, 0.008315577f,
+        0.02734375f, 0.012026066f,
+        0.03125000f, 0.015834956f,
+        0.04687500f, 0.031739906f,
+        0.06250000f, 0.048228501f,
+        0.09375000f, 0.082288715f,
+        0.12500000f, 0.117239616f,
+        0.18000000f, 0.180000000f,
+        0.25000000f, 0.261059978f,
+        0.37500000f, 0.406992955f,
+        0.50000000f, 0.552633896f,
+        0.62500000f, 0.694937822f,
+        0.75000000f, 0.817742418f,
+        0.87500000f, 0.916040488f,
         1.00000000f, 1.000000000f
     )
 
