@@ -29,7 +29,7 @@ object OrientationObserver {
     var rotationDegrees by mutableStateOf(0f)
         private set
 
-    // 连续的设备姿态传感器角，用于材质高光等不应按横竖屏档位跳变的视觉效果。
+    // 未经过平放阈值过滤的连续设备姿态传感器角，用于 PhysicalButton 材质高光。
     // 消费方负责将传感器的顺时针角度转换到自己的屏幕坐标系。
     var continuousOrientationDegrees by mutableFloatStateOf(0f)
         private set
@@ -44,11 +44,11 @@ object OrientationObserver {
             return
         }
 
+        continuousOrientationDegrees = orientation.toFloat()
+
         if (isNearFlat) {
             return
         }
-
-        continuousOrientationDegrees = orientation.toFloat()
 
         // 右侧朝上（手机顺时针旋转90°）
         when (orientation) {
