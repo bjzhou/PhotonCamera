@@ -272,6 +272,7 @@ class Camera2Controller(private val context: Context) {
     private var awbColorTemperatureRange: Range<Int>? = null
     private var lastWhiteBalanceResult: WhiteBalanceResultSnapshot? = null
     private var manualWhiteBalanceAnchor: ManualWhiteBalanceAnchor? = null
+    private var malformedColorCorrectionGainsReported = false
     private var isRawSupported = false
     private var isP010Supported = false
     private var isHlg10Supported = false
@@ -1134,6 +1135,7 @@ class Camera2Controller(private val context: Context) {
         awbColorTemperatureRange = null
         lastWhiteBalanceResult = null
         manualWhiteBalanceAnchor = null
+        malformedColorCorrectionGainsReported = false
         isRawSupported = false
         isP010Supported = false
         isHlg10Supported = false
@@ -2840,9 +2842,27 @@ class Camera2Controller(private val context: Context) {
             awbMode = awbMode,
             colorTemperature = cctTemperature,
             colorTint = cctTint,
-            gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS),
+            gains = readColorCorrectionGains(result),
             transform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
         )
+    }
+
+    private fun readColorCorrectionGains(result: CaptureResult): RggbChannelVector? {
+        return try {
+            result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        } catch (error: IllegalArgumentException) {
+            if (!malformedColorCorrectionGainsReported) {
+                malformedColorCorrectionGainsReported = true
+                PLog.w(
+                    TAG,
+                    "Camera ${getActiveOpenCameraId()} returned malformed " +
+                            "${CaptureResult.COLOR_CORRECTION_GAINS.name} at frame ${result.frameNumber}; " +
+                            "white-balance gains are unavailable for this result",
+                    error
+                )
+            }
+            null
+        }
     }
 
     private fun resolveWhiteBalanceControlPath(
