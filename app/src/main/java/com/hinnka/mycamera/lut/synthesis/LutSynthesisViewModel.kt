@@ -43,7 +43,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
 
     private val importManager = CustomImportManager(application)
     private val lutManager = LutManager(application)
-    private val imageProcessor = LutImageProcessor()
+    private val imageProcessor = LutImageProcessor(application)
 
     // 状态流
     private val _layers = MutableStateFlow<List<LutSynthesisLayer>>(emptyList())

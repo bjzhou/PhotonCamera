@@ -7,6 +7,7 @@ import android.graphics.SurfaceTexture
 import android.opengl.*
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.livephoto.resolveLivePhotoRotationDegrees
+import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsNaturalLightGl
@@ -47,6 +48,7 @@ enum class PreviewCaptureSource {
 }
 
 class LutRenderer(context: Context) : GLSurfaceView.Renderer {
+    private val appContext = context.applicationContext
     companion object {
         private const val TAG = "LutRenderer"
 
@@ -86,6 +88,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var cameraTextureId: Int = 0
     private var lutTextureId: Int = 0
     private var baselineLutTextureId: Int = 0
+    private val basicToneTextures = BasicToneGlTextures()
 
     // 缓冲区
     private var vertexBufferId: Int = 0
@@ -401,6 +404,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var tonePivot: Float = 0f // -1.0 ~ +1.0
 
     @Volatile
+    var paletteX: Float = 0.5f
+
+    @Volatile
+    var paletteY: Float = 0.5f
+
+    @Volatile
+    var paletteDensity: Float = 1f
+
+    @Volatile
     var filmGrain: Float = 0f // 0.0 ~ 1.0
 
     @Volatile
@@ -551,6 +563,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         cameraTextureId = 0
         lutTextureId = 0
         baselineLutTextureId = 0
+        basicToneTextures.reset()
         vertexBufferId = 0
         texCoordBufferId = 0
         indexBufferId = 0
@@ -1455,6 +1468,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (curveEnabled && curveTextureId != 0) curveTextureId else 0)
         GLES30.glUniform1i(locations.uCurveTextureLocation, 2)
         GLES30.glUniform1i(locations.uCurveEnabledLocation, if (curveEnabled && curveTextureId != 0) 1 else 0)
+
+        basicToneTextures.bind(
+            context = appContext,
+            textureUnit = 3,
+            samplerLocation = locations.uBasicToneLutLocation,
+            intensityLocation = locations.uBasicToneIntensityLocation,
+            amount = ColorPaletteMapper.basicToneAmount(params),
+        )
 
         GLES30.glUniform1f(locations.uApertureLocation, apertureOverride)
         val fp = focusPointOverride ?: PointF(0.5f, 0.5f)
@@ -3832,6 +3853,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(stackTextureId), 0)
             stackTextureId = 0
         }
+        basicToneTextures.release()
         recordFboWidth = 0
         recordFboHeight = 0
 
@@ -3872,6 +3894,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             toneToe = toneToe,
             toneShoulder = toneShoulder,
             tonePivot = tonePivot,
+            paletteX = paletteX,
+            paletteY = paletteY,
+            paletteDensity = paletteDensity,
             fade = fade,
             filmGrain = filmGrain,
             vignette = vignette,
@@ -3951,6 +3976,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         toneToe = params.toneToe
         toneShoulder = params.toneShoulder
         tonePivot = params.tonePivot
+        paletteX = params.paletteX
+        paletteY = params.paletteY
+        paletteDensity = params.paletteDensity
         filmGrain = params.filmGrain
         vignette = params.vignette
         bleachBypass = params.bleachBypass

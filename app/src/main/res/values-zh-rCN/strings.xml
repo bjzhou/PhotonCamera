@@ -412,6 +412,7 @@
     <string name="recipe_param_exposure">曝光</string>
     <string name="recipe_param_contrast">对比度</string>
     <string name="recipe_param_saturation">饱和度</string>
+    <string name="recipe_palette_tone">影调</string>
     <string name="recipe_param_temperature">色温</string>
     <string name="recipe_param_tint">色调</string>
     <string name="recipe_param_fade">褪色</string>

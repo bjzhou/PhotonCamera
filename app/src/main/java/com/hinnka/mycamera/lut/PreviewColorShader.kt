@@ -74,6 +74,7 @@ internal object PreviewColorShader {
             ${if (variant.includeHlgInput) PreviewColorShaderModules.HLG_TO_LINEAR else PreviewColorShaderModules.HLG_TO_LINEAR_STUB}
             ${PreviewColorShaderModules.EXPOSURE}
             ${PreviewColorShaderModules.SANITIZE}
+            ${BasicToneLutShader.GLSL}
 
             float getLuma(vec3 color) {
                 return dot(color, W);
@@ -179,6 +180,9 @@ internal object PreviewColorShader {
                     }
 
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.rgb = applyBasicToneLut(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.r += uTemperature * 0.1;

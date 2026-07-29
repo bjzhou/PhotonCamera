@@ -6281,7 +6281,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         try {
             val lutInfo = contentRepository.lutManager.getLutInfo(lutId)
             val name = lutInfo?.getName() ?: "BakedLUT"
-            BakedLutExporter.exportBakedCube(lutConfig, recipe, name)
+            BakedLutExporter.exportBakedCube(getApplication(), lutConfig, recipe, name)
         } catch (e: Exception) {
             PLog.e("CameraViewModel", "Failed to bake LUT to cube", e)
             null
@@ -6296,7 +6296,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val recipe = contentRepository.lutManager.loadColorRecipeParams(lutId)
 
         try {
-            BakedLutExporter.exportBakedHaldPng(lutConfig, recipe)
+            BakedLutExporter.exportBakedHaldPng(getApplication(), lutConfig, recipe)
         } catch (e: Exception) {
             PLog.e("CameraViewModel", "Failed to bake LUT to HALD PNG", e)
             null

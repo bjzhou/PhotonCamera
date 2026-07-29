@@ -417,6 +417,7 @@
     <string name="recipe_param_exposure">Exposure</string>
     <string name="recipe_param_contrast">Contrast</string>
     <string name="recipe_param_saturation">Saturation</string>
+    <string name="recipe_palette_tone">High/Low Key</string>
     <string name="recipe_param_temperature">Temp</string>
     <string name="recipe_param_tint">Tint</string>
     <string name="recipe_param_fade">Fade</string>

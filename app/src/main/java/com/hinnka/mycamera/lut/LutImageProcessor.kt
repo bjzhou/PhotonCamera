@@ -56,6 +56,8 @@ data class LutStackRenderResult(
  * 所有 GPU 操作在独立单线程完成，确保 EGL 上下文线程安全
  */
 class LutImageProcessor(context: Context? = null) {
+    private val appContext = context?.applicationContext
+
     @Volatile
     private var glThread: Thread? = null
 
@@ -77,6 +79,7 @@ class LutImageProcessor(context: Context? = null) {
     private var shaderProgram = 0
     private var imageTextureId = 0
     private var lutTextureId = 0
+    private val basicToneTextures = BasicToneGlTextures()
     private var framebufferId = 0
     private var outputTextureId = 0
     private var outputFramebufferWidth = 0
@@ -1119,6 +1122,14 @@ class LutImageProcessor(context: Context? = null) {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (curveActive) curveTextureId else 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveTexture"), 3)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveEnabled"), if (curveActive) 1 else 0)
+
+        basicToneTextures.bind(
+            context = appContext,
+            textureUnit = 6,
+            samplerLocation = GLES30.glGetUniformLocation(program, "uBasicToneLut"),
+            intensityLocation = GLES30.glGetUniformLocation(program, "uBasicToneIntensity"),
+            amount = effectiveRecipeParams?.let(ColorPaletteMapper::basicToneAmount) ?: 0f,
+        )
 
         // 设置 HDF 参数
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uHalation"), halation)
@@ -3310,6 +3321,7 @@ class LutImageProcessor(context: Context? = null) {
         if (lutTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
         }
+        basicToneTextures.release()
         releaseOutputFramebuffer()
         releaseNaturalLightFramebuffer()
         releaseNaturalLightOutputFramebuffer()
@@ -3575,6 +3587,7 @@ class LutImageProcessor(context: Context? = null) {
             ${PreviewColorShaderModules.HLG_TO_LINEAR}
             ${PreviewColorShaderModules.EXPOSURE}
             ${PreviewColorShaderModules.SANITIZE}
+            ${BasicToneLutShader.GLSL}
 
             vec3 prepareToneSample(vec3 sampleColor) {
                 vec3 prepared = sampleColor;
@@ -3742,6 +3755,10 @@ class LutImageProcessor(context: Context? = null) {
 
                     // 3.5. 影调曲线（独立塑造高调/低调 profile）
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    // 3.6. Oplus BasicTone 端点 LUT（符号在 CPU 侧选端点，绝对值控制强度）
+                    color.rgb = applyBasicToneLut(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
 
                     // 4. 白平衡调整（色温 + 色调）

@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
+import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
@@ -19,8 +20,11 @@ import java.nio.ByteOrder
 @UnstableApi
 class VideoLutEffect(
     @Volatile var lutConfig: LutConfig?,
-    @Volatile var recipeParams: ColorRecipeParams?
+    recipeParams: ColorRecipeParams?
 ) : GlEffect {
+    @Volatile
+    var recipeParams: ColorRecipeParams? = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
+        private set
 
     private var shaderProgram: VideoLutShaderProgram? = null
 
@@ -37,7 +41,7 @@ class VideoLutEffect(
     fun update(lutConfig: LutConfig?, recipeParams: ColorRecipeParams?) {
         PLog.d("VideoLutEffect", "update called, lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
         this.lutConfig = lutConfig
-        this.recipeParams = recipeParams
+        this.recipeParams = recipeParams?.let(ColorPaletteMapper::mergeIntoEffectiveParams)
         shaderProgram?.triggerUpdate()
     }
 }
@@ -181,6 +185,8 @@ private class VideoLutShaderProgram(
                     sanitizeFloat(color.b)
                 );
             }
+
+            ${BasicToneLutShader.GLSL}
 
             float applyToneCurveToLuma(float luma, float toe, float shoulder, float pivot) {
                 float safeLuma = clamp(luma, 0.0, 1.0);
@@ -550,6 +556,9 @@ private class VideoLutShaderProgram(
                     color.rgb = applyToneCurve(color.rgb, uToneToe, uToneShoulder, uTonePivot);
                     color.rgb = sanitizeColor(color.rgb);
 
+                    color.rgb = applyBasicToneLut(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
                     color.g -= uTint * 0.05;
@@ -698,6 +707,7 @@ private class VideoLutShaderProgram(
 
     private var lutTextureId = 0
     private var curveTextureId = 0
+    private val basicToneTextures = BasicToneGlTextures()
     private var lastLutConfig: LutConfig? = null
     private var lastRecipeParams: ColorRecipeParams? = null
 
@@ -827,6 +837,14 @@ private class VideoLutShaderProgram(
             GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uCurveTexture"), 3)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uCurveEnabled"), 0)
         }
+
+        basicToneTextures.bind(
+            context = context.applicationContext,
+            textureUnit = 2,
+            samplerLocation = GLES30.glGetUniformLocation(programId, "uBasicToneLut"),
+            intensityLocation = GLES30.glGetUniformLocation(programId, "uBasicToneIntensity"),
+            amount = currentRecipeParams?.let(ColorPaletteMapper::basicToneAmount) ?: 0f,
+        )
 
         // 设置色彩配方 uniforms
         val colorRecipeEnabled = currentRecipeParams != null && !currentRecipeParams.isDefault()
@@ -999,6 +1017,7 @@ private class VideoLutShaderProgram(
         super.release()
         deleteLutTexture()
         deleteCurveTexture()
+        basicToneTextures.release()
         if (positionVbo != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(positionVbo), 0)
             positionVbo = 0
