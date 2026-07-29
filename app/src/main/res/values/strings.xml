@@ -589,6 +589,15 @@
 
     <!-- Frame Import Help -->
     <string name="more_options">More options</string>
+    <string name="copy_settings">Copy settings</string>
+    <string name="paste_settings">Paste settings</string>
+    <string name="copy_settings_success">Settings copied</string>
+    <string name="paste_settings_success">Settings pasted</string>
+    <string name="copy_settings_failed">Couldn’t copy settings</string>
+    <string name="paste_settings_failed">Couldn’t paste settings</string>
+    <string name="paste_settings_complete">Settings pasted to %1$d of %2$d photos</string>
+    <string name="pasting_settings_progress">Pasting settings · %1$d/%2$d</string>
+    <string name="exporting_progress">Exporting · %1$d/%2$d</string>
     <string name="discard">Discard</string>
     <string name="frame_editor_create_menu">Create or import frame</string>
     <string name="frame_editor_new_title">New Frame</string>

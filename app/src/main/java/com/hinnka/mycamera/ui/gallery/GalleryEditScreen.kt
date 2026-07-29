@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -175,9 +176,11 @@ fun GalleryEditScreen(
     val showPaymentDialog = viewModel.showPaymentDialog
     val isPurchased by viewModel.isPurchased.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState()
+    val hasCopiedEditSettings by viewModel.hasCopiedEditSettings.collectAsState()
 
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     val frameScrollState = rememberLazyListState()
     var showBaselineLutEditSheet by remember { mutableStateOf(false) }
     var baselineLutEditId by remember { mutableStateOf<String?>(null) }
@@ -867,6 +870,65 @@ fun GalleryEditScreen(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = stringResource(R.string.save),
                                     tint = AccentOrange
+                                )
+                            }
+                        }
+                        // 更多始终放在 actions 的最右侧。
+                        Box {
+                            IconButton(onClick = { showMoreMenu = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = stringResource(R.string.more_options),
+                                    tint = Color.White
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.copy_settings)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        viewModel.copyCurrentEditSettings(
+                                            editFrameCustomProperties
+                                        )
+                                        Toast.makeText(
+                                            context,
+                                            R.string.copy_settings_success,
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = AppIcons.ContentCopy,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.paste_settings)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        viewModel
+                                            .pasteCopiedEditSettingsToCurrentEdit()
+                                            ?.let { pastedCustomProperties ->
+                                                editFrameCustomProperties =
+                                                    pastedCustomProperties
+                                                Toast.makeText(
+                                                    context,
+                                                    R.string.paste_settings_success,
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                    },
+                                    enabled = hasCopiedEditSettings,
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = AppIcons.ContentCopy,
+                                            contentDescription = null
+                                        )
+                                    }
                                 )
                             }
                         }

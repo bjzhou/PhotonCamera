@@ -111,10 +111,13 @@ fun GalleryDetailScreen(
     var showExportDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var isExportingDng by remember { mutableStateOf(false) }
+    var isCopyingSettings by remember { mutableStateOf(false) }
+    var isPastingSettings by remember { mutableStateOf(false) }
     val isVideoExporting = viewModel.isVideoExporting
     val videoExportProgress = viewModel.videoExportProgress
     var showVideoExportConfirmDialog by remember { mutableStateOf(false) }
     val isSharing by viewModel.isSharing.collectAsState()
+    val hasCopiedEditSettings by viewModel.hasCopiedEditSettings.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     var showAiScoreSheet by remember { mutableStateOf(false) }
     var showMoreSheet by remember { mutableStateOf(false) }
@@ -883,12 +886,72 @@ fun GalleryDetailScreen(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    GalleryActionItem(
+                        icon = AppIcons.ContentCopy,
+                        text = stringResource(R.string.copy_settings),
+                        isLoading = isCopyingSettings,
+                        enabled = !isCopyingSettings &&
+                            !isPastingSettings &&
+                            !isSharing &&
+                            !isSaving,
+                        onClick = {
+                            isCopyingSettings = true
+                            viewModel.copyPhotoSettings(currentPhoto) { success ->
+                                isCopyingSettings = false
+                                if (success) {
+                                    showMoreSheet = false
+                                }
+                                Toast.makeText(
+                                    context,
+                                    if (success) {
+                                        R.string.copy_settings_success
+                                    } else {
+                                        R.string.copy_settings_failed
+                                    },
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    )
+
+                    GalleryActionItem(
+                        icon = AppIcons.ContentCopy,
+                        text = stringResource(R.string.paste_settings),
+                        isLoading = isPastingSettings,
+                        enabled = hasCopiedEditSettings &&
+                            !isCopyingSettings &&
+                            !isPastingSettings &&
+                            !isSharing &&
+                            !isSaving,
+                        onClick = {
+                            isPastingSettings = true
+                            viewModel.pasteCopiedSettingsToPhoto(currentPhoto) { success ->
+                                isPastingSettings = false
+                                if (success) {
+                                    showMoreSheet = false
+                                }
+                                Toast.makeText(
+                                    context,
+                                    if (success) {
+                                        R.string.paste_settings_success
+                                    } else {
+                                        R.string.paste_settings_failed
+                                    },
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    )
+
                     // 分享
                     GalleryActionItem(
                         icon = Icons.Default.Share,
                         text = stringResource(R.string.share),
                         isLoading = isSharing,
-                        enabled = !isSharing && !isSaving,
+                        enabled = !isSharing &&
+                            !isSaving &&
+                            !isCopyingSettings &&
+                            !isPastingSettings,
                         onClick = {
                             showMoreSheet = false
                             viewModel.sharePhoto(currentPhoto)
@@ -901,6 +964,7 @@ fun GalleryDetailScreen(
                             icon = AppIcons.Output,
                             text = stringResource(R.string.export),
                             isLoading = isSaving,
+                            enabled = !isCopyingSettings && !isPastingSettings,
                             onClick = {
                                 showExportDialog = true
                             }
@@ -913,6 +977,7 @@ fun GalleryDetailScreen(
                             icon = AppIcons.Output,
                             text = if (isVideoExporting && videoExportProgress > 0) "$videoExportProgress%" else stringResource(R.string.export),
                             isLoading = isVideoExporting,
+                            enabled = !isCopyingSettings && !isPastingSettings,
                             onClick = {
                                 if (isVideoTransformerExportSupported()) {
                                     showVideoExportConfirmDialog = true
@@ -929,7 +994,10 @@ fun GalleryDetailScreen(
                             iconText = "DNG",
                             text = "DNG",
                             isLoading = isExportingDng,
-                            enabled = !isSaving && !isExportingDng,
+                            enabled = !isSaving &&
+                                !isExportingDng &&
+                                !isCopyingSettings &&
+                                !isPastingSettings,
                             onClick = {
                                 showMoreSheet = false
                                 isExportingDng = true

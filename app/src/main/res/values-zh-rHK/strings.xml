@@ -579,6 +579,15 @@
 
     <!-- 邊框匯入幫助 -->
     <string name="more_options">更多操作</string>
+    <string name="copy_settings">複製設定</string>
+    <string name="paste_settings">貼上設定</string>
+    <string name="copy_settings_success">已複製設定</string>
+    <string name="paste_settings_success">已貼上設定</string>
+    <string name="copy_settings_failed">複製設定失敗</string>
+    <string name="paste_settings_failed">貼上設定失敗</string>
+    <string name="paste_settings_complete">已向 %2$d 張相片中的 %1$d 張貼上設定</string>
+    <string name="pasting_settings_progress">正在貼上設定 · %1$d/%2$d</string>
+    <string name="exporting_progress">正在匯出 · %1$d/%2$d</string>
     <string name="discard">放棄</string>
     <string name="frame_editor_create_menu">創建或匯入邊框</string>
     <string name="frame_editor_new_title">新建邊框樣式</string>

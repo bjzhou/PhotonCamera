@@ -64,6 +64,22 @@ enum class GalleryTab {
     PHOTON, SYSTEM
 }
 
+enum class GalleryBatchOperation {
+    PASTE_SETTINGS,
+    EXPORT
+}
+
+data class GalleryBatchOperationProgress(
+    val operation: GalleryBatchOperation,
+    val completed: Int,
+    val total: Int
+)
+
+private data class CopiedEditSettings(
+    val metadata: MediaMetadata,
+    val normalizedCropRect: RectF?
+)
+
 /**
  * 相册 ViewModel
  * 管理照片列表、选择状态和各种操作
@@ -202,6 +218,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val isExporting: StateFlow<Boolean> = _isExporting.asStateFlow()
     var exportProgress by mutableStateOf(0 to 0)
         private set
+
+    private val _isPastingSettings = MutableStateFlow(false)
+    val isPastingSettings: StateFlow<Boolean> = _isPastingSettings.asStateFlow()
+    var pasteSettingsProgress by mutableStateOf(0 to 0)
+        private set
+
+    private val _batchOperationProgress =
+        MutableStateFlow<GalleryBatchOperationProgress?>(null)
+    val batchOperationProgress: StateFlow<GalleryBatchOperationProgress?> =
+        _batchOperationProgress.asStateFlow()
+
+    private var copiedEditSettings: CopiedEditSettings? = null
+    private val _hasCopiedEditSettings = MutableStateFlow(false)
+    val hasCopiedEditSettings: StateFlow<Boolean> = _hasCopiedEditSettings.asStateFlow()
 
     // 视频导出状态
     var isVideoExporting by mutableStateOf(false)
@@ -2226,6 +2256,177 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * 复制当前编辑页中实际生效的后期设置。RAW 开发参数刻意不进入剪贴板，
+     * 避免粘贴后改变目标照片的 RAW 开发结果并触发重新刷新。
+     *
+     * 色彩配方保存为当前有效值，而不是继续引用 LUT 的默认值，确保复制后即使 LUT
+     * 的全局配方发生变化，粘贴结果仍与复制时看到的画面一致。
+     */
+    fun copyCurrentEditSettings(customProperties: Map<String, String>) {
+        val normalizedCrop = editCropRect.value?.let(::RectF)
+        val sourceIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
+        copiedEditSettings = CopiedEditSettings(
+            metadata = MediaMetadata(
+                lutId = editLutId.value,
+                colorRecipeParams = (editPhotoRecipeParams.value ?: editLutRecipeParams.value)
+                    .deepCopy(),
+                sharpening = editSharpening.value.takeUnless { sourceIsRaw },
+                noiseReduction = editNoiseReduction.value.takeUnless { sourceIsRaw },
+                chromaNoiseReduction =
+                    editChromaNoiseReduction.value.takeUnless { sourceIsRaw },
+                frameId = editFrameId.value,
+                customProperties = customProperties.toMap(),
+                computationalAperture = editComputationalAperture.value,
+                focusPointX = editFocusPointX.value,
+                focusPointY = editFocusPointY.value,
+                postRotationDegrees = editRotationDegrees.value,
+                postMirrorHorizontal = editMirrorHorizontal.value,
+                applyEffectsToVideo = editApplyEffectsToVideo.value
+            ),
+            normalizedCropRect = normalizedCrop
+        )
+        _hasCopiedEditSettings.value = true
+    }
+
+    /**
+     * 从详情页复制照片已经保存的后期设置。
+     */
+    fun copyPhotoSettings(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val sourcePhoto = photo.relatedPhoto ?: photo
+                val sourceIsRaw = isRawMedia(photo)
+                val metadata = withContext(Dispatchers.IO) {
+                    GalleryManager.loadMetadata(context, sourcePhoto.id)
+                        ?: sourcePhoto.metadata
+                        ?: photo.metadata
+                        ?: if (selectedTab == GalleryTab.SYSTEM) {
+                            MediaMetadata.fromUri(context, photo.uri)
+                        } else {
+                            null
+                        }
+                } ?: run {
+                    onComplete(false)
+                    return@launch
+                }
+                val effectiveRecipe = metadata.colorRecipeParams
+                    ?: metadata.lutId?.let { lutId ->
+                        withContext(Dispatchers.IO) {
+                            contentRepository.lutManager.loadColorRecipeParams(lutId)
+                        }
+                    }
+                val baseWidth = metadata.width.takeIf { it > 0 } ?: sourcePhoto.width
+                val baseHeight = metadata.height.takeIf { it > 0 } ?: sourcePhoto.height
+                val (cropWidth, cropHeight) = PostEditGeometry.rotatedDimensions(
+                    baseWidth,
+                    baseHeight,
+                    metadata.postRotationDegrees
+                )
+                val normalizedCrop = metadata.postCropRegion
+                    ?.takeIf { cropWidth > 0 && cropHeight > 0 }
+                    ?.let { crop ->
+                        RectF(
+                            crop.left.toFloat() / cropWidth,
+                            crop.top.toFloat() / cropHeight,
+                            crop.right.toFloat() / cropWidth,
+                            crop.bottom.toFloat() / cropHeight
+                        )
+                    }
+
+                copiedEditSettings = CopiedEditSettings(
+                    metadata = MediaMetadata(
+                        lutId = metadata.lutId,
+                        colorRecipeParams = effectiveRecipe?.deepCopy(),
+                        sharpening = metadata.sharpening.takeUnless { sourceIsRaw },
+                        noiseReduction = metadata.noiseReduction.takeUnless { sourceIsRaw },
+                        chromaNoiseReduction =
+                            metadata.chromaNoiseReduction.takeUnless { sourceIsRaw },
+                        frameId = metadata.frameId,
+                        customProperties = metadata.customProperties.toMap(),
+                        computationalAperture = metadata.computationalAperture,
+                        focusPointX = metadata.focusPointX,
+                        focusPointY = metadata.focusPointY,
+                        postRotationDegrees = metadata.postRotationDegrees,
+                        postMirrorHorizontal = metadata.postMirrorHorizontal,
+                        applyEffectsToVideo = metadata.applyEffectsToVideo
+                    ),
+                    normalizedCropRect = normalizedCrop
+                )
+                _hasCopiedEditSettings.value = true
+                onComplete(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to copy settings from photo ${photo.id}", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
+     * 将已复制设置放入当前编辑态；返回边框自定义属性供编辑页同步本地预览状态。
+     */
+    fun pasteCopiedEditSettingsToCurrentEdit(): Map<String, String>? {
+        val copied = copiedEditSettings ?: return null
+        val settings = copied.metadata
+
+        pendingEditLutRecipeSync = null
+        editLutRecipeSyncJob?.cancel()
+        editLutRecipeSyncJob = null
+
+        editLutId.value = settings.lutId
+        editPhotoRecipeParams.value = settings.colorRecipeParams?.deepCopy()
+        editFrameId.value = settings.frameId
+        val targetIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
+        if (!targetIsRaw) {
+            settings.sharpening?.let { editSharpening.value = it }
+            settings.noiseReduction?.let { editNoiseReduction.value = it }
+            settings.chromaNoiseReduction?.let {
+                editChromaNoiseReduction.value = it
+            }
+        }
+        editComputationalAperture.value = settings.computationalAperture
+        editFocusPointX.value = settings.focusPointX
+        editFocusPointY.value = settings.focusPointY
+        editRotationDegrees.value =
+            PostEditGeometry.normalizeRotation(settings.postRotationDegrees)
+        editMirrorHorizontal.value = settings.postMirrorHorizontal
+        editCropRect.value = copied.normalizedCropRect?.let(::RectF)
+        editCropAspectOption.value = copied.normalizedCropRect?.let {
+            CropAspectOption.Custom(it.width(), it.height())
+        } ?: CropAspectOption.Free
+        editApplyEffectsToVideo.value = settings.applyEffectsToVideo
+        currentMediaMetadata = (currentMediaMetadata ?: MediaMetadata()).copy(
+            customProperties = settings.customProperties.toMap()
+        )
+
+        settings.lutId?.let { lutId ->
+            viewModelScope.launch {
+                editLutConfig = withContext(Dispatchers.IO) {
+                    contentRepository.lutManager.loadLut(lutId)
+                }
+            }
+        } ?: run {
+            editLutConfig = null
+        }
+        updateBokehPhoto()
+        return settings.customProperties.toMap()
+    }
+
+    private fun ColorRecipeParams.deepCopy(): ColorRecipeParams {
+        return copy(
+            masterCurvePoints = masterCurvePoints?.copyOf(),
+            redCurvePoints = redCurvePoints?.copyOf(),
+            greenCurvePoints = greenCurvePoints?.copyOf(),
+            blueCurvePoints = blueCurvePoints?.copyOf()
+        )
+    }
+
+    /**
      * 设置锐化强度
      */
     fun setSharpening(value: Float) {
@@ -3151,6 +3352,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     current.copy(
                         lutId = editLutId.value,
                         frameId = editFrameId.value,
+                        customProperties = currentMediaMetadata?.customProperties
+                            ?: targetMetadata?.customProperties.orEmpty(),
                         colorRecipeParams = editPhotoRecipeParams.value,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
@@ -3430,18 +3633,320 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun applyCopiedEditSettings(
+        current: MediaMetadata,
+        copied: CopiedEditSettings,
+        copyDetailProcessing: Boolean
+    ): MediaMetadata {
+        val settings = copied.metadata
+        val (cropWidth, cropHeight) = PostEditGeometry.rotatedDimensions(
+            current.width,
+            current.height,
+            settings.postRotationDegrees
+        )
+        val cropRegion = copied.normalizedCropRect
+            ?.takeIf { cropWidth > 0 && cropHeight > 0 }
+            ?.let { rect ->
+                android.graphics.Rect(
+                    (rect.left * cropWidth).roundToInt(),
+                    (rect.top * cropHeight).roundToInt(),
+                    (rect.right * cropWidth).roundToInt(),
+                    (rect.bottom * cropHeight).roundToInt()
+                )
+            }
+
+        return current.copy(
+            lutId = settings.lutId,
+            frameId = settings.frameId,
+            customProperties = settings.customProperties.toMap(),
+            colorRecipeParams = settings.colorRecipeParams?.deepCopy(),
+            sharpening = if (copyDetailProcessing && settings.sharpening != null) {
+                settings.sharpening
+            } else {
+                current.sharpening
+            },
+            noiseReduction =
+                if (copyDetailProcessing && settings.noiseReduction != null) {
+                    settings.noiseReduction
+                } else {
+                    current.noiseReduction
+                },
+            chromaNoiseReduction =
+                if (copyDetailProcessing && settings.chromaNoiseReduction != null) {
+                    settings.chromaNoiseReduction
+                } else {
+                    current.chromaNoiseReduction
+                },
+            computationalAperture = settings.computationalAperture,
+            focusPointX = settings.focusPointX,
+            focusPointY = settings.focusPointY,
+            postCropRegion = cropRegion,
+            postRotationDegrees =
+                PostEditGeometry.normalizeRotation(settings.postRotationDegrees),
+            postMirrorHorizontal = settings.postMirrorHorizontal,
+            applyEffectsToVideo = settings.applyEffectsToVideo
+        )
+    }
+
+    /**
+     * 从详情页将剪贴板设置直接保存到当前照片，不进入编辑模式。
+     */
+    fun pasteCopiedSettingsToPhoto(
+        photo: MediaData,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        val copied = copiedEditSettings ?: run {
+            onComplete(false)
+            return
+        }
+        val selectedTabSnapshot = selectedTab
+
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val result = withContext(Dispatchers.IO) {
+                    val targetPhotoId = if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                        photo.relatedPhoto?.id
+                            ?: findPhotonPhotoBySourceUri(photo.uri)?.id
+                            ?: GalleryManager.importPhoto(context, photo.uri, null)
+                    } else {
+                        photo.id
+                    } ?: return@withContext null
+
+                    val targetIsRaw =
+                        GalleryManager.getDngFile(context, targetPhotoId).exists()
+                    val fallbackMetadata = photo.relatedPhoto?.metadata
+                        ?: photo.metadata
+                        ?: MediaMetadata(
+                            mediaType = photo.mediaType,
+                            width = photo.width,
+                            height = photo.height
+                        )
+                    val updated = GalleryManager.updateMetadata(
+                        context,
+                        targetPhotoId
+                    ) { latest ->
+                        val metadataWithResolvedSize =
+                            if (latest.width > 0 && latest.height > 0) {
+                                latest
+                            } else {
+                                latest.copy(
+                                    width = fallbackMetadata.width,
+                                    height = fallbackMetadata.height
+                                )
+                            }
+                        applyCopiedEditSettings(
+                            current = metadataWithResolvedSize,
+                            copied = copied,
+                            copyDetailProcessing = !targetIsRaw
+                        )
+                    } ?: return@withContext null
+
+                    invalidatePreviewCache(targetPhotoId)
+                    GalleryManager.deleteDetailHdrFile(context, targetPhotoId)
+                    GalleryManager.queueDetailHdrCacheBuild(
+                        context = context,
+                        photoId = targetPhotoId,
+                        metadata = updated,
+                        sharpening = updated.sharpening ?: 0f,
+                        noiseReduction = updated.noiseReduction ?: 0f,
+                        chromaNoiseReduction = updated.chromaNoiseReduction ?: 0f
+                    )
+                    GalleryManager.updateThumbnail(
+                        context = context,
+                        photoId = targetPhotoId,
+                        photoProcessor = contentRepository.photoProcessor,
+                        metadata = updated
+                    )
+                    targetPhotoId to updated
+                }
+
+                if (result == null) {
+                    onComplete(false)
+                    return@launch
+                }
+                val (targetPhotoId, updated) = result
+                currentMediaMetadata = updated
+                currentPhotoMetadataId = photo.id
+                photo.relatedPhoto?.metadata = updated
+                if (selectedTabSnapshot == GalleryTab.PHOTON) {
+                    photo.metadata = updated
+                }
+                applyPhotoMetadataUpdateToMemory(targetPhotoId, updated)
+                if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                    loadPhotos(reset = true)
+                    _photos.value.firstOrNull { it.id == targetPhotoId }?.let {
+                        linkSystemPhotoToPhoton(photo.id, it)
+                    }
+                }
+                photoRefreshKeys[targetPhotoId] = System.currentTimeMillis()
+                onComplete(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to paste settings to photo ${photo.id}", e)
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
+     * 将剪贴板中的设置批量应用到选中的照片。系统相册照片会先建立 Photon 副本，
+     * 使粘贴保持非破坏性，并与单张编辑保存使用同一份元数据链路。
+     */
+    fun pasteCopiedSettingsToSelectedPhotos(
+        onComplete: (successCount: Int, total: Int) -> Unit = { _, _ -> }
+    ) {
+        if (_isExporting.value || _isPastingSettings.value) return
+        val copied = copiedEditSettings ?: run {
+            onComplete(0, 0)
+            return
+        }
+        val selectedSnapshot = selectedPhotos.filter { it.isImage }
+        if (selectedSnapshot.isEmpty()) {
+            onComplete(0, 0)
+            return
+        }
+        val selectedTabSnapshot = selectedTab
+
+        viewModelScope.launch {
+            _isPastingSettings.value = true
+            val total = selectedSnapshot.size
+            pasteSettingsProgress = 0 to total
+            _batchOperationProgress.value = GalleryBatchOperationProgress(
+                operation = GalleryBatchOperation.PASTE_SETTINGS,
+                completed = 0,
+                total = total
+            )
+            var successCount = 0
+
+            try {
+                val context = getApplication<Application>()
+                withContext(Dispatchers.IO) {
+                    selectedSnapshot.forEachIndexed { index, photo ->
+                        var refreshedPhotoId: String? = null
+                        try {
+                            val targetPhotoId = if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                                photo.relatedPhoto?.id
+                                    ?: findPhotonPhotoBySourceUri(photo.uri)?.id
+                                    ?: GalleryManager.importPhoto(context, photo.uri, null)
+                            } else {
+                                photo.id
+                            }
+                            if (targetPhotoId != null) {
+                                val targetIsRaw =
+                                    GalleryManager.getDngFile(context, targetPhotoId).exists()
+                                val current = GalleryManager.loadMetadata(context, targetPhotoId)
+                                    ?: photo.relatedPhoto?.metadata
+                                    ?: photo.metadata
+                                    ?: MediaMetadata(
+                                        width = photo.width,
+                                        height = photo.height,
+                                        mediaType = photo.mediaType
+                                    )
+                                val updated = GalleryManager.updateMetadata(
+                                    context,
+                                    targetPhotoId
+                                ) { latest ->
+                                    val metadataWithResolvedSize =
+                                        if (latest.width > 0 && latest.height > 0) {
+                                            latest
+                                        } else {
+                                            latest.copy(
+                                                width = current.width,
+                                                height = current.height
+                                            )
+                                        }
+                                    applyCopiedEditSettings(
+                                        metadataWithResolvedSize,
+                                        copied,
+                                        copyDetailProcessing = !targetIsRaw
+                                    )
+                                }
+                                if (updated != null) {
+                                    invalidatePreviewCache(targetPhotoId)
+                                    GalleryManager.deleteDetailHdrFile(context, targetPhotoId)
+                                    GalleryManager.queueDetailHdrCacheBuild(
+                                        context = context,
+                                        photoId = targetPhotoId,
+                                        metadata = updated,
+                                        sharpening = updated.sharpening ?: 0f,
+                                        noiseReduction = updated.noiseReduction ?: 0f,
+                                        chromaNoiseReduction =
+                                            updated.chromaNoiseReduction ?: 0f
+                                    )
+                                    GalleryManager.updateThumbnail(
+                                        context = context,
+                                        photoId = targetPhotoId,
+                                        photoProcessor = contentRepository.photoProcessor,
+                                        metadata = updated
+                                    )
+                                    refreshedPhotoId = targetPhotoId
+                                    successCount += 1
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            PLog.e(
+                                TAG,
+                                "Failed to paste settings to selected photo ${photo.id}",
+                                e
+                            )
+                        } finally {
+                            withContext(Dispatchers.Main) {
+                                val completed = index + 1
+                                pasteSettingsProgress = completed to total
+                                _batchOperationProgress.value =
+                                    GalleryBatchOperationProgress(
+                                        operation =
+                                            GalleryBatchOperation.PASTE_SETTINGS,
+                                        completed = completed,
+                                        total = total
+                                    )
+                                refreshedPhotoId?.let { photoId ->
+                                    photoRefreshKeys[photoId] = System.currentTimeMillis()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                exitSelectionMode()
+                loadPhotos(reset = true)
+                onComplete(successCount, total)
+            } finally {
+                _isPastingSettings.value = false
+                pasteSettingsProgress = 0 to 0
+                _batchOperationProgress.value = null
+            }
+        }
+    }
+
     /**
      * 批量导出选中的照片
      */
     fun exportSelectedPhotos(onComplete: (Int) -> Unit = {}) {
+        if (_isExporting.value || _isPastingSettings.value) return
         val selectedSnapshot = selectedPhotos.toList()
         if (selectedSnapshot.isEmpty()) return
+        val toExport = selectedSnapshot.filter { it.isImage }
+        if (toExport.isEmpty()) {
+            onComplete(0)
+            return
+        }
+        val selectedTabSnapshot = selectedTab
 
         viewModelScope.launch {
             _isExporting.value = true
-            val toExport = selectedSnapshot.filter { it.isImage }
             val total = toExport.size
             exportProgress = 0 to total
+            _batchOperationProgress.value = GalleryBatchOperationProgress(
+                operation = GalleryBatchOperation.EXPORT,
+                completed = 0,
+                total = total
+            )
+            var successCount = 0
             
             try {
                 val context = getApplication<Application>()
@@ -3449,33 +3954,67 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 withContext(Dispatchers.IO) {
                     toExport.forEachIndexed { index, photo ->
-                        var photoId = photo.id
-                        // 如果在系统相册 Tab，导出其关联的照片
-                        if (selectedTab == GalleryTab.SYSTEM) {
-                            photoId = photo.relatedPhoto?.id ?: return@forEachIndexed
-                        }
-                        val metadata = GalleryManager.loadMetadata(context, photoId) ?: photo.metadata ?: MediaMetadata()
-                        GalleryManager.exportPhoto(
-                            context, photoId, null, contentRepository.photoProcessor, metadata,
-                            sharpening.value, noiseReduction.value,
-                            chromaNoiseReduction.value, quality
-                        )
-                        
-                        withContext(Dispatchers.Main) {
-                            exportProgress = (index + 1) to total
+                        try {
+                            val photoId = if (selectedTabSnapshot == GalleryTab.SYSTEM) {
+                                photo.relatedPhoto?.id
+                            } else {
+                                photo.id
+                            }
+                            if (photoId != null) {
+                                val metadata = GalleryManager.loadMetadata(context, photoId)
+                                    ?: photo.relatedPhoto?.metadata
+                                    ?: photo.metadata
+                                    ?: MediaMetadata()
+                                val exported = GalleryManager.exportPhoto(
+                                    context,
+                                    photoId,
+                                    null,
+                                    contentRepository.photoProcessor,
+                                    metadata,
+                                    sharpening.value,
+                                    noiseReduction.value,
+                                    chromaNoiseReduction.value,
+                                    quality
+                                )
+                                if (exported) {
+                                    successCount += 1
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            PLog.e(
+                                TAG,
+                                "Failed to export selected photo ${photo.id}",
+                                e
+                            )
+                        } finally {
+                            withContext(Dispatchers.Main) {
+                                val completed = index + 1
+                                exportProgress = completed to total
+                                _batchOperationProgress.value =
+                                    GalleryBatchOperationProgress(
+                                        operation = GalleryBatchOperation.EXPORT,
+                                        completed = completed,
+                                        total = total
+                                    )
+                            }
                         }
                     }
                 }
                 
                 exitSelectionMode()
                 loadPhotos()
-                onComplete(total)
+                onComplete(successCount)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to batch export photos", e)
                 onComplete(0)
             } finally {
                 _isExporting.value = false
                 exportProgress = 0 to 0
+                _batchOperationProgress.value = null
             }
         }
     }
