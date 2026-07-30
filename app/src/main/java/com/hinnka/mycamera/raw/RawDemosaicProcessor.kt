@@ -257,7 +257,6 @@ class RawDemosaicProcessor {
         private const val DARKTABLE_FILMIC_HR_BETA_COMP = 0f
         private const val DARKTABLE_FILMIC_HR_DELTA = 1f
         private const val DARKTABLE_FILMIC_HR_HIGH_QUALITY_ITERATIONS = 1
-        private const val DNG_DEFAULT_CROP_ASPECT_TOLERANCE = 0.005f
         private const val DENOISE_PROFILE_GLES31_MIN_SSBO_BYTES = 128L * 1024L * 1024L
         private val BRADFORD_D65_TO_D50 = floatArrayOf(
             1.0478112f, 0.0228866f, -0.0501270f,
@@ -3605,6 +3604,7 @@ class RawDemosaicProcessor {
                     TAG,
                     "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
                         "source=${rawTextureWidth}x$rawTextureHeight " +
+                        "statsBounds=$safeStatsBounds " +
                         "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
                         "lsc=${lensShadingLogString(metadata)} " +
                         "warpCount=${activeWarpParameters.size / 8} " +
@@ -4614,81 +4614,13 @@ class RawDemosaicProcessor {
         cropRegion: Rect?,
         metadataDefaultCrop: Rect?
     ): Rect {
-        val safeMetadataCrop = RawDefaultCropOverride.sanitizeCropWithinImage(metadataDefaultCrop, width, height)
-        if (safeMetadataCrop != null) {
-            return calculateDngDefaultCropSourceBounds(
-                width = width,
-                height = height,
-                metadataCrop = safeMetadataCrop,
-                userCrop = cropRegion,
-                aspectRatio = aspectRatio
-            )
-        }
-
-        return BitmapUtils.calculateProcessedRect(
-            width,
-            height,
-            aspectRatio,
-            cropRegion,
-            0
+        return RawDefaultCropOverride.resolveOutputSourceBounds(
+            width = width,
+            height = height,
+            aspectRatio = aspectRatio,
+            userCrop = cropRegion,
+            metadataDefaultCrop = metadataDefaultCrop,
         )
-    }
-
-    private fun calculateDngDefaultCropSourceBounds(
-        width: Int,
-        height: Int,
-        metadataCrop: Rect,
-        userCrop: Rect?,
-        aspectRatio: AspectRatio?
-    ): Rect {
-        val safeUserCrop = sanitizeUserCrop(userCrop, width, height)
-        val userCropInsideMetadata = safeUserCrop
-            ?.takeUnless { it.isFullImage(width, height) }
-            ?.let { user ->
-                Rect(metadataCrop).takeIf { it.intersect(user) && !it.isEmpty }
-        }
-        val baseCrop = userCropInsideMetadata ?: metadataCrop
-        val sourceIsLandscape = baseCrop.width() >= baseCrop.height()
-        val targetAspectRatio = aspectRatio
-        return if (
-            targetAspectRatio != null &&
-            !baseCrop.hasEquivalentAspect(targetAspectRatio, sourceIsLandscape)
-        ) {
-            cropSourceBoundsToAspect(baseCrop, targetAspectRatio, sourceIsLandscape)
-        } else {
-            Rect(baseCrop)
-        }
-    }
-
-    private fun cropSourceBoundsToAspect(
-        bounds: Rect,
-        aspectRatio: AspectRatio,
-        sourceIsLandscape: Boolean
-    ): Rect {
-        val targetRatio = aspectRatio.getValue(sourceIsLandscape)
-        val srcRatio = bounds.width().toFloat() / bounds.height().toFloat()
-        val cropWidth: Int
-        val cropHeight: Int
-        if (srcRatio > targetRatio) {
-            cropHeight = bounds.height()
-            cropWidth = alignDownToEven((cropHeight * targetRatio).toInt())
-        } else {
-            cropWidth = bounds.width()
-            cropHeight = alignDownToEven((cropWidth / targetRatio).toInt())
-        }
-        val left = bounds.left + (bounds.width() - cropWidth).coerceAtLeast(0) / 2
-        val top = bounds.top + (bounds.height() - cropHeight).coerceAtLeast(0) / 2
-        return Rect(left, top, left + cropWidth, top + cropHeight)
-    }
-
-    private fun Rect.hasEquivalentAspect(
-        aspectRatio: AspectRatio,
-        sourceIsLandscape: Boolean
-    ): Boolean {
-        if (width() <= 0 || height() <= 0) return false
-        val targetRatio = aspectRatio.getValue(sourceIsLandscape)
-        val sourceRatio = width().toFloat() / height().toFloat()
-        return abs(sourceRatio - targetRatio) / targetRatio <= DNG_DEFAULT_CROP_ASPECT_TOLERANCE
     }
 
     private fun Rect.toOutputBounds(rotation: Int): Rect {
@@ -4696,31 +4628,6 @@ class RawDemosaicProcessor {
             Rect(top, left, bottom, right)
         } else {
             Rect(this)
-        }
-    }
-
-    private fun Rect.isFullImage(width: Int, height: Int): Boolean {
-        return left == 0 && top == 0 && right == width && bottom == height
-    }
-
-    private fun alignDownToEven(value: Int): Int {
-        return if (value <= 1) value else value and 1.inv()
-    }
-
-    private fun sanitizeUserCrop(crop: Rect?, width: Int, height: Int): Rect? {
-        if (crop == null || crop.isEmpty) return null
-        val currentIsLandscape = width >= height
-        val cropIsLandscape = crop.width() >= crop.height()
-        val alignedCrop = if (cropIsLandscape != currentIsLandscape) {
-            Rect(crop.top, crop.left, crop.bottom, crop.right)
-        } else {
-            Rect(crop)
-        }
-        val imageBounds = Rect(0, 0, width, height)
-        return if (alignedCrop.intersect(imageBounds) && !alignedCrop.isEmpty) {
-            alignedCrop
-        } else {
-            null
         }
     }
 

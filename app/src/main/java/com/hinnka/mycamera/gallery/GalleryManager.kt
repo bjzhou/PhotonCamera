@@ -1737,28 +1737,6 @@ object GalleryManager {
         )
     }
 
-    private fun resolveRawStatsBounds(
-        width: Int,
-        height: Int,
-        defaultCrop: Rect?,
-        cropRegion: Rect?
-    ): Rect? {
-        val imageBounds = Rect(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
-        var resolved: Rect? = null
-        listOf(defaultCrop, cropRegion).forEach { candidate ->
-            val safeCandidate = sanitizeIntersectingCrop(candidate, imageBounds) ?: return@forEach
-            resolved = resolved?.let { current ->
-                Rect(current).takeIf { it.intersect(safeCandidate) && !it.isEmpty }
-            } ?: safeCandidate
-        }
-        return resolved?.takeUnless { it.hasSameBounds(imageBounds) }
-    }
-
-    private fun sanitizeIntersectingCrop(crop: Rect?, imageBounds: Rect): Rect? {
-        if (crop == null || crop.isEmpty || imageBounds.isEmpty) return null
-        return Rect(crop).takeIf { it.intersect(imageBounds) && !it.isEmpty }
-    }
-
     private fun Rect.hasSameBounds(other: Rect): Boolean {
         return left == other.left && top == other.top && right == other.right && bottom == other.bottom
     }
@@ -3777,12 +3755,21 @@ object GalleryManager {
         captureResult: CaptureResult?,
     ): RawDngProfilePreparationOptions {
         val profileToneMapMode = rawDngPgtmModeForMetadata(metadata)
-        val statsBounds = resolveRawStatsBounds(
+        val blackBorderDefaultCrop =
+            RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
+                width = width,
+                height = height,
+                rotation = rotation,
+                rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+                metadataDefaultCrop = defaultCrop,
+            )
+        val statsBounds = RawDefaultCropOverride.resolveOutputSourceBounds(
             width = width,
             height = height,
-            defaultCrop = defaultCrop,
-            cropRegion = metadata.cropRegion,
-        )
+            aspectRatio = aspectRatio,
+            userCrop = metadata.cropRegion,
+            metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
+        ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
         val mainFlashFired = didMainFlashFire(captureResult)
         val viewfinderMatchEnabled = capturePreviewThumbnail != null &&
             !mainFlashFired &&
@@ -3824,6 +3811,7 @@ object GalleryManager {
             TAG,
             "RAW_VIEWFINDER_BASELINE stage=DNG_PREPARE enabled=$viewfinderMatchEnabled " +
                 "curve=DEFAULT pgtmOnGpu=$profileGainTableRequired " +
+                "statsBounds=$statsBounds blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "mainFlashFired=$mainFlashFired " +
                 "flashState=${captureResult?.get(CaptureResult.FLASH_STATE)} " +
                 "sourceAutoExposure=${metadata.rawAutoExposure} " +
