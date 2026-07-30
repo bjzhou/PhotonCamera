@@ -912,6 +912,8 @@
     <string name="settings_phantom_pip_crop_reset">Reset Crop</string>
     <string name="settings_phantom_pip_crop_choose_background">Choose Background</string>
     <string name="settings_phantom_pip_crop_default_background">Default Background</string>
+    <string name="settings_phantom_frame_title">Phantom Mode Frame</string>
+    <string name="settings_phantom_frame_description">Choose a frame used only for Phantom Mode exports. The app\'s default frame is not used.</string>
     <string name="settings_phantom_save_as_new">Save as New Image</string>
     <string name="settings_phantom_save_as_new_description">When enabled, the app will save the edited photo as a new image instead of overwriting the original one.</string>
     <string name="color_space">Color Space</string>

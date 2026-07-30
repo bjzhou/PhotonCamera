@@ -588,6 +588,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val lutId = preferences?.lutId
             ?: availableLutList.firstOrNull { it.isDefault }?.id
         val saveAsNew = preferences?.phantomSaveAsNew ?: false
+        val phantomFrameId = preferences?.phantomFrameId
         val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val isRawSource = isRawMedia(name, mimeType)
@@ -621,6 +622,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             if (baselineTarget != null) {
                 current.copy(
                     lutId = lutId,
+                    frameId = phantomFrameId,
                     colorRecipeParams = metadataCreativeColorRecipeParams,
                     baselineTarget = baselineTarget,
                     baselineLutId = baselineLutId,
@@ -629,6 +631,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             } else {
                 current.copy(
                     lutId = lutId,
+                    frameId = phantomFrameId,
                     colorRecipeParams = metadataCreativeColorRecipeParams,
                     baselineTarget = null,
                     baselineLutId = null,

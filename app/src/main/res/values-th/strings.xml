@@ -728,6 +728,8 @@
     <string name="settings_phantom_pip_crop_reset">รีเซ็ตการครอบตัด</string>
     <string name="settings_phantom_pip_crop_choose_background">เลือกภาพพื้นหลัง</string>
     <string name="settings_phantom_pip_crop_default_background">พื้นหลังเริ่มต้น</string>
+    <string name="settings_phantom_frame_title">กรอบโหมด Phantom</string>
+    <string name="settings_phantom_frame_description">เลือกกรอบที่ใช้เฉพาะกับการส่งออกในโหมด Phantom โดยจะไม่ใช้กรอบเริ่มต้นของแอป</string>
     <string name="settings_phantom_save_as_new">บันทึกภาพใหม่เป็น</string>
     <string name="settings_phantom_save_as_new_description">เมื่อเปิด ไฟล์ใหม่จะถูกสร้างขึ้นเมื่อมีการบันทึกรูปภาพที่แก้ไขแล้ว แทนที่จะเขียนทับรูปภาพต้นฉบับ</string>
     <string name="color_space">พื้นที่สี</string>

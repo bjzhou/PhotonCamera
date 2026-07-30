@@ -55,6 +55,7 @@ fun FrameManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val currentFrameId = viewModel.currentFrameId
+    val phantomFrameId by viewModel.phantomFrameId.collectAsState()
     val availableFrames = viewModel.availableFrameList
     val customImportManager = viewModel.getCustomImportManager()
     val scope = rememberCoroutineScope()
@@ -420,6 +421,9 @@ fun FrameManagementScreen(
                             // 如果删除的是当前选中的边框，切换到无边框
                             if (currentFrameId == deletingFrame!!.id) {
                                 viewModel.setFrame(null)
+                            }
+                            if (phantomFrameId == deletingFrame!!.id) {
+                                viewModel.setPhantomFrame(null)
                             }
                             viewModel.refreshCustomContent()
                             showDeleteDialog = false

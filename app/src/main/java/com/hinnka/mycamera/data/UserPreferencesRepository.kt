@@ -134,6 +134,7 @@ data class UserPreferences(
     val rawCfaCorrectionModes: Map<String, String> = emptyMap(),
     val exportDngWithRawExport: Boolean = false,
     val frameId: String? = null,
+    val phantomFrameId: String? = null,
     val showHistogram: Boolean = true,
     val showGrid: Boolean = false,  // 网格线显示
     val showLevelIndicator: Boolean = false,  // 水平仪显示
@@ -341,6 +342,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val EXPORT_DNG_WITH_RAW_EXPORT_KEY = booleanPreferencesKey("export_dng_with_raw_export")
         private val PHANTOM_BASELINE_LUT_ID_KEY = stringPreferencesKey("phantom_baseline_lut_id")
         private val FRAME_ID_KEY = stringPreferencesKey("frame_id")
+        private val PHANTOM_FRAME_ID_KEY = stringPreferencesKey("phantom_frame_id")
         private val SHOW_HISTOGRAM = booleanPreferencesKey("show_histogram")
         private val SHOW_GRID = booleanPreferencesKey("show_grid")
         private val SHOW_LEVEL_INDICATOR = booleanPreferencesKey("show_level_indicator")
@@ -555,6 +557,7 @@ class UserPreferencesRepository(private val context: Context) {
                 exportDngWithRawExport = preferences[EXPORT_DNG_WITH_RAW_EXPORT_KEY] ?: false,
                 phantomBaselineLutId = preferences[PHANTOM_BASELINE_LUT_ID_KEY],
                 frameId = preferences[FRAME_ID_KEY],
+                phantomFrameId = preferences[PHANTOM_FRAME_ID_KEY],
                 showHistogram = preferences[SHOW_HISTOGRAM] ?: true,
                 showGrid = preferences[SHOW_GRID] ?: false,
                 showLevelIndicator = preferences[SHOW_LEVEL_INDICATOR] ?: false,
@@ -1279,6 +1282,19 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[FRAME_ID_KEY] = frameId
             } else {
                 preferences.remove(FRAME_ID_KEY)
+            }
+        }
+    }
+
+    /**
+     * 保存幻影模式独立使用的边框。
+     */
+    suspend fun savePhantomFrameConfig(frameId: String?) {
+        context.dataStore.edit { preferences ->
+            if (frameId != null) {
+                preferences[PHANTOM_FRAME_ID_KEY] = frameId
+            } else {
+                preferences.remove(PHANTOM_FRAME_ID_KEY)
             }
         }
     }

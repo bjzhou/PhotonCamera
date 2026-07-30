@@ -1177,6 +1177,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val phantomBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.phantomBaselineLutId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val phantomFrameId: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.phantomFrameId }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val rawDcpId: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.rawDcpId }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -6192,6 +6195,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setPhantomSaveAsNew(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.savePhantomSaveAsNew(enabled)
+        }
+    }
+
+    fun setPhantomFrame(frameId: String?) {
+        viewModelScope.launch {
+            userPreferencesRepository.savePhantomFrameConfig(frameId)
         }
     }
 

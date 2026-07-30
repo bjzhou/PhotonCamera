@@ -330,6 +330,7 @@ fun SettingsScreen(
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
+    val phantomFrameId by viewModel.phantomFrameId.collectAsState()
     val defaultVirtualAperture by viewModel.defaultVirtualAperture.collectAsState(initial = 0f)
     val jpgBaselineLutId by viewModel.jpgBaselineLutId.collectAsState()
     val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
@@ -361,6 +362,7 @@ fun SettingsScreen(
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableLuts = viewModel.availableLutList
+    val availableFrames = viewModel.availableFrameList
     val previewThumbnail = viewModel.previewThumbnail
 
     var selectedPage by remember { mutableStateOf<SettingsPage?>(null) }
@@ -2029,6 +2031,19 @@ fun SettingsScreen(
                                 modifier = Modifier.padding(vertical = 12.dp)
                             )
 
+                            FrameWatermarkSetting(
+                                title = stringResource(R.string.settings_phantom_frame_title),
+                                description = stringResource(R.string.settings_phantom_frame_description),
+                                availableFrames = availableFrames,
+                                currentFrameId = phantomFrameId,
+                                onFrameSelected = viewModel::setPhantomFrame
+                            )
+
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+
                             BaselineColorCorrectionSettingItem(
                                 title = stringResource(R.string.settings_baseline_phantom_title),
                                 description = stringResource(R.string.settings_baseline_phantom_description),
@@ -2724,6 +2739,7 @@ private fun SettingsCategoryOverview(
                 description = listOf(
                     stringResource(R.string.settings_phantom_pip_preview),
                     stringResource(R.string.settings_phantom_save_as_new),
+                    stringResource(R.string.settings_phantom_frame_title),
                     stringResource(R.string.settings_baseline_phantom_title)
                 ).joinToString(" · "),
                 onClick = { onPageSelected(SettingsPage.PHANTOM) }
@@ -3572,6 +3588,8 @@ fun NavigationSettingItem(
  */
 @Composable
 fun FrameWatermarkSetting(
+    title: String,
+    description: String,
     availableFrames: List<FrameInfo>,
     currentFrameId: String?,
     onFrameSelected: (String?) -> Unit,
@@ -3580,18 +3598,18 @@ fun FrameWatermarkSetting(
 
     val frameScrollState = rememberLazyListState()
 
-    LaunchedEffect(currentFrameId) {
-        currentFrameId?.let { lutId ->
-            val selectedIndex = availableFrames.indexOfFirst { it.id == lutId }
-            if (selectedIndex >= 1) {
-                frameScrollState.animateScrollToItem(selectedIndex - 1)
-            }
-        }
+    LaunchedEffect(currentFrameId, availableFrames) {
+        val selectedIndex = currentFrameId
+            ?.let { frameId -> availableFrames.indexOfFirst { it.id == frameId } }
+            ?.takeIf { it >= 0 }
+            ?.plus(1)
+            ?: 0
+        frameScrollState.animateScrollToItem(selectedIndex)
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = stringResource(R.string.settings_frame_style),
+            text = title,
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Normal,
@@ -3629,7 +3647,7 @@ fun FrameWatermarkSetting(
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = stringResource(R.string.settings_frame_description),
+            text = description,
             color = Color.White.copy(alpha = 0.6f),
             fontSize = 13.sp
         )
