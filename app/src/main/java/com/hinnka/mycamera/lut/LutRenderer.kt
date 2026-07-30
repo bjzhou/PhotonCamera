@@ -419,6 +419,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     var vignette: Float = 0f // -1.0 ~ +1.0
 
     @Volatile
+    var flash: Float = 0f // 0.0 ~ 1.0
+
+    @Volatile
     var bleachBypass: Float = 0f // 0.0 ~ 1.0
 
     @Volatile
@@ -1448,6 +1451,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uTonePivotLocation, params.tonePivot)
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
             GLES30.glUniform1f(locations.uVignetteLocation, params.vignette)
+            GLES30.glUniform1f(locations.uFlashLocation, params.flash)
             GLES30.glUniform1f(locations.uBleachBypassLocation, params.bleachBypass)
             GLES30.glUniform1f(locations.uNoiseLocation, params.noise)
             GLES30.glUniform1f(locations.uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
@@ -3900,6 +3904,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             fade = fade,
             filmGrain = filmGrain,
             vignette = vignette,
+            flash = flash,
             bleachBypass = bleachBypass,
             bloom = bloom,
             softLight = softLight,
@@ -3981,6 +3986,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         paletteDensity = params.paletteDensity
         filmGrain = params.filmGrain
         vignette = params.vignette
+        flash = params.flash
         bleachBypass = params.bleachBypass
         bloom = params.bloom
         softLight = params.softLight

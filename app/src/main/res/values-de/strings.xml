@@ -160,6 +160,7 @@
     <string name="recipe_param_shadows">Schatten</string>
     <string name="recipe_param_film_grain">Körnung</string>
     <string name="recipe_param_vignette">Vignettierung</string>
+    <string name="recipe_param_flash">Blitz</string>
     <string name="recipe_param_bleach_bypass">Bleach Bypass</string>
     <string name="recipe_param_bloom">Bloom</string>
     <string name="recipe_param_soft_light">Weiches Licht</string>

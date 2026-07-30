@@ -54,6 +54,7 @@ internal object PreviewColorShader {
             uniform float uTonePivot;
             uniform float uFilmGrain;
             uniform float uVignette;
+            uniform float uFlash;
             uniform float uBleachBypass;
             uniform float uChromaticAberration;
             uniform float uNoise;
@@ -73,6 +74,7 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${if (variant.includeHlgInput) PreviewColorShaderModules.HLG_TO_LINEAR else PreviewColorShaderModules.HLG_TO_LINEAR_STUB}
             ${PreviewColorShaderModules.EXPOSURE}
+            ${DirectFlashShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
@@ -221,6 +223,11 @@ internal object PreviewColorShader {
                         desaturated.g *= 1.02;
                         desaturated.b *= 1.05;
                         color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (uFlash > 0.001) {
+                        color.rgb = applyDirectFlash(color.rgb, vTexCoord, uAspectRatio, uFlash);
                         color.rgb = sanitizeColor(color.rgb);
                     }
 

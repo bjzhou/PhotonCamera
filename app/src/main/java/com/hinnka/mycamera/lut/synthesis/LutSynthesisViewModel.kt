@@ -204,6 +204,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
                 val bakeableRecipe = recipe.copy(
                     filmGrain = 0f,
                     vignette = 0f,
+                    flash = 0f,
                     bloom = 0f,
                     halation = 0f,
                     redHalation = 0f,
@@ -277,6 +278,7 @@ class LutSynthesisViewModel(application: Application) : AndroidViewModel(applica
                 val bakeableRecipe = recipe.copy(
                     filmGrain = 0f,
                     vignette = 0f,
+                    flash = 0f,
                     bloom = 0f,
                     halation = 0f,
                     redHalation = 0f,

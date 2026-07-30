@@ -108,6 +108,7 @@ private class VideoLutShaderProgram(
             uniform float uTonePivot;     // -1.0 ~ +1.0
             uniform float uFilmGrain;     // 0.0 ~ 1.0
             uniform float uVignette;      // -1.0 ~ +1.0
+            uniform float uFlash;         // 0.0 ~ 1.0
             uniform float uBleachBypass;  // 0.0 ~ 1.0
             uniform float uNoise;         // 0.0 ~ 1.0
             uniform float uNoiseSeed;     // 噪点随机种子
@@ -172,6 +173,8 @@ private class VideoLutShaderProgram(
                 linearColor *= exp2(exposureEv);
                 return linearToSrgb(linearColor);
             }
+
+            ${DirectFlashShader.GLSL}
 
             float sanitizeFloat(float value) {
                 if (value != value) return 0.0;
@@ -596,6 +599,11 @@ private class VideoLutShaderProgram(
                         color.rgb = mix(color.rgb, desaturated, uBleachBypass);
                     }
 
+                    if (uFlash > 0.001) {
+                        color.rgb = applyDirectFlash(color.rgb, uvCoord, uAspectRatio, uFlash);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
                     if (abs(uVignette) > 0.0) {
                         vec2 center = vec2(0.5, 0.5);
                         float dist = distance(uvCoord, center);
@@ -704,6 +712,8 @@ private class VideoLutShaderProgram(
     private var positionVbo = 0
     private var texCoordVbo = 0
     private var isGles3Context = false
+    private var inputWidth = 1
+    private var inputHeight = 1
 
     private var lutTextureId = 0
     private var curveTextureId = 0
@@ -740,6 +750,8 @@ private class VideoLutShaderProgram(
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         PLog.d("VideoLutShaderProgram", "configure called, inputWidth: $inputWidth, inputHeight: $inputHeight")
+        this.inputWidth = inputWidth.coerceAtLeast(1)
+        this.inputHeight = inputHeight.coerceAtLeast(1)
         return Size(inputWidth, inputHeight)
     }
 
@@ -868,11 +880,15 @@ private class VideoLutShaderProgram(
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uTonePivot"), currentRecipeParams.tonePivot)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFilmGrain"), currentRecipeParams.filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uVignette"), currentRecipeParams.vignette)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uFlash"), currentRecipeParams.flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uBleachBypass"), currentRecipeParams.bleachBypass)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uNoise"), currentRecipeParams.noise)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uNoiseSeed"), (presentationTimeUs % 10000000L) / 1000000f)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uLowRes"), currentRecipeParams.lowRes)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uAspectRatio"), 16f / 9f)
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(programId, "uAspectRatio"),
+                inputWidth.toFloat() / inputHeight.toFloat()
+            )
 
             // LCH 配方数组
             val lchHue = floatArrayOf(

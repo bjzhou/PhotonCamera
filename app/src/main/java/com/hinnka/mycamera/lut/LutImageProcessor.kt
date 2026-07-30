@@ -1023,6 +1023,7 @@ class LutImageProcessor(context: Context? = null) {
         val tonePivot = effectiveRecipeParams?.tonePivot ?: 0f
         val filmGrain = effectiveRecipeParams?.filmGrain ?: 0f
         val vignette = effectiveRecipeParams?.vignette ?: 0f
+        val flash = effectiveRecipeParams?.flash ?: 0f
         val bleachBypass = effectiveRecipeParams?.bleachBypass ?: 0f
         val bloom = effectiveRecipeParams?.bloom ?: 0f
         val halation = 0f
@@ -1088,6 +1089,7 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTonePivot"), tonePivot)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFilmGrain"), filmGrain)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFlash"), flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uNoise"), noise)
             GLES30.glUniform1f(
@@ -3551,6 +3553,7 @@ class LutImageProcessor(context: Context? = null) {
             uniform float uTonePivot;     // -1.0 ~ +1.0 (曲线中点偏移)
             uniform float uFilmGrain;     // 0.0 ~ 1.0 (颗粒强度)
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
+            uniform float uFlash;         // 0.0 ~ 1.0 (镜头轴向直闪模拟)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
             uniform float uNoise;         // 0.0 ~ 1.0 (噪点)
             uniform float uNoiseSeed;     // 噪点随机种子
@@ -3586,6 +3589,7 @@ class LutImageProcessor(context: Context? = null) {
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${PreviewColorShaderModules.HLG_TO_LINEAR}
             ${PreviewColorShaderModules.EXPOSURE}
+            ${DirectFlashShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
@@ -3809,6 +3813,11 @@ class LutImageProcessor(context: Context? = null) {
                         
                         // 根据强度混合
                         color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                    }
+
+                    if (uFlash > 0.001) {
+                        color.rgb = applyDirectFlash(color.rgb, uvCoord, uAspectRatio, uFlash);
+                        color.rgb = sanitizeColor(color.rgb);
                     }
 
                     // 9. 晕影（Vignette - 边缘光线衰减/增强）

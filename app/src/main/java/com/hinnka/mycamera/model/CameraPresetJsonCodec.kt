@@ -134,6 +134,7 @@ internal object CameraPresetJsonCodec {
             paletteDensity = obj.float("paletteDensity", default.paletteDensity),
             filmGrain = obj.float("filmGrain", default.filmGrain),
             vignette = obj.float("vignette", default.vignette),
+            flash = obj.float("flash", default.flash),
             bleachBypass = obj.float("bleachBypass", default.bleachBypass),
             bloom = obj.float("bloom", default.bloom),
             softLight = obj.float("softLight", default.softLight),
@@ -193,6 +194,7 @@ internal object CameraPresetJsonCodec {
         val default = EffectParams.DEFAULT
         return EffectParams(
             vignette = obj.float("vignette", default.vignette),
+            flash = obj.float("flash", default.flash),
             filmGrain = obj.float("filmGrain", default.filmGrain),
             bloom = obj.float("bloom", default.bloom),
             softLight = obj.float("softLight", default.softLight),

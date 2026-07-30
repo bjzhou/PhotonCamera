@@ -160,6 +160,7 @@
     <string name="recipe_param_shadows">シャドウ</string>
     <string name="recipe_param_film_grain">粒子</string>
     <string name="recipe_param_vignette">周辺減光</string>
+    <string name="recipe_param_flash">フラッシュ</string>
     <string name="recipe_param_bleach_bypass">銀残し</string>
     <string name="recipe_param_bloom">ブルーム</string>
     <string name="recipe_param_soft_light">ソフトライト</string>

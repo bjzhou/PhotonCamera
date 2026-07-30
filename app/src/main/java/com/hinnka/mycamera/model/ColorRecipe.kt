@@ -28,6 +28,7 @@ data class ColorRecipeParams(
     val paletteDensity: Float = 1f, // 调色盘浓度
     val filmGrain: Float = 0f,      // 0.0 ~ 1.0 (颗粒强度，0为无颗粒)
     val vignette: Float = 0f,       // -1.0 ~ +1.0 (晕影，负值暗角，正值亮角)
+    val flash: Float = 0f,          // 0.0 ~ 1.0 (镜头轴向直闪模拟强度，0为无效果)
     val bleachBypass: Float = 0f,   // 0.0 ~ 1.0 (留银冲洗强度，0为无效果)
     val bloom: Float = 0f,          // 0.0 ~ 1.0 (Bevy Bloom 泛光强度，0为无效果)
     val softLight: Float = 0f,      // 0.0 ~ 1.0 (柔光扩散强度，0为无效果)
@@ -101,6 +102,7 @@ data class ColorRecipeParams(
                 paletteDensity == 1f &&
                 filmGrain == 0f &&
                 vignette == 0f &&
+                flash == 0f &&
                 bleachBypass == 0f &&
                 bloom == 0f &&
                 softLight == 0f &&
@@ -172,6 +174,7 @@ data class ColorRecipeParams(
                 paletteDensity == other.paletteDensity &&
                 filmGrain == other.filmGrain &&
                 vignette == other.vignette &&
+                flash == other.flash &&
                 bleachBypass == other.bleachBypass &&
                 bloom == other.bloom &&
                 softLight == other.softLight &&
@@ -267,6 +270,7 @@ enum class RecipeParam(
     SHADOWS(R.string.recipe_param_shadows, -1.0f, 1.0f, 0f),
     FILM_GRAIN(R.string.recipe_param_film_grain, 0.0f, 1.0f, 0f),
     VIGNETTE(R.string.recipe_param_vignette, -1.0f, 1.0f, 0f),
+    FLASH(R.string.recipe_param_flash, 0.0f, 1.0f, 0f),
     BLEACH_BYPASS(R.string.recipe_param_bleach_bypass, 0.0f, 1.0f, 0f),
     BLOOM(R.string.recipe_param_bloom, 0.0f, 1.0f, 0f),
     SOFT_LIGHT(R.string.recipe_param_soft_light, 0.0f, 1.0f, 0f),
@@ -336,6 +340,7 @@ enum class RecipeParam(
             SHADOWS -> params.shadows
             FILM_GRAIN -> params.filmGrain
             VIGNETTE -> params.vignette
+            FLASH -> params.flash
             BLEACH_BYPASS -> params.bleachBypass
             BLOOM -> params.bloom
             SOFT_LIGHT -> params.softLight
@@ -401,6 +406,7 @@ enum class RecipeParam(
             SHADOWS -> params.copy(shadows = clampedValue)
             FILM_GRAIN -> params.copy(filmGrain = clampedValue)
             VIGNETTE -> params.copy(vignette = clampedValue)
+            FLASH -> params.copy(flash = clampedValue)
             BLEACH_BYPASS -> params.copy(bleachBypass = clampedValue)
             BLOOM -> params.copy(bloom = clampedValue)
             SOFT_LIGHT -> params.copy(softLight = clampedValue)

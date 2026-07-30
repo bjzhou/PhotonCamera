@@ -142,10 +142,12 @@ class CameraPresetJsonCodecTest {
                 "unknownFutureField": "ignored",
                 "colorRecipe": {
                   "exposure": 0.25,
+                  "flash": 0.15,
                   "unknownColorField": 10
                 },
                 "effects": {
                   "vignette": -0.2,
+                  "flash": 0.65,
                   "hdf": 0.7
                 }
               }
@@ -166,7 +168,9 @@ class CameraPresetJsonCodecTest {
         assertEquals(1f, preset.colorRecipe.saturation, 0.0001f)
         assertEquals(0.5f, preset.colorRecipe.paletteX, 0.0001f)
         assertEquals(1f, preset.colorRecipe.lutIntensity, 0.0001f)
+        assertEquals(0.15f, preset.colorRecipe.flash, 0.0001f)
         assertEquals(-0.2f, preset.effects.vignette, 0.0001f)
+        assertEquals(0.65f, preset.effects.flash, 0.0001f)
         assertEquals(0f, preset.effects.hdf, 0.0001f)
     }
 

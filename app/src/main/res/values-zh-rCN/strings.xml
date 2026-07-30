@@ -421,6 +421,7 @@
     <string name="recipe_param_shadows">阴影</string>
     <string name="recipe_param_film_grain">颗粒</string>
     <string name="recipe_param_vignette">晕影</string>
+    <string name="recipe_param_flash">闪光灯</string>
     <string name="recipe_param_bleach_bypass">留银冲洗</string>
     <string name="recipe_param_bloom">泛光</string>
     <string name="recipe_param_soft_light">柔光</string>

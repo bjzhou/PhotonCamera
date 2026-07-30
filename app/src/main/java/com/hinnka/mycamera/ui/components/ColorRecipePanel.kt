@@ -76,6 +76,7 @@ fun ColorRecipePanel(
 ) {
     val isBakeable: (RecipeParam) -> Boolean = { param ->
         param != RecipeParam.VIGNETTE &&
+        param != RecipeParam.FLASH &&
         param != RecipeParam.FILM_GRAIN &&
         param != RecipeParam.BLOOM &&
         param != RecipeParam.SOFT_LIGHT &&
@@ -805,6 +806,7 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
 
         RecipeParam.FADE,
         RecipeParam.FILM_GRAIN,
+        RecipeParam.FLASH,
         RecipeParam.NOISE,
         RecipeParam.LOW_RES,
         RecipeParam.BLEACH_BYPASS,
@@ -871,6 +873,7 @@ private fun getParamColor(param: RecipeParam): Color {
         RecipeParam.FILM_GRAIN -> Color(0xFF9E9E9E) // 灰色
         RecipeParam.NOISE -> Color(0xFFA1887F) // 浅棕色
         RecipeParam.VIGNETTE -> Color(0xFF795548) // 棕色
+        RecipeParam.FLASH -> Color(0xFFE3F2FD) // 冷白色（直闪）
         RecipeParam.BLEACH_BYPASS -> Color(0xFF00BCD4) // 青色
         RecipeParam.BLOOM -> Color(0xFFFFD54F) // 泛光
         RecipeParam.SOFT_LIGHT -> Color(0xFFE8E1D4) // 柔光

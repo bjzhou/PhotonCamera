@@ -72,6 +72,7 @@ object BakedLutExporter {
         return copy(
             filmGrain = 0f,
             vignette = 0f,
+            flash = 0f,
             bloom = 0f,
             softLight = 0f,
             halation = 0f,
