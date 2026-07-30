@@ -2,6 +2,7 @@ package com.hinnka.mycamera.model
 
 import androidx.annotation.Keep
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.hinnka.mycamera.R
 
 /**
@@ -73,6 +74,14 @@ data class ColorRecipeParams(
     val primaryBlueHue: Float = 0f,
     val primaryBlueSaturation: Float = 0f,
     val primaryBlueLightness: Float = 0f,
+    val gradingShadowHue: Float = 0f,          // 0.0 ~ 1.0
+    val gradingShadowAmount: Float = 0f,       // 0.0 ~ 1.0
+    val gradingMidtoneHue: Float = 0f,         // 0.0 ~ 1.0
+    val gradingMidtoneAmount: Float = 0f,      // 0.0 ~ 1.0
+    val gradingHighlightHue: Float = 0f,       // 0.0 ~ 1.0
+    val gradingHighlightAmount: Float = 0f,    // 0.0 ~ 1.0
+    val gradingBalance: Float = 0f,            // -1.0 ~ 1.0
+    val gradingBlending: Float = 0.5f,         // 0.0 ~ 1.0
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
     val remarks: String? = "",       // 用户备注
     // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
@@ -146,6 +155,14 @@ data class ColorRecipeParams(
                 primaryBlueHue == 0f &&
                 primaryBlueSaturation == 0f &&
                 primaryBlueLightness == 0f &&
+                gradingShadowHue == 0f &&
+                gradingShadowAmount == 0f &&
+                gradingMidtoneHue == 0f &&
+                gradingMidtoneAmount == 0f &&
+                gradingHighlightHue == 0f &&
+                gradingHighlightAmount == 0f &&
+                gradingBalance == 0f &&
+                gradingBlending == 0.5f &&
                 remarks.isNullOrEmpty() &&
                 masterCurvePoints == null &&
                 redCurvePoints == null &&
@@ -218,6 +235,14 @@ data class ColorRecipeParams(
                 primaryBlueHue == other.primaryBlueHue &&
                 primaryBlueSaturation == other.primaryBlueSaturation &&
                 primaryBlueLightness == other.primaryBlueLightness &&
+                gradingShadowHue == other.gradingShadowHue &&
+                gradingShadowAmount == other.gradingShadowAmount &&
+                gradingMidtoneHue == other.gradingMidtoneHue &&
+                gradingMidtoneAmount == other.gradingMidtoneAmount &&
+                gradingHighlightHue == other.gradingHighlightHue &&
+                gradingHighlightAmount == other.gradingHighlightAmount &&
+                gradingBalance == other.gradingBalance &&
+                gradingBlending == other.gradingBlending &&
                 lutIntensity == other.lutIntensity &&
                 remarks == other.remarks &&
                 (masterCurvePoints === other.masterCurvePoints || masterCurvePoints?.contentEquals(other.masterCurvePoints) == true) &&
@@ -238,7 +263,22 @@ data class ColorRecipeParams(
          * 从 JSON 字符串反序列化
          */
         fun fromJson(json: String): ColorRecipeParams {
-            return gson.fromJson(json, ColorRecipeParams::class.java)?.copy(halation = 0f) ?: return DEFAULT
+            return try {
+                val root = JsonParser.parseString(json)
+                val parsed = gson.fromJson(root, ColorRecipeParams::class.java) ?: return DEFAULT
+                parsed.copy(
+                    halation = 0f,
+                    gradingBlending = if (
+                        root.isJsonObject && root.asJsonObject.has("gradingBlending")
+                    ) {
+                        parsed.gradingBlending
+                    } else {
+                        DEFAULT.gradingBlending
+                    }
+                )
+            } catch (_: Exception) {
+                DEFAULT
+            }
         }
 
         /**

@@ -174,6 +174,10 @@
     <string name="edit_color_and_effects">Sesuaikan warna dan efek</string>
     <string name="recipe_tab_color">Warna</string>
     <string name="recipe_color_basic">Dasar</string>
+    <string name="recipe_color_grading">Gradasi</string>
+    <string name="recipe_grading_midtones">Nada Tengah</string>
+    <string name="recipe_grading_balance">Keseimbangan</string>
+    <string name="recipe_grading_blending">Transisi</string>
     <string name="recipe_tab_light">Cahaya</string>
     <string name="recipe_tab_texture">Tekstur</string>
     <string name="recipe_tab_post">Pasca</string>

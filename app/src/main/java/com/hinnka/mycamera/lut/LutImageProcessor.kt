@@ -1101,6 +1101,26 @@ class LutImageProcessor(context: Context? = null) {
                 GLES30.glGetUniformLocation(program, "uAspectRatio"),
                 width.toFloat() / Math.max(1, height).toFloat()
             )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(program, "uGradingHues"),
+                effectiveRecipeParams.gradingShadowHue,
+                effectiveRecipeParams.gradingMidtoneHue,
+                effectiveRecipeParams.gradingHighlightHue
+            )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(program, "uGradingAmounts"),
+                effectiveRecipeParams.gradingShadowAmount,
+                effectiveRecipeParams.gradingMidtoneAmount,
+                effectiveRecipeParams.gradingHighlightAmount
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(program, "uGradingBalance"),
+                effectiveRecipeParams.gradingBalance
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(program, "uGradingBlending"),
+                effectiveRecipeParams.gradingBlending
+            )
             ColorRecipeGl.bindLchAdjustments(
                 uLchHueAdjustmentsLoc,
                 uLchChromaAdjustmentsLoc,
@@ -3559,6 +3579,10 @@ class LutImageProcessor(context: Context? = null) {
             uniform float uNoiseSeed;     // 噪点随机种子
             uniform float uLowRes;        // 0.0 ~ 1.0 (低像素强度)
             uniform float uAspectRatio;   // 图像长宽比
+            uniform vec3 uGradingHues;
+            uniform vec3 uGradingAmounts;
+            uniform float uGradingBalance;
+            uniform float uGradingBlending;
             
             // Primary Calibration
             uniform mat3 uPrimaryCalibrationMatrix;
@@ -3590,6 +3614,7 @@ class LutImageProcessor(context: Context? = null) {
             ${PreviewColorShaderModules.HLG_TO_LINEAR}
             ${PreviewColorShaderModules.EXPOSURE}
             ${DirectFlashShader.GLSL}
+            ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
@@ -3787,6 +3812,18 @@ class LutImageProcessor(context: Context? = null) {
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyLchColorMixer(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.rgb = applyThreeWayColorGrading(
+                        color.rgb,
+                        uGradingHues,
+                        uGradingAmounts,
+                        uGradingBalance,
+                        uGradingBlending,
+                        (uInputColorSpace == 1)
+                            ? vec3(0.2290, 0.6917, 0.0793)
+                            : vec3(0.2126, 0.7152, 0.0722)
+                    );
                     color.rgb = sanitizeColor(color.rgb);
 
                     // 7. 褪色效果

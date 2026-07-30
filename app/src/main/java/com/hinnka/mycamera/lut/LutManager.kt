@@ -58,6 +58,10 @@ class LutManager(private val context: Context) {
             "blueHue", "blueChroma", "blueLightness",
             "purpleHue", "purpleChroma", "purpleLightness",
             "magentaHue", "magentaChroma", "magentaLightness",
+            "gradingShadowHue", "gradingShadowAmount",
+            "gradingMidtoneHue", "gradingMidtoneAmount",
+            "gradingHighlightHue", "gradingHighlightAmount",
+            "gradingBalance", "gradingBlending",
             "lutIntensity"
         )
 
@@ -120,6 +124,14 @@ class LutManager(private val context: Context) {
                 magentaHue = f("magentaHue"),
                 magentaChroma = f("magentaChroma"),
                 magentaLightness = f("magentaLightness"),
+                gradingShadowHue = f("gradingShadowHue"),
+                gradingShadowAmount = f("gradingShadowAmount"),
+                gradingMidtoneHue = f("gradingMidtoneHue"),
+                gradingMidtoneAmount = f("gradingMidtoneAmount"),
+                gradingHighlightHue = f("gradingHighlightHue"),
+                gradingHighlightAmount = f("gradingHighlightAmount"),
+                gradingBalance = f("gradingBalance"),
+                gradingBlending = f("gradingBlending", 0.5f),
                 lutIntensity = f("lutIntensity", 1f),
                 remarks = s("remarks"),
             )

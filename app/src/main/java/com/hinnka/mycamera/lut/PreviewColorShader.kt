@@ -61,6 +61,10 @@ internal object PreviewColorShader {
             uniform float uNoiseSeed;
             uniform float uLowRes;
             uniform float uAspectRatio;
+            uniform vec3 uGradingHues;
+            uniform vec3 uGradingAmounts;
+            uniform float uGradingBalance;
+            uniform float uGradingBlending;
             uniform mat3 uPrimaryCalibrationMatrix;
             uniform float uAperture;
             uniform vec2 uFocusPoint;
@@ -75,6 +79,7 @@ internal object PreviewColorShader {
             ${if (variant.includeHlgInput) PreviewColorShaderModules.HLG_TO_LINEAR else PreviewColorShaderModules.HLG_TO_LINEAR_STUB}
             ${PreviewColorShaderModules.EXPOSURE}
             ${DirectFlashShader.GLSL}
+            ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
@@ -207,6 +212,16 @@ internal object PreviewColorShader {
                     color.rgb = sanitizeColor(color.rgb);
 
                     color.rgb = applyLchColorMixer(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.rgb = applyThreeWayColorGrading(
+                        color.rgb,
+                        uGradingHues,
+                        uGradingAmounts,
+                        uGradingBalance,
+                        uGradingBlending,
+                        W
+                    );
                     color.rgb = sanitizeColor(color.rgb);
 
                     if (uFade > 0.001) {

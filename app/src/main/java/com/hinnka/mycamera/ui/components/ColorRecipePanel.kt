@@ -50,6 +50,7 @@ private enum class ColorPanelSection {
     BASIC,
     CALIBRATION,
     LCH,
+    GRADING,
 }
 
 /**
@@ -213,7 +214,7 @@ fun ColorRecipePanel(
             )
             RecipePanelTab.COLOR -> onParamsChange(
                 resetParams(
-                    currentParams,
+                    currentParams.resetColorGrading(),
                     parameterGroups[RecipePanelTab.COLOR].orEmpty() +
                         calibrationGroups.flatMap { it.second } +
                         lchGroups.flatMap { it.second }
@@ -256,7 +257,7 @@ fun ColorRecipePanel(
                     redCurvePoints = null,
                     greenCurvePoints = null,
                     blueCurvePoints = null
-                ),
+                ).resetColorGrading(),
                 visibleParams
             )
         )
@@ -471,6 +472,13 @@ fun ColorRecipePanel(
                                         )
                                     }
                                 }
+                                ColorPanelSection.GRADING -> {
+                                    ColorGradingPanel(
+                                        currentParams = currentParams,
+                                        onParamsChange = onParamsChange,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                             }
                         }
                         RecipePanelTab.EFFECTS -> {
@@ -521,6 +529,7 @@ private fun ColorSectionTabs(
         ColorPanelSection.BASIC to R.string.recipe_color_basic,
         ColorPanelSection.CALIBRATION to R.string.recipe_tab_calibration,
         ColorPanelSection.LCH to R.string.recipe_tab_lch,
+        ColorPanelSection.GRADING to R.string.recipe_color_grading,
     )
     Row(
         modifier = modifier
@@ -534,7 +543,7 @@ private fun ColorSectionTabs(
             Text(
                 text = stringResource(title),
                 color = if (selected) Color.White else Color.White.copy(alpha = 0.5f),
-                fontSize = 11.sp,
+                fontSize = if (tabs.size > 3) 9.sp else 11.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
@@ -546,6 +555,19 @@ private fun ColorSectionTabs(
             )
         }
     }
+}
+
+private fun ColorRecipeParams.resetColorGrading(): ColorRecipeParams {
+    return copy(
+        gradingShadowHue = 0f,
+        gradingShadowAmount = 0f,
+        gradingMidtoneHue = 0f,
+        gradingMidtoneAmount = 0f,
+        gradingHighlightHue = 0f,
+        gradingHighlightAmount = 0f,
+        gradingBalance = 0f,
+        gradingBlending = 0.5f,
+    )
 }
 
 @Composable

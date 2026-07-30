@@ -355,6 +355,10 @@
     <string name="edit_color_and_effects">ปรับสีและเอฟเฟกต์</string>
     <string name="recipe_tab_color">สี</string>
     <string name="recipe_color_basic">พื้นฐาน</string>
+    <string name="recipe_color_grading">เกรดสี</string>
+    <string name="recipe_grading_midtones">โทนกลาง</string>
+    <string name="recipe_grading_balance">สมดุล</string>
+    <string name="recipe_grading_blending">การผสม</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">แสง</string>
     <string name="recipe_tab_curve">เส้นโค้ง</string>

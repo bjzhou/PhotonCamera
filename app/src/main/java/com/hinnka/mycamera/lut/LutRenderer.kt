@@ -454,6 +454,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile var primaryBlueHue: Float = 0f
     @Volatile var primaryBlueSaturation: Float = 0f
     @Volatile var primaryBlueLightness: Float = 0f
+    @Volatile var gradingShadowHue: Float = 0f
+    @Volatile var gradingShadowAmount: Float = 0f
+    @Volatile var gradingMidtoneHue: Float = 0f
+    @Volatile var gradingMidtoneAmount: Float = 0f
+    @Volatile var gradingHighlightHue: Float = 0f
+    @Volatile var gradingHighlightAmount: Float = 0f
+    @Volatile var gradingBalance: Float = 0f
+    @Volatile var gradingBlending: Float = 0.5f
 
     private val lchHueAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
     private val lchChromaAdjustments = FloatArray(LCH_COLOR_BAND_COUNT)
@@ -1457,6 +1465,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uNoiseSeedLocation, (System.currentTimeMillis() % 10000) / 1000f)
             GLES30.glUniform1f(locations.uLowResLocation, params.lowRes)
             GLES30.glUniform1f(locations.uAspectRatioLocation, width.toFloat() / maxOf(1, height).toFloat())
+            GLES30.glUniform3f(
+                locations.uGradingHuesLocation,
+                params.gradingShadowHue,
+                params.gradingMidtoneHue,
+                params.gradingHighlightHue
+            )
+            GLES30.glUniform3f(
+                locations.uGradingAmountsLocation,
+                params.gradingShadowAmount,
+                params.gradingMidtoneAmount,
+                params.gradingHighlightAmount
+            )
+            GLES30.glUniform1f(locations.uGradingBalanceLocation, params.gradingBalance)
+            GLES30.glUniform1f(locations.uGradingBlendingLocation, params.gradingBlending)
             val lch = ColorRecipeGl.lchAdjustments(params)
             val primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(params)
             ColorRecipeGl.bindLchAdjustments(
@@ -3953,6 +3975,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             primaryBlueHue = primaryBlueHue,
             primaryBlueSaturation = primaryBlueSaturation,
             primaryBlueLightness = primaryBlueLightness,
+            gradingShadowHue = gradingShadowHue,
+            gradingShadowAmount = gradingShadowAmount,
+            gradingMidtoneHue = gradingMidtoneHue,
+            gradingMidtoneAmount = gradingMidtoneAmount,
+            gradingHighlightHue = gradingHighlightHue,
+            gradingHighlightAmount = gradingHighlightAmount,
+            gradingBalance = gradingBalance,
+            gradingBlending = gradingBlending,
         )
     }
 
@@ -4004,6 +4034,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         primaryBlueHue = params.primaryBlueHue
         primaryBlueSaturation = params.primaryBlueSaturation
         primaryBlueLightness = params.primaryBlueLightness
+        gradingShadowHue = params.gradingShadowHue
+        gradingShadowAmount = params.gradingShadowAmount
+        gradingMidtoneHue = params.gradingMidtoneHue
+        gradingMidtoneAmount = params.gradingMidtoneAmount
+        gradingHighlightHue = params.gradingHighlightHue
+        gradingHighlightAmount = params.gradingHighlightAmount
+        gradingBalance = params.gradingBalance
+        gradingBlending = params.gradingBlending
         val lch = ColorRecipeGl.lchAdjustments(params)
         setLchAdjustments(lch.hue, lch.chroma, lch.lightness)
         // 更新曲线纹理

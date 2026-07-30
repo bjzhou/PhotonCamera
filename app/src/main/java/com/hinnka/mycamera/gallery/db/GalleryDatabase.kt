@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 30,
+    version = 31,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -246,6 +246,33 @@ abstract class GalleryDatabase : RoomDatabase() {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_flash REAL")
                 db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_flash REAL")
+            }
+        }
+
+        private val MIGRATION_30_31 = object : androidx.room.migration.Migration(30, 31) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                val gradingColumns = listOf(
+                    "gradingShadowHue",
+                    "gradingShadowAmount",
+                    "gradingMidtoneHue",
+                    "gradingMidtoneAmount",
+                    "gradingHighlightHue",
+                    "gradingHighlightAmount",
+                    "gradingBalance",
+                    "gradingBlending"
+                )
+                gradingColumns.forEach { column ->
+                    db.execSQL("ALTER TABLE gallery_media ADD COLUMN recipe_$column REAL")
+                    db.execSQL("ALTER TABLE gallery_media ADD COLUMN baseline_recipe_$column REAL")
+                }
+                db.execSQL(
+                    "UPDATE gallery_media SET recipe_gradingBlending = 0.5 " +
+                        "WHERE recipe_exposure IS NOT NULL"
+                )
+                db.execSQL(
+                    "UPDATE gallery_media SET baseline_recipe_gradingBlending = 0.5 " +
+                        "WHERE baseline_recipe_exposure IS NOT NULL"
+                )
             }
         }
 
@@ -610,7 +637,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_26_27,
                         MIGRATION_27_28,
                         MIGRATION_28_29,
-                        MIGRATION_29_30
+                        MIGRATION_29_30,
+                        MIGRATION_30_31
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

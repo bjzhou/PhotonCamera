@@ -471,6 +471,10 @@
     <!-- Color Recipe Tabs -->
     <string name="recipe_tab_color">颜色</string>
     <string name="recipe_color_basic">基础</string>
+    <string name="recipe_color_grading">色彩分级</string>
+    <string name="recipe_grading_midtones">中间调</string>
+    <string name="recipe_grading_balance">平衡</string>
+    <string name="recipe_grading_blending">过渡</string>
     <string name="recipe_tab_lch">LCH</string>
     <string name="recipe_tab_light">亮度</string>
     <string name="recipe_tab_curve">曲线</string>

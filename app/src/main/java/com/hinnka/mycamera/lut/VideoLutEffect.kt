@@ -114,6 +114,10 @@ private class VideoLutShaderProgram(
             uniform float uNoiseSeed;     // 噪点随机种子
             uniform float uLowRes;        // 0.0 ~ 1.0
             uniform float uAspectRatio;   // 图像长宽比
+            uniform vec3 uGradingHues;
+            uniform vec3 uGradingAmounts;
+            uniform float uGradingBalance;
+            uniform float uGradingBlending;
             
             uniform vec3 uPrimaryCalibrationRow0;
             uniform vec3 uPrimaryCalibrationRow1;
@@ -175,6 +179,7 @@ private class VideoLutShaderProgram(
             }
 
             ${DirectFlashShader.GLSL}
+            ${ThreeWayColorGradingShader.GLSL}
 
             float sanitizeFloat(float value) {
                 if (value != value) return 0.0;
@@ -582,6 +587,18 @@ private class VideoLutShaderProgram(
                     color.rgb = applyLchColorMixer(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
 
+                    color.rgb = applyThreeWayColorGrading(
+                        color.rgb,
+                        uGradingHues,
+                        uGradingAmounts,
+                        uGradingBalance,
+                        uGradingBlending,
+                        (uInputColorSpace == 1)
+                            ? vec3(0.2290, 0.6917, 0.0793)
+                            : vec3(0.2126, 0.7152, 0.0722)
+                    );
+                    color.rgb = sanitizeColor(color.rgb);
+
                     if (uFade > 0.0) {
                         float fadeAmount = uFade * 0.3;
                         color.rgb = mix(color.rgb, vec3(0.5), fadeAmount);
@@ -888,6 +905,26 @@ private class VideoLutShaderProgram(
             GLES30.glUniform1f(
                 GLES30.glGetUniformLocation(programId, "uAspectRatio"),
                 inputWidth.toFloat() / inputHeight.toFloat()
+            )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(programId, "uGradingHues"),
+                currentRecipeParams.gradingShadowHue,
+                currentRecipeParams.gradingMidtoneHue,
+                currentRecipeParams.gradingHighlightHue
+            )
+            GLES30.glUniform3f(
+                GLES30.glGetUniformLocation(programId, "uGradingAmounts"),
+                currentRecipeParams.gradingShadowAmount,
+                currentRecipeParams.gradingMidtoneAmount,
+                currentRecipeParams.gradingHighlightAmount
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(programId, "uGradingBalance"),
+                currentRecipeParams.gradingBalance
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(programId, "uGradingBlending"),
+                currentRecipeParams.gradingBlending
             )
 
             // LCH 配方数组

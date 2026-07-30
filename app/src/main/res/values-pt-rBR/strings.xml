@@ -175,6 +175,10 @@
     <string name="edit_color_and_effects">Ajustar cor e efeitos</string>
     <string name="recipe_tab_color">Cor</string>
     <string name="recipe_color_basic">Básico</string>
+    <string name="recipe_color_grading">Gradação</string>
+    <string name="recipe_grading_midtones">Tons médios</string>
+    <string name="recipe_grading_balance">Balanço</string>
+    <string name="recipe_grading_blending">Transição</string>
     <string name="recipe_tab_light">Luz</string>
     <string name="recipe_tab_texture">Textura</string>
     <string name="recipe_tab_post">Pós</string>

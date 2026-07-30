@@ -175,6 +175,10 @@
     <string name="edit_color_and_effects">색상 및 효과 조정</string>
     <string name="recipe_tab_color">색상</string>
     <string name="recipe_color_basic">기본</string>
+    <string name="recipe_color_grading">그레이딩</string>
+    <string name="recipe_grading_midtones">중간톤</string>
+    <string name="recipe_grading_balance">밸런스</string>
+    <string name="recipe_grading_blending">블렌딩</string>
     <string name="recipe_tab_light">빛</string>
     <string name="recipe_tab_texture">질감</string>
     <string name="recipe_tab_post">후보정</string>
