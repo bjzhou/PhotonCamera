@@ -148,7 +148,7 @@ data class MediaMetadata(
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
      *
-     * CaptureInfo.model 使用其 Build.MODEL 默认值，不复用边框水印的 deviceModel。
+     * CaptureInfo.model 使用其 EXIF 安全设备型号默认值，不复用边框水印的 deviceModel。
      */
     fun toCaptureInfo(): com.hinnka.mycamera.camera.CaptureInfo {
         return com.hinnka.mycamera.camera.CaptureInfo(

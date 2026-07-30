@@ -3,6 +3,8 @@ package com.hinnka.mycamera.gallery
 import android.graphics.Bitmap
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.utils.DeviceUtil
+import com.hinnka.mycamera.utils.OPPO_EXIF_USER_COMMENT
 import com.hinnka.mycamera.utils.PLog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -125,6 +127,16 @@ object ExifWriter {
             // ========== 设备信息 ==========
             exif.setAttribute(ExifInterface.TAG_MAKE, captureInfo.make)
             exif.setAttribute(ExifInterface.TAG_MODEL, captureInfo.model)
+            DeviceUtil.buildExifLensModel(
+                focalLength35mm = captureInfo.focalLength35mm,
+                aperture = captureInfo.aperture,
+                model = captureInfo.model,
+            )?.let { lensModel ->
+                exif.setAttribute(ExifInterface.TAG_LENS_MODEL, lensModel)
+            }
+            if (DeviceUtil.isOppo) {
+                exif.setAttribute(ExifInterface.TAG_USER_COMMENT, OPPO_EXIF_USER_COMMENT)
+            }
             exif.setAttribute(ExifInterface.TAG_SOFTWARE, captureInfo.software)
 
             // ========== 日期时间 ==========

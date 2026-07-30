@@ -26,6 +26,9 @@ class SuperResolutionDngWriterIfdTest {
 
     @Test
     fun `header links ExifIFD and keeps focal length out of IFD0`() {
+        val lensModelBytes =
+            "OPPO Find X9 Ultra ultra wide camera 14mm f/2.0\u0000".toByteArray(Charsets.US_ASCII)
+        val userCommentBytes = encodeExifAsciiUserComment(OPPO_EXIF_USER_COMMENT)
         val primaryEntries = listOf(
             tiffEntry(TAG_STRIP_OFFSETS, TYPE_LONG, 1, uintBytes(0)),
             tiffEntry(TAG_MAKE, TYPE_ASCII, 7, "Photon\u0000".toByteArray(Charsets.US_ASCII)),
@@ -34,6 +37,8 @@ class SuperResolutionDngWriterIfdTest {
         val exifEntries = listOf(
             tiffEntry(TAG_DATETIME_ORIGINAL, TYPE_ASCII, 20, "2026:07:13 12:34:56\u0000".toByteArray(Charsets.US_ASCII)),
             tiffEntry(TAG_FOCAL_LENGTH, TYPE_RATIONAL, 1, uintBytes(20) + uintBytes(1)),
+            tiffEntry(TAG_USER_COMMENT, TYPE_UNDEFINED, userCommentBytes.size.toLong(), userCommentBytes),
+            tiffEntry(TAG_LENS_MODEL, TYPE_ASCII, lensModelBytes.size.toLong(), lensModelBytes),
         ).sortedBy(::entryTag)
 
         val header = buildHeader(primaryEntries, exifEntries)
@@ -45,6 +50,8 @@ class SuperResolutionDngWriterIfdTest {
         assertFalse(primaryIfd.containsKey(TAG_FOCAL_LENGTH))
         assertTrue(exifIfd.containsKey(TAG_FOCAL_LENGTH))
         assertTrue(exifIfd.containsKey(TAG_DATETIME_ORIGINAL))
+        assertEquals(TYPE_UNDEFINED, exifIfd.getValue(TAG_USER_COMMENT).type)
+        assertTrue(exifIfd.containsKey(TAG_LENS_MODEL))
         assertEquals(header.size, primaryIfd.getValue(TAG_STRIP_OFFSETS).valueOrOffset)
 
         val focalLength = exifIfd.getValue(TAG_FOCAL_LENGTH)
@@ -140,6 +147,8 @@ class SuperResolutionDngWriterIfdTest {
         const val TAG_EXIF_IFD_POINTER = 34665
         const val TAG_DATETIME_ORIGINAL = 36867
         const val TAG_FOCAL_LENGTH = 37386
+        const val TAG_USER_COMMENT = 37510
+        const val TAG_LENS_MODEL = 42036
         const val TAG_PROFILE_GAIN_TABLE_MAP_2 = 52544
     }
 }

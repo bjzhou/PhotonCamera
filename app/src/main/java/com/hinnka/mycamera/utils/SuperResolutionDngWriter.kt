@@ -206,8 +206,10 @@ object SuperResolutionDngWriter {
     private const val TAG_DATETIME_DIGITIZED = 36868
     private const val TAG_APERTURE_VALUE = 37378
     private const val TAG_FOCAL_LENGTH = 37386
+    private const val TAG_USER_COMMENT = 37510
     private const val TAG_WHITE_BALANCE = 41987
     private const val TAG_FOCAL_LENGTH_IN_35MM_FILM = 41989
+    private const val TAG_LENS_MODEL = 42036
     private const val TAG_CFA_REPEAT_PATTERN_DIM = 33421
     private const val TAG_CFA_PATTERN = 33422
     private const val TAG_DNG_VERSION = 50706
@@ -493,11 +495,18 @@ object SuperResolutionDngWriter {
             ?.let { it.toDouble() / 1_000_000_000.0 }
         val iso = captureMetadataResult.get(CaptureResult.SENSOR_SENSITIVITY)?.takeIf { it > 0 }
         val aperture = captureMetadataResult.get(CaptureResult.LENS_APERTURE)?.takeIf { it > 0f }
+            ?: characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+                ?.firstOrNull()
+                ?.takeIf { it > 0f }
         val physicalFocalLength = captureMetadataResult.get(CaptureResult.LENS_FOCAL_LENGTH)
             ?.takeIf { it > 0f }
         val focalLength = effectiveFocalLengthMm?.takeIf { it > 0f } ?: physicalFocalLength
         val focalLength35mm = effectiveFocalLength35mm?.takeIf { it > 0 }
             ?: calculate35mmEquivalent(characteristics, physicalFocalLength)
+        val lensModel = DeviceUtil.buildExifLensModel(
+            focalLength35mm = focalLength35mm,
+            aperture = aperture,
+        )
         val exifWhiteBalance = captureMetadataResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
             if (awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
         }
@@ -551,10 +560,14 @@ object SuperResolutionDngWriter {
             add(ascii(TAG_DATETIME_ORIGINAL, dateTime))
             add(ascii(TAG_DATETIME_DIGITIZED, dateTime))
             focalLength?.let { add(rationalArray(TAG_FOCAL_LENGTH, listOf(it.toDouble()))) }
+            if (DeviceUtil.isOppo) {
+                add(undefined(TAG_USER_COMMENT, encodeExifAsciiUserComment(OPPO_EXIF_USER_COMMENT)))
+            }
             exifWhiteBalance?.let { add(short(TAG_WHITE_BALANCE, it)) }
             focalLength35mm?.let {
                 add(short(TAG_FOCAL_LENGTH_IN_35MM_FILM, it.coerceIn(1, MAX_TIFF_SHORT)))
             }
+            lensModel?.let { add(ascii(TAG_LENS_MODEL, it)) }
         }.sortedBy { it.tag }
 
         val primaryEntries = buildList {
@@ -565,7 +578,7 @@ object SuperResolutionDngWriter {
             add(short(TAG_COMPRESSION, compression.tagValue))
             add(short(TAG_PHOTOMETRIC_INTERPRETATION, imageLayout.photometricInterpretation))
             add(ascii(TAG_MAKE, Build.MANUFACTURER.ifBlank { "Android" }))
-            add(ascii(TAG_MODEL, Build.MODEL.ifBlank { cameraModel }))
+            add(ascii(TAG_MODEL, DeviceUtil.exifModel))
             add(long(TAG_STRIP_OFFSETS, 0))
             add(short(TAG_ORIENTATION, orientation))
             add(short(TAG_SAMPLES_PER_PIXEL, samplesPerPixel))

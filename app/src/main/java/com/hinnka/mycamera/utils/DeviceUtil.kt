@@ -2,6 +2,52 @@ package com.hinnka.mycamera.utils
 
 import android.os.Build
 import com.hinnka.mycamera.BuildConfig
+import java.util.Locale
+
+const val OPPO_EXIF_USER_COMMENT = "oplus_13422822400"
+
+internal fun encodeExifAsciiUserComment(value: String): ByteArray {
+    val encodingPrefix = byteArrayOf(
+        'A'.code.toByte(),
+        'S'.code.toByte(),
+        'C'.code.toByte(),
+        'I'.code.toByte(),
+        'I'.code.toByte(),
+        0,
+        0,
+        0,
+    )
+    return encodingPrefix + value.toByteArray(Charsets.US_ASCII)
+}
+
+internal fun selectExifModel(deviceModel: String, buildModel: String): String {
+    val isPrintableAscii = deviceModel.isNotEmpty() &&
+        deviceModel.all { character -> character.code in 0x20..0x7E }
+    return if (isPrintableAscii) deviceModel else buildModel
+}
+
+internal fun formatExifLensModel(
+    model: String,
+    focalLength35mm: Int?,
+    aperture: Float?,
+): String? {
+    val focalLength = focalLength35mm?.takeIf { it > 0 } ?: return null
+    val fNumber = aperture?.takeIf { it.isFinite() && it > 0f } ?: return null
+    val cameraType = when {
+        focalLength <= 18 -> "ultra wide camera"
+        focalLength < 40 -> "wide camera"
+        focalLength < 150 -> "telephoto camera"
+        else -> "ultra telephoto camera"
+    }
+    return String.format(
+        Locale.US,
+        "%s %s %dmm f/%.1f",
+        model,
+        cameraType,
+        focalLength,
+        fNumber,
+    )
+}
 
 object DeviceUtil {
     val model: String
@@ -15,6 +61,19 @@ object DeviceUtil {
                 ?: SystemPropertiesUtil.get("ro.product.vendor.model")
                 ?: Build.MODEL
         }
+
+    val exifModel: String
+        get() = selectExifModel(model, Build.MODEL)
+
+    fun buildExifLensModel(
+        focalLength35mm: Int?,
+        aperture: Float?,
+        model: String = exifModel,
+    ): String? = formatExifLensModel(
+        model = model,
+        focalLength35mm = focalLength35mm,
+        aperture = aperture,
+    )
 
     val isQualcomm: Boolean
         get() {
