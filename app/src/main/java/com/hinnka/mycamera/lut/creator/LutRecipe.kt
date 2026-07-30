@@ -3,16 +3,17 @@ package com.hinnka.mycamera.lut.creator
 import androidx.annotation.Keep
 
 /**
- * LUT recipe representing a color grading style as a set of Control Points for RBF interpolation.
+ * LUT recipe representing a color grading style as a set of weighted source/target samples.
  */
 @Keep
 data class LutRecipe(
-    val controlPoints: List<ControlPoint> = emptyList()
+    val controlPoints: List<ControlPoint> = emptyList(),
+    val isMonochrome: Boolean = false
 )
 
 /**
  * A Control Point maps a source (un-stylized) color to a target (stylized) color.
- * Coordinates are in normalized linear RGB or sRGB [0.0, 1.0].
+ * Coordinates are normalized display-referred sRGB values in [0.0, 1.0].
  */
 @Keep
 data class ControlPoint(

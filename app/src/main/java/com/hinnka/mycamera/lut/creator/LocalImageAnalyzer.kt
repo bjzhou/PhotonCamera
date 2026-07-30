@@ -275,7 +275,7 @@ object LocalImageAnalyzer {
                     )
                 } else {
                     // Fallback: If no neutral pixels found for this luminance, add a slightly stabilized identity point
-                    // with lower weight in logic (or just skip to let RBF decide)
+                    // with lower weight in logic (or just skip to let local interpolation decide)
                     if (step == 0 || step == toneSteps - 1) {
                         val fallbackL = targetL
                         controlPoints.add(
@@ -751,8 +751,8 @@ object LocalImageAnalyzer {
     }
 
     private fun mergeNearbyControlPoints(controlPoints: List<ControlPoint>): List<ControlPoint> {
-        // This is CRITICAL. If two points are very close in Source space but have different Targets,
-        // the RBF solver will explode (matrix singularity). We merge points within 0.05 distance.
+        // Nearby source samples with conflicting targets destabilize any local interpolator.
+        // Merge points within 0.05 distance before LUT generation.
         val finalPoints = mutableListOf<ControlPoint>()
         for (p in controlPoints) {
             var merged = false

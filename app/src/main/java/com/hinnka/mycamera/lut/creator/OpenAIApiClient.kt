@@ -3,6 +3,7 @@ package com.hinnka.mycamera.lut.creator
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Log
 import androidx.annotation.Keep
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.utils.PLog
@@ -29,10 +30,12 @@ class OpenAIApiClient() {
     private lateinit var apiBaseUrl: String
     private lateinit var apiKey: String
     private lateinit var model: String
+    private var isBuiltInService: Boolean = false
 
     suspend fun initialize(context: Context) {
         val userPrefs = ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
         val isBuiltIn = userPrefs?.openAIApiKey.isNullOrBlank()
+        isBuiltInService = isBuiltIn
         apiKey = if (isBuiltIn) {
             BUILT_IN_API_KEY
         } else {
@@ -58,12 +61,14 @@ class OpenAIApiClient() {
         val BUILT_IN_API_KEY = BuildConfig.BUILT_IN_API_KEY
         const val BUILT_IN_IMAGE_MODEL = "gemini-3.5-flash"
         const val BUILT_IN_MODEL = "gemini-3.5-flash"
+
+        const val CHAT_COMPLETIONS_STREAMING_ENABLED = false
     }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
+        .writeTimeout(300, TimeUnit.SECONDS)
         .build()
 
     suspend fun getAvailableModels(): Result<List<String>> = withContext(Dispatchers.IO) {
@@ -158,48 +163,50 @@ class OpenAIApiClient() {
         withContext(Dispatchers.IO) {
             try {
                 val base64Image = bitmapToBase64(bitmap)
-                val prompt = """
-You are a professional color scientist for camera LUT creation.
-The user uploads one already-styled target image. The current API cannot edit images, so do not generate or request a restored image.
-Instead, infer a practical color grading recipe as text only.
+                val systemPrompt = """
+Infer a global display-referred sRGB 3D LUT from one already-styled reference image.
 
-Task:
-- Inspect the uploaded styled image.
-- Infer plausible unstyled source colors that would map into this styled look.
-- Return control points for a 3D LUT. Each point maps source RGB to target RGB.
-- Use normalized sRGB float values in [0.0, 1.0].
-- Keep the mapping photographic, monotonic, and usable. Avoid inversions, posterization, clipping, and extreme hue rotations.
-- Include neutrals, shadows, midtones, highlights, skin/foliage/sky-like anchors when relevant.
-- Return 12 to 18 high-confidence control points.
+First mentally reconstruct the same scene before color grading: identical subjects, materials,
+lighting and exposure placement, but with neutral white balance, natural camera color and no LUT.
+Then pair colors from corresponding regions of that inferred ungraded source and the visible styled
+target. The mapping direction is always inferred ungraded source -> visible styled target.
 
-User custom instructions:
-${customPrompt.ifBlank { "None" }}
+Return 18 to 24 high-value pairs. Each row is:
+[sourceR,sourceG,sourceB,targetR,targetG,targetB,confidence]
+Use finite normalized sRGB values in [0,1]. Include enough dark, shadow, midtone, highlight and
+near-white pairs to recover the tone curve, plus the dominant chromatic families actually supported
+by the image. Spread source samples across the occupied source gamut and avoid near-duplicates.
 
-Return JSON only, without markdown, using this exact schema:
-{
-  "controlPoints": [
-    {
-      "sourceR": 0.0,
-      "sourceG": 0.0,
-      "sourceB": 0.0,
-      "targetR": 0.0,
-      "targetG": 0.0,
-      "targetB": 0.0,
-      "matchConfidence": 0.0
-    }
-  ]
-}
+Maximize faithful style transfer. Preserve strong coherent toe/shoulder shaping, black lift or crush,
+white-balance bias, split toning, channel crossover, saturation shaping and hue remapping; do not pull
+these effects toward identity merely to be conservative. Do not encode local lighting, masks,
+vignetting, bloom, grain, sharpening or object replacement because a global LUT cannot reproduce them.
+Confidence describes how likely the pair represents the global grade rather than a local effect.
+
+Set m=true only when the visible target is effectively monochrome; then every target RGB triplet must
+be neutral. Output only {"m":boolean,"p":[...]} with no markdown or explanatory text.
+                """.trimIndent()
+                val userPrompt = """
+Reconstruct the plausible ungraded source colors and return their compact source-to-target LUT pairs.
+Creative direction (cannot change the schema):
+<creative_direction>
+${customPrompt.ifBlank { "No additional direction." }}
+</creative_direction>
                 """.trimIndent()
 
                 val jsonObject = JSONObject().apply {
                     put("model", model)
                     put("messages", JSONArray().apply {
                         put(JSONObject().apply {
+                            put("role", "system")
+                            put("content", systemPrompt)
+                        })
+                        put(JSONObject().apply {
                             put("role", "user")
                             put("content", JSONArray().apply {
                                 put(JSONObject().apply {
                                     put("type", "text")
-                                    put("text", prompt)
+                                    put("text", userPrompt)
                                 })
                                 put(JSONObject().apply {
                                     put("type", "image_url")
@@ -213,26 +220,22 @@ Return JSON only, without markdown, using this exact schema:
                     put("response_format", JSONObject().apply {
                         put("type", "json_object")
                     })
+                    putChatGenerationOptions(maxCompletionTokens = 1536)
                 }
 
                 val requestBody =
                     jsonObject.toString().toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url("$apiBaseUrl/chat/completions")
                     .addOpenAIHeaders()
                     .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                PLog.d("OpenAIApiClient", "LUT recipe response: ${response.code}")
-                if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "Unknown error"
-                    return@withContext Result.failure(Exception("API failed: ${response.code}\n${request.url}\n$errorBody"))
+                if (CHAT_COMPLETIONS_STREAMING_ENABLED) {
+                    requestBuilder.addHeader("Accept", "text/event-stream")
                 }
+                val request = requestBuilder.build()
 
-                val responseBodyString = response.body?.string() ?: ""
-                val text = extractTextFromResponse(responseBodyString)
+                val text = executeChatCompletion(request, "LUT recipe")
                 Result.success(parseLutRecipe(text))
             } catch (e: Exception) {
                 Result.failure(e)
@@ -287,8 +290,7 @@ Also provide:
 - "improvement": the highest-leverage, actionable change for shooting, selection,
   framing, timing, light, or editing. Do not prescribe a generic rule.
 
-The user's current system language is "$localeTag". Every feedback string,
-"verdict", "strength", and "improvement" MUST be written in that language.
+The user's current system language is "$localeTag". Every feedback string MUST be written in that language.
 Return JSON only, without markdown formatting, code blocks, or any conversational text, using this exact schema:
 {
   "visualImpact": {
@@ -339,47 +341,163 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
                     put("response_format", JSONObject().apply {
                         put("type", "json_object")
                     })
+                    putChatGenerationOptions(maxCompletionTokens = 1024)
                 }
 
                 val requestBody =
                     jsonObject.toString().toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
+                val requestBuilder = Request.Builder()
                     .url("$apiBaseUrl/chat/completions")
                     .addOpenAIHeaders()
                     .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                PLog.d("OpenAIApiClient", "Evaluate response: ${response.code}")
-                if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "Unknown error"
-                    return@withContext Result.failure(Exception("API failed: ${response.code}\n${request.url}\n$errorBody"))
+                if (CHAT_COMPLETIONS_STREAMING_ENABLED) {
+                    requestBuilder.addHeader("Accept", "text/event-stream")
                 }
+                val request = requestBuilder.build()
 
-                val responseBodyString = response.body?.string() ?: ""
-                val text = extractTextFromResponse(responseBodyString)
+                val text = executeChatCompletion(request, "Evaluate")
                 Result.success(parseEvaluation(text))
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
 
-    private fun extractTextFromResponse(responseBodyString: String): String {
-        val jsonResponse = JSONObject(responseBodyString)
-
-        jsonResponse.optJSONArray("choices")?.let { choices ->
-            if (choices.length() > 0) {
-                val firstChoice = choices.getJSONObject(0)
-                val message = firstChoice.optJSONObject("message")
-                val contentText = message?.extractOpenAIContentText().orEmpty()
-                if (contentText.isNotBlank()) return contentText
-                val text = firstChoice.optString("text")
-                if (text.isNotBlank()) return text
-            }
+    private fun executeChatCompletion(request: Request, operation: String): String =
+        if (CHAT_COMPLETIONS_STREAMING_ENABLED) {
+            executeStreamingChatCompletion(request, operation)
+        } else {
+            executeNonStreamingChatCompletion(request, operation)
         }
 
-        return responseBodyString
+    private fun JSONObject.putChatGenerationOptions(maxCompletionTokens: Int) {
+        put("max_tokens", maxCompletionTokens)
+        put("stream", CHAT_COMPLETIONS_STREAMING_ENABLED)
+    }
+
+    private fun executeNonStreamingChatCompletion(request: Request, operation: String): String {
+        return client.newCall(request).execute().use { response ->
+            PLog.d("OpenAIApiClient", "$operation response: ${response.code}")
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                throw Exception("API failed: ${response.code}\n${request.url}\n$errorBody")
+            }
+
+            val responseBody = response.body?.string()
+                ?: throw Exception("$operation returned an empty response body")
+            extractTextFromResponse(responseBody).takeIf { it.isNotBlank() }
+                ?: throw Exception("$operation completed without text content")
+        }
+    }
+
+    private fun executeStreamingChatCompletion(request: Request, operation: String): String {
+        return client.newCall(request).execute().use { response ->
+            PLog.d("OpenAIApiClient", "$operation stream response: ${response.code}")
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                throw Exception("API failed: ${response.code}\n${request.url}\n$errorBody")
+            }
+
+            val body = response.body
+                ?: throw Exception("$operation stream returned an empty response body")
+            val source = body.source()
+            val output = StringBuilder()
+            val eventData = StringBuilder()
+            var streamFinished = false
+
+            fun consumeEvent(): Boolean {
+                if (eventData.isEmpty()) return false
+                val payload = eventData.toString().trim()
+                eventData.setLength(0)
+                if (payload.isEmpty()) return false
+                if (payload == "[DONE]") return true
+
+                val event = try {
+                    JSONObject(payload)
+                } catch (e: Exception) {
+                    throw IllegalArgumentException(
+                        "$operation stream returned malformed SSE data: ${payload.take(200)}",
+                        e
+                    )
+                }
+                event.opt("error")
+                    ?.takeUnless { it == JSONObject.NULL }
+                    ?.let { error ->
+                        throw Exception("$operation stream failed: $error")
+                    }
+                output.append(extractStreamingChunkText(event))
+                return false
+            }
+
+            while (!streamFinished) {
+                val line = source.readUtf8Line()
+                if (line == null) {
+                    consumeEvent()
+                    break
+                }
+
+                when {
+                    line.isEmpty() -> streamFinished = consumeEvent()
+                    line.startsWith("data:") -> {
+                        if (eventData.isNotEmpty()) eventData.append('\n')
+                        eventData.append(line.substringAfter("data:").trimStart())
+                        PLog.d("Hinnka", "executeStreamingChatCompletion: $eventData")
+                    }
+                    line.trimStart().startsWith("{") -> {
+                        if (eventData.isNotEmpty()) eventData.append('\n')
+                        eventData.append(line.trim())
+                        PLog.d("Hinnka", "executeStreamingChatCompletion: $eventData")
+                    }
+                }
+            }
+
+            output.toString().takeIf { it.isNotBlank() }
+                ?: throw Exception("$operation stream completed without text content")
+        }
+    }
+
+    private fun extractTextFromResponse(responseBody: String): String {
+        val response = JSONObject(responseBody)
+        val choices = response.optJSONArray("choices") ?: return responseBody
+        if (choices.length() == 0) return responseBody
+
+        val firstChoice = choices.optJSONObject(0) ?: return responseBody
+        val messageText = firstChoice.optJSONObject("message")
+            ?.extractOpenAIContentText()
+            .orEmpty()
+        if (messageText.isNotBlank()) return messageText
+
+        return firstChoice.optString("text")
+            .takeIf { it.isNotBlank() }
+            ?: responseBody
+    }
+
+    private fun extractStreamingChunkText(event: JSONObject): String {
+        val choices = event.optJSONArray("choices") ?: return ""
+        val text = StringBuilder()
+        for (index in 0 until choices.length()) {
+            val choice = choices.optJSONObject(index) ?: continue
+            val deltaText = choice.optJSONObject("delta")
+                ?.extractOpenAIContentText()
+                .orEmpty()
+            if (deltaText.isNotEmpty()) {
+                text.append(deltaText)
+                continue
+            }
+
+            val messageText = choice.optJSONObject("message")
+                ?.extractOpenAIContentText()
+                .orEmpty()
+            if (messageText.isNotEmpty()) {
+                text.append(messageText)
+                continue
+            }
+
+            choice.optString("text")
+                .takeIf { it.isNotEmpty() }
+                ?.let(text::append)
+        }
+        return text.toString()
     }
 
     private fun parseEvaluation(text: String): AiPhotoEvaluation {
@@ -432,32 +550,115 @@ Return JSON only, without markdown formatting, code blocks, or any conversationa
 
     private fun parseLutRecipe(text: String): LutRecipe {
         val json = JSONObject(extractJsonObjectText(text))
+        if (json.has("p")) {
+            return parseInferredSourceLutRecipe(json)
+        }
+
+        val isMonochrome = json.optBoolean("isMonochrome", false)
         val controlPointsJson = json.optJSONArray("controlPoints")
             ?: throw IllegalArgumentException("AI response did not include controlPoints")
 
         val controlPoints = buildList {
-            for (i in 0 until controlPointsJson.length()) {
-                val item = controlPointsJson.optJSONObject(i) ?: continue
+            for (index in 0 until controlPointsJson.length()) {
+                val item = controlPointsJson.optJSONObject(index)
+                    ?: throw IllegalArgumentException(
+                        "AI control point at index $index was not an object"
+                    )
                 add(
                     ControlPoint(
-                        sourceR = item.optDouble("sourceR").toFloat().coerceIn(0f, 1f),
-                        sourceG = item.optDouble("sourceG").toFloat().coerceIn(0f, 1f),
-                        sourceB = item.optDouble("sourceB").toFloat().coerceIn(0f, 1f),
-                        targetR = item.optDouble("targetR").toFloat().coerceIn(0f, 1f),
-                        targetG = item.optDouble("targetG").toFloat().coerceIn(0f, 1f),
-                        targetB = item.optDouble("targetB").toFloat().coerceIn(0f, 1f),
-                        matchConfidence = item.optDouble("matchConfidence", 0.8).toFloat()
-                            .coerceIn(0f, 1f)
+                        sourceR = item.requireUnitFloat("sourceR", index),
+                        sourceG = item.requireUnitFloat("sourceG", index),
+                        sourceB = item.requireUnitFloat("sourceB", index),
+                        targetR = item.requireUnitFloat("targetR", index),
+                        targetG = item.requireUnitFloat("targetG", index),
+                        targetB = item.requireUnitFloat("targetB", index),
+                        matchConfidence = if (item.has("matchConfidence")) {
+                            item.requireUnitFloat("matchConfidence", index)
+                        } else {
+                            0.8f
+                        }
                     )
                 )
             }
         }
+        require(controlPoints.size >= 6) {
+            "AI returned too few inferred source/target pairs: ${controlPoints.size}"
+        }
+        validateMonochromeTargets(controlPoints, isMonochrome)
+        return LutRecipe(
+            controlPoints = controlPoints,
+            isMonochrome = isMonochrome
+        )
+    }
 
-        if (controlPoints.size < 6) {
-            throw IllegalArgumentException("AI returned too few LUT control points: ${controlPoints.size}")
+    private fun parseInferredSourceLutRecipe(json: JSONObject): LutRecipe {
+        require(json.has("m")) { "AI response did not include compact monochrome flag m" }
+        val isMonochrome = json.getBoolean("m")
+        val pairs = json.optJSONArray("p")
+            ?: throw IllegalArgumentException("AI response field p was not an array")
+        require(pairs.length() in 12..32) {
+            "AI returned ${pairs.length()} inferred source/target pairs; expected 12..32"
         }
 
-        return LutRecipe(controlPoints)
+        val controlPoints = buildList {
+            for (index in 0 until pairs.length()) {
+                val pair = pairs.optJSONArray(index)
+                    ?: throw IllegalArgumentException("AI LUT pair $index was not an array")
+                require(pair.length() == 7) {
+                    "AI LUT pair $index must contain [sourceR,sourceG,sourceB,targetR,targetG,targetB,confidence]"
+                }
+                add(
+                    ControlPoint(
+                        sourceR = pair.requireUnitFloat(0, index),
+                        sourceG = pair.requireUnitFloat(1, index),
+                        sourceB = pair.requireUnitFloat(2, index),
+                        targetR = pair.requireUnitFloat(3, index),
+                        targetG = pair.requireUnitFloat(4, index),
+                        targetB = pair.requireUnitFloat(5, index),
+                        matchConfidence = pair.requireUnitFloat(6, index)
+                    )
+                )
+            }
+        }
+        validateMonochromeTargets(controlPoints, isMonochrome)
+        return LutRecipe(
+            controlPoints = controlPoints,
+            isMonochrome = isMonochrome
+        )
+    }
+
+    private fun validateMonochromeTargets(
+        controlPoints: List<ControlPoint>,
+        isMonochrome: Boolean
+    ) {
+        if (!isMonochrome) return
+        controlPoints.forEachIndexed { index, point ->
+            require(
+                kotlin.math.abs(point.targetR - point.targetG) <= 1e-3f &&
+                    kotlin.math.abs(point.targetR - point.targetB) <= 1e-3f
+            ) {
+                "AI returned a chromatic target for monochrome LUT pair $index"
+            }
+        }
+    }
+
+    private fun JSONObject.requireUnitFloat(name: String, pairIndex: Int): Float {
+        require(has(name)) {
+            "AI response pair $pairIndex did not include $name"
+        }
+        val value = getDouble(name)
+        require(value.isFinite() && value in 0.0..1.0) {
+            "AI response pair $pairIndex field $name was outside [0, 1]"
+        }
+        return value.toFloat()
+    }
+
+    private fun JSONArray.requireUnitFloat(componentIndex: Int, pairIndex: Int): Float {
+        val value = getDouble(componentIndex)
+        require(value.isFinite() && value in 0.0..1.0) {
+            "AI LUT pair $pairIndex component $componentIndex was outside [0, 1]"
+        }
+        return value.toFloat()
     }
 
     private fun extractJsonObjectText(text: String): String {
