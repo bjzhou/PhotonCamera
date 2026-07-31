@@ -5428,7 +5428,7 @@ class Camera2Controller(private val context: Context) {
         val outputSize = _state.value.videoConfig.resolveOutputSize(
             _state.value.videoCapabilities.openGatePortraitAspectRatio
         )
-        val cameraInputSize = _state.value.videoCapabilities.previewSizesByResolution[
+        val cameraInputSize = _state.value.videoCapabilities.cameraInputSizesByResolution[
             _state.value.videoConfig.resolution
         ] ?: _state.value.currentPreviewSize
         val isFrontCamera = isCurrentCameraFrontFacing()

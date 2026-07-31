@@ -140,7 +140,7 @@ data class VideoCapabilities(
     val availableLogProfiles: List<VideoLogProfile> = listOf(VideoLogProfile.OFF),
     val availableBitrates: List<VideoBitratePreset> = VideoBitratePreset.entries.toList(),
     val availableCodecs: List<VideoCodec> = VideoCodec.entries.toList(),
-    val previewSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
+    val cameraInputSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val recordingSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val openGatePortraitAspectRatio: Float = 3f / 4f,
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
