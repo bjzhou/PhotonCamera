@@ -108,6 +108,9 @@ private const val DefaultAwbTemperature = 5000f
 private const val DefaultFocusDistance = 0f
 private val CameraTopBarBaseTopPadding = 32.dp
 private val CameraTopBarBaseHeight = 80.dp
+private val VideoViewfinderRaisedOffset = 16.dp
+private val OpenGateVideoViewfinderRaisedOffset = 56.dp
+private val VideoTopBarLoweredOffset = 36.dp
 
 @Composable
 private fun cameraTopSafePadding(): Dp {
@@ -743,12 +746,17 @@ fun CameraScreen(
         }
         val videoAspectRatio =
             state.videoConfig.aspectRatio.getPortraitAspectRatio(state.videoCapabilities.openGatePortraitAspectRatio)
+        val isOpenGateVideo =
+            isVideoMode && state.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
 
         val density = LocalDensity.current
         val width = with(density) { constraints.maxWidth.toDp() }
         val height = with(density) { constraints.maxHeight.toDp() }
         val topSafePadding = cameraTopSafePadding()
         val topBarHeight = CameraTopBarBaseHeight + topSafePadding
+        val navigationBarHeight = with(density) {
+            WindowInsets.navigationBars.getBottom(this).toDp()
+        }
         val cardWidth = if (isXpan) {
             (height - topSafePadding - 280.dp) * 24 / 65 + 8.dp
         } else {
@@ -761,11 +769,22 @@ fun CameraScreen(
         } else {
             val standardHeight = width * 4 / 3
             val bottomMinHeight = 188.dp // parameterBar (44.dp) + controls (136.dp min) + 8.dp buffer
-            val navigationBarHeight = with(density) {
-                WindowInsets.navigationBars.getBottom(this).toDp()
-            }
             val maxCardHeight = (height - topBarHeight - bottomMinHeight - navigationBarHeight).coerceAtLeast(300.dp)
             standardHeight.coerceAtMost(maxCardHeight)
+        }
+        val videoContentHeight = (height - navigationBarHeight).coerceAtLeast(0.dp)
+        val requestedVideoViewfinderOffset = if (isOpenGateVideo) {
+            OpenGateVideoViewfinderRaisedOffset
+        } else {
+            VideoViewfinderRaisedOffset
+        }
+        val videoViewfinderOffset = if (
+            isVideoMode &&
+            (videoContentHeight - cardHeight) / 2 >= requestedVideoViewfinderOffset
+        ) {
+            -requestedVideoViewfinderOffset
+        } else {
+            0.dp
         }
 
         val topBar = @Composable {
@@ -805,7 +824,15 @@ fun CameraScreen(
                 onSettingsClick = {
                     activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
                 },
-                modifier = Modifier.padding(top = topSafePadding)
+                modifier = Modifier
+                    .padding(top = topSafePadding)
+                    .offset(
+                        y = if (isVideoMode && !isOpenGateVideo) {
+                            VideoTopBarLoweredOffset
+                        } else {
+                            0.dp
+                        }
+                    )
             )
         }
 
@@ -1384,12 +1411,13 @@ fun CameraScreen(
                     .paint(backgroundPainter, contentScale = ContentScale.Crop)
                     .navigationBarsPadding(),
             ) {
-                // Viewfinder centered
+                // Keep the viewfinder centered on compact screens; use spare height on taller screens.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(cardHeight)
                         .align(Alignment.Center)
+                        .offset(y = videoViewfinderOffset)
                         .onGloballyPositioned { coordinates ->
                             viewfinderAreaBounds = coordinates.boundsInRoot()
                         },
