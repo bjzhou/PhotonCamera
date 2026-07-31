@@ -76,22 +76,8 @@ internal object RawTilePlanner {
         } else {
             outputSourceBounds.height
         }
-        // A cropped core can start at any sensor phase. Reserving phase - 1 additional pixels
-        // keeps both sides at or above the requested support after the working origin is aligned.
-        val workWidth = stableWorkingLength(
-            sourceSize = sourceWidth,
-            requestedLength = coreEdge + support * 2 + phase - 1,
-            phase = phase,
-        )
-        val workHeight = stableWorkingLength(
-            sourceSize = sourceHeight,
-            requestedLength = coreEdge + support * 2 + phase - 1,
-            phase = phase,
-        )
-
-        val result = ArrayList<RawRenderTile>()
+        val cores = ArrayList<Pair<RawTileRect, RawTileRect>>()
         var outputTop = 0
-        var index = 0
         while (outputTop < outputHeight) {
             val outputBottom = minOf(outputHeight, outputTop + coreEdge)
             var outputLeft = 0
@@ -103,25 +89,46 @@ internal object RawTilePlanner {
                     sourceBounds = outputSourceBounds,
                     rotation = rotation,
                 )
-                result += RawRenderTile(
-                    index = index++,
-                    outputCore = outputCore,
-                    sourceCore = sourceCore,
-                    sourceWorking = fixedWorkingRect(
-                        core = sourceCore,
-                        sourceWidth = sourceWidth,
-                        sourceHeight = sourceHeight,
-                        workWidth = workWidth,
-                        workHeight = workHeight,
-                        support = support,
-                        phase = phase,
-                    ),
-                )
+                cores += outputCore to sourceCore
                 outputLeft = outputRight
             }
             outputTop = outputBottom
         }
-        return result
+
+        // A crop or an edge tile may be much smaller than the configured maximum core. Size the
+        // reusable working texture from the largest core that is actually present; otherwise a
+        // one-tile crop below coreEdge needlessly expands back to almost the full sensor.
+        val largestSourceCoreWidth = cores.maxOf { it.second.width }
+        val largestSourceCoreHeight = cores.maxOf { it.second.height }
+        // A cropped core can start at any sensor phase. Reserving phase - 1 additional pixels
+        // keeps both sides at or above the requested support after the working origin is aligned.
+        val workWidth = stableWorkingLength(
+            sourceSize = sourceWidth,
+            requestedLength = largestSourceCoreWidth + support * 2 + phase - 1,
+            phase = phase,
+        )
+        val workHeight = stableWorkingLength(
+            sourceSize = sourceHeight,
+            requestedLength = largestSourceCoreHeight + support * 2 + phase - 1,
+            phase = phase,
+        )
+
+        return cores.mapIndexed { index, (outputCore, sourceCore) ->
+            RawRenderTile(
+                index = index,
+                outputCore = outputCore,
+                sourceCore = sourceCore,
+                sourceWorking = fixedWorkingRect(
+                    core = sourceCore,
+                    sourceWidth = sourceWidth,
+                    sourceHeight = sourceHeight,
+                    workWidth = workWidth,
+                    workHeight = workHeight,
+                    support = support,
+                    phase = phase,
+                ),
+            )
+        }
     }
 
     private fun outputToSource(
