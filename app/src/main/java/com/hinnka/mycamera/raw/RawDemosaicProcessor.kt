@@ -237,7 +237,11 @@ class RawDemosaicProcessor {
         // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
         private const val VGN_COLOR_NOISE_LEVEL = 50
         private const val VGN_ADVANCED_COLOR_NOISE_ENABLED = true
-        private const val RAW_TILE_CORE_EDGE_PX = 2048
+        private const val RAW_TILE_CORE_EDGE_PX = 4096
+        // Shader prewarming only needs representative resource dimensions. Keep it independent
+        // from the production tile core so increasing render throughput does not reserve a
+        // full-size capture working set while the camera is opening.
+        private const val RAW_PREWARM_CORE_EDGE_PX = 2048
         // Phocus GetStripMargin(50) returns 60 pixels for gradient/color-noise interpolation.
         // The remaining 52 pixels cover chroma denoise, NLM, shadows/highlights and sharpening.
         private const val RAW_TILE_SUPPORT_PX = 112
@@ -400,10 +404,12 @@ class RawDemosaicProcessor {
             cameraWhite = floatArrayOf(1f, 1f, 1f),
             frameCount = frameCount.coerceAtLeast(1),
         )
-        val textures = IntArray(1)
+        val textures = IntArray(2)
         GLES30.glGenTextures(textures.size, textures, 0)
+        val previousRawTextureId = rawTextureId
         return try {
             val linearRawTexture = textures[0]
+            val meteringRawTexture = textures[1]
             createCaptureWarmupTexture(
                 textureId = linearRawTexture,
                 internalFormat = GLES30.GL_RGBA16UI,
@@ -413,6 +419,26 @@ class RawDemosaicProcessor {
                 height = programSize.height,
                 pixels = null,
             )
+            createCaptureWarmupTexture(
+                textureId = meteringRawTexture,
+                internalFormat = GLES30.GL_R16UI,
+                format = GLES30.GL_RED_INTEGER,
+                type = GLES30.GL_UNSIGNED_SHORT,
+                width = programSize.width,
+                height = programSize.height,
+                pixels = null,
+            )
+            rawTextureId = meteringRawTexture
+            setupFullResFramebuffer(
+                (programSize.width + 1) / 2,
+                (programSize.height + 1) / 2,
+            )
+            runHalfResolutionMeteringDemosaic(
+                metadata = metadata,
+                width = programSize.width,
+                height = programSize.height,
+            )
+            rawTextureId = previousRawTextureId
             // High-resolution capture uses the same bounded tile capacity as rendering. Prewarm
             // must not allocate whole-frame intermediates merely to compile a small viewport.
             setupFullResFramebuffer(resourceSize.width, resourceSize.height)
@@ -510,6 +536,7 @@ class RawDemosaicProcessor {
             )
             exposureReady && profileReady
         } finally {
+            rawTextureId = previousRawTextureId
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             GLES30.glDeleteTextures(textures.size, textures, 0)
         }
@@ -842,6 +869,7 @@ class RawDemosaicProcessor {
     private var pgtmGoogleGainCurvesProgram = 0
     private val pgtmPhotonPrograms =
         IntArray(DngPhotonLocalToneMapGpuShaders.Pass.entries.size)
+    private var meteringHalfResolutionProgram = 0
     private var linearRcdProgram = 0
     private var warpRectilinearProgram = 0
     private var linearRawRgbProgram = 0
@@ -1907,6 +1935,14 @@ class RawDemosaicProcessor {
             RawTilePlanner.shouldTile(outputSourceBounds.width(), outputSourceBounds.height()) ||
                 RawTilePlanner.shouldTile(actualWidth, actualHeight)
         val hasActiveWarp = applicableDngWarpRectilinear?.isNotEmpty() == true
+        val captureProfilePreparationRequested =
+            exposurePreviewRequest != null || captureProfileToneMapMode != null
+        val useHalfResolutionMeteringDemosaic =
+            exposurePreviewRequest != null &&
+                actualSamplesPerPixel == 1 &&
+                actualMetadata.frameCount == 1 &&
+                actualMetadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
+                !hasActiveWarp
         val tileBlockingReason = when {
             !highResolutionOutput -> null
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
@@ -1915,7 +1951,7 @@ class RawDemosaicProcessor {
             hasActiveWarp -> "DNG WarpRectilinear requires a displacement-aware source region"
             colorEngine == RawRenderingEngine.DarktableFilmic ->
                 "Darktable Filmic wavelet reconstruction requires scale-by-scale tiling"
-            exposurePreviewRequest != null || captureProfileToneMapMode != null ->
+            captureProfilePreparationRequested ->
                 "capture metering/profile preparation"
             else -> null
         }
@@ -1973,7 +2009,15 @@ class RawDemosaicProcessor {
                 return@withContext null
             }
             if (rawRenderTiles.isEmpty()) {
-                setupFullResFramebuffer(actualWidth, actualHeight)
+                when {
+                    useHalfResolutionMeteringDemosaic -> setupFullResFramebuffer(
+                        (actualWidth + 1) / 2,
+                        (actualHeight + 1) / 2,
+                    )
+
+                    !captureProfilePreparationRequested || exposurePreviewRequest != null ->
+                        setupFullResFramebuffer(actualWidth, actualHeight)
+                }
             }
             if (borrowedGpuSource != null) {
                 if (rawTextureId != 0 && rawTextureId != borrowedGpuSource.textureId) {
@@ -2273,7 +2317,18 @@ class RawDemosaicProcessor {
                 // 4. Full-frame demosaic is only valid for the legacy path. High-resolution
                 // rendering performs the same work from renderRawTiles() after all shared
                 // profile/exposure state has been resolved.
-                if (actualSamplesPerPixel in 3..4) {
+                if (useHalfResolutionMeteringDemosaic) {
+                    runHalfResolutionMeteringDemosaic(
+                        metadata = actualMetadata,
+                        width = actualWidth,
+                        height = actualHeight,
+                    )
+                } else if (captureProfilePreparationRequested && exposurePreviewRequest == null) {
+                    PLog.d(
+                        TAG,
+                        "RAW capture profile preparation skipped demosaic: exposure matching disabled",
+                    )
+                } else if (actualSamplesPerPixel in 3..4) {
                     renderLinearRawRgbToTexture(
                         sourceTextureId = rawTextureId,
                         sourceSamplesPerPixel = actualSamplesPerPixel,
@@ -2317,7 +2372,12 @@ class RawDemosaicProcessor {
                         )
                     }
                 }
-                applicableDngWarpRectilinear?.let { warps ->
+                applicableDngWarpRectilinear
+                    ?.takeUnless {
+                        useHalfResolutionMeteringDemosaic ||
+                            (captureProfilePreparationRequested && exposurePreviewRequest == null)
+                    }
+                    ?.let { warps ->
                     var appliedWarpCount = 0
                     for (offset in warps.indices step 8) {
                         val parameters = warps.copyOfRange(offset, offset + 8)
@@ -2348,7 +2408,7 @@ class RawDemosaicProcessor {
                 }
             }
 
-            if (exposurePreviewRequest != null || captureProfileToneMapMode != null) {
+            if (captureProfilePreparationRequested) {
                 val solvedExposureEv = exposurePreviewRequest?.let { request ->
                     renderExposurePreviewRequest(
                         request = request,
@@ -4763,6 +4823,7 @@ class RawDemosaicProcessor {
             initShaderProgram()
             if (sharpenProgram == 0 || passthroughProgram == 0 ||
                 chromaDenoiseGuideProgram == 0 || chromaDenoiseProgram == 0 ||
+                meteringHalfResolutionProgram == 0 ||
                 linearRcdProgram == 0 || linearRawRgbProgram == 0 ||
                 linearRawRgbExpandProgram == 0
             ) {
@@ -4771,6 +4832,7 @@ class RawDemosaicProcessor {
                             "sharpen=$sharpenProgram pass=$passthroughProgram " +
                             "chromaGuide=$chromaDenoiseGuideProgram " +
                             "chromaDenoise=$chromaDenoiseProgram " +
+                            "meteringHalf=$meteringHalfResolutionProgram " +
                             "linearRcd=$linearRcdProgram linearRawRgb=$linearRawRgbProgram " +
                             "linearRawRgbExpand=$linearRawRgbExpandProgram"
                 )
@@ -4914,6 +4976,7 @@ class RawDemosaicProcessor {
         PLog.d(
             TAG,
             "Shader programs created: passthrough=$passthroughProgram " +
+                "meteringHalf=$meteringHalfResolutionProgram " +
                 "pgtmStats=$pgtmCellStatsProgram googlePgtmCurves=$pgtmGoogleGainCurvesProgram " +
                 "photonPgtm=localLaplacianBgu"
         )
@@ -5273,6 +5336,10 @@ class RawDemosaicProcessor {
                 "DNG_PHOTON_PGTM_${pass.name}",
             )
         }
+        meteringHalfResolutionProgram = compileComputeProgram(
+            RawMeteringDemosaicShaders.HALF_RESOLUTION,
+            "RAW_METERING_HALF_RESOLUTION",
+        )
         val fShaderLinearRcd = compileShader(
             GLES30.GL_FRAGMENT_SHADER,
             FRAGMENT_SHADER_LINEAR_RCD,
@@ -7750,6 +7817,108 @@ class RawDemosaicProcessor {
             }
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         }
+    }
+
+    /**
+     * Collapses each standard Bayer 2x2 cell to one camera-RGB texel for capture-side exposure
+     * matching. The result stays in the same un-white-balanced, lens-shading-corrected domain as
+     * the full VGN output, so the existing DCP/default-curve preview path remains authoritative.
+     */
+    private fun runHalfResolutionMeteringDemosaic(
+        metadata: RawMetadata,
+        width: Int,
+        height: Int,
+    ) {
+        require(meteringHalfResolutionProgram != 0) {
+            "RAW metering half-resolution program is unavailable"
+        }
+        require(metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR) {
+            "Half-resolution metering requires a standard 2x2 Bayer CFA"
+        }
+        val outputWidth = (width + 1) / 2
+        val outputHeight = (height + 1) / 2
+        check(demosaicWidth == outputWidth && demosaicHeight == outputHeight) {
+            "RAW metering target mismatch: ${demosaicWidth}x$demosaicHeight, " +
+                "expected=${outputWidth}x$outputHeight"
+        }
+        val startNs = System.nanoTime()
+        val blackLevel4 = FloatArray(4) { index ->
+            metadata.blackLevel.getOrElse(index) {
+                metadata.blackLevel.firstOrNull() ?: 0f
+            }.coerceAtLeast(0f)
+        }
+        GLES31.glUseProgram(meteringHalfResolutionProgram)
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uRawTexture"),
+            RCD_RAW_TEXTURE_UNIT,
+        )
+        bindLensShadingForProgram(meteringHalfResolutionProgram, metadata)
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uImageSize"),
+            width,
+            height,
+        )
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uOutputSize"),
+            outputWidth,
+            outputHeight,
+        )
+        GLES31.glUniform1i(
+            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uCfaPattern"),
+            metadata.cfaPattern,
+        )
+        GLES31.glUniform4fv(
+            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uBlackLevel"),
+            1,
+            blackLevel4,
+            0,
+        )
+        GLES31.glUniform1f(
+            GLES31.glGetUniformLocation(meteringHalfResolutionProgram, "uWhiteLevel"),
+            metadata.whiteLevel,
+        )
+        GLES31.glBindImageTexture(
+            0,
+            demosaicTextureId,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA16F,
+        )
+        GLES31.glDispatchCompute(
+            GlesComputeWorkGroup.imageGroupCount(outputWidth),
+            GlesComputeWorkGroup.imageGroupCount(outputHeight),
+            1,
+        )
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
+        )
+        checkGlError("RAW metering half-resolution demosaic")
+        GlesGpuScheduler.waitForGpuCheckpoint(TAG, "RAW metering half-resolution demosaic")
+        GLES31.glBindImageTexture(
+            0,
+            0,
+            0,
+            false,
+            0,
+            GLES31.GL_READ_ONLY,
+            GLES30.GL_RGBA16F,
+        )
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_LENS_SHADING_TEXTURE_UNIT)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
+        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+        PLog.d(
+            TAG,
+            "RAW metering half-resolution demosaic complete: " +
+                "source=${width}x$height output=${outputWidth}x$outputHeight " +
+                "cfa=${metadata.cfaPattern} tookMs=" +
+                "${(System.nanoTime() - startNs) / 1_000_000}",
+        )
     }
 
     private fun runStandardBayerRcdDemosaic(
@@ -11418,7 +11587,7 @@ class RawDemosaicProcessor {
             sourceHeight = sourceHeight,
             outputSourceBounds = RawTileRect(0, 0, sourceWidth, sourceHeight),
             rotation = 0,
-            coreEdgePx = RAW_TILE_CORE_EDGE_PX,
+            coreEdgePx = RAW_PREWARM_CORE_EDGE_PX,
             supportPx = RAW_TILE_SUPPORT_PX,
             cfaPeriod = 2,
         ).first().sourceWorking
@@ -11975,6 +12144,10 @@ class RawDemosaicProcessor {
         if (quadRefineProgram != 0) GLES31.glDeleteProgram(quadRefineProgram)
         if (quadWriteOutputProgram != 0) GLES31.glDeleteProgram(quadWriteOutputProgram)
         if (pgtmCellStatsProgram != 0) GLES31.glDeleteProgram(pgtmCellStatsProgram)
+        if (meteringHalfResolutionProgram != 0) {
+            GLES31.glDeleteProgram(meteringHalfResolutionProgram)
+            meteringHalfResolutionProgram = 0
+        }
         if (pgtmGoogleGainCurvesProgram != 0) {
             GLES31.glDeleteProgram(pgtmGoogleGainCurvesProgram)
         }

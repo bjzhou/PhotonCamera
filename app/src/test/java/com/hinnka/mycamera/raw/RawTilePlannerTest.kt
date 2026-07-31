@@ -118,4 +118,22 @@ class RawTilePlannerTest {
         assertTrue(!RawTilePlanner.shouldTile(3_000, 3_000))
         assertTrue(RawTilePlanner.shouldTile(3_001, 3_000))
     }
+
+    @Test
+    fun fourKCoreKeepsSingleCroppedTileBoundedToItsActualSourceCore() {
+        val tiles = RawTilePlanner.plan(
+            sourceWidth = 4_080,
+            sourceHeight = 3_064,
+            outputSourceBounds = RawTileRect(675, 507, 3_404, 2_556),
+            rotation = 90,
+            coreEdgePx = 4_096,
+            supportPx = 112,
+            cfaPeriod = 2,
+        )
+
+        assertEquals(1, tiles.size)
+        assertEquals(RawTileRect(0, 0, 2_049, 2_729), tiles.single().outputCore)
+        assertEquals(2_954, tiles.single().sourceWorking.width)
+        assertEquals(2_274, tiles.single().sourceWorking.height)
+    }
 }
