@@ -37,6 +37,10 @@ object VideoCapabilitiesResolver {
             ?: availableResolutions.firstOrNull()
             ?: VideoResolutionPreset.FHD_1080P
 
+        val recordingSizesByResolution = availableResolutions.mapNotNull { preset ->
+            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
+                ?.let { preset to it }
+        }.toMap()
         val previewSizesByResolution = availableResolutions.associateWith { preset ->
             findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
                 ?: requestedConfig.resolution.resolveOutputSize(
@@ -44,12 +48,8 @@ object VideoCapabilitiesResolver {
                 )
         }
 
-        val recordingSize = findBestOutputSize(
-            recordingOutputSizes,
-            resolvedResolution,
-            requestedConfig.aspectRatio,
-            openGateAspect
-        ) ?: resolvedResolution.resolveOutputSize(
+        val recordingSize = recordingSizesByResolution[resolvedResolution]
+            ?: resolvedResolution.resolveOutputSize(
             requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
         )
 
@@ -115,12 +115,14 @@ object VideoCapabilitiesResolver {
                 availableLogProfiles = availableLogProfiles,
                 availableBitrates = VideoBitratePreset.entries.toList(),
                 previewSizesByResolution = previewSizesByResolution,
+                recordingSizesByResolution = recordingSizesByResolution,
                 openGatePortraitAspectRatio = openGateAspect,
                 availableStabilizationModes = availableStabilizationModes,
                 supportsTorch = isFlashSupported,
                 linearTonemapSupported = linearTonemapSupported
             ),
-            previewSize = previewSize
+            previewSize = previewSize,
+            recordingSize = recordingSize
         )
     }
 

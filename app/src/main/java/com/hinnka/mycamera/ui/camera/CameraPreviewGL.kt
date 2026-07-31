@@ -30,7 +30,6 @@ import com.hinnka.mycamera.ui.components.FocusIndicator
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.VideoLogProfile
-import com.hinnka.mycamera.video.VideoRecorder
 
 /**
  * 相机预览组件 - OpenGL ES 版本（Camera2 适配）
@@ -66,7 +65,6 @@ fun CameraPreviewGL(
     onDepthInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     onAiFocusInputAvailable: ((android.graphics.Bitmap) -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
-    videoRecorder: VideoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     isHlgInput: Boolean = false,
     naturalLightEnabled: Boolean = false,
@@ -277,7 +275,6 @@ fun CameraPreviewGL(
                         })
                         glSurfaceView.setMeteringMode(meteringMode)
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
-                        glSurfaceView.setVideoRecorder(videoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setIsHlgInput(isHlgInput)
                         glSurfaceView.setRawPreviewSettings(

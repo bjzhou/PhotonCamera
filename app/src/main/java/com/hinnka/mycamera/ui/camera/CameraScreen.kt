@@ -1084,7 +1084,6 @@ fun CameraScreen(
                             viewModel.glSurfaceView = it
                         },
                         livePhotoRecorder = viewModel.livePhotoRecorder,
-                        videoRecorder = viewModel.videoRecorder,
                         videoLogProfile = state.videoConfig.logProfile,
                         isHlgInput = if (hlgHardwareCompatibilityEnabled) state.isHLG else false,
                         naturalLightEnabled = naturalLightEnabled,
@@ -1923,6 +1922,7 @@ fun Controls(
                     captureMode = state.captureMode,
                     isCapturing = state.isCapturing,
                     isVideoRecording = state.videoRecordingState.isRecording,
+                    isVideoProcessing = state.videoRecordingState.isProcessing,
                     isPaused = state.videoRecordingState.isPaused,
                     allowLongPress = state.captureMode == CaptureMode.QUICK_SHOT ||
                         (!naturalLightEnabled &&
@@ -1976,7 +1976,11 @@ fun Controls(
                     }
                 } else {
                     PhysicalButton(
-                        onClick = onSwitchCameraClick,
+                        onClick = {
+                            if (!state.videoRecordingState.isProcessing) {
+                                onSwitchCameraClick()
+                            }
+                        },
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .padding(end = 40.dp)
@@ -1987,7 +1991,9 @@ fun Controls(
                         Icon(
                             imageVector = AppIcons.Cameraswitch,
                             contentDescription = stringResource(R.string.switch_camera),
-                            tint = Color.White,
+                            tint = Color.White.copy(
+                                alpha = if (state.videoRecordingState.isProcessing) 0.35f else 1f
+                            ),
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -1998,7 +2004,8 @@ fun Controls(
 
             CaptureModeSwitcher(
                 captureMode = state.captureMode,
-                enabled = !state.videoRecordingState.isRecording,
+                enabled = !state.videoRecordingState.isRecording &&
+                    !state.videoRecordingState.isProcessing,
                 onModeSelected = onCaptureModeSelected
             )
         }
@@ -2014,6 +2021,7 @@ fun CaptureButton(
     captureMode: CaptureMode,
     isCapturing: Boolean,
     isVideoRecording: Boolean,
+    isVideoProcessing: Boolean,
     isPaused: Boolean,
     allowLongPress: Boolean,
     multipleExposureEnabled: Boolean,
@@ -2027,7 +2035,7 @@ fun CaptureButton(
     var isPressed by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed || isCapturing || isVideoRecording) 0.95f else 1f,
+        targetValue = if (isPressed || isCapturing || isVideoRecording || isVideoProcessing) 0.95f else 1f,
         animationSpec = spring(dampingRatio = 0.5f),
         label = "captureScale"
     )
@@ -2049,7 +2057,11 @@ fun CaptureButton(
         label = "livePhotoRotation"
     )
 
-    val currentDisabled by rememberUpdatedState(isCapturing || (captureMode == CaptureMode.VIDEO && isVideoRecording))
+    val currentDisabled by rememberUpdatedState(
+        isCapturing ||
+            isVideoProcessing ||
+            (captureMode == CaptureMode.VIDEO && isVideoRecording)
+    )
 
     PhysicalButton(
         modifier = modifier
@@ -2059,7 +2071,7 @@ fun CaptureButton(
                 var isLongPressStarted = false
                 detectTapGestures(
                     onTap = {
-                        if (!isCapturing) {
+                        if (!isCapturing && !isVideoProcessing) {
                             onTap()
                         }
                     },
@@ -2107,6 +2119,8 @@ fun CaptureButton(
         }
 
         val ringColor = when {
+            captureMode == CaptureMode.VIDEO && isVideoProcessing ->
+                Color.White.copy(alpha = 0.5f)
             captureMode == CaptureMode.VIDEO && isVideoRecording -> {
                 if (isPaused) Color.White.copy(alpha = 0.8f)
                 else Color.Red.copy(alpha = pulseAlpha)
@@ -2174,6 +2188,13 @@ fun CaptureButton(
                 .clip(RoundedCornerShape(centerCorner))
                 .background(centerBrush)
         )
+        if (captureMode == CaptureMode.VIDEO && isVideoProcessing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(34.dp),
+                color = Color.White,
+                strokeWidth = 3.dp
+            )
+        }
     }
 }
 

@@ -34,7 +34,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
+import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.video.CaptureMode
@@ -52,6 +55,7 @@ import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
 import com.hinnka.mycamera.video.VideoStabilizationMode
+import com.hinnka.mycamera.video.resolveSurfaceTextureVideoOrientationDegrees
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1261,6 +1265,10 @@ class Camera2Controller(private val context: Context) {
         } else {
             PLog.e(TAG, "Preview session failed: $reason")
         }
+        if (videoRecorder.isRecording()) {
+            videoRecorder.forceStop()
+            stopVideoRecordingTicker()
+        }
         closeCameraDeviceSafely(cameraDevice, "preview session failure: $reason")
         cameraDevice = null
         clearCameraRuntimeState("preview session failure: $reason")
@@ -1979,6 +1987,11 @@ class Camera2Controller(private val context: Context) {
         val surface = previewSurface ?: return
         val captureMode = _state.value.captureMode
         val reader = imageReader
+        val videoSurface = if (captureMode == CaptureMode.VIDEO) {
+            videoRecorder.cameraInputSurface
+        } else {
+            null
+        }
         val sessionGeneration = ++previewSessionGeneration
         pendingVendorSessionParameterRestart = false
         val templateType = if (captureMode == CaptureMode.VIDEO) {
@@ -1991,12 +2004,14 @@ class Camera2Controller(private val context: Context) {
         try {
             previewRequestBuilder = device.createCaptureRequest(templateType).apply {
                 addTarget(surface)
+                videoSurface?.let(::addTarget)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦、色调映射）
                 applyBaseCameraSettings(this, isCapture = false)
             }
 
             val surfaces = mutableListOf(surface)
+            videoSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
                 val captureReader = reader ?: return
                 surfaces += captureReader.surface
@@ -2006,12 +2021,23 @@ class Camera2Controller(private val context: Context) {
                 val useHlgCapture = _state.value.useHlg10 && activeOutputPhysicalCameraId == null && !forceStandardSession
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
-                    surfaces.map { outputSurface ->
-                        createOutputConfiguration(
-                            surface = outputSurface,
-                            useHlgCapture = useHlgCapture,
-                            outputType = CameraOutputType.VIDEO_RECORD
+                    buildList {
+                        add(
+                            createOutputConfiguration(
+                                surface = surface,
+                                useHlgCapture = useHlgCapture,
+                                outputType = CameraOutputType.PREVIEW
+                            )
                         )
+                        videoSurface?.let { encoderSurface ->
+                            add(
+                                createOutputConfiguration(
+                                    surface = encoderSurface,
+                                    useHlgCapture = useHlgCapture,
+                                    outputType = CameraOutputType.VIDEO_RECORD
+                                )
+                            )
+                        }
                     },
                     Executors.newSingleThreadExecutor(),
                     object : CameraCaptureSession.StateCallback() {
@@ -2480,6 +2506,11 @@ class Camera2Controller(private val context: Context) {
             // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
             previewRequestBuilder?.let { builder ->
                 session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            }
+            if (_state.value.captureMode == CaptureMode.VIDEO && videoRecorder.cameraInputSurface != null) {
+                if (videoRecorder.onCameraInputStarted()) {
+                    startVideoRecordingTicker()
+                }
             }
 
             _state.value = _state.value.copy(isPreviewActive = true)
@@ -5224,7 +5255,12 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setCaptureMode(mode: CaptureMode) {
-        if (_state.value.captureMode == mode || _state.value.videoRecordingState.isRecording) return
+        if (_state.value.captureMode == mode ||
+            _state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) {
+            return
+        }
         val nextVideoConfig = if (mode == CaptureMode.VIDEO) {
             _state.value.videoConfig
         } else {
@@ -5372,8 +5408,17 @@ class Camera2Controller(private val context: Context) {
         mirrorFrontCameraEnabled = enabled
     }
 
-    fun startVideoRecording() {
-        if (_state.value.captureMode != CaptureMode.VIDEO || _state.value.videoRecordingState.isRecording) {
+    fun startVideoRecording(
+        creativeLutConfig: LutConfig? = null,
+        creativeRecipeParams: ColorRecipeParams? = null,
+        baselineLutConfig: LutConfig? = null,
+        baselineRecipeParams: ColorRecipeParams? = null,
+        orientationOffsetDegrees: Int = 0
+    ) {
+        if (_state.value.captureMode != CaptureMode.VIDEO ||
+            _state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) {
             return
         }
 
@@ -5383,10 +5428,24 @@ class Camera2Controller(private val context: Context) {
         val outputSize = _state.value.videoConfig.resolveOutputSize(
             _state.value.videoCapabilities.openGatePortraitAspectRatio
         )
+        val cameraInputSize = _state.value.videoCapabilities.previewSizesByResolution[
+            _state.value.videoConfig.resolution
+        ] ?: _state.value.currentPreviewSize
         val isFrontCamera = isCurrentCameraFrontFacing()
-        val shouldFlipEncodedFrame = isFrontCamera && !mirrorFrontCameraEnabled
+        val shouldFlipEncodedFrame = isFrontCamera && mirrorFrontCameraEnabled
+        val colorLayers = buildList {
+            if (!_state.value.videoConfig.logProfile.isEnabled &&
+                (baselineLutConfig != null || baselineRecipeParams?.isDefault() == false)
+            ) {
+                add(VideoColorEffectLayer(baselineLutConfig, baselineRecipeParams))
+            }
+            if (creativeLutConfig != null || creativeRecipeParams?.isDefault() == false) {
+                add(VideoColorEffectLayer(creativeLutConfig, creativeRecipeParams))
+            }
+        }
         val started = videoRecorder.startRecording(
             size = outputSize,
+            cameraInputSize = cameraInputSize,
             fps = _state.value.videoConfig.fps.fps,
             bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
             codecMime = _state.value.videoConfig.codec.mimeType,
@@ -5394,7 +5453,9 @@ class Camera2Controller(private val context: Context) {
                 logProfile = _state.value.videoConfig.logProfile,
                 hasActiveLut = _state.value.lutEnabled && _state.value.currentLutName != null
             ),
-            orientationHintDegrees = resolveVideoOrientationHintDegrees(),
+            colorLayers = colorLayers,
+            hlgInput = _state.value.useHlg10,
+            orientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees),
             flipEncodedFrame = shouldFlipEncodedFrame,
             recordingPath = _state.value.videoConfig.recordingPath,
             recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
@@ -5404,8 +5465,14 @@ class Camera2Controller(private val context: Context) {
             }
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
-            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
-            onVideoSaved?.invoke(uri)
+            val completeRecording = Runnable {
+                _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+                onVideoSaved?.invoke(uri)
+            }
+            cameraHandler?.post(completeRecording) ?: completeRecording.run()
         }
         if (!started) {
             return
@@ -5415,7 +5482,7 @@ class Camera2Controller(private val context: Context) {
             videoRecordingState = VideoRecordingState(isRecording = true, elapsedMs = 0L)
         )
         videoRecordingPausedMs = 0L
-        startVideoRecordingTicker()
+        createPreviewSession(openGeneration = cameraOpenGeneration)
     }
 
     private fun isCurrentCameraFrontFacing(): Boolean {
@@ -5426,6 +5493,9 @@ class Camera2Controller(private val context: Context) {
     fun pauseVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isPaused) return
         videoRecorder.pauseRecording()
+        if (videoRecorder.usesDedicatedCameraInput) {
+            updateDedicatedVideoRepeatingTarget(includeVideoSurface = false)
+        }
         videoRecordingPauseStartElapsedMs = SystemClock.elapsedRealtime()
         _state.value = _state.value.copy(
             videoRecordingState = _state.value.videoRecordingState.copy(isPaused = true)
@@ -5434,6 +5504,12 @@ class Camera2Controller(private val context: Context) {
 
     fun resumeVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording || !_state.value.videoRecordingState.isPaused) return
+        if (videoRecorder.usesDedicatedCameraInput &&
+            !updateDedicatedVideoRepeatingTarget(includeVideoSurface = true)
+        ) {
+            PLog.e(TAG, "Cannot resume dedicated video input because the recording surface is unavailable")
+            return
+        }
         videoRecorder.resumeRecording()
         videoRecordingPausedMs += SystemClock.elapsedRealtime() - videoRecordingPauseStartElapsedMs
         _state.value = _state.value.copy(
@@ -5448,8 +5524,15 @@ class Camera2Controller(private val context: Context) {
         videoCaptureStatsLastTimestampNs = 0L
         stopVideoRecordingTicker()
         _state.value = _state.value.copy(
-            videoRecordingState = _state.value.videoRecordingState.copy(isRecording = false)
+            videoRecordingState = _state.value.videoRecordingState.copy(
+                isRecording = false,
+                isPaused = false,
+                isProcessing = videoRecorder.usesDedicatedCameraInput
+            )
         )
+        if (videoRecorder.usesDedicatedCameraInput && !_state.value.videoRecordingState.isPaused) {
+            updateDedicatedVideoRepeatingTarget(includeVideoSurface = false)
+        }
         videoRecorder.stopRecording()
         if (pendingVendorSessionParameterRestart && cameraDevice != null && previewSurface != null) {
             PLog.d(TAG, "Restarting preview session after recording for pending vendor session parameter change")
@@ -5457,9 +5540,37 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun resolveVideoOrientationHintDegrees(): Int {
-        val deviceRotation = OrientationObserver.rotationDegrees.toInt()
-        return ((deviceRotation % 360) + 360) % 360
+    private fun updateDedicatedVideoRepeatingTarget(includeVideoSurface: Boolean): Boolean {
+        val device = cameraDevice ?: return false
+        val session = captureSession ?: return false
+        val previewTarget = previewSurface ?: return false
+        val encoderTarget = videoRecorder.cameraInputSurface
+        if (includeVideoSurface && encoderTarget == null) return false
+
+        return try {
+            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                addTarget(previewTarget)
+                encoderTarget?.takeIf { includeVideoSurface }?.let(::addTarget)
+                applyBaseCameraSettings(this, isCapture = false)
+            }
+            previewRequestBuilder = builder
+            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            true
+        } catch (e: Exception) {
+            PLog.e(
+                TAG,
+                "Failed to ${if (includeVideoSurface) "attach" else "detach"} dedicated video target",
+                e
+            )
+            false
+        }
+    }
+
+    private fun resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees: Int): Int {
+        return resolveSurfaceTextureVideoOrientationDegrees(
+            deviceRotationDegrees = OrientationObserver.rotationDegrees.toInt(),
+            calibrationOffsetDegrees = orientationOffsetDegrees,
+        )
     }
 
 // ==================== 延时拍摄和网格线 ====================
@@ -6954,12 +7065,13 @@ class Camera2Controller(private val context: Context) {
             pendingFrameMetadata.clear()
             cameraOpenGeneration++
             val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
+            val keepVideoProcessing = _state.value.videoRecordingState.isProcessing
             if (keepVideoRecording) {
                 PLog.d(TAG, "Closing camera while keeping active video recording")
             }
             if (_state.value.videoRecordingState.isRecording && !keepVideoRecording) {
                 stopVideoRecording()
-            } else if (!keepVideoRecording) {
+            } else if (!keepVideoRecording && !_state.value.videoRecordingState.isProcessing) {
                 videoRecorder.forceStop()
                 stopVideoRecordingTicker()
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
@@ -6975,7 +7087,11 @@ class Camera2Controller(private val context: Context) {
             } else {
                 _state.value.copy(
                     isPreviewActive = false,
-                    videoRecordingState = VideoRecordingState()
+                    videoRecordingState = if (keepVideoProcessing) {
+                        _state.value.videoRecordingState
+                    } else {
+                        VideoRecordingState()
+                    }
                 )
             }
 

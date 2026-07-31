@@ -12,12 +12,11 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.net.Uri
-import android.opengl.EGL14
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
+import android.util.Size
 import android.view.Surface
 import androidx.core.app.ActivityCompat
-import com.hinnka.mycamera.livephoto.HardwareLutVideoRenderer
+import com.hinnka.mycamera.lut.RealtimeVideoRenderer
+import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +28,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -67,20 +67,12 @@ class VideoRecorder(
         val info: MediaCodec.BufferInfo
     )
 
-    private data class PendingFrame(
-        val textureId: Int,
-        val transformMatrix: FloatArray,
-        val timestampUs: Long,
-        val sharedContext: EGLContext,
-        val sharedDisplay: EGLDisplay
-    )
-
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val renderDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val muxerLock = Any()
-    private val pendingFrameLock = Any()
+    private val realtimeFrameLock = Any()
     private val videoCodecLock = Any()
     private val audioCodecLock = Any()
 
@@ -98,9 +90,7 @@ class VideoRecorder(
     private var audioEncoder: MediaCodec? = null
     private var audioRecord: AudioRecord? = null
     private var inputSurface: Surface? = null
-    private var renderer: HardwareLutVideoRenderer? = null
-    private var lastSharedContext: EGLContext = EGL14.EGL_NO_CONTEXT
-    private var lastSharedDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var renderer: RealtimeVideoRenderer? = null
     private var requestedBitrateMbps: Int = 30
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
     private var requestedOrientationHintDegrees: Int = 0
@@ -110,8 +100,14 @@ class VideoRecorder(
     private var preferredAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO
     private var requestedColorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest()
     private var preparedEncoderColorConfig: VideoEncoderColorConfig? = null
+    private var requestedOutputSize = Size(1080, 1920)
+    private var requestedCameraInputSize = Size(1920, 1080)
+    private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
+    private var cameraInputStarted = false
+    private var hlgCameraInput = false
+    private var firstVideoPresentationTimeUs = Long.MIN_VALUE
 
-    private var requestedSize = android.util.Size(1080, 1920)
+    private var requestedSize = Size(1080, 1920)
     private var requestedFps = 30
     private var outputDateTakenMs: Long = 0L
     private var pendingVideoOutput: VideoMediaStoreWriter.PendingVideo? = null
@@ -128,13 +124,9 @@ class VideoRecorder(
     private var finishCallback: ((Uri?) -> Unit)? = null
     private var audioBytesQueued = 0L
     private var activeAudioConfig = monoAudioConfig()
-    private var lastAcceptedFrameTimestampUs = Long.MIN_VALUE
-    private var frameSelectionStartTimestampUs = Long.MIN_VALUE
-    private var lastAcceptedFrameSlot = Long.MIN_VALUE
-    private var lastEncodedFrameSlot = Long.MIN_VALUE
     private var lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
-    private var pendingFrame: PendingFrame? = null
+    private var pendingRealtimeFrame = false
     private var totalPausedDurationUs: Long = 0L
     private var pauseStartTimeUs: Long = 0L
     private var renderLoopRunning = false
@@ -150,15 +142,23 @@ class VideoRecorder(
     private var audioDrainJob: Job? = null
     private var audioRecordJob: Job? = null
 
-    val targetSize: android.util.Size?
-        get() = requestedSize.takeIf { isRecording }
+    val usesDedicatedCameraInput: Boolean
+        get() = isRecording
+
+    val cameraInputSurface: Surface?
+        get() = renderer?.inputSurface.takeIf {
+            isRecording && !stopRequested
+        }
 
     fun startRecording(
-        size: android.util.Size,
+        size: Size,
+        cameraInputSize: Size = size,
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
+        colorLayers: List<VideoColorEffectLayer> = emptyList(),
+        hlgInput: Boolean = false,
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
@@ -168,12 +168,18 @@ class VideoRecorder(
     ): Boolean {
         if (isRecording) return false
 
-        requestedSize = android.util.Size(size.width.align16(), size.height.align16())
+        requestedOrientationHintDegrees = normalizeOrientationHint(orientationHintDegrees)
+        requestedOutputSize = Size(size.width.align16(), size.height.align16())
+        requestedCameraInputSize = cameraInputSize
+        // SurfaceTexture 变换后的 OES 内容已经处于自然显示方向，编码画布必须继续使用
+        // VideoResolutionPreset 的显示尺寸。设备横竖屏差异只通过容器 rotation metadata 表达。
+        requestedSize = requestedOutputSize
         requestedFps = fps
         requestedBitrateMbps = bitrateMbps
         requestedCodecMime = codecMime
         requestedColorConfig = colorConfig
-        requestedOrientationHintDegrees = normalizeOrientationHint(orientationHintDegrees)
+        requestedColorLayers = colorLayers.toList()
+        hlgCameraInput = hlgInput
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedRecordingPath = recordingPath
         requestedRecordingTreeUri = recordingTreeUri?.takeIf { it.isNotBlank() }
@@ -181,10 +187,6 @@ class VideoRecorder(
         this.errorCallback = onError
         this.finishCallback = onFinished
         resetMuxerState()
-        frameSelectionStartTimestampUs = Long.MIN_VALUE
-        lastAcceptedFrameSlot = Long.MIN_VALUE
-        lastAcceptedFrameTimestampUs = Long.MIN_VALUE
-        lastEncodedFrameSlot = Long.MIN_VALUE
         totalPausedDurationUs = 0L
         pauseStartTimeUs = 0L
         isPaused = false
@@ -196,8 +198,13 @@ class VideoRecorder(
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
         stopRequested = false
+        cameraInputStarted = false
+        firstVideoPresentationTimeUs = Long.MIN_VALUE
         try {
             prepareVideoEncoder()
+            runBlocking(renderDispatcher) {
+                initializeRealtimeRenderer()
+            }
             createMuxer()
             audioEnabled = initAudioEncoder(startLoop = false)
             startDrains()
@@ -208,39 +215,51 @@ class VideoRecorder(
             return false
         }
         isRecording = true
+        PLog.d(
+            TAG,
+            "Video recording prepared: encoder=${requestedSize.width}x${requestedSize.height}, " +
+                "output=${requestedOutputSize.width}x${requestedOutputSize.height} @ " +
+                "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees, " +
+                "input=dedicated-surface-texture, " +
+                "path=${requestedRecordingPath.name}, uri=${requestedRecordingTreeUri?.take(48)}"
+        )
+        return true
+    }
+
+    fun onCameraInputStarted(): Boolean {
+        if (!isRecording || stopRequested || cameraInputStarted) return false
+        cameraInputStarted = true
         if (audioEnabled) {
             startAudioLoop()
         }
-        PLog.d(
-            TAG,
-            "Video recording prepared: ${requestedSize.width}x${requestedSize.height} @ " +
-                "${requestedFps}fps, orientationHint=$requestedOrientationHintDegrees, " +
-                "path=${requestedRecordingPath.name}, uri=${requestedRecordingTreeUri?.take(48)}"
-        )
+        PLog.d(TAG, "Dedicated Camera2 recording input started")
         return true
     }
 
     fun stopRecording() {
         if (!isRecording || stopRequested) return
         stopRequested = true
+        val completion = finishCallback
         scope.launch {
+            var publishedUri: Uri? = null
             try {
                 audioRecordJob?.join()
                 withContext(renderDispatcher) {
-                    drainPendingFrames()
+                    drainRealtimeFrames(allowWhenStopping = true)
                     signalVideoEndOfInputStream()
                 }
                 queueAudioEndOfStream()
                 videoDrainJob?.join()
                 audioDrainJob?.join()
 
-                val publishedUri = finalizeOutput()
-                finishCallback?.invoke(publishedUri)
+                releaseCaptureResources()
+                isRecording = false
+                publishedUri = finalizeOutput()
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to stop recording cleanly", e)
-                finishCallback?.invoke(null)
             } finally {
                 cleanup()
+                completion?.invoke(publishedUri)
             }
         }
     }
@@ -248,10 +267,11 @@ class VideoRecorder(
     fun forceStop() {
         if (!isRecording) return
         stopRequested = true
+        val completion = finishCallback
         scope.launch {
             errorCallback?.invoke("Recording stopped unexpectedly")
-            finishCallback?.invoke(null)
             cleanup()
+            completion?.invoke(null)
         }
     }
 
@@ -270,68 +290,54 @@ class VideoRecorder(
         PLog.d(TAG, "Video recording resumed")
     }
 
-    fun onPreviewFrame(
-        textureId: Int,
-        transformMatrix: FloatArray,
-        timestampNs: Long,
-        sharedContext: EGLContext,
-        sharedDisplay: EGLDisplay
-    ) {
-        if (!isRecording || stopRequested || isPaused) return
-        if (textureId == 0 || sharedContext == EGL14.EGL_NO_CONTEXT) return
-
-        val frameTimestampUs = timestampNs / 1000
-        statsIncomingFrames += 1
-        if (!shouldEncodeFrame(frameTimestampUs)) return
-        statsAcceptedFrames += 1
-
-        synchronized(pendingFrameLock) {
-            if (pendingFrame != null) {
-                statsReplacedPendingFrames += 1
-            }
-            pendingFrame = PendingFrame(
-                textureId = textureId,
-                transformMatrix = transformMatrix.clone(),
-                timestampUs = frameTimestampUs,
-                sharedContext = sharedContext,
-                sharedDisplay = sharedDisplay
-            )
-            if (!renderLoopRunning) {
-                renderLoopRunning = true
-                scope.launch(renderDispatcher) {
-                    drainPendingFrames()
-                }
-            }
-        }
-    }
-
     fun isRecording(): Boolean = isRecording && !stopRequested
 
     fun setPreferredAudioInputId(audioInputId: String) {
         preferredAudioInputId = audioInputId.ifBlank { VIDEO_AUDIO_INPUT_AUTO }
     }
 
-    private fun initEncoders(sharedContext: EGLContext, sharedDisplay: EGLDisplay) {
-        val width = requestedSize.width
-        val height = requestedSize.height
-        if (videoEncoder == null) {
-            prepareVideoEncoder()
-        }
+    private fun initializeRealtimeRenderer() {
         val encoderSurface = inputSurface ?: throw IllegalStateException("Video encoder input surface is not prepared")
         val encoderColorConfig = preparedEncoderColorConfig ?: VideoEncoderColorConfig.sdrDisplay()
-        renderer = HardwareLutVideoRenderer(
-            width = width,
-            height = height,
-            lutConfig = null,
-            colorRecipeParams = null,
-            encoderColorConfig = encoderColorConfig
-        ).apply {
-            initialize(encoderSurface, sharedContext, sharedDisplay)
-        }
+        val realtimeRenderer = RealtimeVideoRenderer(
+            context = context,
+            cameraInputSize = requestedCameraInputSize,
+            encoderOutputSize = requestedSize,
+            colorLayers = requestedColorLayers,
+            videoLogProfile = requestedColorConfig.logProfile,
+            hlgInput = hlgCameraInput,
+            mirrorHorizontally =
+                requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 == 0,
+            mirrorVertically =
+                requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 != 0,
+            encoderColorConfig = encoderColorConfig,
+        )
+        renderer = realtimeRenderer
+        realtimeRenderer.initialize(
+            encoderSurface = encoderSurface,
+            onFrameAvailable = ::onRealtimeFrameAvailable,
+        )
+        PLog.d(
+            TAG,
+            "Realtime video renderer initialized: ${requestedSize.width}x${requestedSize.height} @ ${requestedFps}fps"
+        )
+    }
 
-        lastSharedContext = sharedContext
-        lastSharedDisplay = sharedDisplay
-        PLog.d(TAG, "Video renderer initialized: ${width}x${height} @ ${requestedFps}fps")
+    private fun onRealtimeFrameAvailable() {
+        if (!isRecording || stopRequested || isPaused) return
+        statsIncomingFrames += 1
+        synchronized(realtimeFrameLock) {
+            if (pendingRealtimeFrame) {
+                statsReplacedPendingFrames += 1
+            }
+            pendingRealtimeFrame = true
+            if (!renderLoopRunning) {
+                renderLoopRunning = true
+                scope.launch(renderDispatcher) {
+                    drainRealtimeFrames(allowWhenStopping = false)
+                }
+            }
+        }
     }
 
     private fun prepareVideoEncoder() {
@@ -620,94 +626,48 @@ class VideoRecorder(
         return activeAudioConfig.channelCount * AUDIO_BYTES_PER_SAMPLE
     }
 
-    private fun presentationTimeForSlot(slot: Long): Long {
-        val fps = requestedFps.coerceAtLeast(1)
-        return (slot.coerceAtLeast(0L) * 1_000_000L) / fps.toLong()
-    }
-
-    private fun shouldEncodeFrame(timestampUs: Long): Boolean {
-        if (timestampUs <= 0L) return false
-        if (lastAcceptedFrameTimestampUs != Long.MIN_VALUE && timestampUs <= lastAcceptedFrameTimestampUs) {
-            return false
-        }
-
-        val fps = requestedFps.coerceAtLeast(1)
-        if (frameSelectionStartTimestampUs == Long.MIN_VALUE) {
-            frameSelectionStartTimestampUs = timestampUs
-            lastAcceptedFrameSlot = 0L
-            lastAcceptedFrameTimestampUs = timestampUs
-            return true
-        }
-
-        val elapsedUs = (timestampUs - frameSelectionStartTimestampUs - totalPausedDurationUs).coerceAtLeast(0L)
-        val slot = (elapsedUs * fps.toLong()) / 1_000_000L
-        if (slot <= lastAcceptedFrameSlot) {
-            return false
-        }
-
-        lastAcceptedFrameSlot = slot
-        lastAcceptedFrameTimestampUs = timestampUs
-        return true
-    }
-
-    private fun drainPendingFrames() {
+    private fun drainRealtimeFrames(allowWhenStopping: Boolean) {
         while (true) {
-            var frame = synchronized(pendingFrameLock) {
-                val nextFrame = pendingFrame
-                if (nextFrame == null) {
+            val hasFrame = synchronized(realtimeFrameLock) {
+                if (!pendingRealtimeFrame) {
                     renderLoopRunning = false
                     return
                 }
-                pendingFrame = null
-                nextFrame
+                pendingRealtimeFrame = false
+                true
             }
 
-            if (!isRecording || stopRequested) {
+            if (!hasFrame ||
+                !isRecording ||
+                (stopRequested && !allowWhenStopping) ||
+                isPaused
+            ) {
                 continue
             }
 
             try {
-                if (renderer == null) {
-                    try {
-                        initEncoders(frame.sharedContext, frame.sharedDisplay)
-                    } catch (e: Exception) {
-                        val diagnostic = if (e is MediaCodec.CodecException) {
-                            "isTransient=${e.isTransient}, isRecoverable=${e.isRecoverable}, errorCode=${e.errorCode}"
-                        } else ""
-                        val errorMessage = "Failed to initialize encoders: ${e.localizedMessage ?: "Unknown error"}. $diagnostic"
-                        PLog.e(TAG, errorMessage, e)
-                        errorCallback?.invoke(errorMessage)
-                        forceStop()
-                        return
-                    }
-                }
                 val videoRenderer = renderer ?: continue
-                val frameSlot = lastAcceptedFrameSlot.takeIf { it != Long.MIN_VALUE } ?: 0L
-                if (lastEncodedFrameSlot != Long.MIN_VALUE && frameSlot <= lastEncodedFrameSlot) {
-                    continue
-                }
-                val presentationTimeUs = presentationTimeForSlot(frameSlot)
                 val renderStartMs = android.os.SystemClock.elapsedRealtime()
-                videoRenderer.renderFrame(
-                    textureId = frame.textureId,
-                    stMatrix = frame.transformMatrix,
-                    timestampUs = presentationTimeUs,
-                    mirrorHorizontally = requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 == 0,
-                    mirrorVertically = requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 != 0
-                )
+                videoRenderer.renderLatestFrame() ?: continue
                 val renderCostMs = (android.os.SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
+                statsAcceptedFrames += 1
                 statsRenderedFrames += 1
                 statsRenderTimeTotalMs += renderCostMs
                 if (renderCostMs > statsRenderTimeMaxMs) {
                     statsRenderTimeMaxMs = renderCostMs
                 }
-                lastEncodedFrameSlot = frameSlot
-                // logRenderStatsIfNeeded()
+                logRenderStatsIfNeeded()
             } catch (e: Exception) {
                 val diagnostic = if (e is MediaCodec.CodecException) {
                     "isTransient=${e.isTransient}, isRecoverable=${e.isRecoverable}, errorCode=${e.errorCode}"
                 } else ""
-                PLog.e(TAG, "Failed to render frame to encoder. $diagnostic", e)
+                val message = "Failed to render dedicated recording frame. $diagnostic"
+                PLog.e(TAG, message, e)
+                errorCallback?.invoke(message)
+                if (!stopRequested) {
+                    forceStop()
+                }
+                return
             }
         }
     }
@@ -885,6 +845,12 @@ class VideoRecorder(
         buffer: ByteBuffer,
         info: MediaCodec.BufferInfo
     ) {
+        if (info.size <= 0 ||
+            info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0 ||
+            (isVideo && isPaused)
+        ) {
+            return
+        }
         synchronized(muxerLock) {
             if (!muxerStarted) {
                 val pending = if (isVideo) pendingVideoSamples else pendingAudioSamples
@@ -937,10 +903,22 @@ class VideoRecorder(
         } else {
             lastMuxedAudioPresentationTimeUs
         }
-        val sanitizedPresentationTimeUs = if (lastPresentationTimeUs == Long.MIN_VALUE) {
-            info.presentationTimeUs.coerceAtLeast(0L)
+        val sourcePresentationTimeUs = if (isVideo) {
+            if (firstVideoPresentationTimeUs == Long.MIN_VALUE) {
+                firstVideoPresentationTimeUs = info.presentationTimeUs
+            }
+            (
+                info.presentationTimeUs -
+                    firstVideoPresentationTimeUs -
+                    totalPausedDurationUs
+                ).coerceAtLeast(0L)
         } else {
-            info.presentationTimeUs.coerceAtLeast(lastPresentationTimeUs + 1L)
+            info.presentationTimeUs
+        }
+        val sanitizedPresentationTimeUs = if (lastPresentationTimeUs == Long.MIN_VALUE) {
+            sourcePresentationTimeUs.coerceAtLeast(0L)
+        } else {
+            sourcePresentationTimeUs.coerceAtLeast(lastPresentationTimeUs + 1L)
         }
         val sanitizedInfo = MediaCodec.BufferInfo().apply {
             set(0, info.size, sanitizedPresentationTimeUs, info.flags)
@@ -1017,10 +995,10 @@ class VideoRecorder(
             output.descriptor.close()
         } catch (_: Exception) {
         }
-        pendingVideoOutput = null
 
         if (!muxerStopSucceeded) {
             VideoMediaStoreWriter.discardPendingVideo(context, output)
+            pendingVideoOutput = null
             return null
         }
 
@@ -1028,10 +1006,11 @@ class VideoRecorder(
         if (uri == null) {
             VideoMediaStoreWriter.discardPendingVideo(context, output)
         }
+        pendingVideoOutput = null
         return uri
     }
 
-    private suspend fun cleanup() {
+    private suspend fun releaseCaptureResources() {
         videoDrainJob?.cancel()
         audioDrainJob?.cancel()
         audioRecordJob?.cancel()
@@ -1083,11 +1062,13 @@ class VideoRecorder(
             }
             audioEncoder = null
         }
+    }
+
+    private suspend fun cleanup() {
+        releaseCaptureResources()
 
         resetMuxerState()
         finishCallback = null
-        lastSharedContext = EGL14.EGL_NO_CONTEXT
-        lastSharedDisplay = EGL14.EGL_NO_DISPLAY
         pendingVideoOutput?.let { output ->
             try {
                 output.descriptor.close()
@@ -1111,21 +1092,22 @@ class VideoRecorder(
             audioFormat = null
             audioBytesQueued = 0L
             activeAudioConfig = monoAudioConfig()
-            lastAcceptedFrameTimestampUs = Long.MIN_VALUE
-            lastEncodedFrameSlot = Long.MIN_VALUE
+            firstVideoPresentationTimeUs = Long.MIN_VALUE
             lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
             lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
         }
-        synchronized(pendingFrameLock) {
-            pendingFrame = null
+        synchronized(realtimeFrameLock) {
+            pendingRealtimeFrame = false
             renderLoopRunning = false
         }
     }
 
     private fun cleanupPreparedStart() {
-        try {
-            renderer?.release()
-        } catch (_: Exception) {
+        runBlocking(renderDispatcher) {
+            try {
+                renderer?.release()
+            } catch (_: Exception) {
+            }
         }
         renderer = null
         try {
@@ -1180,7 +1162,12 @@ class VideoRecorder(
     }
 
     fun release() {
-        forceStop()
+        if (isRecording || renderer != null || videoEncoder != null || audioEncoder != null) {
+            stopRequested = true
+            runBlocking {
+                cleanup()
+            }
+        }
         scope.cancel()
         renderDispatcher.close()
     }

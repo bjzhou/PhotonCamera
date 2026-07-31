@@ -392,7 +392,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val state: StateFlow<CameraState> = cameraController.state
     val livePhotoRecorder get() = cameraController.livePhotoRecorder
-    val videoRecorder get() = cameraController.videoRecorder
 
     // 照片保存完成事件
     private val _imageSavedEvent = MutableSharedFlow<Unit>()
@@ -1940,7 +1939,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     } else {
                         view.setAperture(0f)
                     }
-                    view.setVideoRecorder(cameraController.videoRecorder)
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
                     view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                     currentState.focusPoint?.let { fp ->
@@ -2359,7 +2357,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     0f
                 })
                 view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
-                view.setVideoRecorder(cameraController.videoRecorder)
                 view.setVideoLogProfile(currentState.videoConfig.logProfile)
                 view.setIsHlgInput(shouldTreatPreviewAsHlgInput(currentState))
                 view.restoreRenderStateAfterResume()
@@ -2730,10 +2727,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (state.value.captureMode == CaptureMode.VIDEO) {
+            if (state.value.videoRecordingState.isProcessing) {
+                return
+            }
             if (state.value.videoRecordingState.isRecording) {
                 cameraController.stopVideoRecording()
             } else {
-                cameraController.startVideoRecording()
+                val currentState = state.value
+                val orientationOffset = userPreferences.value.cameraOrientationOffsets[
+                    currentState.currentCameraId
+                ] ?: 0
+                cameraController.startVideoRecording(
+                    creativeLutConfig = currentLutConfig.takeIf { currentState.lutEnabled },
+                    creativeRecipeParams = getMergedRecipeParams(),
+                    baselineLutConfig = currentBaselineLutConfig,
+                    baselineRecipeParams = currentBaselineRecipeParams.value,
+                    orientationOffsetDegrees = orientationOffset
+                )
             }
             return
         }

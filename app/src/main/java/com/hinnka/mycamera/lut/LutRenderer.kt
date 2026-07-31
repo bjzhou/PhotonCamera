@@ -22,7 +22,6 @@ import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
-import com.hinnka.mycamera.video.VideoRecorder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
@@ -107,10 +106,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val meteringDispatchInFlight = AtomicBoolean(false)
     private var captureFboId: Int = 0
     private var captureTextureId: Int = 0
-    private var recordFboId: Int = 0
-    private var recordTextureId: Int = 0
-    private var recordFboWidth: Int = 0
-    private var recordFboHeight: Int = 0
     private var passthroughProgramId: Int = 0
     private var uPassMVPMatrixLocation: Int = 0
     private var uPassSTMatrixLocation: Int = 0
@@ -496,11 +491,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // Live Photo 录制器
     var livePhotoRecorder: LivePhotoRecorder? = null
     @Volatile
-    var videoRecorder: VideoRecorder? = null
-    @Volatile
     var videoLogProfile: VideoLogProfile = VideoLogProfile.OFF
-    private var videoRenderStatsWindowStartMs: Long = 0L
-    private var videoRenderStatsFrames: Int = 0
 
     // 预览帧捕获请求仅在 GL 线程中写入和消费。
     private val pendingPreviewCaptureRequests = ArrayDeque<PreviewCaptureRequest>()
@@ -585,10 +576,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         meteringTextureId = 0
         captureFboId = 0
         captureTextureId = 0
-        recordFboId = 0
-        recordTextureId = 0
-        recordFboWidth = 0
-        recordFboHeight = 0
         passthroughProgramId = 0
         depthInputFboId = 0
         depthInputTextureId = 0
@@ -1552,12 +1539,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (viewportWidth <= 0 || viewportHeight <= 0) return
 
         // 更新 SurfaceTexture
-        var hasFreshCameraFrame = false
         if (frameAvailable.getAndSet(false)) {
             try {
                 surfaceTexture?.updateTexImage()
                 surfaceTexture?.getTransformMatrix(stMatrix)
-                hasFreshCameraFrame = true
             } catch (e: RuntimeException) {
                 PLog.e(
                     TAG,
@@ -1568,11 +1553,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
 
         val liveRecorder = livePhotoRecorder
-        val activeVideoRecorder = videoRecorder?.takeIf { it.isRecording() }
-        if (activeVideoRecorder == null) {
-            videoRenderStatsWindowStartMs = 0L
-            videoRenderStatsFrames = 0
-        }
         val hdfEnabled = halation > 0.001f
         val halationEnabled = redHalation > 0.001f
         val bloomEnabled = bloom > 0.001f
@@ -1588,7 +1568,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         uploadPendingCurveTextures()
         val requestedFbo = rawPreviewNeeded ||
             liveRecorder != null ||
-            activeVideoRecorder != null ||
             postProcessEffectEnabled ||
             bokehNeeded ||
             aiFocusInputNeeded ||
@@ -1705,41 +1684,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 )
             }
 
-            // 5. 视频录制输出
-            if (hasFreshCameraFrame) {
-                activeVideoRecorder?.targetSize?.let { targetSize ->
-                    ensureRecordFbo(targetSize.width, targetSize.height)
-                    if (recordFboId != 0 && recordTextureId != 0) {
-                        if (postProcessEffectEnabled) {
-                            drawPostProcessEffects(recordFboId, targetSize.width, targetSize.height, currentTexId)
-                        } else if (bokehNeeded) {
-                            drawFboToScreen(recordFboId, targetSize.width, targetSize.height, currentTexId)
-                        } else {
-                            drawFboToScreen(
-                                fboId = recordFboId,
-                                width = targetSize.width,
-                                height = targetSize.height,
-                                sourceTextureId = currentTexId,
-                                targetMvpMatrix = buildTextureMvpMatrix(
-                                    sourceWidth = viewportWidth,
-                                    sourceHeight = viewportHeight,
-                                    targetWidth = targetSize.width,
-                                    targetHeight = targetSize.height
-                                )
-                            )
-                        }
-                        GLES30.glFlush()
-                        activeVideoRecorder.onPreviewFrame(
-                            textureId = recordTextureId,
-                            transformMatrix = identityMatrix,
-                            timestampNs = surfaceTexture?.timestamp ?: 0L,
-                            sharedContext = EGL14.eglGetCurrentContext(),
-                            sharedDisplay = EGL14.eglGetCurrentDisplay()
-                        )
-                    }
-                }
-            }
-
             // 3.5. Focus Peaking (Only for preview, not for recording)
             if (!isAutoFocus && focusPeakingEnabled) {
                 currentTexId = renderFocusPeaking(currentTexId, currentWidth, currentHeight)
@@ -1762,7 +1706,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 finalDisplayHeight = finalDisplayHeight,
                 compositeFinalDisplay = needsHdfCompositeForSampling
             )
-            if (meteringEnabled && activeVideoRecorder == null) {
+            if (meteringEnabled) {
                 runMeteringInternal(
                     sourceTextureId = finalDisplayTextureId,
                     sourceWidth = finalDisplayWidth,
@@ -1922,7 +1866,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         )
 
         // 测光和直方图（按需）
-        if (fboId == 0 && meteringEnabled && videoRecorder?.isRecording() != true) {
+        if (fboId == 0 && meteringEnabled) {
             runMeteringInternal()
         }
 
@@ -2684,49 +2628,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glFramebufferTexture2D(
             GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
             GLES30.GL_TEXTURE_2D, captureTextureId, 0
-        )
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-    }
-
-    private fun ensureRecordFbo(width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
-        if (recordFboId != 0 && recordFboWidth == width && recordFboHeight == height) return
-
-        if (recordFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(recordFboId), 0)
-            recordFboId = 0
-        }
-        if (recordTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(recordTextureId), 0)
-            recordTextureId = 0
-        }
-
-        val fbos = IntArray(1)
-        val textures = IntArray(1)
-        GLES30.glGenFramebuffers(1, fbos, 0)
-        GLES30.glGenTextures(1, textures, 0)
-        recordFboId = fbos[0]
-        recordTextureId = textures[0]
-        recordFboWidth = width
-        recordFboHeight = height
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, recordTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F,
-            width, height, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, recordFboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            recordTextureId,
-            0
         )
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
@@ -3855,14 +3756,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(aiFocusInputTextureId), 0)
             aiFocusInputTextureId = 0
         }
-        if (recordFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(recordFboId), 0)
-            recordFboId = 0
-        }
-        if (recordTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(recordTextureId), 0)
-            recordTextureId = 0
-        }
         if (fboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(fboId), 0)
             fboId = 0
@@ -3880,9 +3773,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stackTextureId = 0
         }
         basicToneTextures.release()
-        recordFboWidth = 0
-        recordFboHeight = 0
-
         // 删除程序
         colorProgramCache.release()
         GlUtils.deleteProgram(passthroughProgramId)
