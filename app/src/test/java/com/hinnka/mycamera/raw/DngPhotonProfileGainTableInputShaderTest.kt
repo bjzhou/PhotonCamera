@@ -7,10 +7,10 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 
-class DngHdrProfileGainTableGpuShadersTest {
+class DngPhotonProfileGainTableInputShaderTest {
     @Test
-    fun cellStatsKeeps256SamplesWith128CooperativeLanes() {
-        val shader = DngHdrProfileGainTableGpuShaders.CELL_STATS
+    fun cellSamplesKeeps256SamplesWith128CooperativeLanes() {
+        val shader = DngPhotonProfileGainTableInputShader.CELL_SAMPLES
 
         assertEquals(
             GlesComputeWorkGroup.Size(x = 16, y = 8, z = 1),
@@ -19,13 +19,13 @@ class DngHdrProfileGainTableGpuShadersTest {
         assertTrue(shader.contains("const uint CELL_SAMPLE_COUNT = 256u;"))
         assertTrue(shader.contains("const uint CELL_LANE_COUNT = 128u;"))
         assertTrue(shader.contains("sampleIndex += CELL_LANE_COUNT"))
-        assertTrue(shader.contains("localIndex += CELL_LANE_COUNT"))
-        assertTrue(shader.contains("sortSamples(localIndex);"))
-        GlesComputeWorkGroup.requireBaselineCompatible(shader, "DNG_PGTM_CELL_STATS")
+        assertTrue(!shader.contains("sortSamples"))
+        assertTrue(!shader.contains("shared "))
+        GlesComputeWorkGroup.requireBaselineCompatible(shader, "DNG_PGTM_CELL_SAMPLES")
     }
 
     @Test
-    fun cellStatsPassesAvailableNdkValidator() {
+    fun cellSamplesPassesAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val validator = sdkRoot?.let(::File)
             ?.resolve("ndk")
@@ -40,10 +40,10 @@ class DngHdrProfileGainTableGpuShadersTest {
             ?.firstOrNull()
         assumeTrue("Android NDK glslc is unavailable", validator != null)
 
-        val sourceFile = File.createTempFile("dng-pgtm-cell-stats-", ".compute")
-        val outputFile = File.createTempFile("dng-pgtm-cell-stats-", ".spv")
+        val sourceFile = File.createTempFile("dng-pgtm-cell-samples-", ".compute")
+        val outputFile = File.createTempFile("dng-pgtm-cell-samples-", ".spv")
         try {
-            sourceFile.writeText(DngHdrProfileGainTableGpuShaders.CELL_STATS)
+            sourceFile.writeText(DngPhotonProfileGainTableInputShader.CELL_SAMPLES)
             val process = ProcessBuilder(
                 checkNotNull(validator).absolutePath,
                 "--target-env=opengl",

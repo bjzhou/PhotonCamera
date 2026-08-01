@@ -3775,8 +3775,7 @@ object GalleryManager {
             !mainFlashFired &&
             resolveRawAutoExposure(context, metadata) &&
             kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f
-        val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon ||
-            profileToneMapMode == RawProfileToneMapMode.GooglePixel
+        val profileGainTableRequired = profileToneMapMode == RawProfileToneMapMode.Photon
         val captureProfilePreparer = if (viewfinderMatchEnabled || profileGainTableRequired) {
             RawDngCaptureProfilePreparer { input ->
                 RawViewfinderExposureMatcher.prepareCaptureProfile(
@@ -3841,17 +3840,13 @@ object GalleryManager {
     }
 
     private fun profileNameForPgtmMode(mode: RawProfileToneMapMode): String {
-        return when (mode) {
-            RawProfileToneMapMode.Photon -> DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
-            else -> DngProfileToneCurve.GOOGLE_HDR_PROFILE_NAME
-        }
+        require(mode == RawProfileToneMapMode.Photon)
+        return DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
     }
 
     private fun profileToneCurveForPgtmMode(mode: RawProfileToneMapMode): FloatArray {
-        return when (mode) {
-            RawProfileToneMapMode.Photon -> DngProfileToneCurve.photonPgtmToneCurvePoints()
-            else -> DngProfileToneCurve.googleHdrToneCurvePoints()
-        }
+        require(mode == RawProfileToneMapMode.Photon)
+        return DngProfileToneCurve.photonPgtmToneCurvePoints()
     }
 
     /**
@@ -4583,10 +4578,6 @@ object GalleryManager {
         val toneMappingParameters = when {
             DngEmbeddedProfile.hasPhotonPgtmProfile(dngFile) -> {
                 rawToneMappingParameters.withPhotonPgtmToneMap(true)
-            }
-
-            DngEmbeddedProfile.hasGoogleToneMapProfile(dngFile) -> {
-                rawToneMappingParameters.withGooglePixelToneMap(true)
             }
 
             else -> return this

@@ -571,7 +571,6 @@ private fun RawProfileToneMapSwitches(
             RawProfileToneMapMode.Default.name to stringResource(R.string.settings_raw_profile_tone_map_default),
             RawProfileToneMapMode.Photon.name to stringResource(R.string.settings_raw_profile_tone_map_photon_pgtm),
             RawProfileToneMapMode.OppoMaster.name to stringResource(R.string.settings_raw_profile_tone_map_oppo_master),
-            RawProfileToneMapMode.GooglePixel.name to stringResource(R.string.settings_raw_profile_tone_map_google_pixel),
         ),
         currentLevel = params.profileToneMapMode.name,
         onLevelSelected = { selected ->

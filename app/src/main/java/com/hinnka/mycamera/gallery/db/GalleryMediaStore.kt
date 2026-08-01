@@ -241,7 +241,7 @@ object GalleryMediaStore {
             rawAgxShoulder = metadata.rawToneMappingParameters.agxShoulder,
             rawFilmicBlackRelativeExposure = metadata.rawToneMappingParameters.filmicBlackRelativeExposure,
             rawFilmicWhiteRelativeExposure = metadata.rawToneMappingParameters.filmicWhiteRelativeExposure,
-            rawGooglePixelToneMap = metadata.rawToneMappingParameters.useGooglePixelToneMap,
+            legacyPhotonToneMap = false,
             rawOppoMasterToneMap = metadata.rawToneMappingParameters.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = metadata.rawToneMappingParameters.usePhotonPgtmToneMap,
             rawAppleProRawToneMap = false,
@@ -434,9 +434,8 @@ object GalleryMediaStore {
                 agxShoulder = rawAgxShoulder,
                 filmicBlackRelativeExposure = rawFilmicBlackRelativeExposure,
                 filmicWhiteRelativeExposure = rawFilmicWhiteRelativeExposure,
-                useGooglePixelToneMap = rawGooglePixelToneMap,
                 useOppoMasterToneMap = rawOppoMasterToneMap,
-                usePhotonPgtmToneMap = rawPhotonPgtmToneMap
+                usePhotonPgtmToneMap = rawPhotonPgtmToneMap || legacyPhotonToneMap
             ).normalized(),
             frameId = frameId,
             width = width,

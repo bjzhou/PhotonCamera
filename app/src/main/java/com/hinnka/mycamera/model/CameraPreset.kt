@@ -29,7 +29,6 @@ data class CameraPreset(
     val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
     val rawHncsFilmCurveMode: String = HncsFilmCurveMode.Standard.persistedValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
-    val rawGooglePixelToneMap: Boolean = false,
     val rawOppoMasterToneMap: Boolean = false,
     val rawPhotonPgtmToneMap: Boolean = false,
     val rawSpectralFilmStock: String? = null,
@@ -97,7 +96,6 @@ data class CameraPreset(
                 rawHncsFilmCurveMode = HncsFilmCurveMode.fromPersistedValue(
                     rawHncsFilmCurveMode
                 ).persistedValue,
-                rawGooglePixelToneMap = rawGooglePixelToneMap && !rawOppoMasterToneMap && !rawPhotonPgtmToneMap,
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawPhotonPgtmToneMap = rawPhotonPgtmToneMap && !rawOppoMasterToneMap
             )

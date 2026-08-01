@@ -817,16 +817,13 @@
     <string name="settings_raw_hncs_film_curve_description">选择响应曲线</string>
     <string name="settings_raw_hncs_film_curve_standard">标准</string>
     <string name="settings_raw_hncs_film_curve_reproduction">色彩复刻</string>
-    <string name="settings_raw_google_pixel_tone_map">Google Pixel 风格色调映射</string>
-    <string name="settings_raw_google_pixel_tone_map_description">使用 Google Pixel 风格的影调渲染</string>
     <string name="settings_raw_oppo_master_tone_map">OPPO 大师影调</string>
     <string name="settings_raw_oppo_master_tone_map_description">使用 OPPO 内嵌的大师影调渲染。</string>
     <string name="settings_raw_profile_tone_map">RAW 影调曲线</string>
     <string name="settings_raw_profile_tone_map_description">选择影调曲线渲染</string>
     <string name="settings_raw_profile_tone_map_default">默认</string>
-    <string name="settings_raw_profile_tone_map_google_pixel">Google Pixel</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO 大师</string>
-    <string name="settings_raw_profile_tone_map_photon_pgtm">光子影调</string>
+    <string name="settings_raw_profile_tone_map_photon_pgtm">光子HDR</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX 白色相对曝光</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX 黑色相对曝光</string>
     <string name="settings_raw_agx_shoulder">AgX 肩部</string>

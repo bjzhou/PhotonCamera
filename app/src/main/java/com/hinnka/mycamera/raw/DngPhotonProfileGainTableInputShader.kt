@@ -1,8 +1,8 @@
 package com.hinnka.mycamera.raw
 
 /** Compute shaders for capture-time DNG ProfileGainTableMap preparation. */
-internal object DngHdrProfileGainTableGpuShaders {
-    val CELL_STATS = """
+internal object DngPhotonProfileGainTableInputShader {
+    val CELL_SAMPLES = """
         #version 310 es
 
         layout(local_size_x = 16, local_size_y = 8, local_size_z = 1) in;
@@ -22,8 +22,6 @@ internal object DngHdrProfileGainTableGpuShaders {
         uniform int uCfaPattern;
         uniform vec4 uBlackLevel;
         uniform float uWhiteLevel;
-        uniform float uBaselineGain;
-        uniform float uHighlightThreshold;
         uniform vec3 uCameraWhite;
         uniform mat3 uColorCorrectionMatrix;
         uniform int uLensShadingEnabled;
@@ -36,23 +34,17 @@ internal object DngHdrProfileGainTableGpuShaders {
         uniform ivec3 uHueSatDivisions;
         uniform int uHueSatEncoding;
         uniform int uHueSatSupportOverrange;
-        uniform int uUseMaxRgbInput;
-        uniform int uWriteCellSamples;
         uniform int uWarpCount;
 
-        layout(std430, binding = 0) writeonly buffer CellStatsBuffer {
-            float cellStats[];
-        };
-        layout(std430, binding = 1) writeonly buffer CellSampleBuffer {
+        layout(std430, binding = 0) writeonly buffer CellSampleBuffer {
             float cellSamples[];
         };
-        layout(std430, binding = 2) readonly buffer WarpRectilinearBuffer {
+        layout(std430, binding = 1) readonly buffer WarpRectilinearBuffer {
             float warpParameters[];
         };
 
         const uint CELL_SAMPLE_COUNT = 256u;
         const uint CELL_LANE_COUNT = 128u;
-        shared float inputSamples[256];
 
         ${DcpHueSatMapGl.SHADER_FUNCTIONS}
 
@@ -142,18 +134,8 @@ internal object DngHdrProfileGainTableGpuShaders {
                     uHueSatSupportOverrange != 0
                 );
             }
-            profileRgb = clamp(profileRgb, 0.0, 1.0) * uBaselineGain;
-            float rgbMin = min(profileRgb.r, min(profileRgb.g, profileRgb.b));
-            float rgbMax = max(profileRgb.r, max(profileRgb.g, profileRgb.b));
-            if (uUseMaxRgbInput != 0) return rgbMax;
-            return max(
-                0.1495 * profileRgb.r +
-                0.2935 * profileRgb.g +
-                0.0570 * profileRgb.b +
-                0.1250 * rgbMin +
-                0.3750 * rgbMax,
-                0.0
-            );
+            profileRgb = clamp(profileRgb, 0.0, 1.0);
+            return max(profileRgb.r, max(profileRgb.g, profileRgb.b));
         }
 
         float sampleSceneInput(ivec2 baseCoord) {
@@ -238,38 +220,10 @@ internal object DngHdrProfileGainTableGpuShaders {
             return clamp(sourcePixel, vec2(0.0), vec2(uImageSize - ivec2(1)));
         }
 
-        void sortSamples(uint laneIndex) {
-            for (uint sequenceSize = 2u; sequenceSize <= 256u; sequenceSize <<= 1u) {
-                for (uint compareDistance = sequenceSize >> 1u;
-                    compareDistance > 0u;
-                    compareDistance >>= 1u
-                ) {
-                    for (
-                        uint localIndex = laneIndex;
-                        localIndex < CELL_SAMPLE_COUNT;
-                        localIndex += CELL_LANE_COUNT
-                    ) {
-                        uint partner = localIndex ^ compareDistance;
-                        if (partner > localIndex) {
-                            float first = inputSamples[localIndex];
-                            float second = inputSamples[partner];
-                            bool ascending = (localIndex & sequenceSize) == 0u;
-                            if ((first > second) == ascending) {
-                                inputSamples[localIndex] = second;
-                                inputSamples[partner] = first;
-                            }
-                        }
-                    }
-                    barrier();
-                }
-            }
-        }
-
         void main() {
             ivec2 cell = ivec2(gl_WorkGroupID.xy);
             uint localIndex = gl_LocalInvocationIndex;
             int cellIndex = cell.y * uGridSize.x + cell.x;
-            int statsOffset = cellIndex * 8;
             int statsWidth = uStatsBounds.z - uStatsBounds.x;
             int statsHeight = uStatsBounds.w - uStatsBounds.y;
 
@@ -303,142 +257,7 @@ internal object DngHdrProfileGainTableGpuShaders {
                     sourceCoord = clamp(sourceCoord, ivec2(0), uImageSize - ivec2(2));
                     inputValue = sampleSceneInput(sourceCoord);
                 }
-                if (uWriteCellSamples != 0) {
-                    cellSamples[cellIndex * 256 + int(sampleIndex)] = inputValue;
-                }
-                inputSamples[sampleIndex] = inputValue;
-            }
-            barrier();
-
-            sortSamples(localIndex);
-            if (localIndex == 0u) {
-                if (!validCell) {
-                    for (int component = 0; component < 8; ++component) {
-                        cellStats[statsOffset + component] = 0.0;
-                    }
-                    return;
-                }
-                int highlightCount = 0;
-                for (int sampleIndex = 0; sampleIndex < 256; ++sampleIndex) {
-                    if (inputSamples[sampleIndex] >= uHighlightThreshold) ++highlightCount;
-                }
-                cellStats[statsOffset] = inputSamples[25];
-                cellStats[statsOffset + 1] = inputSamples[127];
-                cellStats[statsOffset + 2] = inputSamples[230];
-                cellStats[statsOffset + 3] = inputSamples[250];
-                cellStats[statsOffset + 4] = float(highlightCount) / 256.0;
-                cellStats[statsOffset + 5] = 256.0;
-                cellStats[statsOffset + 6] = inputSamples[254];
-                cellStats[statsOffset + 7] = inputSamples[255];
-            }
-        }
-    """.trimIndent()
-
-    val GOOGLE_GAIN_CURVES = """
-        #version 310 es
-
-        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-
-        precision highp float;
-        precision highp int;
-
-        layout(std430, binding = 0) readonly buffer CurvePlanBuffer {
-            float curvePlans[];
-        };
-        layout(std430, binding = 1) writeonly buffer GainCurveBuffer {
-            float gainCurves[];
-        };
-        uniform int uCellCount;
-        uniform int uPointCount;
-        uniform float uInputScale;
-        uniform float uMinTableGain;
-        uniform float uMaxTableGain;
-        uniform float uToeEnd;
-        uniform float uShapeQ;
-        uniform float uMinShapePower;
-        uniform float uMaxShapePower;
-        uniform int uDiagnosticMode;
-        uniform float uDiagnosticStart;
-        uniform float uDiagnosticEnd;
-        uniform float uDiagnosticFeather;
-
-        const float CURVE_EPS = 1e-6;
-
-        float smoothUnit(float edge0, float edge1, float value) {
-            float amount = clamp((value - edge0) / max(edge1 - edge0, CURVE_EPS), 0.0, 1.0);
-            return amount * amount * (3.0 - 2.0 * amount);
-        }
-
-        float diagnosticMask(float inputValue) {
-            float enter = uDiagnosticStart <= 0.0 || uDiagnosticFeather <= 0.0
-                ? (inputValue >= uDiagnosticStart ? 1.0 : 0.0)
-                : smoothUnit(
-                    uDiagnosticStart - uDiagnosticFeather,
-                    uDiagnosticStart + uDiagnosticFeather,
-                    inputValue
-                );
-            float exit = uDiagnosticEnd >= 1.0 || uDiagnosticFeather <= 0.0
-                ? (inputValue <= uDiagnosticEnd ? 1.0 : 0.0)
-                : 1.0 - smoothUnit(
-                    uDiagnosticEnd - uDiagnosticFeather,
-                    uDiagnosticEnd + uDiagnosticFeather,
-                    inputValue
-                );
-            return clamp(min(enter, exit), 0.0, 1.0);
-        }
-
-        void main() {
-            int cellIndex = int(gl_GlobalInvocationID.x);
-            if (cellIndex >= uCellCount) return;
-
-            int planOffset = cellIndex * 3;
-            float blackGain = clamp(
-                curvePlans[planOffset], uMinTableGain, uMaxTableGain
-            );
-            float endpointGain = clamp(
-                curvePlans[planOffset + 1], uMinTableGain, uMaxTableGain
-            );
-            float shapePower = clamp(
-                curvePlans[planOffset + 2], uMinShapePower, uMaxShapePower
-            );
-            float endpointRatio = blackGain / max(endpointGain, CURVE_EPS);
-            float shoulderAmount = pow(endpointRatio, uShapeQ) - 1.0;
-            float previousFinalOutput = 0.0;
-            int outputOffset = cellIndex * uPointCount;
-            for (int point = 0; point < uPointCount; ++point) {
-                float tableInput = point == uPointCount - 1
-                    ? 1.0
-                    : float(point) / float(uPointCount);
-                float shoulderInput = clamp(
-                    (tableInput - uToeEnd) / max(1.0 - uToeEnd, CURVE_EPS),
-                    0.0,
-                    1.0
-                );
-                float denominator = pow(
-                    max(1.0 + shoulderAmount * pow(shoulderInput, shapePower), CURVE_EPS),
-                    1.0 / uShapeQ
-                );
-                float trueGain = point == uPointCount - 1
-                    ? uInputScale
-                    : clamp(blackGain / denominator, uMinTableGain, uMaxTableGain);
-
-                float finalGain = trueGain;
-                if (uDiagnosticMode >= 0) {
-                    float mask = diagnosticMask(tableInput);
-                    float mixedGain = uDiagnosticMode == 0
-                        ? mix(1.0, trueGain, mask)
-                        : mix(trueGain, 1.0, mask);
-                    float monotonicOutput = max(previousFinalOutput, tableInput * mixedGain);
-                    finalGain = tableInput <= CURVE_EPS
-                        ? clamp(mixedGain, uMinTableGain, uMaxTableGain)
-                        : clamp(
-                            monotonicOutput / tableInput,
-                            uMinTableGain,
-                            uMaxTableGain
-                        );
-                    previousFinalOutput = monotonicOutput;
-                }
-                gainCurves[outputOffset + point] = finalGain;
+                cellSamples[cellIndex * 256 + int(sampleIndex)] = inputValue;
             }
         }
     """.trimIndent()
