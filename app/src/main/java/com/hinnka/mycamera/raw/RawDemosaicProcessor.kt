@@ -237,10 +237,7 @@ class RawDemosaicProcessor {
         // It is also above the native level-35 gate, so the complete IIR2 pass 1/2/3 chain runs.
         private const val VGN_COLOR_NOISE_LEVEL = 50
         private const val VGN_ADVANCED_COLOR_NOISE_ENABLED = true
-        private const val RAW_TILE_CORE_EDGE_PX = 4096
-        // Shader prewarming only needs representative resource dimensions. Keep it independent
-        // from the production tile core so increasing render throughput does not reserve a
-        // full-size capture working set while the camera is opening.
+        private const val RAW_TILE_CORE_EDGE_PX = 3072
         private const val RAW_PREWARM_CORE_EDGE_PX = 2048
         // Phocus GetStripMargin(50) returns 60 pixels for gradient/color-noise interpolation.
         // The remaining 52 pixels cover chroma denoise, NLM, shadows/highlights and sharpening.
