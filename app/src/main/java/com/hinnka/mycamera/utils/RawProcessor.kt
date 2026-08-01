@@ -9,6 +9,7 @@ import android.media.Image
 import android.util.Log
 import android.util.Size
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
@@ -319,6 +320,7 @@ object RawProcessor {
         cfaCorrectionMode: String? = null,
         effectiveFocalLengthMm: Float? = null,
         effectiveFocalLength35mm: Int? = null,
+        captureInfo: CaptureInfo,
         dngProfilePreparationOptions: RawDngProfilePreparationOptions? = null,
     ): Boolean {
         if (!isRawImage(image)) {
@@ -339,6 +341,7 @@ object RawProcessor {
             cfaCorrectionMode = cfaCorrectionMode,
             effectiveFocalLengthMm = effectiveFocalLengthMm,
             effectiveFocalLength35mm = effectiveFocalLength35mm,
+            captureInfo = captureInfo,
             dngProfilePreparationOptions = dngProfilePreparationOptions,
             defaultCrop = resolveCameraRawDefaultCrop(
                 width = image.width,
@@ -409,6 +412,7 @@ object RawProcessor {
         cfaCorrectionMode: String?,
         effectiveFocalLengthMm: Float?,
         effectiveFocalLength35mm: Int?,
+        captureInfo: CaptureInfo,
         dngProfilePreparationOptions: RawDngProfilePreparationOptions?,
         defaultCrop: Rect,
     ): Boolean {
@@ -447,6 +451,7 @@ object RawProcessor {
             cfaCorrectionMode = cfaCorrectionMode,
             effectiveFocalLengthMm = effectiveFocalLengthMm,
             effectiveFocalLength35mm = effectiveFocalLength35mm,
+            captureInfo = captureInfo,
             dngProfilePreparationOptions = dngProfilePreparationOptions,
             defaultCrop = defaultCrop,
         )
@@ -631,6 +636,7 @@ object RawProcessor {
         captureMetadataResult: CaptureResult? = null,
         effectiveFocalLengthMm: Float? = null,
         effectiveFocalLength35mm: Int? = null,
+        captureInfo: CaptureInfo,
         outputStream: java.io.OutputStream,
         rotation: Int = 0,
         thumbnail: Bitmap? = null,
@@ -732,6 +738,7 @@ object RawProcessor {
                 captureMetadataResult = captureMetadataResult ?: captureResult,
                 effectiveFocalLengthMm = effectiveFocalLengthMm,
                 effectiveFocalLength35mm = effectiveFocalLength35mm,
+                captureInfo = captureInfo,
                 orientation = orientation,
                 cfaPattern = resolvedCfaPattern,
                 blackLevel = blackLevel,

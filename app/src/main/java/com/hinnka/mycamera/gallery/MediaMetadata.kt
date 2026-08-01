@@ -148,12 +148,18 @@ data class MediaMetadata(
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
      *
-     * CaptureInfo.model 使用其 EXIF 安全设备型号默认值，不复用边框水印的 deviceModel。
+     * 导入照片的 deviceModel 来自原图 EXIF，应优先保留；本机照片仍使用
+     * EXIF 安全的设备型号，不复用边框水印展示名称。
      */
     fun toCaptureInfo(): com.hinnka.mycamera.camera.CaptureInfo {
         return com.hinnka.mycamera.camera.CaptureInfo(
             iso = iso,
             make = brand ?: Build.MANUFACTURER,
+            model = if (isImported) {
+                deviceModel?.takeIf { it.isNotBlank() } ?: DeviceUtil.exifModel
+            } else {
+                DeviceUtil.exifModel
+            },
             captureTime = dateTaken ?: System.currentTimeMillis(),
             imageWidth = width,
             imageHeight = height,
@@ -164,7 +170,7 @@ data class MediaMetadata(
             software = software ?: "PhotonCamera",
             latitude = latitude,
             longitude = longitude,
-            altitude = altitude
+            altitude = altitude,
         )
     }
 

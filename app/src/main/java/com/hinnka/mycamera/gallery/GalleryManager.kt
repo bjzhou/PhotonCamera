@@ -2007,6 +2007,7 @@ object GalleryManager {
                             cfaCorrectionMode = metadata.rawCfaCorrectionMode,
                             effectiveFocalLengthMm = captureInfo.focalLength,
                             effectiveFocalLength35mm = captureInfo.focalLength35mm,
+                            captureInfo = captureInfo,
                             dngProfilePreparationOptions = rawDngProfilePreparationOptions(
                                 context = context,
                                 metadata = metadata,
@@ -3549,6 +3550,7 @@ object GalleryManager {
                     captureMetadataResult = captureMetadataResult,
                     effectiveFocalLengthMm = captureInfo.focalLength,
                     effectiveFocalLength35mm = captureInfo.focalLength35mm,
+                    captureInfo = captureInfo,
                     outputStream = outputStream,
                     rotation = rotation,
                     thumbnail = thumbnail,
