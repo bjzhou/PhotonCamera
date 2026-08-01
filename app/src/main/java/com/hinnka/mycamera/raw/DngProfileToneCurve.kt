@@ -1,7 +1,8 @@
 package com.hinnka.mycamera.raw
 
+import kotlin.math.pow
+
 internal object DngProfileToneCurve {
-    const val GOOGLE_HDR_PROFILE_NAME = "Google Pixel HDR Tone Map"
     const val PHOTON_PGTM_PROFILE_NAME = "Photon HDR"
 
     private const val POINT_TOLERANCE = 2e-4f
@@ -81,32 +82,14 @@ internal object DngProfileToneCurve {
         0.97638f, 0.99517f, 0.98425f, 0.99686f, 0.99213f, 0.99845f, 1f, 1f
     )
 
-    // Monotonic output-domain rebase of the original curve, pinned at 18% middle gray.
-    // The original asymmetric toe/shoulder relationship is retained; scene-dependent contrast
-    // and exposure belong to PGTM.
-    private val PHOTON_PGTM_TONE_CURVE_POINTS = floatArrayOf(
-        0.00000000f, 0.000000000f,
-        0.00390625f, 0.000111219f,
-        0.00781250f, 0.000462170f,
-        0.01171875f, 0.001073441f,
-        0.01562500f, 0.002373597f,
-        0.01953125f, 0.004900927f,
-        0.02343750f, 0.008315577f,
-        0.02734375f, 0.012026066f,
-        0.03125000f, 0.015834956f,
-        0.04687500f, 0.031739906f,
-        0.06250000f, 0.048228501f,
-        0.09375000f, 0.082288715f,
-        0.12500000f, 0.117239616f,
-        0.18000000f, 0.180000000f,
-        0.25000000f, 0.261059978f,
-        0.37500000f, 0.406992955f,
-        0.50000000f, 0.552633896f,
-        0.62500000f, 0.694937822f,
-        0.75000000f, 0.817742418f,
-        0.87500000f, 0.916040488f,
-        1.00000000f, 1.000000000f
-    )
+    // Larger toe power deepens the lowest shadows; toe width extends that behavior upward.
+    // Mid power controls the body contrast. Larger shoulder power softens the approach to white.
+    // Balance moves the curve vertically without changing either endpoint.
+    private const val PHOTON_PGTM_TOE_POWER = 1.5
+    private const val PHOTON_PGTM_TOE_WIDTH = 0.01
+    private const val PHOTON_PGTM_MID_POWER = 1.25
+    private const val PHOTON_PGTM_SHOULDER_POWER = 1.2
+    private const val PHOTON_PGTM_BALANCE = 0.97
 
     private val PHOTON_PGTM_TONE_CURVE_LUT by lazy {
         DcpToneCurve(photonPgtmToneCurvePoints()).toLut(256)
@@ -123,10 +106,6 @@ internal object DngProfileToneCurve {
         }
     }
 
-    fun googleHdrToneCurveLut(sampleCount: Int = 256): FloatArray {
-        return DcpToneCurve(googleHdrToneCurvePoints()).toLut(sampleCount)
-    }
-
     fun linearToneCurvePoints(): FloatArray {
         return LINEAR_TONE_CURVE_POINTS.copyOf()
     }
@@ -136,16 +115,31 @@ internal object DngProfileToneCurve {
     }
 
     fun photonPgtmToneCurvePoints(): FloatArray {
-        val values = DcpToneCurve(PHOTON_PGTM_TONE_CURVE_POINTS)
-            .toLut(DNG_PROFILE_TONE_CURVE_POINT_COUNT)
         return FloatArray(DNG_PROFILE_TONE_CURVE_POINT_COUNT * 2) { index ->
             val pointIndex = index / 2
+            val input = pointIndex.toDouble() / (DNG_PROFILE_TONE_CURVE_POINT_COUNT - 1).toDouble()
             if ((index and 1) == 0) {
-                pointIndex.toFloat() / (DNG_PROFILE_TONE_CURVE_POINT_COUNT - 1).toFloat()
+                input.toFloat()
             } else {
-                values[pointIndex]
+                photonPgtmToneCurve(input).toFloat()
             }
         }
+    }
+
+    private fun photonPgtmToneCurve(input: Double): Double {
+        if (input <= 0.0) return 0.0
+        if (input >= 1.0) return 1.0
+
+        // n(x) is strictly increasing and s(x) is strictly decreasing for positive parameters.
+        // Therefore n(x) / (n(x) + s(x)) is smooth and strictly increasing on (0, 1).
+        val normalizedToeInput =
+            (input + PHOTON_PGTM_TOE_WIDTH) / (1.0 + PHOTON_PGTM_TOE_WIDTH)
+        val toeTransition = normalizedToeInput
+            .pow(PHOTON_PGTM_MID_POWER - PHOTON_PGTM_TOE_POWER)
+        val numerator = input.pow(PHOTON_PGTM_TOE_POWER) * toeTransition
+        val shoulder = PHOTON_PGTM_BALANCE *
+            (1.0 - input).pow(PHOTON_PGTM_SHOULDER_POWER)
+        return numerator / (numerator + shoulder)
     }
 
     fun photonPgtmToneCurveLut(sampleCount: Int = 256): FloatArray {
@@ -183,17 +177,6 @@ internal object DngProfileToneCurve {
         return DcpToneCurve(oppoEmbeddedToneCurvePoints()).toLut(sampleCount)
     }
 
-    fun isGoogleHdrToneCurve(toneCurve: DcpToneCurve?): Boolean {
-        if (toneCurve?.isValid != true) return false
-        val googlePoints = googleHdrToneCurvePoints()
-        if (toneCurve.points.size == googlePoints.size) {
-            return toneCurve.points.indices.all { index ->
-                kotlin.math.abs(toneCurve.points[index] - googlePoints[index]) <= POINT_TOLERANCE
-            }
-        }
-        return isGoogleHdrToneCurveLut(toneCurve.toLut())
-    }
-
     fun isOppoEmbeddedToneCurve(toneCurve: DcpToneCurve?): Boolean {
         if (toneCurve?.isValid != true) return false
         val oppoPoints = OPPO_EMBEDDED_TONE_CURVE_POINTS
@@ -225,14 +208,6 @@ internal object DngProfileToneCurve {
             }
         }
         return isPhotonPgtmToneCurveLut(toneCurve.toLut())
-    }
-
-    fun isGoogleHdrToneCurveLut(lut: FloatArray?): Boolean {
-        if (lut == null || lut.isEmpty()) return false
-        val googleLut = googleHdrToneCurveLut(lut.size)
-        return lut.indices.all { index ->
-            kotlin.math.abs(lut[index] - googleLut[index]) <= LUT_TOLERANCE
-        }
     }
 
     fun isOppoEmbeddedToneCurveLut(lut: FloatArray?): Boolean {

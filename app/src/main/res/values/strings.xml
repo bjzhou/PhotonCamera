@@ -801,16 +801,13 @@
     <string name="settings_raw_hncs_film_curve_description">Choose a response curve.</string>
     <string name="settings_raw_hncs_film_curve_standard">Standard</string>
     <string name="settings_raw_hncs_film_curve_reproduction">Reproduction</string>
-    <string name="settings_raw_google_pixel_tone_map">Google Pixel-style tone mapping</string>
-    <string name="settings_raw_google_pixel_tone_map_description">Use Google Pixel-style tonal rendering.</string>
     <string name="settings_raw_oppo_master_tone_map">OPPO Master tone mapping</string>
     <string name="settings_raw_oppo_master_tone_map_description">Use OPPO embedded master tonal rendering.</string>
     <string name="settings_raw_profile_tone_map">RAW tone curve</string>
     <string name="settings_raw_profile_tone_map_description">Choose the tone curve rendering.</string>
     <string name="settings_raw_profile_tone_map_default">Default</string>
-    <string name="settings_raw_profile_tone_map_google_pixel">Google Pixel</string>
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
-    <string name="settings_raw_profile_tone_map_photon_pgtm">Photon</string>
+    <string name="settings_raw_profile_tone_map_photon_pgtm">Photon HDR</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
     <string name="settings_raw_agx_black_relative_exposure">AgX Black Relative Exposure</string>
     <string name="settings_raw_agx_shoulder">AgX Shoulder</string>

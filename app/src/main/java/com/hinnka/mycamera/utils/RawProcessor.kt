@@ -585,8 +585,7 @@ object RawProcessor {
         val finalBaselineExposureEv = DngBaselineExposure.sanitize(
             sourceBaselineExposureEv + (exposureOffsetEv ?: 0f)
         )
-        val profileRequired = options.profileToneMapMode == RawProfileToneMapMode.Photon ||
-            options.profileToneMapMode == RawProfileToneMapMode.GooglePixel
+        val profileRequired = options.profileToneMapMode == RawProfileToneMapMode.Photon
         if (profileRequired && captureProfile?.profileGainTableMap == null) {
             PLog.e(
                 TAG,
@@ -784,14 +783,14 @@ object RawProcessor {
         }
     }
 
-    private fun profileNameForToneMapMode(mode: RawProfileToneMapMode): String = when (mode) {
-        RawProfileToneMapMode.Photon -> DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
-        else -> DngProfileToneCurve.GOOGLE_HDR_PROFILE_NAME
+    private fun profileNameForToneMapMode(mode: RawProfileToneMapMode): String {
+        require(mode == RawProfileToneMapMode.Photon)
+        return DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
     }
 
-    private fun profileToneCurveForToneMapMode(mode: RawProfileToneMapMode): FloatArray = when (mode) {
-        RawProfileToneMapMode.Photon -> DngProfileToneCurve.photonPgtmToneCurvePoints()
-        else -> DngProfileToneCurve.googleHdrToneCurvePoints()
+    private fun profileToneCurveForToneMapMode(mode: RawProfileToneMapMode): FloatArray {
+        require(mode == RawProfileToneMapMode.Photon)
+        return DngProfileToneCurve.photonPgtmToneCurvePoints()
     }
 
     internal fun denormalizeNormalizedRawBufferInPlace(

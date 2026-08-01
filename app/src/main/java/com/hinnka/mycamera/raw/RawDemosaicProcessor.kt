@@ -482,8 +482,7 @@ class RawDemosaicProcessor {
                 hueSatMapSupportsOverrange = false,
             ) != null
             val warmedProfileMap = when (profileToneMapMode) {
-                RawProfileToneMapMode.Photon,
-                RawProfileToneMapMode.GooglePixel -> generateProfileGainTableMapOnGpu(
+                RawProfileToneMapMode.Photon -> generateProfileGainTableMapOnGpu(
                     rawTextureId = linearRawTexture,
                     width = programSize.width,
                     height = programSize.height,
@@ -491,7 +490,6 @@ class RawDemosaicProcessor {
                     metadata = metadata,
                     statsBounds = Rect(0, 0, programSize.width, programSize.height),
                     baselineExposureEv = 0f,
-                    profileToneMapMode = profileToneMapMode,
                     colorCorrectionMatrix = identity,
                     cameraWhite = metadata.cameraWhite,
                     hueSatMap = null,
@@ -501,8 +499,7 @@ class RawDemosaicProcessor {
                 else -> null
             }
             val profileReady = when (profileToneMapMode) {
-                RawProfileToneMapMode.Photon,
-                RawProfileToneMapMode.GooglePixel -> warmedProfileMap != null
+                RawProfileToneMapMode.Photon -> warmedProfileMap != null
 
                 else -> true
             }
@@ -865,8 +862,7 @@ class RawDemosaicProcessor {
     private var quadChromaProgram = 0
     private var quadRefineProgram = 0
     private var quadWriteOutputProgram = 0
-    private var pgtmCellStatsProgram = 0
-    private var pgtmGoogleGainCurvesProgram = 0
+    private var pgtmCellSamplesProgram = 0
     private val pgtmPhotonPrograms =
         IntArray(DngPhotonLocalToneMapGpuShaders.Pass.entries.size)
     private var meteringHalfResolutionProgram = 0
@@ -2051,15 +2047,8 @@ class RawDemosaicProcessor {
                 actualRawData = null
             }
 
-        val embeddedDngProfileName = embeddedDngRenderPlan?.profileName
         val embeddedProfileToneCurveLut = embeddedDngRenderPlan?.toneCurveLut
         val embeddedProfileToneMapMode = when {
-            embeddedProfileToneCurveLut != null &&
-                (DngProfileToneCurve.isGoogleHdrToneCurveLut(embeddedProfileToneCurveLut) ||
-                    DngEmbeddedProfile.isGoogleProfileName(embeddedDngProfileName)) -> {
-                RawProfileToneMapMode.GooglePixel
-            }
-
             embeddedProfileToneCurveLut != null &&
                 DngProfileToneCurve.isPhotonPgtmToneCurveLut(embeddedProfileToneCurveLut) -> {
                 RawProfileToneMapMode.Photon
@@ -2068,18 +2057,15 @@ class RawDemosaicProcessor {
             else -> RawProfileToneMapMode.Default
         }
         val normalizedToneMappingParameters = rawToneMappingParameters.normalized()
-        val googlePixelToneMapRequested = useAdobeProfilePipeline &&
-            normalizedToneMappingParameters.useGooglePixelToneMap
         val photonPgtmToneMapRequested = useAdobeProfilePipeline &&
             normalizedToneMappingParameters.usePhotonPgtmToneMap
         val oppoMasterToneMapRequested = useAdobeProfilePipeline &&
             normalizedToneMappingParameters.useOppoMasterToneMap
         val requestedProfileToneMapMode = when {
-            googlePixelToneMapRequested -> RawProfileToneMapMode.GooglePixel
             photonPgtmToneMapRequested -> RawProfileToneMapMode.Photon
             else -> RawProfileToneMapMode.Default
         }
-        val profileGainToneMapRequested = requestedProfileToneMapMode == RawProfileToneMapMode.GooglePixel ||
+        val profileGainToneMapRequested =
             requestedProfileToneMapMode == RawProfileToneMapMode.Photon
         val embeddedProfileGainTableMap = actualMetadata.profileGainTableMap?.takeIf { it.isValid }
         var profileGainTableMap = embeddedProfileGainTableMap
@@ -2098,14 +2084,11 @@ class RawDemosaicProcessor {
                 metadata = actualMetadata.copy(profileGainTableMap = null),
                 statsBounds = outputSourceBounds,
                 baselineExposureEv = DngBaselineExposure.sanitize(actualMetadata.baselineExposure),
-                profileToneMapMode = requestedProfileToneMapMode,
                 colorCorrectionMatrix = resolvedDcpRenderPlan?.colorCorrectionMatrix
                     ?: actualMetadata.colorCorrectionMatrix,
                 cameraWhite = resolvedDcpRenderPlan?.cameraWhite ?: actualMetadata.cameraWhite,
                 hueSatMap = resolvedDcpRenderPlan?.hueSatMap,
-                hueSatMapSupportsOverrange =
-                    requestedProfileToneMapMode != RawProfileToneMapMode.Photon &&
-                        resolvedDcpRenderPlan?.supportsOverrange == true,
+                hueSatMapSupportsOverrange = false,
                 warpRectilinear = applicableDngWarpRectilinear,
             )?.takeIf { it.isValid }
             if (generated != null) {
@@ -2452,8 +2435,7 @@ class RawDemosaicProcessor {
                     actualMetadata.baselineExposure + (solvedExposureEv ?: 0f)
                 )
                 val captureProfileGainTableMap = when (captureProfileToneMapMode) {
-                    RawProfileToneMapMode.Photon,
-                    RawProfileToneMapMode.GooglePixel -> generateProfileGainTableMapOnGpu(
+                    RawProfileToneMapMode.Photon -> generateProfileGainTableMapOnGpu(
                         rawTextureId = rawTextureId,
                         width = actualWidth,
                         height = actualHeight,
@@ -2461,7 +2443,6 @@ class RawDemosaicProcessor {
                         metadata = actualMetadata,
                         statsBounds = captureProfileStatsBounds,
                         baselineExposureEv = finalBaselineExposureEv,
-                        profileToneMapMode = captureProfileToneMapMode,
                         colorCorrectionMatrix = linearColorCorrectionMatrix,
                         cameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
@@ -2470,8 +2451,7 @@ class RawDemosaicProcessor {
                     )
                     else -> null
                 }
-                val profileRequired = captureProfileToneMapMode == RawProfileToneMapMode.Photon ||
-                    captureProfileToneMapMode == RawProfileToneMapMode.GooglePixel
+                val profileRequired = captureProfileToneMapMode == RawProfileToneMapMode.Photon
                 val captureResult = if (profileRequired && captureProfileGainTableMap == null) {
                     null
                 } else {
@@ -3376,7 +3356,6 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         statsBounds: Rect?,
         baselineExposureEv: Float,
-        profileToneMapMode: RawProfileToneMapMode,
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
         hueSatMap: DcpHueSatMap?,
@@ -3393,25 +3372,15 @@ class RawDemosaicProcessor {
             )
             return null
         }
-        val curveModel = when (profileToneMapMode) {
-            RawProfileToneMapMode.Photon -> HdrPgtmCurveModel.PHOTON
-            RawProfileToneMapMode.GooglePixel -> HdrPgtmCurveModel.GOOGLE
-            else -> return null
-        }
         val photonProgramsReady = pgtmPhotonPrograms.all { it != 0 }
-        if (pgtmCellStatsProgram == 0 ||
-            (curveModel == HdrPgtmCurveModel.GOOGLE && pgtmGoogleGainCurvesProgram == 0) ||
-            (curveModel == HdrPgtmCurveModel.PHOTON && !photonProgramsReady)
-        ) {
+        if (pgtmCellSamplesProgram == 0 || !photonProgramsReady) {
             PLog.e(
                 TAG,
-                "GPU RAW PGTM programs unavailable: stats=$pgtmCellStatsProgram " +
-                    "model=$curveModel googleCurves=$pgtmGoogleGainCurvesProgram " +
+                "GPU RAW PGTM programs unavailable: samples=$pgtmCellSamplesProgram " +
                     "photonProgramsReady=$photonProgramsReady",
             )
             return null
         }
-        val exposureGain = DngBaselineExposure.exactGain(baselineExposureEv)
         val safeStatsBounds = sanitizePgtmStatsBounds(
             statsBounds,
             rawTextureWidth,
@@ -3424,7 +3393,7 @@ class RawDemosaicProcessor {
             )
             return null
         }
-        val gridSize = DngHdrProfileGainTableGenerator.gridSizeFor(width, height)
+        val gridSize = DngPhotonProfileGainTableGenerator.gridSizeFor(width, height)
         val gridWidth = gridSize.getOrElse(0) { 0 }
         val gridHeight = gridSize.getOrElse(1) { 0 }
         if (gridWidth <= 0 || gridHeight <= 0) return null
@@ -3437,30 +3406,15 @@ class RawDemosaicProcessor {
                     if (isNoOpWarpRectilinear(parameters)) continue
                     parameters.forEach { activeWarpParameters += it }
                 }
-            }
+        }
 
         val cellCount = gridWidth * gridHeight
-        val statsFloatCount = cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
-        val sampleFloatCount = if (curveModel == HdrPgtmCurveModel.PHOTON) {
-            cellCount * DngPhotonLocalToneMapper.SAMPLES_PER_CELL
-        } else {
-            1
-        }
-        val bufferIds = IntArray(5)
+        val sampleFloatCount = cellCount * DngPhotonLocalToneMapper.SAMPLES_PER_CELL
+        val bufferIds = IntArray(2)
         val totalStartNs = System.nanoTime()
         GLES31.glGenBuffers(bufferIds.size, bufferIds, 0)
         try {
-            val statsBufferId = bufferIds[0]
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, statsBufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                statsFloatCount * Float.SIZE_BYTES,
-                null,
-                GLES31.GL_DYNAMIC_READ,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, statsBufferId)
-
-            val sampleBufferId = bufferIds[1]
+            val sampleBufferId = bufferIds[0]
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, sampleBufferId)
             GLES31.glBufferData(
                 GLES31.GL_SHADER_STORAGE_BUFFER,
@@ -3468,9 +3422,9 @@ class RawDemosaicProcessor {
                 null,
                 GLES31.GL_DYNAMIC_READ,
             )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, sampleBufferId)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, sampleBufferId)
 
-            val warpBufferId = bufferIds[4]
+            val warpBufferId = bufferIds[1]
             val warpBuffer = ByteBuffer.allocateDirect(
                 max(activeWarpParameters.size, 1) * Float.SIZE_BYTES
             )
@@ -3489,19 +3443,19 @@ class RawDemosaicProcessor {
                 warpBuffer,
                 GLES31.GL_STATIC_DRAW,
             )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, warpBufferId)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, warpBufferId)
 
-            GLES31.glUseProgram(pgtmCellStatsProgram)
+            GLES31.glUseProgram(pgtmCellSamplesProgram)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + RCD_RAW_TEXTURE_UNIT)
             GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, rawTextureId)
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uRawTexture"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uRawTexture"),
                 RCD_RAW_TEXTURE_UNIT,
             )
             // PGTM is later applied to the demosaicked camera-linear image, whose RAW samples
-            // already include lens-shading correction. Build its statistics in the same domain;
+            // already include lens-shading correction. Build its samples in the same domain;
             // otherwise the local map reintroduces lens vignetting into already-corrected flats.
-            bindLensShadingForProgram(pgtmCellStatsProgram, metadata)
+            bindLensShadingForProgram(pgtmCellSamplesProgram, metadata)
             val activeHueSatMap = hueSatMap?.takeIf { it.isValid }
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
             val hueSatTextureId = activeHueSatMap?.let { map ->
@@ -3509,50 +3463,50 @@ class RawDemosaicProcessor {
             } ?: ensureDummyDcp3DTexture()
             GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, hueSatTextureId)
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatMap"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatMap"),
                 LINEAR_DCP_HUE_SAT_TEXTURE_UNIT,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatEnabled"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatEnabled"),
                 if (activeHueSatMap != null) 1 else 0,
             )
             GLES31.glUniform3i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatDivisions"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatDivisions"),
                 activeHueSatMap?.hueDivisions ?: 1,
                 activeHueSatMap?.satDivisions ?: 1,
                 activeHueSatMap?.valueDivisions ?: 1,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatEncoding"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatEncoding"),
                 activeHueSatMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHueSatSupportOverrange"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uHueSatSupportOverrange"),
                 if (hueSatMapSupportsOverrange) 1 else 0,
             )
             GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uImageSize"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uImageSize"),
                 rawTextureWidth,
                 rawTextureHeight,
             )
             GLES31.glUniform4i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uStatsBounds"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uStatsBounds"),
                 safeStatsBounds.left,
                 safeStatsBounds.top,
                 safeStatsBounds.right,
                 safeStatsBounds.bottom,
             )
             GLES31.glUniform2i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uGridSize"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uGridSize"),
                 gridWidth,
                 gridHeight,
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uSamplesPerPixel"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uSamplesPerPixel"),
                 samplesPerPixel.coerceAtLeast(1),
             )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uCfaPattern"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uCfaPattern"),
                 metadata.cfaPattern,
             )
             val blackLevel4 = FloatArray(4) { index ->
@@ -3561,37 +3515,21 @@ class RawDemosaicProcessor {
                 }
             }
             GLES31.glUniform4fv(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uBlackLevel"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uBlackLevel"),
                 1,
                 blackLevel4,
                 0,
             )
             GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uWhiteLevel"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uWhiteLevel"),
                 metadata.whiteLevel,
             )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uBaselineGain"),
-                if (curveModel == HdrPgtmCurveModel.PHOTON) 1f else exposureGain,
-            )
             GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uUseMaxRgbInput"),
-                if (curveModel == HdrPgtmCurveModel.PHOTON) 1 else 0,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uHighlightThreshold"),
-                if (curveModel == HdrPgtmCurveModel.PHOTON) 1f / exposureGain else 0.92f,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uWriteCellSamples"),
-                if (curveModel == HdrPgtmCurveModel.PHOTON) 1 else 0,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uWarpCount"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uWarpCount"),
                 activeWarpParameters.size / 8,
             )
             GLES31.glUniform3fv(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uCameraWhite"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uCameraWhite"),
                 1,
                 sanitizeCameraWhite(cameraWhite),
                 0,
@@ -3604,35 +3542,26 @@ class RawDemosaicProcessor {
                 0f, 0f, 1f,
             )
             GLES31.glUniformMatrix3fv(
-                GLES31.glGetUniformLocation(pgtmCellStatsProgram, "uColorCorrectionMatrix"),
+                GLES31.glGetUniformLocation(pgtmCellSamplesProgram, "uColorCorrectionMatrix"),
                 1,
                 false,
                 transposeMatrix3x3(safeColorCorrectionMatrix),
                 0,
             )
-            val statsGpuStartNs = System.nanoTime()
+            val samplesGpuStartNs = System.nanoTime()
             GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
             GLES31.glMemoryBarrier(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
             )
-            checkGlError("generateProfileGainTableMapOnGpu stats dispatch")
-            val packedCellStats = readFloatStorageBuffer(
-                bufferId = statsBufferId,
-                floatCount = statsFloatCount,
-                label = "PGTM cell stats",
-            ) ?: return null
-            val statsGpuReadyNs = System.nanoTime()
+            checkGlError("generateProfileGainTableMapOnGpu sample dispatch")
+            val samplesGpuReadyNs = System.nanoTime()
 
-            val plan = DngHdrProfileGainTableGenerator.planForCellStats(
+            val plan = DngPhotonProfileGainTableGenerator.plan(
                 width = width,
                 height = height,
                 baselineExposureEv = baselineExposureEv,
-                packedCellStats = packedCellStats,
-                noiseSlope = metadata.noiseProfile.getOrElse(0) { 0f },
-                noiseOffset = metadata.noiseProfile.getOrElse(1) { 0f },
                 diagnosticBand = DngPgtmDiagnostic.activeBandForSource("$TAG GPU capture"),
-                curveModel = curveModel,
-                samplingArea = HdrPgtmSamplingArea(
+                samplingArea = PhotonPgtmSamplingArea(
                     originH = safeStatsBounds.left.toDouble() / rawTextureWidth,
                     originV = safeStatsBounds.top.toDouble() / rawTextureHeight,
                     extentH = safeStatsBounds.width().toDouble() / rawTextureWidth,
@@ -3648,159 +3577,37 @@ class RawDemosaicProcessor {
                 return null
             }
 
-            if (plan.curveModel == HdrPgtmCurveModel.PHOTON) {
-                val localToneMapGpuStartNs = System.nanoTime()
-                val gains = generatePhotonProfileGainCurvesOnGpu(
-                    plan = plan,
-                    sampleBufferId = sampleBufferId,
-                ) ?: return null
-                val localToneMapGpuReadyNs = System.nanoTime()
-                val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains)
-                    ?: return null
-                val photonPlan = requireNotNull(plan.photonPlan)
-                val photonPreToneMapGain = photonPlan.exposureGain *
-                    2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
-                PLog.d(
-                    TAG,
-                    "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
-                        "source=${rawTextureWidth}x$rawTextureHeight " +
-                        "statsBounds=$safeStatsBounds " +
-                        "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
-                        "lsc=${lensShadingLogString(metadata)} " +
-                        "warpCount=${activeWarpParameters.size / 8} " +
-                        "photonGuide=maxRgb " +
-                        "hueSatOverrange=$hueSatMapSupportsOverrange " +
-                        "photonBaselineGain=${photonPlan.exposureGain} " +
-                        "photonPreToneMapGain=$photonPreToneMapGain " +
-                        "photonLlfLevels=${photonPlan.parameters.localLaplacianIntensityLevels} " +
-                        "photonRangeSigma=${photonPlan.parameters.localLaplacianRangeSigma} " +
-                        "photonBguRangeSigma=${photonPlan.parameters.bilateralRangeSigma} " +
-                        "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
-                        "planCpuMs=${(planReadyNs - statsGpuReadyNs) / 1_000_000.0} " +
-                        "localToneMapGpuMs=" +
-                        "${(localToneMapGpuReadyNs - localToneMapGpuStartNs) / 1_000_000.0} " +
-                        "totalMs=${(localToneMapGpuReadyNs - totalStartNs) / 1_000_000.0}",
-                )
-                return map
-            }
-
-            val curveProgram = pgtmGoogleGainCurvesProgram
-            val googlePlan = requireNotNull(plan.googlePlan)
-            val curvePlanFloatCount = cellCount * 3
-            val curvePlanBuffer = ByteBuffer.allocateDirect(
-                curvePlanFloatCount * Float.SIZE_BYTES
-            )
-                .order(ByteOrder.nativeOrder())
-                .asFloatBuffer()
-            googlePlan.cellPlans.forEach { cellPlan ->
-                curvePlanBuffer.put(cellPlan.blackGain)
-                curvePlanBuffer.put(cellPlan.endpointGain)
-                curvePlanBuffer.put(cellPlan.shapePower)
-            }
-            curvePlanBuffer.position(0)
-            val planBufferId = bufferIds[2]
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, planBufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                curvePlanFloatCount * Float.SIZE_BYTES,
-                curvePlanBuffer,
-                GLES31.GL_STATIC_DRAW,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, planBufferId)
-
-            val gainFloatCount = cellCount * plan.pointCount
-            val gainBufferId = bufferIds[3]
-            GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, gainBufferId)
-            GLES31.glBufferData(
-                GLES31.GL_SHADER_STORAGE_BUFFER,
-                gainFloatCount * Float.SIZE_BYTES,
-                null,
-                GLES31.GL_DYNAMIC_READ,
-            )
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, gainBufferId)
-            GLES31.glUseProgram(curveProgram)
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(curveProgram, "uCellCount"),
-                cellCount,
-            )
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(curveProgram, "uPointCount"),
-                plan.pointCount,
-            )
-            val parameters = googlePlan.curveParameters
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uInputScale"),
-                googlePlan.inputScale,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uMinTableGain"),
-                parameters.minTableGain,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uMaxTableGain"),
-                parameters.maxTableGain,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uToeEnd"),
-                parameters.toeEnd,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uShapeQ"),
-                parameters.shapeQ,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uMinShapePower"),
-                parameters.minShapePower,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uMaxShapePower"),
-                parameters.maxShapePower,
-            )
-            val diagnosticMode = when (plan.diagnosticBand?.mode) {
-                DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
-                DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
-                null -> -1
-            }
-            GLES31.glUniform1i(
-                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticMode"),
-                diagnosticMode,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticStart"),
-                plan.diagnosticBand?.start ?: 0f,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticEnd"),
-                plan.diagnosticBand?.end ?: 1f,
-            )
-            GLES31.glUniform1f(
-                GLES31.glGetUniformLocation(curveProgram, "uDiagnosticFeather"),
-                plan.diagnosticBand?.feather ?: 0f,
-            )
-            val curveGpuStartNs = System.nanoTime()
-            GLES31.glDispatchCompute((cellCount + 63) / 64, 1, 1)
-            GLES31.glMemoryBarrier(
-                GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
-            )
-            checkGlError("generateProfileGainTableMapOnGpu curve dispatch")
-            val gains = readFloatStorageBuffer(
-                bufferId = gainBufferId,
-                floatCount = gainFloatCount,
-                label = "PGTM gain curves",
+            val localToneMapGpuStartNs = System.nanoTime()
+            val gains = generatePhotonProfileGainCurvesOnGpu(
+                plan = plan,
+                sampleBufferId = sampleBufferId,
             ) ?: return null
-            val curvesGpuReadyNs = System.nanoTime()
-            val map = DngHdrProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
+            val localToneMapGpuReadyNs = System.nanoTime()
+            val map =
+                DngPhotonProfileGainTableGenerator.mapFromGpuGains(plan, gains) ?: return null
+            val photonPlan = plan.photonPlan
+            val photonPreToneMapGain = photonPlan.exposureGain *
+                2.0f.pow(photonPlan.parameters.preToneMapExposureBoostEv)
             PLog.d(
                 TAG,
-                "GPU RAW PGTM prepared: mode=$profileToneMapMode size=${width}x$height " +
+                "GPU Photon HDR prepared: size=${width}x$height " +
                     "source=${rawTextureWidth}x$rawTextureHeight " +
+                    "statsBounds=$safeStatsBounds " +
                     "grid=${gridWidth}x$gridHeight samplesPerPixel=$samplesPerPixel " +
                     "lsc=${lensShadingLogString(metadata)} " +
                     "warpCount=${activeWarpParameters.size / 8} " +
-                    "statsGpuMs=${(statsGpuReadyNs - statsGpuStartNs) / 1_000_000.0} " +
-                    "planCpuMs=${(planReadyNs - statsGpuReadyNs) / 1_000_000.0} " +
-                    "curvesGpuMs=${(curvesGpuReadyNs - curveGpuStartNs) / 1_000_000.0} " +
-                    "totalMs=${(curvesGpuReadyNs - totalStartNs) / 1_000_000.0}",
+                    "photonGuide=maxRgb " +
+                    "hueSatOverrange=$hueSatMapSupportsOverrange " +
+                    "photonBaselineGain=${photonPlan.exposureGain} " +
+                    "photonPreToneMapGain=$photonPreToneMapGain " +
+                    "photonLlfLevels=${photonPlan.parameters.localLaplacianIntensityLevels} " +
+                    "photonRangeSigma=${photonPlan.parameters.localLaplacianRangeSigma} " +
+                    "photonBguRangeSigma=${photonPlan.parameters.bilateralRangeSigma} " +
+                    "samplesGpuMs=${(samplesGpuReadyNs - samplesGpuStartNs) / 1_000_000.0} " +
+                    "planCpuMs=${(planReadyNs - samplesGpuReadyNs) / 1_000_000.0} " +
+                    "localToneMapGpuMs=" +
+                    "${(localToneMapGpuReadyNs - localToneMapGpuStartNs) / 1_000_000.0} " +
+                    "totalMs=${(localToneMapGpuReadyNs - totalStartNs) / 1_000_000.0}",
             )
             return map
         } catch (error: Exception) {
@@ -3810,7 +3617,6 @@ class RawDemosaicProcessor {
             GLES31.glUseProgram(0)
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 2, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
             GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
             GLES31.glBindTexture(GLES31.GL_TEXTURE_3D, 0)
@@ -3823,10 +3629,10 @@ class RawDemosaicProcessor {
     }
 
     private fun generatePhotonProfileGainCurvesOnGpu(
-        plan: HdrProfileGainTablePlan,
+        plan: PhotonProfileGainTablePlan,
         sampleBufferId: Int,
     ): FloatArray? {
-        val photonPlan = plan.photonPlan ?: return null
+        val photonPlan = plan.photonPlan
         val parameters = photonPlan.parameters
         val preToneMapExposureGain = photonPlan.exposureGain *
             2.0f.pow(parameters.preToneMapExposureBoostEv)
@@ -4378,8 +4184,8 @@ class RawDemosaicProcessor {
             uniform1f(activeProgram, "uMinTableGain", photonPlan.minTableGain)
             uniform1f(activeProgram, "uMaxTableGain", photonPlan.maxTableGain)
             val diagnosticMode = when (plan.diagnosticBand?.mode) {
-                DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
-                DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
+                DngPhotonProfileGainTableGenerator.DiagnosticMode.PASS_ONLY -> 0
+                DngPhotonProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY -> 1
                 null -> -1
             }
             uniform1i(activeProgram, "uDiagnosticMode", diagnosticMode)
@@ -4424,10 +4230,10 @@ class RawDemosaicProcessor {
      * adjacent range/spatial gain ratios distinguish that from a misplaced spatial grid.
      */
     private fun summarizePhotonGainCurves(
-        plan: HdrProfileGainTablePlan,
+        plan: PhotonProfileGainTablePlan,
         gains: FloatArray,
     ): String {
-        val photonPlan = requireNotNull(plan.photonPlan)
+        val photonPlan = plan.photonPlan
         val pointCount = plan.pointCount
         val gridWidth = plan.grid.mapPointsH
         val gridHeight = plan.grid.mapPointsV
@@ -4977,8 +4783,8 @@ class RawDemosaicProcessor {
             TAG,
             "Shader programs created: passthrough=$passthroughProgram " +
                 "meteringHalf=$meteringHalfResolutionProgram " +
-                "pgtmStats=$pgtmCellStatsProgram googlePgtmCurves=$pgtmGoogleGainCurvesProgram " +
-                "photonPgtm=localLaplacianBgu"
+                "pgtmSamples=$pgtmCellSamplesProgram " +
+                "photonPgtm=localLaplacianBgu",
         )
     }
 
@@ -5321,13 +5127,9 @@ class RawDemosaicProcessor {
     """.trimIndent()
 
     private fun initLinearRawPrograms(vShader: Int) {
-        pgtmCellStatsProgram = compileComputeProgram(
-            DngHdrProfileGainTableGpuShaders.CELL_STATS,
-            "DNG_PGTM_CELL_STATS",
-        )
-        pgtmGoogleGainCurvesProgram = compileComputeProgram(
-            DngHdrProfileGainTableGpuShaders.GOOGLE_GAIN_CURVES,
-            "DNG_GOOGLE_PGTM_GAIN_CURVES",
+        pgtmCellSamplesProgram = compileComputeProgram(
+            DngPhotonProfileGainTableInputShader.CELL_SAMPLES,
+            "DNG_PGTM_CELL_SAMPLES",
         )
         DngPhotonLocalToneMapGpuShaders.sources.forEachIndexed { index, source ->
             val pass = DngPhotonLocalToneMapGpuShaders.Pass.entries[index]
@@ -10822,14 +10624,10 @@ class RawDemosaicProcessor {
         mode: RawProfileToneMapMode,
         preferredToneCurveLut: FloatArray? = null,
     ): DcpRenderPlan {
-        val toneCurve = preferredToneCurveLut?.copyOf() ?: when (mode) {
-            RawProfileToneMapMode.Photon -> DngProfileToneCurve.photonPgtmToneCurveLut()
-            else -> DngProfileToneCurve.googleHdrToneCurveLut()
-        }
-        val modeName = when (mode) {
-            RawProfileToneMapMode.Photon -> DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
-            else -> "Google Pixel Tone Map"
-        }
+        require(mode == RawProfileToneMapMode.Photon)
+        val toneCurve =
+            preferredToneCurveLut?.copyOf() ?: DngProfileToneCurve.photonPgtmToneCurveLut()
+        val modeName = DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
         return DcpRenderPlan(
             profileName = basePlan?.profileName?.let { "$it + $modeName" } ?: modeName,
             workingColorSpace = basePlan?.workingColorSpace ?: workingColorSpace,
@@ -10837,8 +10635,7 @@ class RawDemosaicProcessor {
             defaultBlackRender = basePlan?.defaultBlackRender ?: DcpDefaultBlackRender.None,
             // Photon PGTM has a normalized SDR contract. Do not inherit profile overrange:
             // later nonlinear profile stages would otherwise change highlight channel ratios.
-            supportsOverrange = mode != RawProfileToneMapMode.Photon &&
-                basePlan?.supportsOverrange == true,
+            supportsOverrange = false,
             colorCorrectionMatrix = basePlan?.colorCorrectionMatrix ?: metadata.colorCorrectionMatrix,
             cameraWhite = basePlan?.cameraWhite ?: metadata.cameraWhite,
             hueSatMap = basePlan?.hueSatMap,
@@ -12143,13 +11940,10 @@ class RawDemosaicProcessor {
         if (quadChromaProgram != 0) GLES31.glDeleteProgram(quadChromaProgram)
         if (quadRefineProgram != 0) GLES31.glDeleteProgram(quadRefineProgram)
         if (quadWriteOutputProgram != 0) GLES31.glDeleteProgram(quadWriteOutputProgram)
-        if (pgtmCellStatsProgram != 0) GLES31.glDeleteProgram(pgtmCellStatsProgram)
+        if (pgtmCellSamplesProgram != 0) GLES31.glDeleteProgram(pgtmCellSamplesProgram)
         if (meteringHalfResolutionProgram != 0) {
             GLES31.glDeleteProgram(meteringHalfResolutionProgram)
             meteringHalfResolutionProgram = 0
-        }
-        if (pgtmGoogleGainCurvesProgram != 0) {
-            GLES31.glDeleteProgram(pgtmGoogleGainCurvesProgram)
         }
         pgtmPhotonPrograms.forEachIndexed { index, program ->
             if (program != 0) GLES31.glDeleteProgram(program)

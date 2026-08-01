@@ -56,32 +56,15 @@ internal object DngPhotonLocalToneMapper {
         floatArrayOf(1f, 1f / 8f, 1f / 27f, 1f / 64f)
 
     fun generate(
-        plan: HdrProfileGainTablePlan,
+        plan: PhotonProfileGainTablePlan,
         cellSamples: FloatArray,
-        packedCellStats: FloatArray,
     ): FloatArray? {
-        if (plan.curveModel != HdrPgtmCurveModel.PHOTON) return null
-        val photonPlan = plan.photonPlan ?: return null
+        val photonPlan = plan.photonPlan
         val cellCount = plan.cellCount
         val expectedSamples = cellCount * SAMPLES_PER_CELL
         if (cellSamples.size != expectedSamples) {
             PLog.e(TAG, "Photon sample count=${cellSamples.size}, expected=$expectedSamples")
             return null
-        }
-        val expectedStats =
-            cellCount * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE
-        if (packedCellStats.size < expectedStats) {
-            PLog.e(TAG, "Photon stats count=${packedCellStats.size}, expected=$expectedStats")
-            return null
-        }
-        repeat(cellCount) { cell ->
-            val sampleWeight = packedCellStats[
-                cell * DngHdrProfileGainTableGenerator.CELL_STATS_FLOAT_STRIDE + 5
-            ]
-            if (!sampleWeight.isFinite() || sampleWeight <= 0f) {
-                PLog.e(TAG, "Photon cell $cell has no valid RAW samples")
-                return null
-            }
         }
         if (cellSamples.any { !it.isFinite() || it < 0f }) {
             PLog.e(TAG, "Photon sample buffer contains invalid scene input")
@@ -127,9 +110,9 @@ internal object DngPhotonLocalToneMapper {
 
     /**
      * Fast general Local Laplacian evaluation from llf_general.m. The caller supplies max-RGB
-     * intensity, and [exposureGain] already contains BaselineExposure and the fixed ACR3 +1.25 EV
-     * placement. The middle 99% determines the Local Laplacian large-edge slope. Reconstructed
-     * max-RGB intensity is bounded to Photon PGTM's normalized SDR output contract.
+     * intensity, and [exposureGain] already contains BaselineExposure and the selected preset's
+     * gray-placement boost. The middle 99% determines the Local Laplacian large-edge slope.
+     * Reconstructed max-RGB intensity is bounded to Photon PGTM's normalized SDR output contract.
      */
     internal fun localLaplacianToneMap(
         source: FloatArray,
@@ -506,7 +489,7 @@ internal object DngPhotonLocalToneMapper {
     }
 
     private fun buildGainCurves(
-        plan: HdrProfileGainTablePlan,
+        plan: PhotonProfileGainTablePlan,
         photonPlan: PhotonPgtmPlan,
         gainGrid: ScalarGainBilateralGrid,
     ): FloatArray {
@@ -537,21 +520,21 @@ internal object DngPhotonLocalToneMapper {
     private fun applyDiagnostic(
         trueGain: Float,
         tableInput: Float,
-        plan: HdrProfileGainTablePlan,
+        plan: PhotonProfileGainTablePlan,
     ): Float {
         val band = plan.diagnosticBand ?: return trueGain
         val mask = diagnosticMask(tableInput, band)
         return when (band.mode) {
-            DngHdrProfileGainTableGenerator.DiagnosticMode.PASS_ONLY ->
+            DngPhotonProfileGainTableGenerator.DiagnosticMode.PASS_ONLY ->
                 lerp(1f, trueGain, mask)
-            DngHdrProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY ->
+            DngPhotonProfileGainTableGenerator.DiagnosticMode.BLOCK_ONLY ->
                 lerp(trueGain, 1f, mask)
         }
     }
 
     private fun diagnosticMask(
         input: Float,
-        band: DngHdrProfileGainTableGenerator.DiagnosticBand,
+        band: DngPhotonProfileGainTableGenerator.DiagnosticBand,
     ): Float {
         val enter = if (band.start <= 0f || band.feather <= 0f) {
             if (input >= band.start) 1f else 0f

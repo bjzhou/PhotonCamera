@@ -170,7 +170,6 @@ private data class PresetMatchSnapshot(
     val rawHncsRenderIntent: HncsRenderIntent,
     val rawHncsFilmCurveMode: HncsFilmCurveMode,
     val rawRenderingEngine: RawRenderingEngine,
-    val rawGooglePixelToneMap: Boolean,
     val rawOppoMasterToneMap: Boolean,
     val rawPhotonPgtmToneMap: Boolean,
     val rawSpectralFilmStock: String?,
@@ -201,7 +200,6 @@ private data class PresetMatchSnapshot(
                 preset.rawHncsFilmCurveMode
             ) &&
             rawRenderingEngine == RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine) &&
-            rawGooglePixelToneMap == preset.rawGooglePixelToneMap &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawPhotonPgtmToneMap == preset.rawPhotonPgtmToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
@@ -250,12 +248,6 @@ private data class PresetMatchSnapshot(
             }
             if (rawRenderingEngine != presetRawRenderingEngine) {
                 add("rawRenderingEngine current=$rawRenderingEngine preset=$presetRawRenderingEngine")
-            }
-            if (rawGooglePixelToneMap != preset.rawGooglePixelToneMap) {
-                add(
-                    "rawGooglePixelToneMap current=$rawGooglePixelToneMap " +
-                        "preset=${preset.rawGooglePixelToneMap}"
-                )
             }
             if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
                 add(
@@ -329,7 +321,6 @@ private data class CameraFeatureUpdate(
     val rawHncsRenderIntent: SettingValue<HncsRenderIntent>? = null,
     val rawHncsFilmCurveMode: SettingValue<HncsFilmCurveMode>? = null,
     val rawRenderingEngine: SettingValue<RawRenderingEngine>? = null,
-    val rawGooglePixelToneMap: SettingValue<Boolean>? = null,
     val rawOppoMasterToneMap: SettingValue<Boolean>? = null,
     val rawPhotonPgtmToneMap: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
@@ -455,7 +446,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawHncsRenderIntent = saved.rawHncsRenderIntent,
                             rawHncsFilmCurveMode = saved.rawHncsFilmCurveMode,
                             rawRenderingEngine = saved.rawRenderingEngine,
-                            rawGooglePixelToneMap = saved.rawGooglePixelToneMap,
                             rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
                             rawPhotonPgtmToneMap = saved.rawPhotonPgtmToneMap,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
@@ -521,7 +511,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = rawHncsRenderIntent.value.assetValue,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode.value.persistedValue,
             rawRenderingEngine = rawRenderingEngine.value.name,
-            rawGooglePixelToneMap = rawToneMappingParameters.value.useGooglePixelToneMap,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = rawToneMappingParameters.value.usePhotonPgtmToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
@@ -602,7 +591,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 HncsFilmCurveMode.fromPersistedValue(this?.rawHncsFilmCurveMode)
             ),
             rawRenderingEngine = SettingValue(RawRenderingEngine.fromPersistedName(this?.rawRenderingEngine)),
-            rawGooglePixelToneMap = SettingValue(this?.rawGooglePixelToneMap ?: false),
             rawOppoMasterToneMap = SettingValue(this?.rawOppoMasterToneMap ?: false),
             rawPhotonPgtmToneMap = SettingValue(this?.rawPhotonPgtmToneMap ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
@@ -722,14 +710,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val rawToneMappingUpdate = if (
-            update.rawGooglePixelToneMap != null ||
             update.rawOppoMasterToneMap != null ||
             update.rawPhotonPgtmToneMap != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
-            update.rawGooglePixelToneMap?.let {
-                toneMappingParameters = toneMappingParameters.withGooglePixelToneMap(it.value)
-            }
             update.rawOppoMasterToneMap?.let {
                 toneMappingParameters = toneMappingParameters.withOppoMasterToneMap(it.value)
             }
@@ -983,7 +967,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = rawHncsRenderIntent.value,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode.value,
             rawRenderingEngine = rawRenderingEngine.value,
-            rawGooglePixelToneMap = rawToneMappingParameters.value.useGooglePixelToneMap,
             rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = rawToneMappingParameters.value.usePhotonPgtmToneMap,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
@@ -1011,7 +994,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsRenderIntent = prefs.rawHncsRenderIntent,
             rawHncsFilmCurveMode = prefs.rawHncsFilmCurveMode,
             rawRenderingEngine = prefs.rawRenderingEngine,
-            rawGooglePixelToneMap = prefs.rawToneMappingParameters.useGooglePixelToneMap,
             rawOppoMasterToneMap = prefs.rawToneMappingParameters.useOppoMasterToneMap,
             rawPhotonPgtmToneMap = prefs.rawToneMappingParameters.usePhotonPgtmToneMap,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
@@ -2538,7 +2520,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         rawToneMappingParameters: RawToneMappingParameters? = null
     ): Boolean {
         if (hasEmbeddedGainmap) return true
-        if (rawToneMappingParameters?.normalized()?.useGooglePixelToneMap == true) return true
         return userPrefs?.autoEnableHdr ?: true
     }
 

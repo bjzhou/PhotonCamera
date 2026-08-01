@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.gallery.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
@@ -65,7 +66,8 @@ data class GalleryMediaEntity(
     val rawAgxShoulder: Float,
     val rawFilmicBlackRelativeExposure: Float,
     val rawFilmicWhiteRelativeExposure: Float,
-    val rawGooglePixelToneMap: Boolean,
+    @ColumnInfo(name = "rawGooglePixelToneMap")
+    val legacyPhotonToneMap: Boolean,
     val rawOppoMasterToneMap: Boolean,
     val rawPhotonPgtmToneMap: Boolean,
     val rawAppleProRawToneMap: Boolean,

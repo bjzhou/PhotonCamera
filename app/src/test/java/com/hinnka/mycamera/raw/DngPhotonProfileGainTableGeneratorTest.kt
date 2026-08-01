@@ -38,7 +38,7 @@ class DngPhotonProfileGainTableGeneratorTest {
             gridWidth = 4,
             gridHeight = 2,
             baselineExposureEv = 3f,
-            samplingArea = HdrPgtmSamplingArea(
+            samplingArea = PhotonPgtmSamplingArea(
                 originH = 0.25,
                 originV = 0.125,
                 extentH = 0.5,
@@ -55,7 +55,7 @@ class DngPhotonProfileGainTableGeneratorTest {
             assertEquals(weight / exposureGain, plan.mapInputWeights[index], 1e-7f)
         }
         val map = requireNotNull(
-            DngHdrProfileGainTableGenerator.mapFromGpuGains(
+            DngPhotonProfileGainTableGenerator.mapFromGpuGains(
                 plan,
                 FloatArray(plan.cellCount * plan.pointCount) { 1f },
             )
@@ -253,9 +253,9 @@ class DngPhotonProfileGainTableGeneratorTest {
         gridWidth: Int,
         gridHeight: Int,
         baselineExposureEv: Float,
-        samplingArea: HdrPgtmSamplingArea = HdrPgtmSamplingArea.FULL,
-    ): HdrProfileGainTablePlan = DngPhotonProfileGainTableGenerator.plan(
-        grid = HdrPgtmGrid(
+        samplingArea: PhotonPgtmSamplingArea = PhotonPgtmSamplingArea.FULL,
+    ): PhotonProfileGainTablePlan = DngPhotonProfileGainTableGenerator.plan(
+        grid = PhotonPgtmGrid(
             mapPointsH = gridWidth,
             mapPointsV = gridHeight,
             mapSpacingH = if (gridWidth > 1) 1.0 / (gridWidth - 1) else 1.0,
