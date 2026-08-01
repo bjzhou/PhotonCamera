@@ -29,6 +29,18 @@ class MediaMetadataTest {
         assertEquals(100, metadata.merge(raw).iso)
     }
 
+    @Test
+    fun importedCaptureInfoKeepsSourceExifMakeAndModel() {
+        val captureInfo = MediaMetadata(
+            brand = "FUJIFILM",
+            deviceModel = "X-T5",
+            isImported = true,
+        ).toCaptureInfo()
+
+        assertEquals("FUJIFILM", captureInfo.make)
+        assertEquals("X-T5", captureInfo.model)
+    }
+
     private fun rawMetadata(iso: Int): RawMetadata {
         return RawMetadata(
             width = 4000,

@@ -9,6 +9,7 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.LensShadingMap
 import android.os.Build
 import android.os.SystemClock
+import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.DngCameraRawProfileXmp
@@ -265,6 +266,7 @@ object SuperResolutionDngWriter {
         captureMetadataResult: CaptureResult = captureResult,
         effectiveFocalLengthMm: Float? = null,
         effectiveFocalLength35mm: Int? = null,
+        captureInfo: CaptureInfo,
         orientation: Int,
         cfaPattern: Int,
         blackLevel: FloatArray,
@@ -378,6 +380,7 @@ object SuperResolutionDngWriter {
                 captureMetadataResult = captureMetadataResult,
                 effectiveFocalLengthMm = effectiveFocalLengthMm,
                 effectiveFocalLength35mm = effectiveFocalLength35mm,
+                captureInfo = captureInfo,
                 orientation = orientation,
                 cfaPattern = cfaPattern,
                 blackLevel = encodedBlackLevel,
@@ -432,6 +435,7 @@ object SuperResolutionDngWriter {
         captureMetadataResult: CaptureResult,
         effectiveFocalLengthMm: Float?,
         effectiveFocalLength35mm: Int?,
+        captureInfo: CaptureInfo,
         orientation: Int,
         cfaPattern: Int,
         blackLevel: FloatArray,
@@ -506,6 +510,7 @@ object SuperResolutionDngWriter {
         val lensModel = DeviceUtil.buildExifLensModel(
             focalLength35mm = focalLength35mm,
             aperture = aperture,
+            model = captureInfo.model,
         )
         val exifWhiteBalance = captureMetadataResult.get(CaptureResult.CONTROL_AWB_MODE)?.let { awbMode ->
             if (awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
@@ -577,8 +582,8 @@ object SuperResolutionDngWriter {
             add(shortArray(TAG_BITS_PER_SAMPLE, IntArray(samplesPerPixel) { 16 }))
             add(short(TAG_COMPRESSION, compression.tagValue))
             add(short(TAG_PHOTOMETRIC_INTERPRETATION, imageLayout.photometricInterpretation))
-            add(ascii(TAG_MAKE, Build.MANUFACTURER.ifBlank { "Android" }))
-            add(ascii(TAG_MODEL, DeviceUtil.exifModel))
+            add(ascii(TAG_MAKE, captureInfo.make))
+            add(ascii(TAG_MODEL, captureInfo.model))
             add(long(TAG_STRIP_OFFSETS, 0))
             add(short(TAG_ORIENTATION, orientation))
             add(short(TAG_SAMPLES_PER_PIXEL, samplesPerPixel))
