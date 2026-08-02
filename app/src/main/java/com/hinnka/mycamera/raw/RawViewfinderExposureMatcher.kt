@@ -3,9 +3,11 @@ package com.hinnka.mycamera.raw
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.utils.PLog
+import java.io.File
 import kotlin.math.max
 
 internal data class RawExposurePreviewFrame(
@@ -27,7 +29,6 @@ internal object RawViewfinderExposureMatcher {
 
     private data class ViewfinderReference(
         val analysis: RawViewfinderExposureMath.Reference,
-        val frame: RawExposurePreviewFrame,
     )
 
     suspend fun prepareCaptureProfile(
@@ -46,7 +47,13 @@ internal object RawViewfinderExposureMatcher {
         applyLensShadingCorrection: Boolean = true,
         rawBlackBorderCrop: RawBlackBorderCrop = RawBlackBorderCrop(),
     ): RawDngCaptureProfileResult? {
-        val reference = capturePreviewThumbnail?.let(::buildReference)
+        val testImageCache = ExposureMatchTestImageCache.create(context)
+        val reference = capturePreviewThumbnail?.let { bitmap ->
+            buildReference(
+                bitmap = bitmap,
+                testImageCache = testImageCache,
+            )
+        }
         if (capturePreviewThumbnail != null && reference == null) {
             PLog.w(TAG, "Viewfinder match skipped: capture preview is unavailable")
         }
@@ -58,6 +65,7 @@ internal object RawViewfinderExposureMatcher {
                     solve(
                         reference = it,
                         renderSample = renderSample,
+                        testImageCache = testImageCache,
                     )
                 },
             )
@@ -79,28 +87,31 @@ internal object RawViewfinderExposureMatcher {
         )
     }
 
-    private fun buildReference(bitmap: Bitmap): ViewfinderReference? {
+    private fun buildReference(
+        bitmap: Bitmap,
+        testImageCache: ExposureMatchTestImageCache?,
+    ): ViewfinderReference? {
         if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return null
         return try {
             val size = longEdgeSize(bitmap.width, bitmap.height, PREVIEW_LONG_EDGE)
             val pixels = sampleBitmap(bitmap, size.width, size.height)
-            val bounds = centerTwoThirdsBounds(size.width, size.height) ?: return null
+            val frame = RawExposurePreviewFrame(
+                width = size.width,
+                height = size.height,
+                argbPixels = pixels,
+            )
+            testImageCache?.writeViewfinder(frame)
             val analysis = RawViewfinderExposureMath.buildReference(
                 pixels = pixels,
                 width = size.width,
                 height = size.height,
-                left = bounds.left,
-                top = bounds.top,
-                right = bounds.right,
-                bottom = bounds.bottom,
+                left = 0,
+                top = 0,
+                right = size.width,
+                bottom = size.height,
             ) ?: return null
             ViewfinderReference(
                 analysis = analysis,
-                frame = RawExposurePreviewFrame(
-                    width = size.width,
-                    height = size.height,
-                    argbPixels = pixels,
-                ),
             )
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to analyze capture preview", e)
@@ -111,9 +122,20 @@ internal object RawViewfinderExposureMatcher {
     private fun solve(
         reference: ViewfinderReference,
         renderSample: (Float) -> RawExposurePreviewFrame?,
+        testImageCache: ExposureMatchTestImageCache?,
     ): Float? {
+        var candidateIndex = 0
         return RawViewfinderExposureMath.solve { exposureEv ->
-            evaluate(reference.analysis, exposureEv, renderSample(exposureEv))
+            val frame = renderSample(exposureEv)
+            if (frame != null) {
+                testImageCache?.writeCandidate(
+                    index = candidateIndex,
+                    exposureEv = exposureEv,
+                    frame = frame,
+                )
+            }
+            candidateIndex++
+            evaluate(reference.analysis, exposureEv, frame)
         }
     }
 
@@ -131,7 +153,7 @@ internal object RawViewfinderExposureMatcher {
             width = frame.width,
             height = frame.height,
         ) ?: return null
-        val meteringLog2Error = match.meanBrightnessLog2Error
+        val meteringLog2Error = match.meteringLog2Error
         PLog.d(
             TAG,
                 "RAW viewfinder sample: exposureEv=$exposureEv " +
@@ -154,7 +176,12 @@ internal object RawViewfinderExposureMatcher {
                 "referencePerceptualBrightnessMean=" +
                 "${match.referencePerceptualBrightnessMean} " +
                 "candidatePerceptualBrightnessMean=" +
-                "${match.candidatePerceptualBrightnessMean}"
+                "${match.candidatePerceptualBrightnessMean} " +
+                "meteringSampleCount=${match.meteringSampleCount} " +
+                "referenceMeteringDisplayLinearLumaMean=" +
+                "${match.referenceMeteringDisplayLinearLumaMean} " +
+                "candidateMeteringDisplayLinearLumaMean=" +
+                "${match.candidateMeteringDisplayLinearLumaMean}"
         )
         return meteringLog2Error
     }
@@ -192,16 +219,113 @@ internal object RawViewfinderExposureMatcher {
         return pixels
     }
 
-    private fun centerTwoThirdsBounds(width: Int, height: Int): Rect? {
-        if (width <= 0 || height <= 0) return null
-        val left = width / 6
-        val top = height / 6
-        return Rect(
-            left,
-            top,
-            (width * 5 / 6).coerceAtLeast(left + 1),
-            (height * 5 / 6).coerceAtLeast(top + 1),
-        )
+    private class ExposureMatchTestImageCache private constructor(
+        private val directory: File,
+    ) {
+        fun writeViewfinder(frame: RawExposurePreviewFrame) {
+            writeFrame(
+                frame = frame,
+                target = File(directory, VIEWFINDER_FILE_NAME),
+                description = "viewfinder",
+            )
+        }
+
+        fun writeCandidate(
+            index: Int,
+            exposureEv: Float,
+            frame: RawExposurePreviewFrame,
+        ) {
+            val target = File(
+                directory,
+                "$CANDIDATE_FILE_PREFIX${index.toString().padStart(2, '0')}.png",
+            )
+            writeFrame(
+                frame = frame,
+                target = target,
+                description = "candidate index=$index exposureEv=$exposureEv",
+            )
+        }
+
+        private fun writeFrame(
+            frame: RawExposurePreviewFrame,
+            target: File,
+            description: String,
+        ) {
+            if (frame.width <= 0 ||
+                frame.height <= 0 ||
+                frame.argbPixels.size < frame.width * frame.height
+            ) {
+                PLog.w(TAG, "Skipped invalid RAW exposure match test image: $description")
+                return
+            }
+            try {
+                val bitmap = Bitmap.createBitmap(
+                    frame.argbPixels,
+                    frame.width,
+                    frame.height,
+                    Bitmap.Config.ARGB_8888,
+                )
+                try {
+                    target.outputStream().buffered().use { output ->
+                        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                            "Bitmap PNG compression returned false"
+                        }
+                    }
+                } finally {
+                    bitmap.recycle()
+                }
+                PLog.d(
+                    TAG,
+                    "Cached RAW exposure match test image: $description path=${target.absolutePath}",
+                )
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to cache RAW exposure match test image: $description", e)
+            }
+        }
+
+        companion object {
+            private const val CACHE_DIRECTORY_NAME = "raw_viewfinder_exposure_match"
+            private const val VIEWFINDER_FILE_NAME = "viewfinder.png"
+            private const val CANDIDATE_FILE_PREFIX = "candidate_"
+
+            fun create(context: Context): ExposureMatchTestImageCache? {
+                if (!BuildConfig.DEBUG) return null
+                val directory = File(context.cacheDir, CACHE_DIRECTORY_NAME)
+                if (!directory.exists() && !directory.mkdirs()) {
+                    PLog.w(
+                        TAG,
+                        "Failed to create RAW exposure match test cache: " +
+                            directory.absolutePath,
+                    )
+                    return null
+                }
+                if (!directory.isDirectory) {
+                    PLog.w(
+                        TAG,
+                        "RAW exposure match test cache path is not a directory: " +
+                            directory.absolutePath,
+                    )
+                    return null
+                }
+                directory.listFiles()
+                    ?.filter { file ->
+                        file.isFile &&
+                            (file.name == VIEWFINDER_FILE_NAME ||
+                                file.name.startsWith(CANDIDATE_FILE_PREFIX) &&
+                                file.extension == "png")
+                    }
+                    ?.forEach { staleFile ->
+                        if (!staleFile.delete()) {
+                            PLog.w(
+                                TAG,
+                                "Failed to remove stale RAW exposure match test image: " +
+                                    staleFile.absolutePath,
+                            )
+                        }
+                    }
+                return ExposureMatchTestImageCache(directory)
+            }
+        }
     }
 }
 

@@ -11,6 +11,57 @@ import kotlin.math.roundToInt
 
 class RawViewfinderExposureMathTest {
     @Test
+    fun meteringUsesCandidateLinearRangeAndCorrespondingReferenceCoordinates() {
+        val width = 10
+        val height = 10
+        val referencePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index < 64) 0.20f else 0.01f)
+        }
+        val candidatePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index < 64) 0.10f else 0.50f)
+        }
+
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = buildReference(referencePixels, width, height),
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(match)
+        assertEquals(64, match!!.meteringSampleCount)
+        assertEquals(-1f, match.meteringLog2Error!!, 0.04f)
+        assertEquals(0.20f, match.referenceMeteringDisplayLinearLumaMean!!, 0.005f)
+        assertEquals(0.10f, match.candidateMeteringDisplayLinearLumaMean!!, 0.005f)
+    }
+
+    @Test
+    fun meteringIsUnavailableWhenCandidateHasNoPixelsInLinearRange() {
+        val width = 8
+        val height = 8
+        val reference = buildReference(
+            grayscalePixels(width, height, linearLuma = 0.10f),
+            width,
+            height,
+        )
+        val candidatePixels = IntArray(width * height) { index ->
+            grayscaleArgb(if (index % 2 == 0) 0.03f else 0.50f)
+        }
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(match)
+        assertEquals(0, match!!.meteringSampleCount)
+        assertNull(match.meteringLog2Error)
+        assertNull(match.referenceMeteringDisplayLinearLumaMean)
+        assertNull(match.candidateMeteringDisplayLinearLumaMean)
+    }
+
+    @Test
     fun meanPerceptualBrightnessTracksDisplayedMidtoneDifference() {
         val referencePixels = grayscalePixels(8, 8, linearLuma = 0.18f)
         val reference = buildReference(referencePixels, 8, 8)
@@ -278,7 +329,7 @@ class RawViewfinderExposureMathTest {
     }
 
     @Test
-    fun referenceWithBlackAndWhiteEndpointsHasDefinedBrightness() {
+    fun referenceWithOnlyBlackAndWhiteEndpointsHasDefinedDiagnostics() {
         val pixels = IntArray(64) { index ->
             if (index % 2 == 0) grayscaleArgb(0f) else grayscaleArgb(1f)
         }
@@ -319,6 +370,8 @@ class RawViewfinderExposureMathTest {
 
         assertNotNull(match)
         assertEquals(0.5f, match!!.candidatePerceptualBrightnessMean, 0.001f)
+        assertEquals(0, match.meteringSampleCount)
+        assertNull(match.meteringLog2Error)
     }
 
     @Test

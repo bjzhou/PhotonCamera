@@ -9,17 +9,18 @@ import kotlin.math.pow
  *
  * Both inputs are tone-mapped 8-bit sRGB previews. Converting their surviving code values back
  * to display-linear light does not recover scene-linear RAW data; it only makes the logarithmic
- * ratio describe a ratio of displayed light. Overall exposure is matched primarily from a robust,
- * center-weighted estimate of fixed tonal-distribution quantiles. Trimming the conflicting error
- * tails prevents one crushed shadow or clipped highlight band from controlling the result. The
- * perceptual arithmetic mean keeps the complete fixed image area, including displayed black and
- * white endpoints, as a global guardrail. This remains defined when local tone mapping changes the
- * shape of the tonal distribution and does not require pixel correspondence.
+ * ratio describe a ratio of displayed light. Capture metering selects coordinates where the
+ * rendered RAW candidate has display-linear luma in [0.05, 0.32], then compares the candidate and
+ * viewfinder arithmetic means over exactly those coordinates. The selection is recomputed for every
+ * exposure candidate. Distribution quantiles and full-area means remain available as diagnostics
+ * for local tone-map differences.
  */
 internal object RawViewfinderExposureMath {
     private const val PERCEPTUAL_BRIGHTNESS_FLOOR = 1f / 255f
     private const val DISPLAY_LINEAR_LUMA_FLOOR = 1f / (255f * 12.92f)
     private const val MIN_SAMPLE_COUNT = 32
+    private const val CANDIDATE_METERING_LUMA_MIN = 0.05f
+    private const val CANDIDATE_METERING_LUMA_MAX = 0.32f
     private const val QUANTILE_TRIM_LOW_FRACTION = 0.15f
     private const val QUANTILE_TRIM_HIGH_FRACTION = 0.85f
     private const val QUANTILE_SPREAD_LOW_FRACTION = 0.15f
@@ -44,7 +45,7 @@ internal object RawViewfinderExposureMath {
     private const val MEAN_BRIGHTNESS_ERROR_WEIGHT = 1f - TRIMMED_QUANTILE_ERROR_WEIGHT
 
     private const val MAX_SOLVE_STEPS = 4
-    private const val MATCH_LOG2_TOLERANCE = 0.05f
+    private const val MATCH_LOG2_TOLERANCE = 0.01f
     private const val INITIAL_PROBE_EV = 0.5f
     private const val MIN_STEP_EV = 0.025f
     private const val MIN_ERROR_DELTA = 0.0001f
@@ -66,6 +67,7 @@ internal object RawViewfinderExposureMath {
         val targetMeanLog2DisplayLinearLuma: Float,
         val targetMeanLog2PerceptualBrightness: Float,
         val targetQuantileLog2Lumas: FloatArray,
+        val meteringReferenceDisplayLinearLumas: FloatArray,
         val sampleCount: Int,
         val displayLinearLumaMean: Float,
         val perceptualBrightnessMean: Float,
@@ -77,6 +79,15 @@ internal object RawViewfinderExposureMath {
             require(targetMeanLog2PerceptualBrightness.isFinite())
             require(targetQuantileLog2Lumas.size == MATCH_QUANTILES.size)
             require(targetQuantileLog2Lumas.all { it.isFinite() })
+            require(
+                meteringReferenceDisplayLinearLumas.size ==
+                    (right - left) * (bottom - top)
+            )
+            require(
+                meteringReferenceDisplayLinearLumas.all {
+                    it.isNaN() || (it.isFinite() && it in 0f..1f)
+                }
+            )
             require(sampleCount >= MIN_SAMPLE_COUNT)
             require(displayLinearLumaMean.isFinite() && displayLinearLumaMean >= 0f)
             require(perceptualBrightnessMean.isFinite() && perceptualBrightnessMean >= 0f)
@@ -84,6 +95,10 @@ internal object RawViewfinderExposureMath {
     }
 
     data class MatchResult(
+        val meteringLog2Error: Float?,
+        val meteringSampleCount: Int,
+        val referenceMeteringDisplayLinearLumaMean: Float?,
+        val candidateMeteringDisplayLinearLumaMean: Float?,
         val matchLog2Error: Float,
         val toneWeightedLog2Error: Float,
         val meanBrightnessLog2Error: Float,
@@ -110,6 +125,13 @@ internal object RawViewfinderExposureMath {
         val perceptualBrightnessMean: Float,
         val meanLog2PerceptualBrightness: Float,
         val sampleCount: Int,
+    )
+
+    private data class MeteringEvaluation(
+        val log2Error: Float,
+        val sampleCount: Int,
+        val referenceDisplayLinearLumaMean: Float,
+        val candidateDisplayLinearLumaMean: Float,
     )
 
     private data class SolverSample(
@@ -142,6 +164,14 @@ internal object RawViewfinderExposureMath {
             bottom = safeBottom,
         ) ?: return null
         if (distribution.sampleCount < MIN_SAMPLE_COUNT) return null
+        val referenceDisplayLinearLumas = buildReferenceDisplayLinearLumas(
+            pixels = pixels,
+            width = width,
+            left = safeLeft,
+            top = safeTop,
+            right = safeRight,
+            bottom = safeBottom,
+        )
         return Reference(
             width = width,
             height = height,
@@ -160,6 +190,7 @@ internal object RawViewfinderExposureMath {
             targetMeanLog2DisplayLinearLuma = distribution.meanLog2DisplayLinearLuma,
             targetMeanLog2PerceptualBrightness = distribution.meanLog2PerceptualBrightness,
             targetQuantileLog2Lumas = distribution.quantiles(),
+            meteringReferenceDisplayLinearLumas = referenceDisplayLinearLumas,
             sampleCount = distribution.sampleCount,
             displayLinearLumaMean = distribution.displayLinearLumaMean,
             perceptualBrightnessMean = distribution.perceptualBrightnessMean,
@@ -188,6 +219,12 @@ internal object RawViewfinderExposureMath {
             right = reference.right,
             bottom = reference.bottom,
         ) ?: return null
+        val metering = evaluateMetering(
+            reference = reference,
+            pixels = pixels,
+            width = width,
+        )
+        val meteringError = metering?.log2Error
         val candidateQuantiles = distribution.quantiles()
         val meanBrightnessError = log2(
             distribution.perceptualBrightnessMean.coerceAtLeast(PERCEPTUAL_BRIGHTNESS_FLOOR)
@@ -247,7 +284,8 @@ internal object RawViewfinderExposureMath {
         val matchError =
             TRIMMED_QUANTILE_ERROR_WEIGHT * trimmedMean +
                 MEAN_BRIGHTNESS_ERROR_WEIGHT * meanBrightnessError
-        if (!meanBrightnessError.isFinite() ||
+        if (meteringError?.isFinite() == false ||
+            !meanBrightnessError.isFinite() ||
             !linearArithmeticMeanError.isFinite() ||
             !linearLogAverageError.isFinite() ||
             !perceptualLogAverageError.isFinite() ||
@@ -261,6 +299,12 @@ internal object RawViewfinderExposureMath {
             return null
         }
         return MatchResult(
+            meteringLog2Error = meteringError,
+            meteringSampleCount = metering?.sampleCount ?: 0,
+            referenceMeteringDisplayLinearLumaMean =
+                metering?.referenceDisplayLinearLumaMean,
+            candidateMeteringDisplayLinearLumaMean =
+                metering?.candidateDisplayLinearLumaMean,
             matchLog2Error = matchError,
             toneWeightedLog2Error = toneWeightedError,
             meanBrightnessLog2Error = meanBrightnessError,
@@ -278,6 +322,71 @@ internal object RawViewfinderExposureMath {
             candidateDisplayLinearLumaMean = distribution.displayLinearLumaMean,
             referencePerceptualBrightnessMean = reference.perceptualBrightnessMean,
             candidatePerceptualBrightnessMean = distribution.perceptualBrightnessMean,
+        )
+    }
+
+    private fun buildReferenceDisplayLinearLumas(
+        pixels: IntArray,
+        width: Int,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+    ): FloatArray {
+        val lumas = FloatArray((right - left) * (bottom - top))
+        var lumaIndex = 0
+        for (y in top until bottom) {
+            for (x in left until right) {
+                lumas[lumaIndex++] =
+                    displayLinearLuma(pixels[y * width + x]) ?: Float.NaN
+            }
+        }
+        return lumas
+    }
+
+    private fun evaluateMetering(
+        reference: Reference,
+        pixels: IntArray,
+        width: Int,
+    ): MeteringEvaluation? {
+        var referenceLumaIndex = 0
+        var sampleCount = 0
+        var referenceLumaSum = 0.0
+        var candidateLumaSum = 0.0
+        for (y in reference.top until reference.bottom) {
+            for (x in reference.left until reference.right) {
+                val referenceLuma =
+                    reference.meteringReferenceDisplayLinearLumas[referenceLumaIndex++]
+                val candidateLuma =
+                    displayLinearLuma(pixels[y * width + x]) ?: continue
+                if (candidateLuma !in
+                    CANDIDATE_METERING_LUMA_MIN..CANDIDATE_METERING_LUMA_MAX ||
+                    !referenceLuma.isFinite()
+                ) {
+                    continue
+                }
+                referenceLumaSum += referenceLuma
+                candidateLumaSum += candidateLuma
+                sampleCount++
+            }
+        }
+        if (sampleCount < MIN_SAMPLE_COUNT) return null
+        val referenceMean = (referenceLumaSum / sampleCount).toFloat()
+        val candidateMean = (candidateLumaSum / sampleCount).toFloat()
+        val log2Error =
+            log2(candidateMean.coerceAtLeast(DISPLAY_LINEAR_LUMA_FLOOR)) -
+                log2(referenceMean.coerceAtLeast(DISPLAY_LINEAR_LUMA_FLOOR))
+        if (!log2Error.isFinite() ||
+            !referenceMean.isFinite() ||
+            !candidateMean.isFinite()
+        ) {
+            return null
+        }
+        return MeteringEvaluation(
+            log2Error = log2Error,
+            sampleCount = sampleCount,
+            referenceDisplayLinearLumaMean = referenceMean,
+            candidateDisplayLinearLumaMean = candidateMean,
         )
     }
 
