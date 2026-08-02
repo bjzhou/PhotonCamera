@@ -9,18 +9,18 @@ import kotlin.math.pow
  *
  * Both inputs are tone-mapped 8-bit sRGB previews. Converting their surviving code values back
  * to display-linear light does not recover scene-linear RAW data; it only makes the logarithmic
- * ratio describe a ratio of displayed light. Capture metering selects coordinates where the
- * rendered RAW candidate has display-linear luma in [0.05, 0.32], then compares the candidate and
- * viewfinder arithmetic means over exactly those coordinates. The selection is recomputed for every
- * exposure candidate. Distribution quantiles and full-area means remain available as diagnostics
- * for local tone-map differences.
+ * ratio describe a ratio of displayed light. Capture metering builds one fixed coordinate set from
+ * the first rendered RAW candidate: it starts around that candidate's display-linear P50 and expands
+ * symmetrically only when the band contains too few valid corresponding pixels. Every exposure
+ * candidate is then compared with the viewfinder over that same coordinate set. Distribution
+ * quantiles and full-area means remain available as diagnostics for local tone-map differences.
  */
 internal object RawViewfinderExposureMath {
     private const val PERCEPTUAL_BRIGHTNESS_FLOOR = 1f / 255f
     private const val DISPLAY_LINEAR_LUMA_FLOOR = 1f / (255f * 12.92f)
     private const val MIN_SAMPLE_COUNT = 32
-    private const val CANDIDATE_METERING_LUMA_MIN = 0.05f
-    private const val CANDIDATE_METERING_LUMA_MAX = 0.32f
+    private const val INITIAL_P50_METERING_HALF_RANGE = 0.01f
+    private const val METERING_RANGE_EPSILON = 1e-6f
     private const val QUANTILE_TRIM_LOW_FRACTION = 0.15f
     private const val QUANTILE_TRIM_HIGH_FRACTION = 0.85f
     private const val QUANTILE_SPREAD_LOW_FRACTION = 0.15f
@@ -118,6 +118,31 @@ internal object RawViewfinderExposureMath {
         val candidatePerceptualBrightnessMean: Float,
     )
 
+    class MeteringSelection internal constructor(
+        internal val pixelIndices: IntArray,
+        internal val referenceDisplayLinearLumas: FloatArray,
+        val seedCandidateDisplayLinearLumaP50: Float,
+        val seedCandidateDisplayLinearLumaRangeMin: Float,
+        val seedCandidateDisplayLinearLumaRangeMax: Float,
+    ) {
+        val sampleCount: Int
+            get() = pixelIndices.size
+
+        init {
+            require(pixelIndices.size >= MIN_SAMPLE_COUNT)
+            require(referenceDisplayLinearLumas.size == pixelIndices.size)
+            require(referenceDisplayLinearLumas.all { it.isFinite() && it in 0f..1f })
+            require(seedCandidateDisplayLinearLumaP50.isFinite())
+            require(seedCandidateDisplayLinearLumaRangeMin.isFinite())
+            require(seedCandidateDisplayLinearLumaRangeMax.isFinite())
+            require(
+                seedCandidateDisplayLinearLumaP50 in
+                    seedCandidateDisplayLinearLumaRangeMin..
+                    seedCandidateDisplayLinearLumaRangeMax
+            )
+        }
+    }
+
     private data class LumaDistribution(
         val sortedLog2PerceptualBrightness: FloatArray,
         val displayLinearLumaMean: Float,
@@ -203,6 +228,28 @@ internal object RawViewfinderExposureMath {
         width: Int,
         height: Int,
     ): MatchResult? {
+        val meteringSelection = buildMeteringSelection(
+            reference = reference,
+            pixels = pixels,
+            width = width,
+            height = height,
+        ) ?: return null
+        return evaluate(
+            reference = reference,
+            pixels = pixels,
+            width = width,
+            height = height,
+            meteringSelection = meteringSelection,
+        )
+    }
+
+    fun evaluate(
+        reference: Reference,
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        meteringSelection: MeteringSelection,
+    ): MatchResult? {
         if (width != reference.width ||
             height != reference.height ||
             pixels.size < width * height ||
@@ -220,9 +267,8 @@ internal object RawViewfinderExposureMath {
             bottom = reference.bottom,
         ) ?: return null
         val metering = evaluateMetering(
-            reference = reference,
             pixels = pixels,
-            width = width,
+            selection = meteringSelection,
         )
         val meteringError = metering?.log2Error
         val candidateQuantiles = distribution.quantiles()
@@ -344,31 +390,89 @@ internal object RawViewfinderExposureMath {
         return lumas
     }
 
-    private fun evaluateMetering(
+    fun buildMeteringSelection(
         reference: Reference,
         pixels: IntArray,
         width: Int,
-    ): MeteringEvaluation? {
+        height: Int,
+    ): MeteringSelection? {
+        if (width != reference.width ||
+            height != reference.height ||
+            pixels.size < width * height
+        ) {
+            return null
+        }
+
+        val capacity = (reference.right - reference.left) *
+            (reference.bottom - reference.top)
+        val candidateLumas = FloatArray(capacity)
+        val pixelIndices = IntArray(capacity)
+        val referenceLumas = FloatArray(capacity)
+        var validPairCount = 0
         var referenceLumaIndex = 0
-        var sampleCount = 0
-        var referenceLumaSum = 0.0
-        var candidateLumaSum = 0.0
         for (y in reference.top until reference.bottom) {
             for (x in reference.left until reference.right) {
                 val referenceLuma =
                     reference.meteringReferenceDisplayLinearLumas[referenceLumaIndex++]
-                val candidateLuma =
-                    displayLinearLuma(pixels[y * width + x]) ?: continue
-                if (candidateLuma !in
-                    CANDIDATE_METERING_LUMA_MIN..CANDIDATE_METERING_LUMA_MAX ||
-                    !referenceLuma.isFinite()
-                ) {
-                    continue
-                }
-                referenceLumaSum += referenceLuma
-                candidateLumaSum += candidateLuma
-                sampleCount++
+                val pixelIndex = y * width + x
+                val candidateLuma = displayLinearLuma(pixels[pixelIndex]) ?: continue
+                if (!referenceLuma.isFinite()) continue
+                candidateLumas[validPairCount] = candidateLuma
+                pixelIndices[validPairCount] = pixelIndex
+                referenceLumas[validPairCount] = referenceLuma
+                validPairCount++
             }
+        }
+        if (validPairCount < MIN_SAMPLE_COUNT) return null
+
+        val sortedCandidateLumas = candidateLumas.copyOf(validPairCount)
+        sortedCandidateLumas.sort()
+        val candidateP50 = unweightedQuantile(sortedCandidateLumas, 0.5f)
+        val distancesFromP50 = FloatArray(validPairCount) { index ->
+            abs(candidateLumas[index] - candidateP50)
+        }
+        distancesFromP50.sort()
+        val minimumHalfRange = distancesFromP50[MIN_SAMPLE_COUNT - 1]
+        val halfRange = if (minimumHalfRange > INITIAL_P50_METERING_HALF_RANGE) {
+            minimumHalfRange + METERING_RANGE_EPSILON
+        } else {
+            INITIAL_P50_METERING_HALF_RANGE
+        }
+        val rangeMin = (candidateP50 - halfRange).coerceAtLeast(0f)
+        val rangeMax = (candidateP50 + halfRange).coerceAtMost(1f)
+
+        val selectedPixelIndices = IntArray(validPairCount)
+        val selectedReferenceLumas = FloatArray(validPairCount)
+        var selectedCount = 0
+        for (index in 0 until validPairCount) {
+            if (candidateLumas[index] !in rangeMin..rangeMax) continue
+            selectedPixelIndices[selectedCount] = pixelIndices[index]
+            selectedReferenceLumas[selectedCount] = referenceLumas[index]
+            selectedCount++
+        }
+        if (selectedCount < MIN_SAMPLE_COUNT) return null
+        return MeteringSelection(
+            pixelIndices = selectedPixelIndices.copyOf(selectedCount),
+            referenceDisplayLinearLumas = selectedReferenceLumas.copyOf(selectedCount),
+            seedCandidateDisplayLinearLumaP50 = candidateP50,
+            seedCandidateDisplayLinearLumaRangeMin = rangeMin,
+            seedCandidateDisplayLinearLumaRangeMax = rangeMax,
+        )
+    }
+
+    private fun evaluateMetering(
+        pixels: IntArray,
+        selection: MeteringSelection,
+    ): MeteringEvaluation? {
+        var sampleCount = 0
+        var referenceLumaSum = 0.0
+        var candidateLumaSum = 0.0
+        for (index in selection.pixelIndices.indices) {
+            val candidateLuma =
+                displayLinearLuma(pixels[selection.pixelIndices[index]]) ?: continue
+            referenceLumaSum += selection.referenceDisplayLinearLumas[index]
+            candidateLumaSum += candidateLuma
+            sampleCount++
         }
         if (sampleCount < MIN_SAMPLE_COUNT) return null
         val referenceMean = (referenceLumaSum / sampleCount).toFloat()

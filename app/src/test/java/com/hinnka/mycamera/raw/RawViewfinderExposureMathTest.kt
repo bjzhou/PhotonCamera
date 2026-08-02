@@ -11,54 +11,143 @@ import kotlin.math.roundToInt
 
 class RawViewfinderExposureMathTest {
     @Test
-    fun meteringUsesCandidateLinearRangeAndCorrespondingReferenceCoordinates() {
+    fun meteringUsesCandidateP50BandAndCorrespondingReferenceCoordinates() {
         val width = 10
         val height = 10
         val referencePixels = IntArray(width * height) { index ->
-            grayscaleArgb(if (index < 64) 0.20f else 0.01f)
+            grayscaleArgb(if (index in 20 until 80) 0.20f else 0.01f)
         }
         val candidatePixels = IntArray(width * height) { index ->
-            grayscaleArgb(if (index < 64) 0.10f else 0.50f)
+            grayscaleArgb(
+                when {
+                    index < 20 -> 0.02f
+                    index < 80 -> 0.10f
+                    else -> 0.50f
+                }
+            )
         }
-
-        val match = RawViewfinderExposureMath.evaluate(
-            reference = buildReference(referencePixels, width, height),
-            pixels = candidatePixels,
-            width = width,
-            height = height,
-        )
-
-        assertNotNull(match)
-        assertEquals(64, match!!.meteringSampleCount)
-        assertEquals(-1f, match.meteringLog2Error!!, 0.04f)
-        assertEquals(0.20f, match.referenceMeteringDisplayLinearLumaMean!!, 0.005f)
-        assertEquals(0.10f, match.candidateMeteringDisplayLinearLumaMean!!, 0.005f)
-    }
-
-    @Test
-    fun meteringIsUnavailableWhenCandidateHasNoPixelsInLinearRange() {
-        val width = 8
-        val height = 8
-        val reference = buildReference(
-            grayscalePixels(width, height, linearLuma = 0.10f),
-            width,
-            height,
-        )
-        val candidatePixels = IntArray(width * height) { index ->
-            grayscaleArgb(if (index % 2 == 0) 0.03f else 0.50f)
-        }
-        val match = RawViewfinderExposureMath.evaluate(
+        val reference = buildReference(referencePixels, width, height)
+        val selection = RawViewfinderExposureMath.buildMeteringSelection(
             reference = reference,
             pixels = candidatePixels,
             width = width,
             height = height,
         )
+        assertNotNull(selection)
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+            meteringSelection = selection!!,
+        )
 
         assertNotNull(match)
-        assertEquals(0, match!!.meteringSampleCount)
-        assertNull(match.meteringLog2Error)
-        assertNull(match.referenceMeteringDisplayLinearLumaMean)
-        assertNull(match.candidateMeteringDisplayLinearLumaMean)
+        assertEquals(60, match!!.meteringSampleCount)
+        assertEquals(-1f, match.meteringLog2Error!!, 0.04f)
+        assertEquals(0.20f, match.referenceMeteringDisplayLinearLumaMean!!, 0.005f)
+        assertEquals(0.10f, match.candidateMeteringDisplayLinearLumaMean!!, 0.005f)
+        assertEquals(0.10f, selection.seedCandidateDisplayLinearLumaP50, 0.005f)
+        assertEquals(
+            0.01f,
+            selection.seedCandidateDisplayLinearLumaP50 -
+                selection.seedCandidateDisplayLinearLumaRangeMin,
+            0.0001f,
+        )
+        assertEquals(
+            0.01f,
+            selection.seedCandidateDisplayLinearLumaRangeMax -
+                selection.seedCandidateDisplayLinearLumaP50,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun meteringExpandsSymmetricallyAroundP50WhenInitialBandIsSparse() {
+        val width = 10
+        val height = 10
+        val candidatePixels = IntArray(width * height) { index ->
+            grayscaleArgb(
+                when {
+                    index < 49 -> 0.02f
+                    index < 51 -> 0.10f
+                    else -> 0.18f
+                }
+            )
+        }
+        val reference = buildReference(candidatePixels, width, height)
+        val selection = RawViewfinderExposureMath.buildMeteringSelection(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+        )
+        assertNotNull(selection)
+        val match = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = candidatePixels,
+            width = width,
+            height = height,
+            meteringSelection = selection!!,
+        )
+
+        assertNotNull(match)
+        assertTrue(match!!.meteringSampleCount >= 32)
+        assertEquals(0f, match.meteringLog2Error!!, 0.001f)
+        assertEquals(0.10f, selection.seedCandidateDisplayLinearLumaP50, 0.005f)
+        val lowerHalfRange =
+            selection.seedCandidateDisplayLinearLumaP50 -
+                selection.seedCandidateDisplayLinearLumaRangeMin
+        val upperHalfRange =
+            selection.seedCandidateDisplayLinearLumaRangeMax -
+                selection.seedCandidateDisplayLinearLumaP50
+        assertTrue(lowerHalfRange > 0.01f)
+        assertEquals(lowerHalfRange, upperHalfRange, 0.0001f)
+    }
+
+    @Test
+    fun meteringSelectionIsReusedAcrossExposureCandidates() {
+        val width = 10
+        val height = 10
+        val reference = buildReference(
+            grayscalePixels(width, height, linearLuma = 0.40f),
+            width,
+            height,
+        )
+        val seedCandidatePixels = IntArray(width * height) { index ->
+            grayscaleArgb(0.02f + 0.48f * index / (width * height - 1))
+        }
+        val selection = RawViewfinderExposureMath.buildMeteringSelection(
+            reference = reference,
+            pixels = seedCandidatePixels,
+            width = width,
+            height = height,
+        )
+        assertNotNull(selection)
+
+        val nextCandidatePixels = grayscalePixels(width, height, linearLuma = 0.10f)
+        selection!!.pixelIndices.forEach { pixelIndex ->
+            nextCandidatePixels[pixelIndex] = grayscaleArgb(0.40f)
+        }
+        val fixedSelectionMatch = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = nextCandidatePixels,
+            width = width,
+            height = height,
+            meteringSelection = selection,
+        )
+        val reselectedMatch = RawViewfinderExposureMath.evaluate(
+            reference = reference,
+            pixels = nextCandidatePixels,
+            width = width,
+            height = height,
+        )
+
+        assertNotNull(fixedSelectionMatch)
+        assertEquals(selection.sampleCount, fixedSelectionMatch!!.meteringSampleCount)
+        assertEquals(0f, fixedSelectionMatch.meteringLog2Error!!, 0.001f)
+        assertNotNull(reselectedMatch)
+        assertTrue(reselectedMatch!!.meteringLog2Error!! < -1f)
     }
 
     @Test
@@ -370,8 +459,8 @@ class RawViewfinderExposureMathTest {
 
         assertNotNull(match)
         assertEquals(0.5f, match!!.candidatePerceptualBrightnessMean, 0.001f)
-        assertEquals(0, match.meteringSampleCount)
-        assertNull(match.meteringLog2Error)
+        assertEquals(64, match.meteringSampleCount)
+        assertNotNull(match.meteringLog2Error)
     }
 
     @Test

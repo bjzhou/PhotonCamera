@@ -125,6 +125,7 @@ internal object RawViewfinderExposureMatcher {
         testImageCache: ExposureMatchTestImageCache?,
     ): Float? {
         var candidateIndex = 0
+        var meteringSelection: RawViewfinderExposureMath.MeteringSelection? = null
         return RawViewfinderExposureMath.solve { exposureEv ->
             val frame = renderSample(exposureEv)
             if (frame != null) {
@@ -134,17 +135,51 @@ internal object RawViewfinderExposureMatcher {
                     frame = frame,
                 )
             }
+            if (candidateIndex == 0 &&
+                frame != null &&
+                frame.width == reference.analysis.width &&
+                frame.height == reference.analysis.height
+            ) {
+                meteringSelection = RawViewfinderExposureMath.buildMeteringSelection(
+                    reference = reference.analysis,
+                    pixels = frame.argbPixels,
+                    width = frame.width,
+                    height = frame.height,
+                )
+                meteringSelection?.let { selection ->
+                    PLog.d(
+                        TAG,
+                        "RAW metering selection: seedExposureEv=$exposureEv " +
+                            "candidateDisplayLinearLumaP50=" +
+                            "${selection.seedCandidateDisplayLinearLumaP50} " +
+                            "candidateDisplayLinearLumaRange=" +
+                            "[${selection.seedCandidateDisplayLinearLumaRangeMin}, " +
+                            "${selection.seedCandidateDisplayLinearLumaRangeMax}] " +
+                            "sampleCount=${selection.sampleCount}"
+                    )
+                }
+            }
             candidateIndex++
-            evaluate(reference.analysis, exposureEv, frame)
+            evaluate(
+                reference = reference.analysis,
+                meteringSelection = meteringSelection,
+                exposureEv = exposureEv,
+                frame = frame,
+            )
         }
     }
 
     private fun evaluate(
         reference: RawViewfinderExposureMath.Reference,
+        meteringSelection: RawViewfinderExposureMath.MeteringSelection?,
         exposureEv: Float,
         frame: RawExposurePreviewFrame?,
     ): Float? {
-        if (frame == null || frame.width != reference.width || frame.height != reference.height) {
+        if (meteringSelection == null ||
+            frame == null ||
+            frame.width != reference.width ||
+            frame.height != reference.height
+        ) {
             return null
         }
         val match = RawViewfinderExposureMath.evaluate(
@@ -152,6 +187,7 @@ internal object RawViewfinderExposureMatcher {
             pixels = frame.argbPixels,
             width = frame.width,
             height = frame.height,
+            meteringSelection = meteringSelection,
         ) ?: return null
         val meteringLog2Error = match.meteringLog2Error
         PLog.d(
