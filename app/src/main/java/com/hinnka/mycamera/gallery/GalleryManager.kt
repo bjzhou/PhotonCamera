@@ -3079,7 +3079,8 @@ object GalleryManager {
                         metadata = preparedMetadata,
                         imageLayout = imageLayout,
                         profileGainTableMap = dngProfilePreparation.profileGainTableMap,
-                        profileToneCurve = profileToneCurveForPgtmMode(profileToneMapMode),
+                        profileToneCurve =
+                            DngProfileToneCurve.profileToneCurveForPgtmMode(profileToneMapMode),
                     )
                 }
                 val canBypassDngPixels = directBufferCompatible &&
@@ -3568,8 +3569,9 @@ object GalleryManager {
                     cfaCorrectionMode = metadata.rawCfaCorrectionMode,
                     baselineExposureEv = baselineExposureEv,
                     profileGainTableMap = profileGainTableMap,
-                    profileName = profileNameForPgtmMode(profileToneMapMode),
-                    profileToneCurve = profileToneCurveForPgtmMode(profileToneMapMode),
+                    profileName = DngProfileToneCurve.profileNameForPgtmMode(profileToneMapMode),
+                    profileToneCurve =
+                        DngProfileToneCurve.profileToneCurveForPgtmMode(profileToneMapMode),
                     imageLayout = imageLayout,
                     compression = compression,
                     inputRowStepSamples = inputRowStepSamples,
@@ -3839,16 +3841,6 @@ object GalleryManager {
             aeMode == CameraMetadata.CONTROL_AE_MODE_ON_ALWAYS_FLASH ||
             aeMode == CameraMetadata.CONTROL_AE_MODE_ON_AUTO_FLASH ||
             aeMode == CameraMetadata.CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE
-    }
-
-    private fun profileNameForPgtmMode(mode: RawProfileToneMapMode): String {
-        require(mode == RawProfileToneMapMode.Photon)
-        return DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
-    }
-
-    private fun profileToneCurveForPgtmMode(mode: RawProfileToneMapMode): FloatArray {
-        require(mode == RawProfileToneMapMode.Photon)
-        return DngProfileToneCurve.photonPgtmToneCurvePoints()
     }
 
     /**

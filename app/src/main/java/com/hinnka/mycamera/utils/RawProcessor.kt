@@ -13,8 +13,8 @@ import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
-import com.hinnka.mycamera.raw.DngBaselineExposure
 import com.hinnka.mycamera.raw.DngProfileToneCurve
+import com.hinnka.mycamera.raw.DngBaselineExposure
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
@@ -711,12 +711,12 @@ object RawProcessor {
         val preparedToneMapMode = dngProfilePreparationOptions?.profileToneMapMode
             ?.takeIf { writtenProfileGainTableMap != null }
         val writtenProfileName = if (dngProfilePreparationOptions != null) {
-            preparedToneMapMode?.let(::profileNameForToneMapMode)
+            preparedToneMapMode?.let(DngProfileToneCurve::profileNameForPgtmMode)
         } else {
             profileName
         }
         val writtenProfileToneCurve = if (dngProfilePreparationOptions != null) {
-            preparedToneMapMode?.let(::profileToneCurveForToneMapMode)
+            preparedToneMapMode?.let(DngProfileToneCurve::profileToneCurveForPgtmMode)
         } else {
             profileToneCurve
         }
@@ -788,16 +788,6 @@ object RawProcessor {
         } finally {
             dngCreator.close()
         }
-    }
-
-    private fun profileNameForToneMapMode(mode: RawProfileToneMapMode): String {
-        require(mode == RawProfileToneMapMode.Photon)
-        return DngProfileToneCurve.PHOTON_PGTM_PROFILE_NAME
-    }
-
-    private fun profileToneCurveForToneMapMode(mode: RawProfileToneMapMode): FloatArray {
-        require(mode == RawProfileToneMapMode.Photon)
-        return DngProfileToneCurve.photonPgtmToneCurvePoints()
     }
 
     internal fun denormalizeNormalizedRawBufferInPlace(
