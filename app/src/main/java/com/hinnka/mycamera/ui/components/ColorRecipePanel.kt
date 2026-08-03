@@ -762,6 +762,7 @@ fun ColorRecipeSlider(
             valueRange = param.minValue..param.maxValue,
             activeTrackColor = getParamColor(param),
             inactiveTrackColor = Color.Gray.copy(alpha = 0.3f),
+            trackGradientColors = getParamTrackGradientColors(param),
             thumbColor = Color.White,
             modifier = Modifier.fillMaxWidth()
         )
@@ -839,6 +840,25 @@ private fun formatParamValue(param: RecipeParam, value: Float): String {
         RecipeParam.CHROMATIC_ABERRATION -> String.format("%.2f", value)
 
         RecipeParam.LUT_INTENSITY -> String.format("%.2f", value)
+    }
+}
+
+/**
+ * 色温和色调是双向颜色偏移，滑轨完整显示两个方向以及中间的中性点。
+ */
+private fun getParamTrackGradientColors(param: RecipeParam): List<Color>? {
+    return when (param) {
+        RecipeParam.TEMPERATURE -> listOf(
+            Color(0xFF4F86F7), // 冷：蓝
+            Color(0xFFF2F2F2), // 中性
+            Color(0xFFFF8A3D), // 暖：橙
+        )
+        RecipeParam.TINT -> listOf(
+            Color(0xFF43B978), // 负向：绿
+            Color(0xFFF2F2F2), // 中性
+            Color(0xFFD85AC4), // 正向：品红
+        )
+        else -> null
     }
 }
 

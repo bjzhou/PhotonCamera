@@ -8,7 +8,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -34,6 +37,7 @@ import kotlin.math.abs
  * @param trackHeight 轨道高度
  * @param activeTrackColor 激活轨道颜色
  * @param inactiveTrackColor 未激活轨道颜色
+ * @param trackGradientColors 整条轨道的渐变色；设置后不再绘制激活/未激活分段
  * @param thumbColor Thumb 颜色
  */
 @Composable
@@ -49,6 +53,7 @@ fun CustomSlider(
     trackHeight: Dp = 4.dp,
     activeTrackColor: Color = Color.White,
     inactiveTrackColor: Color = Color.Gray.copy(alpha = 0.5f),
+    trackGradientColors: List<Color>? = null,
     thumbColor: Color = Color.White
 ) {
     var isDragging by remember { mutableStateOf(false) }
@@ -114,22 +119,37 @@ fun CustomSlider(
             val trackEnd = trackStart + trackWidth
             val centerY = size.height / 2
 
-            // 绘制未激活轨道
-            drawTrack(
-                start = Offset(trackStart, centerY),
-                end = Offset(trackEnd, centerY),
-                color = if (enabled) inactiveTrackColor else inactiveTrackColor.copy(alpha = 0.3f),
-                strokeWidth = trackHeightPx
-            )
+            if (trackGradientColors != null && trackGradientColors.size >= 2) {
+                val gradientColors = if (enabled) {
+                    trackGradientColors
+                } else {
+                    trackGradientColors.map { it.copy(alpha = it.alpha * 0.3f) }
+                }
+                drawGradientTrack(
+                    startX = trackStart,
+                    endX = trackEnd,
+                    centerY = centerY,
+                    colors = gradientColors,
+                    height = trackHeightPx
+                )
+            } else {
+                // 绘制未激活轨道
+                drawTrack(
+                    start = Offset(trackStart, centerY),
+                    end = Offset(trackEnd, centerY),
+                    color = if (enabled) inactiveTrackColor else inactiveTrackColor.copy(alpha = 0.3f),
+                    strokeWidth = trackHeightPx
+                )
 
-            // 绘制激活轨道
-            val activeEnd = trackStart + trackWidth * normalizedValue
-            drawTrack(
-                start = Offset(trackStart, centerY),
-                end = Offset(activeEnd, centerY),
-                color = if (enabled) activeTrackColor else activeTrackColor.copy(alpha = 0.5f),
-                strokeWidth = trackHeightPx
-            )
+                // 绘制激活轨道
+                val activeEnd = trackStart + trackWidth * normalizedValue
+                drawTrack(
+                    start = Offset(trackStart, centerY),
+                    end = Offset(activeEnd, centerY),
+                    color = if (enabled) activeTrackColor else activeTrackColor.copy(alpha = 0.5f),
+                    strokeWidth = trackHeightPx
+                )
+            }
 
             // 绘制 Thumb
             val thumbX = trackStart + trackWidth * normalizedValue
@@ -159,6 +179,28 @@ private fun DrawScope.drawTrack(
         end = end,
         strokeWidth = strokeWidth,
         cap = StrokeCap.Round
+    )
+}
+
+/**
+ * 绘制带圆角端点的整轨渐变。
+ */
+private fun DrawScope.drawGradientTrack(
+    startX: Float,
+    endX: Float,
+    centerY: Float,
+    colors: List<Color>,
+    height: Float
+) {
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            colors = colors,
+            startX = startX,
+            endX = endX
+        ),
+        topLeft = Offset(startX, centerY - height / 2f),
+        size = Size(endX - startX, height),
+        cornerRadius = CornerRadius(height / 2f)
     )
 }
 
