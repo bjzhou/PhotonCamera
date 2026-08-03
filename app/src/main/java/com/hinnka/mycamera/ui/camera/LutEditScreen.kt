@@ -13,7 +13,7 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
+import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.ImageHistogram
 import com.hinnka.mycamera.viewmodel.LutEditViewModel
@@ -39,8 +39,7 @@ fun LutEditBottomSheet(
     initialParams: ColorRecipeParams? = null,
     onParamsPreviewChange: ((ColorRecipeParams) -> Unit)? = null,
     imageHistogram: ImageHistogram? = null,
-    effectParams: EffectParams? = null,
-    onEffectParamsChange: ((EffectParams) -> Unit)? = null,
+    showEffects: Boolean = false,
     editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
     containerColor: Color = Color.Black.copy(alpha = 0.8f),
     modifier: Modifier = Modifier
@@ -153,8 +152,12 @@ fun LutEditBottomSheet(
                 },
                 imageHistogram = imageHistogram,
                 showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL,
-                currentEffects = effectParams,
-                onEffectsChange = onEffectParamsChange,
+                currentEffects = editingParams.toEffectParams().takeIf { showEffects },
+                onEffectsChange = if (showEffects) {
+                    { effects -> onParamsUpdated(effects.applyTo(editingParams)) }
+                } else {
+                    null
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         }

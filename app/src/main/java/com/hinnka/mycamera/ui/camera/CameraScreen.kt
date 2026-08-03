@@ -70,7 +70,6 @@ import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.ui.components.*
@@ -83,7 +82,6 @@ import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -104,7 +102,6 @@ enum class ActivePanel {
 private const val InitialPreviewTransitionDelayMillis = 150L
 private const val PreviewTransitionRevealDurationMillis = 800
 private const val RawCaptureTapDebounceMillis = 1000L
-private const val EffectsParamsSaveDebounceMillis = 250L
 private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
 private const val DefaultAwbTemperature = 5000f
@@ -220,16 +217,8 @@ fun CameraScreen(
     val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
-    val currentEffectParams by viewModel.currentEffectParams.collectAsState()
     val activePresetId by viewModel.activePresetId.collectAsState()
     val customPresets by viewModel.customPresets.collectAsState()
-    var previewEffectParamsOverride by remember { mutableStateOf<EffectParams?>(null) }
-    var pendingEffectParamsToSave by remember { mutableStateOf<EffectParams?>(null) }
-    var effectParamsSaveJob by remember { mutableStateOf<Job?>(null) }
-    val previewEffectParams = previewEffectParamsOverride ?: currentEffectParams
-    val mergedRecipeParams = remember(currentRecipeParams, previewEffectParams) {
-        previewEffectParams.applyTo(currentRecipeParams)
-    }
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
     val useRaw by viewModel.useRaw.collectAsState()
@@ -293,48 +282,13 @@ fun CameraScreen(
     var baselineEditLutId by remember { mutableStateOf<String?>(null) }
     var baselineEditTarget by remember { mutableStateOf<BaselineColorCorrectionTarget?>(null) }
 
-    fun saveEffectParamsDebounced(params: EffectParams) {
-        previewEffectParamsOverride = params
-        pendingEffectParamsToSave = params
-        effectParamsSaveJob?.cancel()
-        effectParamsSaveJob = scope.launch {
-            delay(EffectsParamsSaveDebounceMillis)
-            viewModel.setEffectParams(params)
-            pendingEffectParamsToSave = null
-            effectParamsSaveJob = null
-        }
-    }
-
-    fun flushEffectParamsSave() {
-        effectParamsSaveJob?.cancel()
-        effectParamsSaveJob = null
-        pendingEffectParamsToSave?.let(viewModel::setEffectParams)
-        pendingEffectParamsToSave = null
-    }
-
     fun discardTransientLookEdits() {
-        effectParamsSaveJob?.cancel()
-        effectParamsSaveJob = null
-        pendingEffectParamsToSave = null
-        previewEffectParamsOverride = null
         previewRecipeParamsOverride = null
-    }
-
-    LaunchedEffect(currentEffectParams) {
-        if (previewEffectParamsOverride == currentEffectParams) {
-            previewEffectParamsOverride = null
-        }
     }
 
     LaunchedEffect(currentRecipeParams) {
         if (previewRecipeParamsOverride?.isSameAs(currentRecipeParams) == true) {
             previewRecipeParamsOverride = null
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            flushEffectParamsSave()
         }
     }
 
@@ -1068,8 +1022,7 @@ fun CameraScreen(
                         baselineLut = viewModel.currentBaselineLutConfig,
                         currentLut = viewModel.currentLutConfig,
                         baselineColorRecipeParams = currentBaselineRecipeParams,
-                        colorRecipeParams = previewRecipeParamsOverride?.let(previewEffectParams::applyTo)
-                            ?: mergedRecipeParams,
+                        colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                         focusPoint = state.focusPoint,
                         focusPointSource = state.focusPointSource,
                         isFocusLocked = state.isFocusLocked,
@@ -1771,10 +1724,8 @@ fun CameraScreen(
                 lutId = currentLutId,
                 initialParams = previewRecipeParamsOverride ?: currentRecipeParams,
                 onParamsPreviewChange = { previewRecipeParamsOverride = it },
-                effectParams = previewEffectParams,
-                onEffectParamsChange = { saveEffectParamsDebounced(it) },
+                showEffects = true,
                 onDismiss = {
-                    flushEffectParamsSave()
                     previewRecipeParamsOverride = null
                     viewModel.refreshActivePresetMatch()
                     activePanel = ActivePanel.FILTERS

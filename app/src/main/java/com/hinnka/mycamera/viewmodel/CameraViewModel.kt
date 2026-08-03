@@ -45,6 +45,7 @@ import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawBurstFrameRole
@@ -158,6 +159,10 @@ private fun resolveEffectiveRawAutoExposure(
     return userPrefs?.rawAutoExposure ?: true
 }
 
+private fun ColorRecipeParams.withoutIndependentEffects(): ColorRecipeParams {
+    return EffectParams.DEFAULT.applyTo(this)
+}
+
 private data class PresetMatchSnapshot(
     val lutId: String?,
     val colorRecipe: ColorRecipeParams,
@@ -184,7 +189,8 @@ private data class PresetMatchSnapshot(
     val phantomBaselineLutId: String?
 ) {
     fun matches(preset: com.hinnka.mycamera.model.CameraPreset): Boolean {
-        val colorRecipeMatches = colorRecipe.isSameAs(preset.colorRecipe)
+        val colorRecipeMatches = colorRecipe.withoutIndependentEffects()
+            .isSameAs(preset.colorRecipe.withoutIndependentEffects())
         val presetLutId = CameraPreset.normalizeLutId(preset.lutId)
 //        PLog.d("PresetMatchSnapshot", "colorRecipe=$colorRecipe ${preset.colorRecipe} colorRecipe match: $colorRecipeMatches")
         return lutId == presetLutId &&
@@ -221,7 +227,12 @@ private data class PresetMatchSnapshot(
         val presetRawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
         val differences = buildList {
             if (lutId != presetLutId) add("lutId current=$lutId preset=$presetLutId")
-            if (!colorRecipe.isSameAs(preset.colorRecipe)) add("colorRecipe differs")
+            if (
+                !colorRecipe.withoutIndependentEffects()
+                    .isSameAs(preset.colorRecipe.withoutIndependentEffects())
+            ) {
+                add("colorRecipe differs")
+            }
             if (effects != preset.effects) add("effects current=$effects preset=${preset.effects}")
             if (aspectRatio != preset.aspectRatio) add("aspectRatio current=$aspectRatio preset=${preset.aspectRatio}")
             if (useRaw != preset.useRaw) add("useRaw current=$useRaw preset=${preset.useRaw}")
@@ -427,8 +438,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         initialValue = ColorRecipeParams.DEFAULT
     )
 
-    val currentEffectParams: StateFlow<EffectParams> = userPreferencesRepository.userPreferences
-        .map { it.activeEffectParams }
+    val currentEffectParams: StateFlow<EffectParams> = currentRecipeParams
+        .map { it.toEffectParams() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, EffectParams.DEFAULT)
 
     val customPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
@@ -513,8 +524,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             id = UUID.randomUUID().toString(),
             name = name,
             lutId = CameraPreset.normalizeLutId(currentLutId.value),
-            colorRecipe = currentRecipeParams.value,
-            effects = currentEffectParams.value,
+            colorRecipe = currentRecipeParams.value.withoutIndependentEffects(),
+            effects = currentRecipeParams.value.toEffectParams(),
             aspectRatio = state.value.aspectRatio.name,
             useRaw = useRaw.value,
             useJpgMax = useJpgMax.value,
@@ -542,15 +553,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun getMergedRecipeParams(recipe: ColorRecipeParams = currentRecipeParams.value): ColorRecipeParams {
-        return currentEffectParams.value.applyTo(recipe)
-    }
-
-    fun setEffectParams(effects: EffectParams) {
-        viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(effects = SettingValue(effects))
-            )
-        }
+        return recipe
     }
 
     fun applyPreset(preset: com.hinnka.mycamera.model.CameraPreset?) {
@@ -679,7 +682,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 currentLutId.value
             }
-            contentRepository.lutManager.saveColorRecipeParams(recipeLutId, it.value)
+            val recipeWithEffects = update.effects?.value?.applyTo(it.value) ?: it.value
+            contentRepository.lutManager.saveColorRecipeParams(recipeLutId, recipeWithEffects)
         }
 
         update.lutId?.let {
