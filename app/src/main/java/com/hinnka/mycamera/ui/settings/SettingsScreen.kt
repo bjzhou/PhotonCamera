@@ -119,6 +119,8 @@ import com.hinnka.mycamera.gallery.Jpeg444ExportEncoder
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
+import com.hinnka.mycamera.ml.DepthModelDownloadState
+import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.HncsProfileManager
@@ -128,6 +130,7 @@ import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
+import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
 import com.hinnka.mycamera.ui.components.SliderSettingItem
 import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.RawEditPanel
@@ -467,6 +470,27 @@ fun SettingsScreen(
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+    val depthModelState by remember(context.applicationContext) {
+        DepthModelManager.observe(context)
+    }.collectAsState()
+    val isDepthModelInstalled = depthModelState is DepthModelDownloadState.Ready
+    var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
+    var pendingDefaultVirtualAperture by remember { mutableStateOf<Float?>(null) }
+    val depthModelImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { DepthModelManager.importModel(context, it) }
+    }
+
+    LaunchedEffect(depthModelState, pendingDefaultVirtualAperture) {
+        val pendingAperture = pendingDefaultVirtualAperture
+        if (depthModelState is DepthModelDownloadState.Ready && pendingAperture != null) {
+            viewModel.setDefaultVirtualAperture(pendingAperture)
+            pendingDefaultVirtualAperture = null
+            showDepthModelDownloadDialog = false
+        }
+    }
+
     val availableHncsProfiles = remember(context) {
         HncsProfileManager(context.applicationContext).getAvailableProfiles()
     }
@@ -690,6 +714,18 @@ fun SettingsScreen(
                     viewModel.purchase(activity)
                 }
                 viewModel.showPaymentDialog = false
+            }
+        )
+    }
+
+    if (showDepthModelDownloadDialog) {
+        DepthModelDownloadDialog(
+            state = depthModelState,
+            onDownload = { DepthModelManager.download(context) },
+            onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
+            onDismiss = {
+                showDepthModelDownloadDialog = false
+                pendingDefaultVirtualAperture = null
             }
         )
     }
@@ -1101,12 +1137,25 @@ fun SettingsScreen(
 
                         QualityLevelSetting(
                             title = stringResource(R.string.settings_default_virtual_aperture),
-                            description = stringResource(R.string.settings_default_virtual_aperture_description),
+                            description = stringResource(
+                                R.string.settings_default_virtual_aperture_description
+                            ) + "\n" + stringResource(R.string.virtual_aperture_depth_model_description),
                             levels = listOf(0f to stringResource(R.string.settings_nr_level_off)) + listOf(
                                 1.0f, 1.2f, 1.4f, 1.8f, 2.0f, 2.8f, 4.0f, 5.6f, 8.0f, 11f, 16f
                             ).map { it to "f/${if (it % 1f == 0f) it.toInt() else it}" },
-                            currentLevel = defaultVirtualAperture,
-                            onLevelSelected = { viewModel.setDefaultVirtualAperture(it) }
+                            currentLevel = if (isDepthModelInstalled) {
+                                defaultVirtualAperture
+                            } else {
+                                0f
+                            },
+                            onLevelSelected = { aperture ->
+                                if (aperture <= 0f || isDepthModelInstalled) {
+                                    viewModel.setDefaultVirtualAperture(aperture)
+                                } else {
+                                    pendingDefaultVirtualAperture = aperture
+                                    showDepthModelDownloadDialog = true
+                                }
+                            }
                         )
 
                         HorizontalDivider(

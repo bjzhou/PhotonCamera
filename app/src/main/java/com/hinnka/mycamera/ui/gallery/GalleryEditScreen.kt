@@ -14,6 +14,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Close
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -58,6 +60,8 @@ import com.hinnka.mycamera.model.ColorPaletteMapper
 import com.hinnka.mycamera.model.ColorPaletteState
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.toEffectParams
+import com.hinnka.mycamera.ml.DepthModelDownloadState
+import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.HncsProfileManager
@@ -158,6 +162,27 @@ fun GalleryEditScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val depthModelState by remember(context.applicationContext) {
+        DepthModelManager.observe(context)
+    }.collectAsState()
+    val isDepthModelInstalled = depthModelState is DepthModelDownloadState.Ready
+    var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
+    var pendingVirtualAperture by remember { mutableStateOf<Float?>(null) }
+    val depthModelImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { DepthModelManager.importModel(context, it) }
+    }
+
+    LaunchedEffect(depthModelState, pendingVirtualAperture) {
+        val pendingAperture = pendingVirtualAperture
+        if (depthModelState is DepthModelDownloadState.Ready && pendingAperture != null) {
+            viewModel.setComputationalAperture(pendingAperture)
+            pendingVirtualAperture = null
+            showDepthModelDownloadDialog = false
+        }
+    }
+
     val userPreferencesRepository = remember {
         com.hinnka.mycamera.data.ContentRepository.getInstance(context).userPreferencesRepository
     }
@@ -254,7 +279,11 @@ fun GalleryEditScreen(
     // 编辑标签页状态
     var editTab by remember { mutableIntStateOf(EDIT_TAB_LUT) }
     var showControls by remember { mutableStateOf(true) }
+    var isEditPanelMinimized by remember { mutableStateOf(false) }
     var isZoomed by remember { mutableStateOf(false) }
+    val editTabsScrollState = rememberScrollState()
+    val editPanelScrollState = rememberScrollState()
+    val editPanelDragThreshold = with(LocalDensity.current) { 32.dp.toPx() }
     val scope = rememberCoroutineScope()
     val refreshKey = editSourcePhoto?.id?.let { viewModel.photoRefreshKeys[it] } ?: 0L
     val isBaselineLutEditSheetVisible = showBaselineLutEditSheet && baselineLutEditId != null
@@ -263,7 +292,12 @@ fun GalleryEditScreen(
         !showRawBaselineLutSelectorSheet
 
     val animatePaddingBottom by animateDpAsState(
-        if (shouldShowEditControls) 160.dp else 0.dp
+        when {
+            !shouldShowEditControls -> 0.dp
+            isEditPanelMinimized -> 48.dp
+            else -> 160.dp
+        },
+        label = "editPanelPreviewPadding"
     )
     var previewRenderRequestId by remember { mutableLongStateOf(0L) }
     val shouldCalculateImageHistogram =
@@ -953,141 +987,225 @@ fun GalleryEditScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
+                        modifier = Modifier.padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = if (isEditPanelMinimized) 4.dp else 16.dp
+                        )
                     ) {
-                        // 标签页切换
-                        Row(
+                        val editPanelToggleDescription = stringResource(
+                            if (isEditPanelMinimized) {
+                                R.string.edit_panel_expand
+                            } else {
+                                R.string.edit_panel_minimize
+                            }
+                        )
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(top = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(24.dp)
-                        ) {
-                            TabItem(
-                                title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
-                                isSelected = editTab == EDIT_TAB_LUT,
-                                onClick = { editTab = EDIT_TAB_LUT }
-                            )
-                            TabItem(
-                                title = stringResource(R.string.edit),
-                                isSelected = editTab == EDIT_TAB_ADJUSTMENTS,
-                                onClick = { editTab = EDIT_TAB_ADJUSTMENTS }
-                            )
-                            TabItem(
-                                title = stringResource(R.string.recipe_tab_post),
-                                isSelected = editTab == EDIT_TAB_DETAIL,
-                                onClick = { editTab = EDIT_TAB_DETAIL }
-                            )
-                            if (isRaw) {
-                                TabItem(
-                                    title = "RAW",
-                                    isSelected = editTab == EDIT_TAB_RAW,
-                                    onClick = { editTab = EDIT_TAB_RAW }
-                                )
-                            }
-                            if (!currentPhoto.isVideo) {
-                                TabItem(
-                                    title = stringResource(R.string.crop),
-                                    isSelected = editTab == EDIT_TAB_CROP,
-                                    onClick = { editTab = EDIT_TAB_CROP }
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.heightIn(max = 550.dp).verticalScroll(rememberScrollState())) {
-                            when (editTab) {
-                                EDIT_TAB_LUT -> {
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    LutSelector(
-                                        availableLuts = viewModel.availableLuts,
-                                        currentLutId = editLutId,
-                                        thumbnail = thumbnailBitmap,
-                                        onLutSelected = { viewModel.setEditLut(it) },
-                                        onManageClick = { onFilterManagementClick(it) },
-                                        categoryOrder = categoryOrder,
-                                        modifier = Modifier.fillMaxWidth()
+                                .height(44.dp)
+                                .pointerInput(
+                                    isEditPanelMinimized,
+                                    editPanelDragThreshold
+                                ) {
+                                    var accumulatedDrag = 0f
+                                    detectVerticalDragGestures(
+                                        onDragStart = { accumulatedDrag = 0f },
+                                        onVerticalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            accumulatedDrag += dragAmount
+                                        },
+                                        onDragEnd = {
+                                            when {
+                                                accumulatedDrag > editPanelDragThreshold ->
+                                                    isEditPanelMinimized = true
+                                                accumulatedDrag < -editPanelDragThreshold ->
+                                                    isEditPanelMinimized = false
+                                            }
+                                        }
                                     )
+                                }
+                                .clickable(
+                                    onClickLabel = editPanelToggleDescription
+                                ) {
+                                    isEditPanelMinimized = !isEditPanelMinimized
+                                }
+                        ) {
+                            if (isEditPanelMinimized) {
+                                Text(
+                                    text = stringResource(R.string.edit_panel_title),
+                                    color = Color.White.copy(alpha = 0.82f),
+                                    fontSize = 14.sp,
+                                    modifier = Modifier
+                                        .align(Alignment.CenterStart)
+                                        .padding(start = 4.dp)
+                                )
+                            }
+                            Icon(
+                                imageVector = AppIcons.DragHandle,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.42f),
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .size(width = 32.dp, height = 20.dp)
+                            )
+                            Icon(
+                                imageVector = if (isEditPanelMinimized) {
+                                    AppIcons.ExpandLess
+                                } else {
+                                    AppIcons.ExpandMore
+                                },
+                                contentDescription = editPanelToggleDescription,
+                                tint = Color.White.copy(alpha = 0.82f),
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 4.dp)
+                                    .size(24.dp)
+                            )
+                        }
 
+                        AnimatedVisibility(
+                            visible = !isEditPanelMinimized,
+                            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+                        ) {
+                            Column {
+                                // 标签页切换
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(editTabsScrollState),
+                                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                                ) {
+                                    TabItem(
+                                        title = stringResource(R.string.filter) + " & " + stringResource(R.string.frame),
+                                        isSelected = editTab == EDIT_TAB_LUT,
+                                        onClick = { editTab = EDIT_TAB_LUT }
+                                    )
+                                    TabItem(
+                                        title = stringResource(R.string.edit),
+                                        isSelected = editTab == EDIT_TAB_ADJUSTMENTS,
+                                        onClick = { editTab = EDIT_TAB_ADJUSTMENTS }
+                                    )
+                                    TabItem(
+                                        title = stringResource(R.string.recipe_tab_post),
+                                        isSelected = editTab == EDIT_TAB_DETAIL,
+                                        onClick = { editTab = EDIT_TAB_DETAIL }
+                                    )
+                                    if (isRaw) {
+                                        TabItem(
+                                            title = "RAW",
+                                            isSelected = editTab == EDIT_TAB_RAW,
+                                            onClick = { editTab = EDIT_TAB_RAW }
+                                        )
+                                    }
                                     if (!currentPhoto.isVideo) {
-                                        Spacer(modifier = Modifier.height(16.dp))
-
-                                        // 边框水印选择器
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = stringResource(R.string.frame),
-                                                color = Color.White,
-                                                fontSize = 16.sp
+                                        TabItem(
+                                            title = stringResource(R.string.crop),
+                                            isSelected = editTab == EDIT_TAB_CROP,
+                                            onClick = { editTab = EDIT_TAB_CROP }
+                                        )
+                                    }
+                                }
+                                Column(
+                                    modifier = Modifier
+                                        .heightIn(max = 550.dp)
+                                        .verticalScroll(editPanelScrollState)
+                                ) {
+                                    when (editTab) {
+                                        EDIT_TAB_LUT -> {
+                                            Spacer(modifier = Modifier.height(16.dp))
+                                            LutSelector(
+                                                availableLuts = viewModel.availableLuts,
+                                                currentLutId = editLutId,
+                                                thumbnail = thumbnailBitmap,
+                                                onLutSelected = { viewModel.setEditLut(it) },
+                                                onManageClick = { onFilterManagementClick(it) },
+                                                categoryOrder = categoryOrder,
+                                                modifier = Modifier.fillMaxWidth()
                                             )
 
-                                            if (editFrameId != null) {
-                                                val currentFrame = availableFrames.find { it.id == editFrameId }
-                                                if (currentFrame?.isEditable == true) {
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .clip(RoundedCornerShape(16.dp))
-                                                            .background(Color.White.copy(alpha = 0.1f))
-                                                            .clickable { onOpenFrameEditor(currentFrame.id) }
-                                                            .padding(horizontal = 10.dp, vertical = 4.dp),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = AppIcons.Tune,
-                                                            contentDescription = null,
-                                                            tint = Color(0xFFFFD700),
-                                                            modifier = Modifier.size(14.dp)
+                                            if (!currentPhoto.isVideo) {
+                                                Spacer(modifier = Modifier.height(16.dp))
+
+                                                // 边框水印选择器
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = stringResource(R.string.frame),
+                                                        color = Color.White,
+                                                        fontSize = 16.sp
+                                                    )
+
+                                                    if (editFrameId != null) {
+                                                        val currentFrame = availableFrames.find { it.id == editFrameId }
+                                                        if (currentFrame?.isEditable == true) {
+                                                            Row(
+                                                                modifier = Modifier
+                                                                    .clip(RoundedCornerShape(16.dp))
+                                                                    .background(Color.White.copy(alpha = 0.1f))
+                                                                    .clickable { onOpenFrameEditor(currentFrame.id) }
+                                                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = AppIcons.Tune,
+                                                                    contentDescription = null,
+                                                                    tint = Color(0xFFFFD700),
+                                                                    modifier = Modifier.size(14.dp)
+                                                                )
+                                                                Text(
+                                                                    text = stringResource(R.string.edit),
+                                                                    color = Color.White,
+                                                                    fontSize = 11.sp
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                Spacer(modifier = Modifier.height(8.dp))
+
+
+                                                LazyRow(
+                                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                                    state = frameScrollState
+                                                ) {
+                                                    // 无边框选项
+                                                    item {
+                                                        FrameOption(
+                                                            name = stringResource(R.string.none),
+                                                            isSelected = editFrameId == null,
+                                                            isCustom = false,  // 无边框不是自定义
+                                                            onClick = { viewModel.setEditFrame(null) }
                                                         )
-                                                        Text(
-                                                            text = stringResource(R.string.edit),
-                                                            color = Color.White,
-                                                            fontSize = 11.sp
+                                                    }
+
+                                                    // 边框选项
+                                                    items(availableFrames) { frame ->
+                                                        FrameOption(
+                                                            name = frame.name,
+                                                            isSelected = editFrameId == frame.id,
+                                                            isCustom = !frame.isBuiltIn,  // 添加自定义标识
+                                                            isEditable = frame.isEditable,
+                                                            onClick = {
+                                                                if (editFrameId == frame.id) {
+                                                                    if (frame.isEditable) {
+                                                                        onOpenFrameEditor(frame.id)
+                                                                    }
+                                                                } else {
+                                                                    viewModel.setEditFrame(frame.id)
+                                                                }
+                                                            }
                                                         )
                                                     }
                                                 }
                                             }
                                         }
-
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-
-                                        LazyRow(
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                            state = frameScrollState
-                                        ) {
-                                            // 无边框选项
-                                            item {
-                                                FrameOption(
-                                                    name = stringResource(R.string.none),
-                                                    isSelected = editFrameId == null,
-                                                    isCustom = false,  // 无边框不是自定义
-                                                    onClick = { viewModel.setEditFrame(null) }
-                                                )
-                                            }
-
-                                            // 边框选项
-                                            items(availableFrames) { frame ->
-                                                FrameOption(
-                                                    name = frame.name,
-                                                    isSelected = editFrameId == frame.id,
-                                                    isCustom = !frame.isBuiltIn,  // 添加自定义标识
-                                                    isEditable = frame.isEditable,
-                                                    onClick = {
-                                                        if (editFrameId == frame.id) {
-                                                            if (frame.isEditable) {
-                                                                onOpenFrameEditor(frame.id)
-                                                            }
-                                                        } else {
-                                                            viewModel.setEditFrame(frame.id)
-                                                        }
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
                                 EDIT_TAB_ADJUSTMENTS -> {
                                     Spacer(modifier = Modifier.height(6.dp))
                                     val effectiveRecipe = editPhotoRecipeParams ?: editLutRecipeParams
@@ -1301,15 +1419,33 @@ fun GalleryEditScreen(
                                         // 细节处理调整 (锐化, 降噪, 杂色降噪)
                                         val aperture = editComputationalAperture
                                         SliderSettingItem(
-                                            title = stringResource(R.string.virtual_aperture),
+                                            title = stringResource(
+                                                R.string.gallery_large_aperture_blur_title
+                                            ),
+                                            description = stringResource(
+                                                R.string.gallery_large_aperture_blur_description
+                                            ),
                                             value = editComputationalAperture ?: 2.8f,
                                             valueRange = 1.0f..16.0f,
                                             onValueChange = { viewModel.setComputationalAperture(it) },
                                             onValueChangeFinished = { },
-                                            toggleValue = aperture != null && aperture > 0f,
+                                            toggleValue = isDepthModelInstalled &&
+                                                aperture != null &&
+                                                aperture > 0f,
+                                            enabled = isDepthModelInstalled &&
+                                                aperture != null &&
+                                                aperture > 0f,
                                             onToggleChange = { checked ->
                                                 if (checked) {
-                                                    viewModel.setComputationalAperture(2.8f)
+                                                    val requestedAperture = aperture
+                                                        ?.takeIf { it > 0f }
+                                                        ?: 2.8f
+                                                    if (isDepthModelInstalled) {
+                                                        viewModel.setComputationalAperture(requestedAperture)
+                                                    } else {
+                                                        pendingVirtualAperture = requestedAperture
+                                                        showDepthModelDownloadDialog = true
+                                                    }
                                                 } else {
                                                     viewModel.setComputationalAperture(null)
                                                 }
@@ -1558,6 +1694,8 @@ fun GalleryEditScreen(
                                         )
                                     }
                                 }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1608,6 +1746,18 @@ fun GalleryEditScreen(
                     viewModel.purchase(activity)
                 }
                 viewModel.showPaymentDialog = false
+            }
+        )
+    }
+
+    if (showDepthModelDownloadDialog) {
+        DepthModelDownloadDialog(
+            state = depthModelState,
+            onDownload = { DepthModelManager.download(context) },
+            onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
+            onDismiss = {
+                showDepthModelDownloadDialog = false
+                pendingVirtualAperture = null
             }
         )
     }

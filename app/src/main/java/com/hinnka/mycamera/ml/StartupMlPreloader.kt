@@ -21,12 +21,19 @@ object StartupMlPreloader {
 
         // RAW processing does not consume a depth map. Keep the model resident only when the
         // configured virtual-aperture path will actually use it.
-        if (preferences.defaultVirtualAperture > 0f) {
+        if (
+            preferences.defaultVirtualAperture > 0f &&
+            DepthModelManager.isInstalled(appContext)
+        ) {
             prewarm("DepthEstimator") {
                 SharedDepthEstimator.prewarm(appContext)
             }
         } else {
-            PLog.d(TAG, "Skip DepthEstimator preload")
+            PLog.d(
+                TAG,
+                "Skip DepthEstimator preload: enabled=${preferences.defaultVirtualAperture > 0f}, " +
+                    "modelInstalled=${DepthModelManager.isInstalled(appContext)}"
+            )
         }
 
         if (preferences.aiFocusTargetMode != AiFocusTargetMode.OFF) {

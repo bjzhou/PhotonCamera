@@ -32,14 +32,9 @@ A professional-grade color adjustment system allowing fine-tuning across multipl
 * **Noise Reduction**: Provides effective noise reduction while focusing on preserving natural details.
 
 ### 6. Large Aperture Bokeh
-* **AI-Driven**: Integrates the **midas-v2** depth detection local AI model, optimized for Qualcomm chips.
+* **AI-Driven**: Uses the local **Depth Anything V2** depth-estimation model.
 * **Precise Depth**: Offers accurate depth sensing for natural background blur transitions (ongoing refinements).
-
-Depth Anything V3 is also supported.
-
-Usage:
-1. Download the TFLite version from https://huggingface.co/qualcomm/Depth-Anything-V3 and place it in `assets`.
-2. In `DepthBokehProcessor`, initialize `depthEstimator` with `DepthEstimator(appContext, DepthEstimator.MODEL_DEPTH_ANYTHING)`.
+* **On-demand Download**: The model is not bundled in the APK. The app prompts for a verified download when virtual aperture is first enabled.
 
 ### 7. Phantom Mode
 * **Raw Quality**: Directly bridges with the system camera for image capture while applying Photon Camera's LUT engine. This bypasses the typical "bad image quality" and "over-sharpening" issues found in standard third-party camera APIs.

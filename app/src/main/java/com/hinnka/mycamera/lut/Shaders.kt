@@ -701,8 +701,179 @@ object Shaders {
     """.trimIndent()
 
     /**
-     * 后期处理专用：物理级的 PSF Splatting 模拟算法。
-     * 采用大半径 Gather、逆向 HDR 提亮（点光源扩张）、能量守恒、球面像差（肥皂泡边缘）和口径蚀来高度还原真实的单反镜头虚化质感。
+     * 提取适合重建为弥散圆的紧凑高光。
+     *
+     * 使用两圈探针寻找点光源外侧的局部背景，因此输入中已经存在一定直径的真实散景
+     * 仍能被完整提取。判定以相对局部对比为主；大块天空、窗户等连续高亮区域内部
+     * 不具备足够多的较暗方向，不会进入光斑重建通道。
+     */
+    val COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uInputTexture;
+        uniform sampler2D uDepthTexture;
+        uniform mat4 uDepthMatrix;
+        uniform float uMaxBlurRadius;
+        uniform float uAperture;
+        uniform float uFocusDepth;
+        uniform vec2 uTexelSize;
+        uniform int uLinearInput;
+
+        const float LENS_GAMMA = 2.2;
+        const vec2 PROBE_DIRECTIONS[12] = vec2[](
+            vec2( 1.0,  0.0),
+            vec2(-1.0,  0.0),
+            vec2( 0.0,  1.0),
+            vec2( 0.0, -1.0),
+            vec2( 0.70710678,  0.70710678),
+            vec2(-0.70710678,  0.70710678),
+            vec2( 0.70710678, -0.70710678),
+            vec2(-0.70710678, -0.70710678),
+            vec2( 0.86602540,  0.5),
+            vec2(-0.86602540,  0.5),
+            vec2( 0.86602540, -0.5),
+            vec2(-0.86602540, -0.5)
+        );
+
+        vec3 toLinear(vec3 color) {
+            if (uLinearInput != 0) return max(color, vec3(0.0));
+            return pow(clamp(color, 0.0, 1.0), vec3(LENS_GAMMA));
+        }
+
+        float luminance(vec3 color) {
+            return dot(color, vec3(0.2126, 0.7152, 0.0722));
+        }
+
+        float computeCoc(float depth) {
+            float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
+            float defocus = pow(gap, 1.1);
+            return clamp(
+                defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)),
+                0.0,
+                uMaxBlurRadius
+            );
+        }
+
+        void main() {
+            vec2 depthUV = clamp(
+                (uDepthMatrix * vec4(vTexCoord, 0.0, 1.0)).xy,
+                0.0,
+                1.0
+            );
+            float coc = computeCoc(texture(uDepthTexture, depthUV).r);
+            if (coc < 1.5) {
+                fragColor = vec4(0.0);
+                return;
+            }
+
+            vec3 centerLinear = toLinear(textureLod(uInputTexture, vTexCoord, 0.0).rgb);
+            float centerLuma = luminance(centerLinear);
+            float innerProbeRadius = clamp(coc * 0.70, 5.0, 32.0);
+            float outerProbeRadius = clamp(
+                max(coc * 2.40, uMaxBlurRadius * 0.80),
+                16.0,
+                128.0
+            );
+
+            vec3 surroundLinear = vec3(0.0);
+            float darkerDirectionCount = 0.0;
+            float maxInnerLuma = 0.0;
+            vec2 innerBrightnessMoment = vec2(0.0);
+            for (int i = 0; i < 12; i++) {
+                vec2 innerUV = clamp(
+                    vTexCoord + PROBE_DIRECTIONS[i] * innerProbeRadius * uTexelSize,
+                    0.0,
+                    1.0
+                );
+                vec2 outerUV = clamp(
+                    vTexCoord + PROBE_DIRECTIONS[i] * outerProbeRadius * uTexelSize,
+                    0.0,
+                    1.0
+                );
+                vec3 innerLinear = toLinear(textureLod(uInputTexture, innerUV, 0.0).rgb);
+                vec3 outerLinear = toLinear(textureLod(uInputTexture, outerUV, 0.0).rgb);
+                float innerLuma = luminance(innerLinear);
+                float outerLuma = luminance(outerLinear);
+                maxInnerLuma = max(maxInnerLuma, innerLuma);
+                innerBrightnessMoment += PROBE_DIRECTIONS[i] * innerLuma;
+
+                vec3 neighborLinear = innerLuma < outerLuma
+                    ? innerLinear
+                    : outerLinear;
+                float neighborLuma = luminance(neighborLinear);
+                surroundLinear += neighborLinear;
+
+                float darkerThreshold = centerLuma * 0.90 - 0.008;
+                darkerDirectionCount += 1.0 - smoothstep(
+                    darkerThreshold,
+                    darkerThreshold + 0.035,
+                    neighborLuma
+                );
+            }
+            surroundLinear *= 1.0 / 12.0;
+
+            float contrast = max(centerLuma - luminance(surroundLinear), 0.0);
+            float relativeContrast = contrast / max(centerLuma, 0.06);
+            float darkDirectionRatio = darkerDirectionCount / 12.0;
+
+            // Medium highlights must already be visibly bright and highly
+            // isolated. This rejects ordinary sunlit foliage, whose linear
+            // luminance was incorrectly admitted by the previous 0.07 floor.
+            float mediumHighlightGate = smoothstep(0.18, 0.50, centerLuma)
+                * max(
+                    smoothstep(0.06, 0.18, contrast),
+                    smoothstep(0.18, 0.38, relativeContrast)
+                )
+                * smoothstep(0.68, 0.88, darkDirectionRatio);
+
+            // Strong point lights use a higher absolute floor. Their local
+            // contrast may be slightly lower after sensor clipping, but they
+            // still need a mostly dark surround to enter the peak PSF path.
+            float strongPointGate = smoothstep(0.65, 0.90, centerLuma)
+                * max(
+                    smoothstep(0.04, 0.14, contrast),
+                    smoothstep(0.12, 0.30, relativeContrast)
+                )
+                * smoothstep(0.62, 0.84, darkDirectionRatio);
+
+            // Non-maximum suppression for an already-soft highlight disc.
+            // Off-center pixels see a brighter inner-ring sample toward the
+            // same light source and are rejected. The directional moment also
+            // suppresses asymmetric fragments, leaving one compact center
+            // region instead of many overlapping PSF emitters.
+            float peakDominance = centerLuma - maxInnerLuma;
+            float localMaximumGate = smoothstep(-0.01, 0.05, peakDominance);
+            float normalizedMoment = length(innerBrightnessMoment / 12.0)
+                / max(centerLuma, 0.06);
+            float centerednessGate = 1.0 - smoothstep(
+                0.05,
+                0.2,
+                normalizedMoment
+            );
+
+            float compactHighlight = max(
+                mediumHighlightGate,
+                strongPointGate
+            ) * localMaximumGate * centerednessGate;
+
+            vec3 residual = max(centerLinear - surroundLinear, vec3(0.0));
+            // LDR point lights have already been clipped and blurred by the
+            // taking lens. Preserve part of their observed color as well as the
+            // local residual so the later PSF can recover a visible disc.
+            vec3 sourceSignal = mix(residual, centerLinear, 0.35);
+            fragColor = vec4(sourceSignal * compactHighlight, compactHighlight);
+        }
+    """.trimIndent()
+
+    /**
+     * 后期处理专用的圆形 PSF gather。
+     *
+     * 基础虚化严格按归一化权重累积，不对普通高亮施加亮度增益。被独立通道识别出的
+     * 紧凑高光才会进行有限的欠曝辐射重建，并通过同一圆形口径核扩散为弥散圆。
      */
     val PSF_SPLAT_FRAGMENT_SHADER = """
         #version 300 es
@@ -712,6 +883,7 @@ object Shaders {
         out vec4 fragColor;
 
         uniform sampler2D uInputTexture;
+        uniform sampler2D uHighlightTexture;
         uniform sampler2D uDepthTexture;
 
         uniform mat4 uDepthMatrix;
@@ -721,22 +893,11 @@ object Shaders {
         uniform vec2 uTexelSize;
         uniform int uLinearInput;
 
-        const float PI = 3.14159265359;
         const float GOLDEN_ANGLE = 2.39996323;
         const int SAMPLES = 640;
         const float LENS_GAMMA = 2.2;
 
-        // 简单的哈希函数，用于产生像素级的抖动
-        float hash(vec2 p) {
-            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-        }
-
-        float backgroundGap(float depth) {
-            return max(uFocusDepth - depth - 0.025, 0.0);
-        }
-
         float computeCoc(float depth) {
-            // Align with BokehMe: Symmetric defocus for both foreground and background
             float gap = max(abs(uFocusDepth - depth) - 0.015, 0.0);
             float defocus = pow(gap, 1.1);
             return clamp(defocus * uMaxBlurRadius * (1.0 / max(uAperture, 0.45)), 0.0, uMaxBlurRadius);
@@ -745,11 +906,19 @@ object Shaders {
         float apertureWeight(vec2 offsetPixels, float coc) {
             vec2 p = offsetPixels / max(coc, 0.001);
             float lenP = length(p);
-            
-            // Perfect circular "creamy" bokeh with a soap bubble rim.
-            float inside = smoothstep(1.0, 0.88, lenP);
-            float rim = smoothstep(0.7, 0.98, lenP);
-            return inside * (1.0 + rim * 0.4); 
+
+            // Keep a coherent disc interior like a real aperture image, then
+            // feather only its outer band. The previous wide fade behaved like
+            // Gaussian haze and erased the circle itself.
+            float support = 1.0 - smoothstep(0.86, 1.0, lenP);
+            float radialTransmission = mix(
+                1.0,
+                0.90,
+                smoothstep(0.0, 0.86, lenP)
+            );
+            float rim = smoothstep(0.70, 0.82, lenP)
+                * (1.0 - smoothstep(0.88, 0.97, lenP));
+            return support * radialTransmission * (1.0 + rim * 0.10);
         }
 
         vec3 toLinear(vec3 color) {
@@ -774,13 +943,41 @@ object Shaders {
                 return;
             }
 
-            // 引入随机旋转抖动，打破 Vogel Spiral 的环状条纹
-            float noise = hash(vTexCoord + 0.5);
-            float rotation = noise * PI * 2.0;
+            // Keep one stable Vogel orientation for the peak-preserving path.
+            // Per-pixel random rotation changes which source texel wins and
+            // turns a circular footprint into a noisy, irregular union.
+            const float rotation = 0.0;
 
             float centerWeight = 4.0 / (centerCoc * 0.3 + 1.0);
-            vec3 accColor = toLinear(centerColor.rgb) * centerWeight;
+            float sampleFootprintUv = uMaxBlurRadius
+                * 1.8
+                * uTexelSize.x
+                / sqrt(float(SAMPLES));
+            float inputIntegrationLod = max(
+                0.0,
+                log2(sampleFootprintUv * float(textureSize(uInputTexture, 0).x))
+            );
+            float highlightIntegrationLod = max(
+                0.0,
+                log2(sampleFootprintUv * float(textureSize(uHighlightTexture, 0).x))
+            );
+
+            vec3 centerHighlight = textureLod(
+                uHighlightTexture,
+                vTexCoord,
+                highlightIntegrationLod
+            ).rgb;
+            vec3 centerLinear = toLinear(centerColor.rgb);
+            vec3 accColor = max(centerLinear - centerHighlight, vec3(0.0))
+                * centerWeight;
+            vec3 accCompactHighlight = centerHighlight;
+            vec3 peakCompactHighlight = centerHighlight;
+            float peakCompactLuma = dot(
+                centerHighlight,
+                vec3(0.2126, 0.7152, 0.0722)
+            );
             float accWeight = centerWeight;
+            float accHighlightKernelWeight = 1.0;
 
             float softBase = max(2.5, uMaxBlurRadius * 0.08);
 
@@ -793,13 +990,19 @@ object Shaders {
                 vec2 sampleUV = clamp(vTexCoord + offset, 0.0, 1.0);
                 vec2 offsetPixels = offset / uTexelSize;
 
-                // 第一遍采样获取亮度，用于决定 LOD
-                vec3 sColorBase = textureLod(uInputTexture, sampleUV, 2.0).rgb;
-                float baseLuma = dot(sColorBase, vec3(0.299, 0.587, 0.114));
-                
-                // 动态 LOD：高光处使用更高的 LOD 使其融合，消除条纹
-                float lod = log2(r * 0.3 + 1.8) + smoothstep(0.4, 0.9, baseLuma) * 1.5;
-                vec3 sColor = textureLod(uInputTexture, sampleUV, lod).rgb;
+                // A constant footprint matches the uniform area density of the
+                // Vogel samples. Radius-dependent LOD smears point lights before
+                // the aperture kernel can form a disc.
+                vec3 sColor = textureLod(
+                    uInputTexture,
+                    sampleUV,
+                    inputIntegrationLod
+                ).rgb;
+                vec3 compactHighlight = textureLod(
+                    uHighlightTexture,
+                    sampleUV,
+                    highlightIntegrationLod
+                ).rgb;
                 
                 vec2 sDepthUV = clamp((uDepthMatrix * vec4(sampleUV, 0.0, 1.0)).xy, 0.0, 1.0);
                 float sDepth = texture(uDepthTexture, sDepthUV).r;
@@ -809,35 +1012,94 @@ object Shaders {
                 float fW = smoothstep(r - softBase, r + softBase * 0.5, sCoc);
                 float bW = smoothstep(r - softBase, r + softBase * 0.5, centerCoc);
 
-                float depthDiff = sDepth - centerDepth;
-                float isNearer = smoothstep(0.01, 0.04, depthDiff);
+                // The depth preprocessor guarantees disparity polarity:
+                // larger values are closer to the camera. A source behind the
+                // destination pixel must never be composited over that nearer
+                // foreground surface.
+                float sourceIsNearer = smoothstep(
+                    0.025,
+                    0.075,
+                    sDepth - centerDepth
+                );
+                float centerOccludesSource = smoothstep(
+                    0.025,
+                    0.075,
+                    centerDepth - sDepth
+                );
+                float sourceVisibility = 1.0 - centerOccludesSource;
 
-                float weight = mix(bW, fW, isNearer);
+                float weight = mix(bW, fW, sourceIsNearer);
                 weight *= apertureWeight(offsetPixels, max(sCoc, centerCoc));
-
-                float isSharpForeground = isNearer * (1.0 - smoothstep(0.3, 2.0, sCoc));
-                weight *= (1.0 - isSharpForeground);
+                weight *= sourceVisibility;
 
                 if (weight > 0.0001) {
                     vec3 sLinear = toLinear(sColor);
-                    float luma = dot(sLinear, vec3(0.2126, 0.7152, 0.0722));
-                    
-                    // 更加平滑的高光增强曲线
-                    float highlight = max(0.0, luma - 0.55);
-                    float hdrBoost = uLinearInput != 0
-                        ? 1.0
-                        : 1.0 + pow(highlight, 1.8) * 18.0 * smoothstep(1.5, 5.0, sCoc);
+                    vec3 baseLinear = max(sLinear - compactHighlight, vec3(0.0));
+                    accColor += baseLinear * weight;
+                    accWeight += weight;
+                }
 
-                    float edge = smoothstep(0.75, 1.03, r / max(sCoc, 0.1));
-                    float ring = 1.0 + edge * 0.3 * smoothstep(1.5, 5.0, sCoc);
+                // Highlight contribution follows the source CoC, not the
+                // destination CoC, so an isolated source expands into a
+                // bounded circular footprint. Its own kernel denominator keeps
+                // the light-source energy independent from depth-edge weights.
+                float highlightWeight = fW
+                    * apertureWeight(offsetPixels, sCoc)
+                    * sourceVisibility;
+                if (highlightWeight > 0.0001) {
+                    accCompactHighlight += compactHighlight * highlightWeight;
+                    accHighlightKernelWeight += highlightWeight;
 
-                    float fw = weight * ring;
-                    accColor += sLinear * hdrBoost * fw;
-                    accWeight += fw;
+                    // A normalized convolution preserves total energy but a
+                    // tiny source occupies very little of a large aperture and
+                    // becomes invisible in an LDR image. Keep the strongest
+                    // source response so clipped point lights still form a
+                    // coherent disc; compact-highlight classification prevents
+                    // continuous bright regions from using this path.
+                    vec3 peakCandidate = compactHighlight * highlightWeight;
+                    float peakCandidateLuma = dot(
+                        peakCandidate,
+                        vec3(0.2126, 0.7152, 0.0722)
+                    );
+                    float peakWins = step(peakCompactLuma, peakCandidateLuma);
+                    peakCompactHighlight = mix(
+                        peakCompactHighlight,
+                        peakCandidate,
+                        peakWins
+                    );
+                    peakCompactLuma = max(peakCompactLuma, peakCandidateLuma);
                 }
             }
 
-            vec3 finalColor = accWeight > 0.001 ? toDisplay(accColor / accWeight) : centerColor.rgb;
+            vec3 finalLinear = accWeight > 0.001
+                ? accColor / accWeight
+                : toLinear(centerColor.rgb);
+            vec3 energyPreservingHighlight = accCompactHighlight
+                / max(accHighlightKernelWeight, 0.001);
+            if (uLinearInput != 0) {
+                // Linear HDR inputs already retain scene radiance.
+                finalLinear += energyPreservingHighlight;
+            } else {
+                // LDR point lights need a peak-preserving response to remain
+                // visible after their energy is spread over the aperture disc.
+                // Blend it with the normalized result to retain smooth overlap,
+                // then compress stronger sources so they receive only a gentle
+                // lift instead of abruptly turning white.
+                vec3 reconstructedHighlight = max(
+                    energyPreservingHighlight * 1.35,
+                    peakCompactHighlight * 0.72
+                );
+                vec3 compressedHighlight = reconstructedHighlight
+                    / (vec3(1.0) + reconstructedHighlight * 2.0);
+                vec3 highlightOpacity = min(
+                    vec3(0.52),
+                    vec3(1.0) - exp(-compressedHighlight * 2.8)
+                );
+                finalLinear = clamp(finalLinear, 0.0, 1.0);
+                finalLinear += (vec3(1.0) - finalLinear) * highlightOpacity;
+            }
+
+            vec3 finalColor = toDisplay(finalLinear);
             if (uLinearInput == 0) {
                 finalColor = clamp(finalColor, 0.0, 1.0);
             }

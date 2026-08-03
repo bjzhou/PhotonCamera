@@ -43,6 +43,7 @@ import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.processor.RawBurstFrameRole
 import com.hinnka.mycamera.processor.RawBurstGyroSelector
@@ -1886,7 +1887,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setFixTonemapCapture(prefs.fixTonemapCapture)
 
                 // 应用保存的虚拟光圈
-                if (prefs.defaultVirtualAperture > 0f) {
+                if (
+                    prefs.defaultVirtualAperture > 0f &&
+                    DepthModelManager.isInstalled(getApplication())
+                ) {
                     setVirtualApertureAuto(true)
                     setAperture(prefs.defaultVirtualAperture)
                 }

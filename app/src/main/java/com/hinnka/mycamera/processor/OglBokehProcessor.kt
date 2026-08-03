@@ -18,6 +18,7 @@ class OglBokehProcessor {
     }
 
     private var uDepthMatrixLoc: Int = 0
+    private var compactHighlightProgramId = 0
     private var bokehProgramId = 0
     private var bokehCompositeProgramId = 0
     private var jbuUpsampleProgramId = 0
@@ -109,8 +110,95 @@ class OglBokehProcessor {
             drawQuad(depthSharpenProgramId)
 
             val finalDepthTex = refinedDepthTex[0]
+            val focusDepth = sampleDepth(lowResDepthMap, focusX, focusY)
+            val maxBlurRadius = originalImage.width.toFloat() / 45.0f
+            val identity = FloatArray(16)
+            android.opengl.Matrix.setIdentityM(identity, 0)
 
-            // Step 3: Render the expensive PSF at a bounded working resolution.
+            // Step 3: Classify only compact, isolated highlights. This prevents
+            // large bright regions from entering the inferred-radiance bokeh path.
+            val compactHighlightTex = IntArray(1)
+            GLES30.glGenTextures(1, compactHighlightTex, 0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                bokehWidth,
+                bokehHeight,
+                0,
+                GLES30.GL_RGBA,
+                if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                null
+            )
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                compactHighlightTex[0],
+                0
+            )
+            requireFramebufferComplete("compact bokeh highlight")
+            GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            GLES30.glUseProgram(compactHighlightProgramId)
+
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uInputTexture"),
+                0
+            )
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthTexture"),
+                1
+            )
+            GLES30.glUniformMatrix4fv(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
+                1,
+                false,
+                identity,
+                0
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uMaxBlurRadius"),
+                maxBlurRadius
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
+                aperture
+            )
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uFocusDepth"),
+                focusDepth
+            )
+            GLES30.glUniform2f(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
+                1.0f / originalImage.width,
+                1.0f / originalImage.height
+            )
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
+                if (linearInput) 1 else 0
+            )
+            drawQuad(compactHighlightProgramId)
+
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
+            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            GLES30.glTexParameteri(
+                GLES30.GL_TEXTURE_2D,
+                GLES30.GL_TEXTURE_MIN_FILTER,
+                GLES30.GL_LINEAR_MIPMAP_LINEAR
+            )
+
+            // Step 4: Render the expensive PSF at a bounded working resolution.
             val bokehTex = IntArray(1)
             GLES30.glGenTextures(1, bokehTex, 0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, bokehTex[0])
@@ -134,9 +222,6 @@ class OglBokehProcessor {
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             GLES30.glUseProgram(bokehProgramId)
 
-            val focusDepth = sampleDepth(lowResDepthMap, focusX, focusY)
-            val maxBlurRadius = originalImage.width.toFloat() / 45.0f
-
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uInputTexture"), 0)
@@ -144,6 +229,13 @@ class OglBokehProcessor {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalDepthTex)
             GLES30.glUniform1i(GLES30.glGetUniformLocation(bokehProgramId, "uDepthTexture"), 1)
+
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
+            GLES30.glUniform1i(
+                GLES30.glGetUniformLocation(bokehProgramId, "uHighlightTexture"),
+                2
+            )
 
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uMaxBlurRadius"), maxBlurRadius)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uAperture"), aperture)
@@ -154,13 +246,11 @@ class OglBokehProcessor {
                 if (linearInput) 1 else 0
             )
 
-            val identity = FloatArray(16)
-            android.opengl.Matrix.setIdentityM(identity, 0)
             GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(bokehProgramId, "uDepthMatrix"), 1, false, identity, 0)
 
             drawQuad(bokehProgramId)
 
-            // Step 4: Resolve at full resolution. In-focus detail is sampled directly
+            // Step 5: Resolve at full resolution. In-focus detail is sampled directly
             // from the original image, while defocused regions use the PSF texture.
             val outputTex = IntArray(1)
             GLES30.glGenTextures(1, outputTex, 0)
@@ -246,6 +336,7 @@ class OglBokehProcessor {
             GLES30.glDeleteTextures(1, intArrayOf(lowResDepthTex), 0)
             GLES30.glDeleteTextures(1, highResDepthTex, 0)
             GLES30.glDeleteTextures(1, refinedDepthTex, 0)
+            GLES30.glDeleteTextures(1, compactHighlightTex, 0)
             GLES30.glDeleteTextures(1, bokehTex, 0)
             GLES30.glDeleteTextures(1, outputTex, 0)
             GLES30.glDeleteFramebuffers(1, fbo, 0)
@@ -385,6 +476,11 @@ class OglBokehProcessor {
         val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
         check(vs != 0) { "Bokeh vertex shader compilation failed" }
         try {
+            compactHighlightProgramId = createProgram(
+                vs,
+                Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
+                "compact bokeh highlight"
+            )
             bokehProgramId = createProgram(vs, Shaders.PSF_SPLAT_FRAGMENT_SHADER, "PSF bokeh")
             bokehCompositeProgramId = createProgram(
                 vs,
@@ -444,6 +540,7 @@ class OglBokehProcessor {
     }
 
     private fun releaseGL() {
+        if (compactHighlightProgramId != 0) GLES30.glDeleteProgram(compactHighlightProgramId)
         if (bokehProgramId != 0) GLES30.glDeleteProgram(bokehProgramId)
         if (bokehCompositeProgramId != 0) GLES30.glDeleteProgram(bokehCompositeProgramId)
         if (jbuUpsampleProgramId != 0) GLES30.glDeleteProgram(jbuUpsampleProgramId)
@@ -461,6 +558,7 @@ class OglBokehProcessor {
         eglDisplay = EGL14.EGL_NO_DISPLAY
         eglContext = EGL14.EGL_NO_CONTEXT
         eglSurface = EGL14.EGL_NO_SURFACE
+        compactHighlightProgramId = 0
         bokehProgramId = 0
         bokehCompositeProgramId = 0
         jbuUpsampleProgramId = 0
