@@ -9,8 +9,7 @@ object MgcUiHook {
     @JvmStatic
     fun onActivityCreate(activity: Activity) {
         val appContext = activity.applicationContext
-        PhotonRawClient.initialize(appContext)
-        MgcRawPipelineRuntime.configure(appContext)
+        MgcJpegPipelineRuntime.configure(appContext)
         PhotonLookClient.syncAsync(appContext, force = true)
     }
 }

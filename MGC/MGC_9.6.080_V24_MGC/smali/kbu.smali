@@ -535,12 +535,6 @@
 
     nop
 
-    invoke-virtual {p0}, Ljava/nio/ByteBuffer;->duplicate()Ljava/nio/ByteBuffer;
-
-    move-result-object v14
-
-    nop
-
     nop
 
     nop
@@ -567,7 +561,6 @@
 
     invoke-virtual {v1}, Ljava/io/FileOutputStream;->flush()V
 
-    invoke-static {v0, v14}, Lcom/hinnka/mycamera/previewhook/api/PhotonRawClient;->onMgcDngOutputReady(Ljava/lang/Object;Ljava/nio/ByteBuffer;)Z
     :try_end_2
     .catchall {:try_start_2 .. :try_end_2} :catchall_2
 

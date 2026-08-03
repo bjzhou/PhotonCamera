@@ -5847,6 +5847,12 @@
 .method public final s([BLmla;)Lsui;
     .locals 6
 
+    const-string v0, "lwp.s"
+
+    invoke-static {v0, p1}, Lcom/hinnka/mycamera/previewhook/api/MgcCapturedJpegHook;->processJpegWithSource(Ljava/lang/String;[B)[B
+
+    move-result-object p1
+
     goto/32 :goto_1
 
     nop

@@ -27,8 +27,16 @@ object MgcVfeLutRuntime {
         includeLutMask = false,
     )
 
+    private val capturedJpegShaderVariant = previewShaderVariant.copy(
+        textureSource = PreviewColorTextureSource.TEXTURE_2D,
+    )
+
     private val previewFragmentShader: String by lazy {
         PreviewColorShader.source(previewShaderVariant)
+    }
+
+    private val capturedJpegFragmentShader: String by lazy {
+        PreviewColorShader.source(capturedJpegShaderVariant)
     }
 
     @Volatile
@@ -189,6 +197,10 @@ object MgcVfeLutRuntime {
 
     @JvmStatic
     fun getFragmentShaderSource(): String = previewFragmentShader.removePrefix("\uFEFF").trimStart()
+
+    @JvmStatic
+    fun getCapturedJpegFragmentShaderSource(): String =
+        capturedJpegFragmentShader.removePrefix("\uFEFF").trimStart()
 
     @JvmStatic
     fun getSnapshotVersion(): Int = snapshotVersion

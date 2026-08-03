@@ -328,6 +328,7 @@ object MgcSurfaceProxyPreviewRenderer {
                     GLES30.glUseProgram(programId)
                     bindInputTexture()
                     bindLutTexture(snapshot)
+                    bindBasicToneTexture()
                     bindCurveTexture()
                     bindMatricesAndGeometry(params)
                     bindSnapshotUniforms(snapshot, params.buffer, viewWidth, viewHeight)
@@ -382,6 +383,13 @@ object MgcSurfaceProxyPreviewRenderer {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
             uniform1i("uLutTexture", 1)
+        }
+
+        private fun bindBasicToneTexture() {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyLutTextureId)
+            uniform1i("uBasicToneLut", 2)
+            uniform1f("uBasicToneIntensity", 0f)
         }
 
         private fun bindCurveTexture() {
@@ -447,6 +455,11 @@ object MgcSurfaceProxyPreviewRenderer {
             uniform1f("uNoiseSeed", (System.nanoTime() and 0xFFFFFF).toFloat() / 1048576f)
             uniform1f("uLowRes", snapshot.lowRes)
             uniform1f("uAspectRatio", viewWidth.toFloat() / viewHeight.coerceAtLeast(1).toFloat())
+            uniform1f("uFlash", 0f)
+            uniform3f("uGradingHues", 0f, 0f, 0f)
+            uniform3f("uGradingAmounts", 0f, 0f, 0f)
+            uniform1f("uGradingBalance", 0f)
+            uniform1f("uGradingBlending", 0f)
             uniformMatrix3("uPrimaryCalibrationMatrix", IDENTITY_MATRIX3)
             uniform1fArray("uLchHueAdjustments[0]", snapshot.lchHueAdjustments)
             uniform1fArray("uLchChromaAdjustments[0]", snapshot.lchChromaAdjustments)
@@ -720,6 +733,11 @@ object MgcSurfaceProxyPreviewRenderer {
         private fun uniform2f(name: String, x: Float, y: Float) {
             val loc = GLES30.glGetUniformLocation(programId, name)
             if (loc >= 0) GLES30.glUniform2f(loc, x, y)
+        }
+
+        private fun uniform3f(name: String, x: Float, y: Float, z: Float) {
+            val loc = GLES30.glGetUniformLocation(programId, name)
+            if (loc >= 0) GLES30.glUniform3f(loc, x, y, z)
         }
 
         private fun uniform4f(name: String, x: Float, y: Float, z: Float, w: Float) {
