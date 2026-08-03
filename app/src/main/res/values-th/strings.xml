@@ -632,8 +632,8 @@
     <string name="settings_hlg_hardware_compatibility_description">ภาพอาจมืดหรือผิดปกติหลังจากเปิด HLG บนอุปกรณ์บางตัว หากคุณพบภาพที่ผิดปกติ โปรดเปิดตัวเลือกนี้สำหรับการถอดรหัสด้วยตนเอง หากภาพเป็นปกติโปรดปิดไว้</string>
     <string name="settings_use_p3_color_space">ช่วงสี P3</string>
     <string name="settings_use_p3_color_space_description">เปิดใช้งานเอาต์พุต Display P3 บนอุปกรณ์ที่รองรับ ปิดโดยค่าเริ่มต้น</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">HDR ถูกเปิดใช้งานตามค่าเริ่มต้น</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">จอแสดงผล HDR ถูกเปิดใช้งานตามค่าเริ่มต้น</string>
+    <string name="settings_ultra_hdr_gain_map">แผนที่เกน Ultra HDR</string>
+    <string name="settings_ultra_hdr_gain_map_description">สร้างแผนที่เกน Ultra HDR สำหรับภาพถ่าย</string>
     <string name="settings_screen_hdr">จอแสดงผล HDR</string>
     <string name="settings_screen_hdr_description">เปิดใช้งานการแสดงผลช่วงไดนามิกสูง (HDR) บนหน้าต่างหน้าจอ หากการเปิดโหมดนี้ในอุปกรณ์บางอย่างทำให้หน้าจอเปลี่ยนเป็นสีเหลืองหรือมืดลง คุณสามารถปิดได้</string>
     <string name="hdr_label">HDR</string>

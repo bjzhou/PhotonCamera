@@ -62,6 +62,7 @@ internal object CameraPresetJsonCodec {
             useRaw = useRaw,
             useJpgMax = useJpgMax,
             useRawMax = useRawMax,
+            ultraHdrGainMapEnabled = obj.boolean("ultraHdrGainMapEnabled", true),
             frameId = obj.stringOrNull("frameId"),
             rawDcpId = obj.stringOrNull("rawDcpId"),
             rawDcpIdsByLens = parseRawDcpIdsByLens(obj.get("rawDcpIdsByLens")),

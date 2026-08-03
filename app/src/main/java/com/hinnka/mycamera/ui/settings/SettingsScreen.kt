@@ -316,7 +316,7 @@ fun SettingsScreen(
     val useHlg10 by viewModel.useHlg10.collectAsState()
     val hlgHardwareCompatibilityEnabled by viewModel.hlgHardwareCompatibilityEnabled.collectAsState()
     val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
-    val autoEnableHdr by viewModel.autoEnableHdr.collectAsState()
+    val ultraHdrGainMapEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
     val useHdrScreenMode by viewModel.useHdrScreenMode.collectAsState()
     val isPurchased by viewModel.isPurchased.collectAsState()
     val phantomMode by viewModel.phantomMode.collectAsState()
@@ -1625,10 +1625,10 @@ fun SettingsScreen(
                             )
 
                             SwitchSettingItem(
-                                title = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture),
-                                description = stringResource(R.string.settings_auto_enable_hdr_for_hdr_capture_description),
-                                checked = autoEnableHdr,
-                                onCheckedChange = { viewModel.setAutoEnableHdrForHdrCapture(it) }
+                                title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                                description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
+                                checked = ultraHdrGainMapEnabled,
+                                onCheckedChange = { viewModel.setUltraHdrGainMapEnabled(it) }
                             )
 
                             HorizontalDivider(

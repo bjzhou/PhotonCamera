@@ -100,6 +100,9 @@ fun PresetEditorScreen(
     var useRaw by remember { mutableStateOf(sourcePreset?.useRaw ?: false) }
     var useJpgMax by remember { mutableStateOf(sourcePreset?.useJpgMax ?: false) }
     var useRawMax by remember { mutableStateOf(sourcePreset?.useRawMax ?: false) }
+    var ultraHdrGainMapEnabled by remember {
+        mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: true)
+    }
     var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
 
     // Quick RAW 参数
@@ -144,6 +147,7 @@ fun PresetEditorScreen(
             useRaw = useRaw,
             useJpgMax = useJpgMax,
             useRawMax = useRawMax,
+            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled,
             frameId = frameId,
             rawDcpId = rawDcpId,
             rawDcpIdsByLens = rawDcpIdsByLens,
@@ -322,6 +326,15 @@ fun PresetEditorScreen(
                             useJpgMax = false
                         }
                     }
+                )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
+
+                SwitchSettingItem(
+                    title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                    description = stringResource(R.string.settings_ultra_hdr_gain_map_description),
+                    checked = ultraHdrGainMapEnabled,
+                    onCheckedChange = { ultraHdrGainMapEnabled = it }
                 )
 
             }

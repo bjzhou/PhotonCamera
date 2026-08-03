@@ -41,6 +41,7 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.getBaselineColorCorrectionConfig
 import com.hinnka.mycamera.lut.creator.LutGenerator
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
+import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.SafeImage
@@ -165,6 +166,7 @@ private data class PresetMatchSnapshot(
     val useRaw: Boolean,
     val useJpgMax: Boolean,
     val useRawMax: Boolean,
+    val ultraHdrGainMapEnabled: Boolean,
     val frameId: String?,
     val rawDcpId: String?,
     val rawDcpIdsByLens: Map<String, String?>,
@@ -183,14 +185,16 @@ private data class PresetMatchSnapshot(
 ) {
     fun matches(preset: com.hinnka.mycamera.model.CameraPreset): Boolean {
         val colorRecipeMatches = colorRecipe.isSameAs(preset.colorRecipe)
+        val presetLutId = CameraPreset.normalizeLutId(preset.lutId)
 //        PLog.d("PresetMatchSnapshot", "colorRecipe=$colorRecipe ${preset.colorRecipe} colorRecipe match: $colorRecipeMatches")
-        return lutId == preset.lutId &&
+        return lutId == presetLutId &&
             colorRecipeMatches &&
             effects == preset.effects &&
             aspectRatio == preset.aspectRatio &&
             useRaw == preset.useRaw &&
             useJpgMax == preset.useJpgMax &&
             useRawMax == preset.useRawMax &&
+            ultraHdrGainMapEnabled == preset.ultraHdrGainMapEnabled &&
             frameId == preset.frameId &&
             rawDcpId == preset.rawDcpId &&
             rawDcpIdsByLens == preset.rawDcpIdsByLens &&
@@ -213,15 +217,22 @@ private data class PresetMatchSnapshot(
     }
 
     fun mismatchSummary(preset: com.hinnka.mycamera.model.CameraPreset): String {
+        val presetLutId = CameraPreset.normalizeLutId(preset.lutId)
         val presetRawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
         val differences = buildList {
-            if (lutId != preset.lutId) add("lutId current=$lutId preset=${preset.lutId}")
+            if (lutId != presetLutId) add("lutId current=$lutId preset=$presetLutId")
             if (!colorRecipe.isSameAs(preset.colorRecipe)) add("colorRecipe differs")
             if (effects != preset.effects) add("effects current=$effects preset=${preset.effects}")
             if (aspectRatio != preset.aspectRatio) add("aspectRatio current=$aspectRatio preset=${preset.aspectRatio}")
             if (useRaw != preset.useRaw) add("useRaw current=$useRaw preset=${preset.useRaw}")
             if (useJpgMax != preset.useJpgMax) add("useJpgMax current=$useJpgMax preset=${preset.useJpgMax}")
             if (useRawMax != preset.useRawMax) add("useRawMax current=$useRawMax preset=${preset.useRawMax}")
+            if (ultraHdrGainMapEnabled != preset.ultraHdrGainMapEnabled) {
+                add(
+                    "ultraHdrGainMapEnabled current=$ultraHdrGainMapEnabled " +
+                        "preset=${preset.ultraHdrGainMapEnabled}"
+                )
+            }
             if (frameId != preset.frameId) add("frameId current=$frameId preset=${preset.frameId}")
             if (rawDcpId != preset.rawDcpId) add("rawDcpId current=$rawDcpId preset=${preset.rawDcpId}")
             if (rawDcpIdsByLens != preset.rawDcpIdsByLens) {
@@ -316,6 +327,7 @@ private data class CameraFeatureUpdate(
     val useRaw: SettingValue<Boolean>? = null,
     val useJpgMax: SettingValue<Boolean>? = null,
     val useRawMax: SettingValue<Boolean>? = null,
+    val ultraHdrGainMapEnabled: SettingValue<Boolean>? = null,
     val frameId: SettingValue<String?>? = null,
     val rawDcpId: SettingValue<String?>? = null,
     val rawDcpIdsByLens: SettingValue<Map<String, String?>>? = null,
@@ -441,6 +453,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             useRaw = saved.useRaw,
                             useJpgMax = saved.useJpgMax,
                             useRawMax = saved.useRawMax,
+                            ultraHdrGainMapEnabled = saved.ultraHdrGainMapEnabled,
                             frameId = saved.frameId,
                             rawDcpId = saved.rawDcpId,
                             rawDcpIdsByLens = saved.rawDcpIdsByLens,
@@ -499,13 +512,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return com.hinnka.mycamera.model.CameraPreset(
             id = UUID.randomUUID().toString(),
             name = name,
-            lutId = currentLutId.value,
+            lutId = CameraPreset.normalizeLutId(currentLutId.value),
             colorRecipe = currentRecipeParams.value,
             effects = currentEffectParams.value,
             aspectRatio = state.value.aspectRatio.name,
             useRaw = useRaw.value,
             useJpgMax = useJpgMax.value,
             useRawMax = useRawMax.value,
+            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled.value,
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
             rawDcpIdsByLens = userPreferences.value.rawDcpIdsByLens,
@@ -575,13 +589,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             AspectRatio.RATIO_4_3
         }
         return CameraFeatureUpdate(
-            lutId = SettingValue(this?.lutId),
+            lutId = SettingValue(CameraPreset.normalizeLutId(this?.lutId)),
             colorRecipe = SettingValue(this?.colorRecipe ?: ColorRecipeParams.DEFAULT),
             effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
             aspectRatio = SettingValue(ratio),
             useRaw = SettingValue(this?.useRaw ?: false),
             useJpgMax = SettingValue(this?.useJpgMax ?: false),
             useRawMax = SettingValue(this?.useRawMax ?: false),
+            ultraHdrGainMapEnabled = SettingValue(this?.ultraHdrGainMapEnabled ?: true),
             frameId = SettingValue(this?.frameId),
             rawDcpId = SettingValue(this?.rawDcpId),
             rawDcpIdsByLens = SettingValue(this?.rawDcpIdsByLens ?: emptyMap()),
@@ -746,6 +761,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     PreferenceUpdateValue(desiredUseRawMax)
                 } else {
                     null
+                },
+                ultraHdrGainMapEnabled = update.ultraHdrGainMapEnabled?.let {
+                    PreferenceUpdateValue(it.value)
                 },
                 useMultipleExposure = if (update.useMultipleExposure != null ||
                     desiredUseMultipleExposure != prefs.useMultipleExposure
@@ -955,13 +973,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun currentPresetMatchSnapshot(): PresetMatchSnapshot {
         return PresetMatchSnapshot(
-            lutId = currentLutId.value.takeIf { it != "none" },
+            lutId = CameraPreset.normalizeLutId(currentLutId.value),
             colorRecipe = currentRecipeParams.value,
             effects = currentEffectParams.value,
             aspectRatio = state.value.aspectRatio.name,
             useRaw = useRaw.value,
             useJpgMax = useJpgMax.value,
             useRawMax = useRawMax.value,
+            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled.value,
             frameId = currentFrameId,
             rawDcpId = rawDcpId.value,
             rawDcpIdsByLens = rawDcpIdsByLens.value,
@@ -982,13 +1001,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun ActivePresetMatchState.toPresetMatchSnapshot(): PresetMatchSnapshot {
         return PresetMatchSnapshot(
-            lutId = lutId.takeIf { it != "none" },
+            lutId = CameraPreset.normalizeLutId(lutId),
             colorRecipe = recipe,
             effects = effects,
             aspectRatio = aspectRatio,
             useRaw = prefs.useRaw,
             useJpgMax = prefs.useJpgMax,
             useRawMax = prefs.useRawMax,
+            ultraHdrGainMapEnabled = prefs.ultraHdrGainMapEnabled,
             frameId = prefs.frameId,
             rawDcpId = prefs.rawDcpId,
             rawDcpIdsByLens = prefs.rawDcpIdsByLens,
@@ -1351,8 +1371,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useP3ColorSpace }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val autoEnableHdr: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.autoEnableHdr }
+    val ultraHdrGainMapEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.ultraHdrGainMapEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val useHdrScreenMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
@@ -2534,7 +2554,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         rawToneMappingParameters: RawToneMappingParameters? = null
     ): Boolean {
         if (hasEmbeddedGainmap) return true
-        return userPrefs?.autoEnableHdr ?: true
+        return userPrefs?.ultraHdrGainMapEnabled ?: true
     }
 
     fun setUseMultipleExposure(enabled: Boolean) {
@@ -3736,9 +3756,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reopenCamera()
     }
 
-    fun setAutoEnableHdrForHdrCapture(enabled: Boolean) {
+    fun setUltraHdrGainMapEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            userPreferencesRepository.saveAutoEnableHdrForHdrCapture(enabled)
+            userPreferencesRepository.saveUltraHdrGainMapEnabled(enabled)
         }
     }
 

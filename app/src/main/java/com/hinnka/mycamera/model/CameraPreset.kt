@@ -21,6 +21,7 @@ data class CameraPreset(
     val useRaw: Boolean = false,
     val useJpgMax: Boolean = false,
     val useRawMax: Boolean = false,
+    val ultraHdrGainMapEnabled: Boolean = true,
     val frameId: String? = null,
     // Quick RAW 功能
     val rawDcpId: String? = null,
@@ -90,6 +91,7 @@ data class CameraPreset(
         return withSupportedCaptureCombination()
             .withoutLegacyHdf()
             .copy(
+                lutId = normalizeLutId(lutId),
                 rawDcpIdsByLens = normalizeRawDcpIdsByLens(rawDcpIdsByLens),
                 rawHncsProfileId = rawHncsProfileId?.takeIf(String::isNotBlank),
                 rawHncsRenderIntent = HncsRenderIntent.Standard.assetValue,
@@ -103,6 +105,10 @@ data class CameraPreset(
 
     companion object {
         private val gson = Gson()
+
+        internal fun normalizeLutId(lutId: String?): String? {
+            return lutId?.takeIf { it.isNotBlank() && it != "none" }
+        }
 
         internal fun normalizeRawDcpIdsByLens(rawDcpIdsByLens: Map<String, String?>): Map<String, String?> {
             return rawDcpIdsByLens

@@ -776,8 +776,8 @@
     <string name="settings_hlg_hardware_compatibility_description">部分设备开启 HLG 拍摄后画面可能偏暗或异常。若遇到画面异常，请开启此选项进行手动解码；画面正常请保持关闭。</string>
     <string name="settings_use_p3_color_space">P3 色域</string>
     <string name="settings_use_p3_color_space_description">在支持的设备上启用 Display P3 输出。默认关闭。</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">默认开启 HDR</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">默认开启 HDR 显示。</string>
+    <string name="settings_ultra_hdr_gain_map">Ultra HDR 增益图</string>
+    <string name="settings_ultra_hdr_gain_map_description">为拍摄的照片生成 Ultra HDR 增益图。</string>
     <string name="settings_screen_hdr">HDR 显示</string>
     <string name="settings_screen_hdr_description">在屏幕窗口上启用高动态范围 (HDR) 显示。若部分设备开启该模式导致屏幕发黄、变暗，可将其关闭。</string>
     <string name="hdr_label">HDR</string>

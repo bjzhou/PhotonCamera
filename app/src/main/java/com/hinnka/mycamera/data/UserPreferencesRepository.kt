@@ -222,7 +222,7 @@ data class UserPreferences(
     val videoStabilizationMode: com.hinnka.mycamera.video.VideoStabilizationMode = com.hinnka.mycamera.video.VideoStabilizationMode.OIS,
     val videoTorchEnabled: Boolean = false,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
-    val autoEnableHdr: Boolean = true,
+    val ultraHdrGainMapEnabled: Boolean = true,
     val phantomMode: Boolean = false,
     val phantomButtonHidden: Boolean = false,
     val launchCameraOnPhantomMode: Boolean = false,
@@ -287,6 +287,7 @@ data class CameraFeaturePreferencesUpdate(
     val useRaw: PreferenceUpdateValue<Boolean>? = null,
     val useJpgMax: PreferenceUpdateValue<Boolean>? = null,
     val useRawMax: PreferenceUpdateValue<Boolean>? = null,
+    val ultraHdrGainMapEnabled: PreferenceUpdateValue<Boolean>? = null,
     val useMultipleExposure: PreferenceUpdateValue<Boolean>? = null,
     val frameId: PreferenceUpdateValue<String?>? = null,
     val rawDcpId: PreferenceUpdateValue<String?>? = null,
@@ -447,7 +448,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_STABILIZATION_MODE = stringPreferencesKey("video_stabilization_mode")
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
-        private val AUTO_ENABLE_HDR_FOR_HDR_CAPTURE = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
+        // Keep the persisted key for compatibility with existing installations.
+        private val ULTRA_HDR_GAIN_MAP_ENABLED = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
         private val PHANTOM_MODE = booleanPreferencesKey("phantom_mode")
         private val PHANTOM_BUTTON_HIDDEN = booleanPreferencesKey("phantom_button_hidden")
         private val LAUNCH_CAMERA_ON_PHANTOM_MODE = booleanPreferencesKey("launch_camera_on_phantom_mode")
@@ -698,7 +700,7 @@ class UserPreferencesRepository(private val context: Context) {
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
-                autoEnableHdr = preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] ?: true,
+                ultraHdrGainMapEnabled = preferences[ULTRA_HDR_GAIN_MAP_ENABLED] ?: true,
                 phantomMode = preferences[PHANTOM_MODE] ?: false,
                 phantomButtonHidden = preferences[PHANTOM_BUTTON_HIDDEN] ?: false,
                 launchCameraOnPhantomMode = preferences[LAUNCH_CAMERA_ON_PHANTOM_MODE] ?: false,
@@ -2043,9 +2045,9 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveAutoEnableHdrForHdrCapture(enabled: Boolean) {
+    suspend fun saveUltraHdrGainMapEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
-            preferences[AUTO_ENABLE_HDR_FOR_HDR_CAPTURE] = enabled
+            preferences[ULTRA_HDR_GAIN_MAP_ENABLED] = enabled
         }
     }
 
@@ -2237,6 +2239,9 @@ class UserPreferencesRepository(private val context: Context) {
             }
             update.useRawMax?.let {
                 preferences[USE_RAW_MAX] = it.value
+            }
+            update.ultraHdrGainMapEnabled?.let {
+                preferences[ULTRA_HDR_GAIN_MAP_ENABLED] = it.value
             }
             update.useMultipleExposure?.let {
                 preferences[USE_MULTIPLE_EXPOSURE] = it.value

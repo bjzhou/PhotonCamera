@@ -18,6 +18,7 @@ class CameraPresetJsonCodecTest {
             colorRecipe = ColorRecipeParams.DEFAULT,
             effects = EffectParams.DEFAULT,
             useRaw = true,
+            ultraHdrGainMapEnabled = false,
             rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
             rawSpectralFilmStock = "kodak_gold_200",
             rawSpectralFilmPrint = "kodak_2383",
@@ -32,6 +33,26 @@ class CameraPresetJsonCodecTest {
         assertEquals("kodak_2383", preset.rawSpectralFilmPrint)
         assertEquals("DR400", preset.rawDROMode)
         assertTrue(preset.useRaw)
+        assertFalse(preset.ultraHdrGainMapEnabled)
+    }
+
+    @Test
+    fun fromJson_normalizesNoneLutSentinelToNull() {
+        val preset = CameraPreset.fromJson(
+            """
+            {
+              "id": "preset_without_lut",
+              "name": "No LUT",
+              "lutId": "none",
+              "colorRecipe": {},
+              "effects": {}
+            }
+            """.trimIndent()
+        )
+
+        requireNotNull(preset)
+        assertNull(preset.lutId)
+        assertFalse(preset.toJson().contains("\"lutId\":\"none\""))
     }
 
     @Test
@@ -171,6 +192,7 @@ class CameraPresetJsonCodecTest {
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
         assertFalse(preset.useJpgMax)
         assertFalse(preset.useRawMax)
+        assertTrue(preset.ultraHdrGainMapEnabled)
         assertEquals(0.25f, preset.colorRecipe.exposure, 0.0001f)
         assertEquals(1f, preset.colorRecipe.contrast, 0.0001f)
         assertEquals(1f, preset.colorRecipe.saturation, 0.0001f)

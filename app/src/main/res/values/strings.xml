@@ -879,8 +879,8 @@
     <string name="settings_hlg_hardware_compatibility_description">Some devices render dark or washed-out images under HLG. Enable this to manually decode HLG in shader if preview is abnormal.</string>
     <string name="settings_use_p3_color_space">P3 Color Space</string>
     <string name="settings_use_p3_color_space_description">Enable Display P3 output on supported devices. Default is off.</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture">Enable HDR by default</string>
-    <string name="settings_auto_enable_hdr_for_hdr_capture_description">Enable HDR display by default.</string>
+    <string name="settings_ultra_hdr_gain_map">Ultra HDR Gain Map</string>
+    <string name="settings_ultra_hdr_gain_map_description">Generate an Ultra HDR gain map for captured photos.</string>
     <string name="settings_screen_hdr">HDR Display</string>
     <string name="settings_screen_hdr_description">Enable High Dynamic Range (HDR) for the screen window. Turn off if screen causes yellowing or dimming.</string>
     <string name="hdr_label">HDR</string>
