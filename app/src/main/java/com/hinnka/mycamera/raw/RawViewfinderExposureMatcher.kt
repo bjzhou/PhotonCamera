@@ -150,11 +150,10 @@ internal object RawViewfinderExposureMatcher {
                     PLog.d(
                         TAG,
                         "RAW metering selection: seedExposureEv=$exposureEv " +
+                            "candidateDisplayLinearLumaP25=" +
+                            "${selection.seedCandidateDisplayLinearLumaP25} " +
                             "candidateDisplayLinearLumaP50=" +
                             "${selection.seedCandidateDisplayLinearLumaP50} " +
-                            "candidateDisplayLinearLumaRange=" +
-                            "[${selection.seedCandidateDisplayLinearLumaRangeMin}, " +
-                            "${selection.seedCandidateDisplayLinearLumaRangeMax}] " +
                             "sampleCount=${selection.sampleCount}"
                     )
                 }
