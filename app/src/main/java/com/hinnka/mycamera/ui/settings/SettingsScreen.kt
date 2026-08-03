@@ -2338,10 +2338,6 @@ fun SettingsScreen(
                 SettingsPage.HELP_ABOUT -> {
                     // 帮助与关于
                     val isGoogleFlavor = BuildConfig.FLAVOR == "google"
-                    val communityGroupUrl = TELEGRAM_GROUP_URL
-                    val communityGroupDescription = stringResource(
-                        R.string.settings_community_group_telegram_description
-                    )
 
                     SettingsSection(
                         title = stringResource(R.string.settings_section_help_about),
@@ -2445,8 +2441,23 @@ fun SettingsScreen(
 
                         NavigationSettingItem(
                             title = stringResource(R.string.settings_community_group),
-                            description = communityGroupDescription,
-                            onClick = { openExternalUrl(context, communityGroupUrl) }
+                            description = stringResource(
+                                R.string.settings_community_group_telegram_description
+                            ),
+                            onClick = { openExternalUrl(context, TELEGRAM_GROUP_URL) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        NavigationSettingItem(
+                            title = stringResource(R.string.settings_community_group),
+                            description = stringResource(
+                                R.string.settings_community_group_qq_description
+                            ),
+                            onClick = { openExternalUrl(context, QQ_GROUP_URL) }
                         )
 
                         if (!isGoogleFlavor) {
