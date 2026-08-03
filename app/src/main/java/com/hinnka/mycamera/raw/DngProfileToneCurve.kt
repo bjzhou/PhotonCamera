@@ -214,7 +214,7 @@ internal object DngProfileToneCurve {
             curve = GOOGLE_HDR_TONE_CURVE_Y,
             output = googleOutputLinear,
         )
-        val photonInputLinear = googleInputLinear * 2f.pow(-0.3f) //alignGoogleAndPhotonMiddleGray(googleInputLinear)
+        val photonInputLinear = alignGoogleAndPhotonMiddleGray(googleInputLinear)
         val photonOutputLinear = photonPgtmToneCurve(photonInputLinear.toDouble()).toFloat()
         return linearToSrgb(photonOutputLinear).coerceIn(0f, 1f)
     }
