@@ -5258,6 +5258,12 @@
 
     move-result-object v4
 
+    iget-object v0, p0, Lhzq;->b:Landroid/content/Context;
+
+    invoke-static {v0}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->getPreferredGalleryPackage(Landroid/content/Context;)Ljava/lang/String;
+
+    move-result-object v4
+
     nop
 
     nop
@@ -5276,6 +5282,12 @@
 
     :goto_85
     invoke-static {v1}, Lcom/a;->aa_ma(Ljava/lang/Object;)Ljava/lang/String;
+
+    move-result-object v1
+
+    iget-object v0, p0, Lhzq;->b:Landroid/content/Context;
+
+    invoke-static {v0}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->getPreferredGalleryPackage(Landroid/content/Context;)Ljava/lang/String;
 
     move-result-object v1
 

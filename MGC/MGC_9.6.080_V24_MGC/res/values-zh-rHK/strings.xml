@@ -92,6 +92,7 @@
     <string name="amethyst_description">運用更多變化的顏色、亮度和對比度提升真實感</string>
     <string name="amethyst_name">10 位元 HDR</string>
     <string name="app_name">相機</string>
+    <string name="pgc_app_name">PGC 相机</string>
     <string name="arcore_version_error_dogfood">你需要透過工作設定檔加入 AR Dogfood 測試計劃，才能下載更新。</string>
     <string name="arcore_version_error_message">你必需安裝最新版本的 Google Play 服務 (AR)，才能使用 %s</string>
     <string name="arcore_version_error_title">需要最新的 AR 應用程式</string>

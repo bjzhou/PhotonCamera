@@ -114,6 +114,7 @@ Clean your lens for better photo quality."</string>
     <string name="androidx_startup">androidx.startup</string>
     <string name="bl_summary">%s</string>
     <string name="app_name">Camera</string>
+    <string name="pgc_app_name">PGC Camera</string>
     <string name="bl_title">Black Level</string>
     <string name="arcore_version_error_dogfood">You will need to join the AR dogfood program with your work profile to download the update.</string>
     <string name="arcore_version_error_message">%s requires the latest version of the Google Play Services for AR app</string>
@@ -1811,7 +1812,8 @@ rotate your phone"</string>
     <string name="zoom_minus_desc">Zoom out</string>
     <string name="zoom_plus_desc">Zoom in</string>
     <string name="edit_text_auto">Null (auto)</string>
-    <string name="default_gallery_summary">Default gallery is Google Photos</string>
+    <string name="default_gallery_summary">Default gallery is Photon Gallery, with the system gallery as fallback</string>
+    <string name="photon_gallery_with_system_fallback">Photon Gallery (system gallery fallback)</string>
     <string name="gallery_summary">%s</string>
     <string name="whitebalance_off_status">Off</string>
     <string name="whitebalance_incandescent_status">Cold</string>

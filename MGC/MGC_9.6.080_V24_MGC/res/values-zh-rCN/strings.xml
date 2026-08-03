@@ -92,6 +92,7 @@
     <string name="amethyst_description">色彩、明暗变化和对比效果更丰富，营造更生动逼真的效果</string>
     <string name="amethyst_name">10-bit HDR</string>
     <string name="app_name">相机</string>
+    <string name="pgc_app_name">PGC 相机</string>
     <string name="arcore_version_error_dogfood">您需要使用工作资料加入 AR dogfood 计划，才能下载更新。</string>
     <string name="arcore_version_error_message">必须装有最新版“面向 AR 的 Google Play 服务”应用才能使用“%s”</string>
     <string name="arcore_version_error_title">需要最新的 AR 应用</string>
@@ -1316,7 +1317,8 @@
     <string name="custom_vid_profiles_title">使用自定义配置文件</string>
     <string name="d_c_m_quality_title">畸变校正模式</string>
     <string name="debug_manual_focus_title">显示对焦数据</string>
-    <string name="default_gallery_summary">默认图库为 Google 相册</string>
+    <string name="default_gallery_summary">默认使用光子相册，不存在时使用系统相册</string>
+    <string name="photon_gallery_with_system_fallback">光子相册（系统相册备用）</string>
     <string name="delay_focus_title">点击对焦后的延迟</string>
     <string name="device_hdrplus_title">机型</string>
     <string name="device_title">界面</string>

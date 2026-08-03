@@ -158,6 +158,17 @@
 .method public final a()Landroid/content/pm/PackageInfo;
     .locals 3
 
+    iget-object v0, p0, Lnpo;->b:Landroid/content/Context;
+
+    invoke-static {v0}, Lcom/hinnka/mycamera/previewhook/api/MgcGalleryIntentHook;->getPreferredGalleryPackageInfo(Landroid/content/Context;)Landroid/content/pm/PackageInfo;
+
+    move-result-object v0
+
+    if-eqz v0, :codex_gallery_package_info_fallback
+
+    return-object v0
+
+    :codex_gallery_package_info_fallback
     goto/32 :goto_11
 
     nop

@@ -1608,7 +1608,13 @@
     nop
 
     :pswitch_9
-    goto/32 :goto_34
+    const/4 p0, 0x0
+
+    invoke-static {p0}, Ljava/lang/Integer;->valueOf(I)Ljava/lang/Integer;
+
+    move-result-object p0
+
+    return-object p0
 
     nop
 

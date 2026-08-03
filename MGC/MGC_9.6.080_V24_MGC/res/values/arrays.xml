@@ -494,7 +494,7 @@
         <item>2</item>
     </string-array>
     <string-array name="gallery_entries">
-        <item>Default</item>
+        <item>@string/photon_gallery_with_system_fallback</item>
     </string-array>
     <string-array name="gallery_entryvalues">
         <item></item>

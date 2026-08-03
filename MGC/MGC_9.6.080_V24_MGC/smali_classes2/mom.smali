@@ -1638,6 +1638,14 @@
     :goto_33
     check-cast v0, Lmql;
 
+    iget-object v1, v0, Lmql;->b:Loyn;
+
+    sget-object v2, Ljava/lang/Boolean;->TRUE:Ljava/lang/Boolean;
+
+    invoke-interface {v1, v2}, Loyn;->a(Ljava/lang/Object;)V
+
+    return-void
+
     nop
 
     goto/32 :goto_3b

@@ -24,6 +24,12 @@
         </intent>
         <package android:name="com.google.android.apps.camera.poseidon"/>
         <package android:name="com.google.android.apps.photos"/>
+        <package android:name="com.hinnka.mycamera"/>
+        <package android:name="com.hinnka.mycamera.debug"/>
+        <package android:name="com.samsung.android.scan3d"/>
+        <package android:name="com.samsung.android.scan3d.debug"/>
+        <package android:name="com.meitu.meiyancamera"/>
+        <package android:name="com.meitu.meiyancamera.debug"/>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="tel"/>
@@ -111,7 +117,7 @@
     <uses-permission android:name="android.permission.INSTALL_PACKAGE_UPDATES"/>
     <uses-feature android:name="android.hardware.camera"/>
     <permission android:name="com.hinnka.MGC.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" android:protectionLevel="signature"/>
-    <application android:allowBackup="true" android:appComponentFactory="androidx.core.app.CoreComponentFactory" android:backupAgent="com.google.android.apps.camera.backup.CameraBackupAgent" android:enableOnBackInvokedCallback="true" android:extractNativeLibs="true" android:fullBackupOnly="false" android:gwpAsanMode="never" android:hardwareAccelerated="true" android:icon="@mipmap/adaptiveproduct_pixelcamera" android:label="@string/app_name" android:largeHeap="true" android:name="com.pairip.application.Application" android:restoreAnyVersion="true" android:supportsRtl="true" android:theme="@style/Theme.Camera" android:usesCleartextTraffic="true">
+    <application android:allowBackup="true" android:appComponentFactory="androidx.core.app.CoreComponentFactory" android:backupAgent="com.google.android.apps.camera.backup.CameraBackupAgent" android:enableOnBackInvokedCallback="true" android:extractNativeLibs="true" android:fullBackupOnly="false" android:gwpAsanMode="never" android:hardwareAccelerated="true" android:icon="@mipmap/adaptiveproduct_pixelcamera" android:label="@string/pgc_app_name" android:largeHeap="true" android:name="com.pairip.application.Application" android:restoreAnyVersion="true" android:supportsRtl="true" android:theme="@style/Theme.Camera" android:usesCleartextTraffic="true">
         <uses-library android:name="com.google.android.gestureservice" android:required="false"/>
         <uses-library android:name="com.google.android.camera2" android:required="false"/>
         <uses-library android:name="com.google.android.camera.experimental2015" android:required="false"/>
