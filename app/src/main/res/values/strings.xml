@@ -380,6 +380,12 @@
     <string name="settings_background">Background</string>
     <string name="settings_background_description">Change the app background image</string>
     <string name="settings_custom_background">Custom...</string>
+    <string name="settings_capture_button">Capture Button</string>
+    <string name="settings_capture_button_description">Customize the capture button with the default design, a color, or an image. Video controls keep their standard red appearance.</string>
+    <string name="settings_capture_button_default">Default</string>
+    <string name="settings_capture_button_color">Color</string>
+    <string name="settings_capture_button_image">Image</string>
+    <string name="settings_capture_button_color_picker">Capture Button Color</string>
 
     <!-- LUT -->
     <string name="filter_intensity">LUT Intensity</string>

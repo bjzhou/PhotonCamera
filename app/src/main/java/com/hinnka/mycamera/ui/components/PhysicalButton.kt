@@ -19,12 +19,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.LinearGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -35,6 +38,9 @@ import com.hinnka.mycamera.utils.OrientationObserver
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
+
+private const val HighlightGlowLayerCount = 8
+private const val HighlightGlowLayerAlpha = 0.032f
 
 internal fun physicalTopDirection(orientationDegrees: Float): Offset {
     val radians = Math.toRadians(orientationDegrees.toDouble())
@@ -48,14 +54,14 @@ private class PhysicalButtonHighlightBrush(
     enabled: Boolean,
     private val orientationDegrees: Float
 ) : ShaderBrush() {
-    private val strength = if (enabled) 1f else 0.45f
+    private val strength = if (enabled) 1f else 0.55f
     private val colors = listOf(
-        Color.White.copy(alpha = 0.52f * strength),
-        Color.White.copy(alpha = 0.18f * strength),
-        Color.Black.copy(alpha = 0.24f * strength),
-        Color.Black.copy(alpha = 0.48f * strength)
+        Color.White.copy(alpha = 0.36f * strength),
+        Color.White.copy(alpha = 0.16f * strength),
+        Color.White.copy(alpha = 0.08f * strength),
+        Color.White.copy(alpha = 0.05f * strength)
     )
-    private val colorStops = listOf(0f, 0.28f, 0.68f, 1f)
+    private val colorStops = listOf(0f, 0.38f, 0.72f, 1f)
 
     override fun createShader(size: Size): Shader {
         val brightDirection = physicalTopDirection(orientationDegrees)
@@ -83,7 +89,8 @@ private class PhysicalButtonHighlightBrush(
 }
 
 object PhysicalButtonDefaults {
-    val OuterBorderColor = Color(0xFF030303)
+    val BackgroundColor = Color(0xFF191919)
+    val HighlightGlowWidth = 4.dp
 
     fun highlightBrush(
         enabled: Boolean = true,
@@ -91,32 +98,12 @@ object PhysicalButtonDefaults {
     ): Brush {
         return PhysicalButtonHighlightBrush(enabled, orientationDegrees)
     }
-
-    fun backgroundBrush(enabled: Boolean = true): Brush {
-        return if (enabled) {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF17181A),
-                    Color(0xFF202124),
-                    Color(0xFF2B2C2F),
-                )
-            )
-        } else {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF141517),
-                    Color(0xFF191A1C),
-                    Color(0xFF202124),
-                )
-            )
-        }
-    }
 }
 
 /**
  * 模拟实体相机按键的通用表面。
  *
- * 从外向内依次绘制黑色间隙、跟随设备姿态的渐变高光细边和轻微纵向渐变的按键面。
+ * 绘制跟随设备姿态的渐变高光细边、向内衰减的柔和辉光和纯色按键面。
  */
 @Composable
 fun PhysicalButton(
@@ -124,9 +111,8 @@ fun PhysicalButton(
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true,
     shape: Shape = CircleShape,
-    outerBorderWidth: Dp = 2.dp,
     highlightBorderWidth: Dp = 1.dp,
-    backgroundBrush: Brush = PhysicalButtonDefaults.backgroundBrush(enabled),
+    highlightGlowWidth: Dp = PhysicalButtonDefaults.HighlightGlowWidth,
     contentAlignment: Alignment = Alignment.Center,
     contentShape: Shape = shape,
     content: @Composable BoxScope.() -> Unit
@@ -161,14 +147,25 @@ fun PhysicalButton(
                 scaleY = pressScale
             }
             .clip(shape)
-            .background(backgroundBrush)
+            .background(PhysicalButtonDefaults.BackgroundColor)
+            .drawWithCache {
+                val outline = shape.createOutline(size, layoutDirection, this)
+                val glowWidthPx = highlightGlowWidth.toPx().coerceAtLeast(0f)
+                val glowLayerStepPx = glowWidthPx / HighlightGlowLayerCount
+
+                onDrawBehind {
+                    for (layer in HighlightGlowLayerCount downTo 1) {
+                        drawOutline(
+                            outline = outline,
+                            brush = highlightBrush,
+                            alpha = HighlightGlowLayerAlpha,
+                            style = Stroke(width = glowLayerStepPx * layer * 2f)
+                        )
+                    }
+                }
+            }
             .border(
-                width = outerBorderWidth,
-                color = PhysicalButtonDefaults.OuterBorderColor,
-                shape = shape
-            )
-            .border(
-                width = outerBorderWidth + highlightBorderWidth,
+                width = highlightBorderWidth,
                 brush = highlightBrush,
                 shape = shape
             )
@@ -178,7 +175,7 @@ fun PhysicalButton(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(outerBorderWidth + highlightBorderWidth)
+                .padding(highlightBorderWidth)
                 .clip(contentShape),
             contentAlignment = contentAlignment,
             content = content

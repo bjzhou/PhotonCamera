@@ -740,6 +740,12 @@
     <string name="update_install_permission_hint">请允许本应用安装未知应用，然后再次点击安装。</string>
     <string name="settings_background_description">更改应用背景图</string>
     <string name="settings_custom_background">自定义...</string>
+    <string name="settings_capture_button">拍摄按钮</string>
+    <string name="settings_capture_button_description">可使用默认样式、自定义颜色或图片；录像按钮仍保留标准红色状态。</string>
+    <string name="settings_capture_button_default">默认</string>
+    <string name="settings_capture_button_color">颜色</string>
+    <string name="settings_capture_button_image">图片</string>
+    <string name="settings_capture_button_color_picker">拍摄按钮颜色</string>
     <string name="settings_default_focal_length_description">设置启动 App 时自动切换到的焦段</string>
     <string name="settings_main_camera_id">主摄 ID</string>
     <string name="settings_main_camera_id_description">选择将哪个 1x 后置相机 ID 作为主摄。</string>

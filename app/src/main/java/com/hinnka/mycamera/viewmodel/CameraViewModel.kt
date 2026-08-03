@@ -22,6 +22,7 @@ import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.AiFocusTargetMode
 import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
+import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.PreferenceUpdateValue
 import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.data.VolumeKeyAction
@@ -1286,6 +1287,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.backgroundImage }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
+    val captureButtonStyle: StateFlow<CaptureButtonStyle> = userPreferencesRepository.userPreferences
+        .map { it.captureButtonStyle }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CaptureButtonStyle.DEFAULT)
+    val captureButtonColor: StateFlow<Int> = userPreferencesRepository.userPreferences
+        .map { it.captureButtonColor }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0xFFFFFFFF.toInt())
+    val captureButtonImagePath: StateFlow<String?> = userPreferencesRepository.userPreferences
+        .map { it.captureButtonImagePath }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.droMode }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
@@ -6051,6 +6061,61 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 } catch (e: Exception) {
                     PLog.e(TAG, "Failed to save custom background image", e)
+                }
+            }
+        }
+    }
+
+    fun setCaptureButtonStyle(style: CaptureButtonStyle) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveCaptureButtonStyle(style)
+        }
+    }
+
+    fun setCaptureButtonColor(color: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveCaptureButtonColor(color)
+        }
+    }
+
+    fun saveCustomCaptureButtonImage(uri: Uri) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val context = getApplication<Application>()
+                val imageDirectory = File(context.filesDir, "capture_buttons")
+                val outputFile = File(
+                    imageDirectory,
+                    "capture_button_${UUID.randomUUID()}.image"
+                )
+                try {
+                    if (!imageDirectory.exists() && !imageDirectory.mkdirs()) {
+                        throw IllegalStateException(
+                            "Unable to create capture button image directory"
+                        )
+                    }
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        outputFile.outputStream().use(input::copyTo)
+                    } ?: throw IllegalArgumentException("Unable to open selected image")
+
+                    val previousPath = userPreferencesRepository.userPreferences
+                        .first()
+                        .captureButtonImagePath
+                    userPreferencesRepository.saveCaptureButtonImage(outputFile.absolutePath)
+
+                    runCatching {
+                        previousPath
+                            ?.let(::File)
+                            ?.takeIf {
+                                it != outputFile &&
+                                    it.parentFile?.canonicalFile == imageDirectory.canonicalFile
+                            }
+                            ?.delete()
+                    }.onFailure {
+                        PLog.w(TAG, "Failed to remove previous capture button image", it)
+                    }
+                } catch (e: Exception) {
+                    outputFile.delete()
+                    PLog.e(TAG, "Failed to save custom capture button image", e)
                 }
             }
         }

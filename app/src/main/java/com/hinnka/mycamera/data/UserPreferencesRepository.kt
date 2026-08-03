@@ -85,6 +85,18 @@ enum class WidgetTheme {
     DARK
 }
 
+enum class CaptureButtonStyle {
+    DEFAULT,
+    COLOR,
+    IMAGE;
+
+    companion object {
+        fun fromPersistedName(name: String?): CaptureButtonStyle {
+            return entries.firstOrNull { it.name == name } ?: DEFAULT
+        }
+    }
+}
+
 enum class AiFocusTargetMode {
     OFF,
     AUTO,
@@ -181,6 +193,9 @@ data class UserPreferences(
     val useLivePhoto: Boolean = false, // 是否启用 Live Photo (Motion Photo)
     val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
     val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
+    val captureButtonStyle: CaptureButtonStyle = CaptureButtonStyle.DEFAULT,
+    val captureButtonColor: Int = 0xFFFFFFFF.toInt(),
+    val captureButtonImagePath: String? = null,
     val droMode: String = "OFF", // DRO 模式
     val tonemapMode: String = "SYSTEM_DEFAULT", // 色调映射模式
     val naturalLightEnabled: Boolean = false, // 是否启用自然光影
@@ -404,6 +419,9 @@ class UserPreferencesRepository(private val context: Context) {
         private val USE_LIVE_PHOTO = booleanPreferencesKey("use_live_photo")
         private val ENABLE_DEVELOP_ANIMATION = booleanPreferencesKey("enable_develop_animation")
         private val BACKGROUND_IMAGE = stringPreferencesKey("background_image")
+        private val CAPTURE_BUTTON_STYLE = stringPreferencesKey("capture_button_style")
+        private val CAPTURE_BUTTON_COLOR = intPreferencesKey("capture_button_color")
+        private val CAPTURE_BUTTON_IMAGE_PATH = stringPreferencesKey("capture_button_image_path")
         private val DRO_MODE = stringPreferencesKey("dro_mode")
         private val TONEMAP_MODE = stringPreferencesKey("tonemap_mode")
         private val NATURAL_LIGHT_ENABLED = booleanPreferencesKey("natural_light_enabled")
@@ -630,6 +648,12 @@ class UserPreferencesRepository(private val context: Context) {
                 useLivePhoto = preferences[USE_LIVE_PHOTO] ?: false,
                 enableDevelopAnimation = preferences[ENABLE_DEVELOP_ANIMATION] ?: false,
                 backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
+                captureButtonStyle = CaptureButtonStyle.fromPersistedName(
+                    preferences[CAPTURE_BUTTON_STYLE]
+                ),
+                captureButtonColor = preferences[CAPTURE_BUTTON_COLOR] ?: 0xFFFFFFFF.toInt(),
+                captureButtonImagePath = preferences[CAPTURE_BUTTON_IMAGE_PATH]
+                    ?.takeIf { it.isNotBlank() },
                 droMode = preferences[DRO_MODE] ?: if (preferences[RAW_DRO_ENABLED_KEY] == true) "DR100" else "OFF",
                 tonemapMode = sanitizeTonemapMode(preferences[TONEMAP_MODE] ?: "SYSTEM_DEFAULT"),
                 naturalLightEnabled = preferences[NATURAL_LIGHT_ENABLED] ?: false,
@@ -1805,6 +1829,26 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveBackgroundImage(image: String) {
         context.dataStore.edit { preferences ->
             preferences[BACKGROUND_IMAGE] = image
+        }
+    }
+
+    suspend fun saveCaptureButtonStyle(style: CaptureButtonStyle) {
+        context.dataStore.edit { preferences ->
+            preferences[CAPTURE_BUTTON_STYLE] = style.name
+        }
+    }
+
+    suspend fun saveCaptureButtonColor(color: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[CAPTURE_BUTTON_COLOR] = color
+            preferences[CAPTURE_BUTTON_STYLE] = CaptureButtonStyle.COLOR.name
+        }
+    }
+
+    suspend fun saveCaptureButtonImage(path: String) {
+        context.dataStore.edit { preferences ->
+            preferences[CAPTURE_BUTTON_IMAGE_PATH] = path
+            preferences[CAPTURE_BUTTON_STYLE] = CaptureButtonStyle.IMAGE.name
         }
     }
 

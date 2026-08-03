@@ -79,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -90,6 +91,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import coil.compose.AsyncImage
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import com.hinnka.mycamera.BuildConfig
@@ -111,6 +113,7 @@ import com.hinnka.mycamera.camera.VendorCaptureSettings
 import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.camera.VendorCaptureValueType
 import com.hinnka.mycamera.data.AiFocusTargetMode
+import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
@@ -2113,6 +2116,13 @@ fun SettingsScreen(
                             viewModel = viewModel,
                             modifier = Modifier.padding(bottom = 16.dp)
                         )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        CaptureButtonAppearanceSetting(viewModel = viewModel)
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -5129,6 +5139,156 @@ fun BackgroundSetting(
             text = stringResource(R.string.settings_background_description),
             color = Color.White.copy(alpha = 0.6f),
             fontSize = 13.sp
+        )
+    }
+}
+
+@Composable
+private fun CaptureButtonAppearanceSetting(
+    viewModel: CameraViewModel,
+    modifier: Modifier = Modifier
+) {
+    val style by viewModel.captureButtonStyle.collectAsState()
+    val color by viewModel.captureButtonColor.collectAsState()
+    val imagePath by viewModel.captureButtonImagePath.collectAsState()
+    var showColorPicker by remember { mutableStateOf(false) }
+
+    val imageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let(viewModel::saveCustomCaptureButtonImage)
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.settings_capture_button),
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CaptureButtonAppearanceItem(
+                label = stringResource(R.string.settings_capture_button_default),
+                selected = style == CaptureButtonStyle.DEFAULT,
+                onClick = { viewModel.setCaptureButtonStyle(CaptureButtonStyle.DEFAULT) },
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.White, Color(0xFFD7D7D7))
+                            )
+                        )
+                )
+            }
+
+            CaptureButtonAppearanceItem(
+                label = stringResource(R.string.settings_capture_button_color),
+                selected = style == CaptureButtonStyle.COLOR,
+                onClick = { showColorPicker = true },
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color(color))
+                        .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                )
+            }
+
+            CaptureButtonAppearanceItem(
+                label = stringResource(R.string.settings_capture_button_image),
+                selected = style == CaptureButtonStyle.IMAGE,
+                onClick = { imageLauncher.launch("image/*") },
+                modifier = Modifier.weight(1f)
+            ) {
+                val imageFile = imagePath?.let(::File)
+                if (imageFile?.isFile == true) {
+                    AsyncImage(
+                        model = imageFile,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                    )
+                } else {
+                    Icon(
+                        imageVector = AppIcons.FilterNone,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.settings_capture_button_description),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 13.sp
+        )
+    }
+
+    if (showColorPicker) {
+        ColorPickerDialog(
+            title = stringResource(R.string.settings_capture_button_color_picker),
+            initialColor = color,
+            onDismiss = { showColorPicker = false },
+            onConfirm = {
+                showColorPicker = false
+                viewModel.setCaptureButtonColor(it)
+            }
+        )
+    }
+}
+
+@Composable
+private fun CaptureButtonAppearanceItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    preview: @Composable () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(
+                width = 2.dp,
+                color = if (selected) Color(0xFFFF6B35) else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier.height(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            preview()
+        }
+        Text(
+            text = label,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

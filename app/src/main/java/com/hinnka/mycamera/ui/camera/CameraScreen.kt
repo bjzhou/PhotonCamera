@@ -60,11 +60,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import coil.compose.AsyncImage
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.data.AiFocusTargetMode
+import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -84,6 +86,7 @@ import com.hinnka.mycamera.video.VideoResolutionPreset
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.*
 import com.hinnka.mycamera.ui.icons.AppIcons
 
@@ -1915,6 +1918,10 @@ fun Controls(
     onGalleryClick: () -> Unit,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
+    val captureButtonStyle by viewModel.captureButtonStyle.collectAsState()
+    val captureButtonColor by viewModel.captureButtonColor.collectAsState()
+    val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
+
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center
@@ -1959,6 +1966,9 @@ fun Controls(
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
                             multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
+                    customStyle = captureButtonStyle,
+                    customColor = captureButtonColor,
+                    customImagePath = captureButtonImagePath,
                     onTap = onCaptureTap,
                     onLongPressStart = { viewModel.startContinuousCapture() },
                     onLongPressEnd = { viewModel.stopContinuousCapture() }
@@ -2054,6 +2064,9 @@ fun CaptureButton(
     allowLongPress: Boolean,
     multipleExposureEnabled: Boolean,
     multipleExposureProgress: Float,
+    customStyle: CaptureButtonStyle,
+    customColor: Int,
+    customImagePath: String?,
     onTap: () -> Unit,
     onLongPressStart: () -> Unit,
     onLongPressEnd: () -> Unit,
@@ -2061,6 +2074,11 @@ fun CaptureButton(
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
     var isPressed by remember { mutableStateOf(false) }
+    val customImage = remember(customImagePath) {
+        customImagePath
+            ?.let(::File)
+            ?.takeIf(File::isFile)
+    }
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed || isCapturing || isVideoRecording || isVideoProcessing) 0.95f else 1f,
@@ -2126,7 +2144,6 @@ fun CaptureButton(
                 )
             },
         shape = CircleShape,
-        outerBorderWidth = 3.dp,
         contentAlignment = Alignment.Center
     ) {
         if (multipleExposureEnabled) {
@@ -2193,7 +2210,7 @@ fun CaptureButton(
             targetValue = if (captureMode == CaptureMode.VIDEO && isVideoRecording) 8.dp else 36.dp,
             label = "centerCorner"
         )
-        val centerBrush = if (captureMode == CaptureMode.VIDEO) {
+        val defaultCenterBrush = if (captureMode == CaptureMode.VIDEO) {
             Brush.verticalGradient(
                 colors = listOf(
                     Color(0xFFFF6668),
@@ -2208,14 +2225,35 @@ fun CaptureButton(
                 )
             )
         }
+        val useCustomAppearance = captureMode != CaptureMode.VIDEO
+        val centerBackgroundModifier = when {
+            useCustomAppearance && customStyle == CaptureButtonStyle.COLOR ->
+                Modifier.background(Color(customColor))
+            else -> Modifier.background(defaultCenterBrush)
+        }
 
         Box(
             modifier = Modifier
                 .padding(centerPadding)
                 .fillMaxSize()
                 .clip(RoundedCornerShape(centerCorner))
-                .background(centerBrush)
-        )
+                .then(centerBackgroundModifier)
+        ) {
+            if (
+                useCustomAppearance &&
+                customStyle == CaptureButtonStyle.IMAGE &&
+                customImage != null
+            ) {
+                AsyncImage(
+                    model = customImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .autoRotate(matchParentSize = true)
+                )
+            }
+        }
         if (captureMode == CaptureMode.VIDEO && isVideoProcessing) {
             CircularProgressIndicator(
                 modifier = Modifier.size(34.dp),
