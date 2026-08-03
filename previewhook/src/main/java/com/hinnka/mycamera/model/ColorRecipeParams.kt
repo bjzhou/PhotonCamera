@@ -18,8 +18,12 @@ data class ColorRecipeParams(
     val paletteDensity: Float = 1f,
     val filmGrain: Float = 0f,
     val vignette: Float = 0f,
+    val flash: Float = 0f,
     val bleachBypass: Float = 0f,
+    val bloom: Float = 0f,
+    val softLight: Float = 0f,
     val halation: Float = 0f,
+    val redHalation: Float = 0f,
     val chromaticAberration: Float = 0f,
     val noise: Float = 0f,
     val lowRes: Float = 0f,
@@ -59,6 +63,14 @@ data class ColorRecipeParams(
     val primaryBlueHue: Float = 0f,
     val primaryBlueSaturation: Float = 0f,
     val primaryBlueLightness: Float = 0f,
+    val gradingShadowHue: Float = 0f,
+    val gradingShadowAmount: Float = 0f,
+    val gradingMidtoneHue: Float = 0f,
+    val gradingMidtoneAmount: Float = 0f,
+    val gradingHighlightHue: Float = 0f,
+    val gradingHighlightAmount: Float = 0f,
+    val gradingBalance: Float = 0f,
+    val gradingBlending: Float = 0.5f,
     val lutIntensity: Float = 1f,   // 0.0 ~ 1.0 (LUT强度，1为完全应用)
     val remarks: String? = "",       // 用户备注
     // 曲线控制点 [x0,y0, x1,y1, ...], null = 恒等曲线（无效果）
@@ -89,8 +101,12 @@ data class ColorRecipeParams(
             paletteDensity == 1f &&
             filmGrain == 0f &&
             vignette == 0f &&
+            flash == 0f &&
             bleachBypass == 0f &&
+            bloom == 0f &&
+            softLight == 0f &&
             halation == 0f &&
+            redHalation == 0f &&
             chromaticAberration == 0f &&
             noise == 0f &&
             lowRes == 0f &&
@@ -130,6 +146,14 @@ data class ColorRecipeParams(
             primaryBlueHue == 0f &&
             primaryBlueSaturation == 0f &&
             primaryBlueLightness == 0f &&
+            gradingShadowHue == 0f &&
+            gradingShadowAmount == 0f &&
+            gradingMidtoneHue == 0f &&
+            gradingMidtoneAmount == 0f &&
+            gradingHighlightHue == 0f &&
+            gradingHighlightAmount == 0f &&
+            gradingBalance == 0f &&
+            gradingBlending == 0.5f &&
             remarks.isNullOrEmpty() &&
             masterCurvePoints == null &&
             redCurvePoints == null &&

@@ -10,6 +10,7 @@ import android.opengl.GLES30
 import android.opengl.GLUtils
 import android.util.Log
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.raw.DngProfileToneCurve
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -24,17 +25,13 @@ import java.nio.ShortBuffer
  */
 internal object MgcCapturedJpegRenderer {
     private const val TAG = "codex_post_lut"
+    private const val PREFERRED_JPEG_INPUT_TONE_CURVE_SIZE = 4096
 
     private val identityMatrix4 = floatArrayOf(
         1f, 0f, 0f, 0f,
         0f, 1f, 0f, 0f,
         0f, 0f, 1f, 0f,
         0f, 0f, 0f, 1f,
-    )
-    private val identityMatrix3 = floatArrayOf(
-        1f, 0f, 0f,
-        0f, 1f, 0f,
-        0f, 0f, 1f,
     )
     private val vertices = floatArrayOf(
         -1f, -1f,
@@ -62,6 +59,8 @@ internal object MgcCapturedJpegRenderer {
     private var lutTextureId = 0
     private var dummyLutTextureId = 0
     private var dummyCurveTextureId = 0
+    private var jpegInputToneCurveTextureId = 0
+    private var jpegInputToneCurveSize = 0
     private var uploadedSnapshotVersion = -1
     private var maxTextureSize = 0
     private var readbackBuffer: ByteBuffer? = null
@@ -70,6 +69,7 @@ internal object MgcCapturedJpegRenderer {
     private val vertexBuffer = floatBufferOf(vertices)
     private val textureCoordinateBuffer = floatBufferOf(textureCoordinates)
     private val drawOrderBuffer = shortBufferOf(drawOrder)
+    private val recipeTextureBindings = MgcRecipeTextureBindings()
 
     @Synchronized
     fun render(source: Bitmap, snapshot: MgcVfeLutSnapshot): Bitmap? {
@@ -91,6 +91,13 @@ internal object MgcCapturedJpegRenderer {
             drainGlErrors()
             ensureOutputFramebuffer(source.width, source.height)
             uploadInputTexture(source)
+            MgcCapturedJpegSpatialEffects.prepareInputDiffusion(
+                sourceTextureId = inputTextureId,
+                width = source.width,
+                height = source.height,
+                softLight = snapshot.softLight,
+                redHalation = snapshot.redHalation,
+            )
 
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebufferId)
             GLES30.glViewport(0, 0, source.width, source.height)
@@ -100,14 +107,31 @@ internal object MgcCapturedJpegRenderer {
             GLES30.glUseProgram(programId)
 
             bindInputTexture()
+            bindJpegInputToneCurve()
             bindLutTexture(snapshot)
-            bindBasicToneTexture()
-            bindCurveTexture()
+            bindBasicToneTexture(snapshot)
+            bindCurveTexture(snapshot)
+            MgcCapturedJpegSpatialEffects.bindDiffusionTextures(
+                colorProgram = programId,
+                softLight = snapshot.softLight,
+                redHalation = snapshot.redHalation,
+            )
             bindGeometryUniforms()
             bindSnapshotUniforms(snapshot, source.width, source.height)
             drawQuad()
             requireNoGlError("captured JPEG draw")
 
+            val readFramebufferId = if (snapshot.bloom > EFFECT_EPSILON) {
+                MgcCapturedJpegSpatialEffects.renderBloom(
+                    sourceTextureId = outputTextureId,
+                    width = source.width,
+                    height = source.height,
+                    bloom = snapshot.bloom,
+                )
+            } else {
+                outputFramebufferId
+            }
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFramebufferId)
             val byteCount = Math.multiplyExact(
                 Math.multiplyExact(source.width, source.height),
                 4,
@@ -191,20 +215,34 @@ internal object MgcCapturedJpegRenderer {
                 error("eglMakeCurrent failed: ${eglErrorHex()}")
             }
 
+            val size = IntArray(1)
+            GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, size, 0)
+            maxTextureSize = size[0]
+            if (maxTextureSize <= 0) error("Invalid GL_MAX_TEXTURE_SIZE=$maxTextureSize")
+            jpegInputToneCurveSize = minOf(
+                PREFERRED_JPEG_INPUT_TONE_CURVE_SIZE,
+                maxTextureSize,
+            )
+            if (jpegInputToneCurveSize < 2) {
+                error("Invalid JPEG input tone curve size=$jpegInputToneCurveSize")
+            }
+
             inputTextureId = create2DTexture()
             dummyLutTextureId = createDummy3DTexture()
             dummyCurveTextureId = createDummy2DTexture()
+            jpegInputToneCurveTextureId = createJpegInputToneCurveTexture()
             programId = buildProgram(
                 MgcVfeLutRuntime.getVertexShaderSource(),
                 MgcVfeLutRuntime.getCapturedJpegFragmentShaderSource(),
             )
             if (programId == 0) error("Captured JPEG shader program unavailable")
-            val size = IntArray(1)
-            GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, size, 0)
-            maxTextureSize = size[0]
-            if (maxTextureSize <= 0) error("Invalid GL_MAX_TEXTURE_SIZE=$maxTextureSize")
+            MgcCapturedJpegSpatialEffects.initialize()
             requireNoGlError("captured JPEG renderer init")
-            Log.d(TAG, "Captured JPEG renderer ready maxTextureSize=$maxTextureSize")
+            Log.d(
+                TAG,
+                "Captured JPEG renderer ready maxTextureSize=$maxTextureSize " +
+                    "inputToneCurveSize=$jpegInputToneCurveSize",
+            )
             true
         }.onFailure {
             Log.e(TAG, "Captured JPEG renderer init failed", it)
@@ -306,6 +344,13 @@ internal object MgcCapturedJpegRenderer {
         uniform1i("uCameraTexture", 0)
     }
 
+    private fun bindJpegInputToneCurve() {
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, jpegInputToneCurveTextureId)
+        uniform1i("uJpegInputToneCurveTexture", 4)
+        uniform1i("uJpegInputToneCurveSize", jpegInputToneCurveSize)
+    }
+
     private fun bindLutTexture(snapshot: MgcVfeLutSnapshot) {
         val textureId = if (snapshot.lutEnabled &&
             snapshot.lutPayload != null &&
@@ -320,18 +365,22 @@ internal object MgcCapturedJpegRenderer {
         uniform1i("uLutTexture", 1)
     }
 
-    private fun bindBasicToneTexture() {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyLutTextureId)
-        uniform1i("uBasicToneLut", 2)
-        uniform1f("uBasicToneIntensity", 0f)
+    private fun bindBasicToneTexture(snapshot: MgcVfeLutSnapshot) {
+        recipeTextureBindings.bindBasicTone(
+            programId = programId,
+            snapshot = snapshot,
+            textureUnit = 2,
+            dummyTextureId = dummyLutTextureId,
+        )
     }
 
-    private fun bindCurveTexture() {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, dummyCurveTextureId)
-        uniform1i("uCurveTexture", 3)
-        uniform1i("uCurveEnabled", 0)
+    private fun bindCurveTexture(snapshot: MgcVfeLutSnapshot) {
+        recipeTextureBindings.bindCurve(
+            programId = programId,
+            snapshot = snapshot,
+            textureUnit = 3,
+            dummyTextureId = dummyCurveTextureId,
+        )
     }
 
     private fun bindGeometryUniforms() {
@@ -376,12 +425,22 @@ internal object MgcCapturedJpegRenderer {
         uniform1f("uNoiseSeed", (System.nanoTime() and 0xFFFFFF).toFloat() / 1048576f)
         uniform1f("uLowRes", snapshot.lowRes)
         uniform1f("uAspectRatio", width.toFloat() / height.coerceAtLeast(1).toFloat())
-        uniform1f("uFlash", 0f)
-        uniform3f("uGradingHues", 0f, 0f, 0f)
-        uniform3f("uGradingAmounts", 0f, 0f, 0f)
-        uniform1f("uGradingBalance", 0f)
-        uniform1f("uGradingBlending", 0f)
-        uniformMatrix3("uPrimaryCalibrationMatrix", identityMatrix3)
+        uniform1f("uFlash", snapshot.flash)
+        uniform3f(
+            "uGradingHues",
+            snapshot.gradingHues[0],
+            snapshot.gradingHues[1],
+            snapshot.gradingHues[2],
+        )
+        uniform3f(
+            "uGradingAmounts",
+            snapshot.gradingAmounts[0],
+            snapshot.gradingAmounts[1],
+            snapshot.gradingAmounts[2],
+        )
+        uniform1f("uGradingBalance", snapshot.gradingBalance)
+        uniform1f("uGradingBlending", snapshot.gradingBlending)
+        uniformMatrix3("uPrimaryCalibrationMatrix", snapshot.primaryCalibrationMatrix)
         uniform1fArray("uLchHueAdjustments[0]", snapshot.lchHueAdjustments)
         uniform1fArray("uLchChromaAdjustments[0]", snapshot.lchChromaAdjustments)
         uniform1fArray("uLchLightnessAdjustments[0]", snapshot.lchLightnessAdjustments)
@@ -559,6 +618,33 @@ internal object MgcCapturedJpegRenderer {
         return id
     }
 
+    private fun createJpegInputToneCurveTexture(): Int {
+        val values = DngProfileToneCurve.googleToPhotonJpegToneCurveLut(
+            jpegInputToneCurveSize,
+        )
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        val id = ids[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, id)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_R32F,
+            values.size,
+            1,
+            0,
+            GLES30.GL_RED,
+            GLES30.GL_FLOAT,
+            floatBufferOf(values),
+        )
+        requireNoGlError("captured JPEG input tone curve upload")
+        return id
+    }
+
     private fun buildProgram(vertexSource: String, fragmentSource: String): Int {
         val vertexShader = compileShader(GLES30.GL_VERTEX_SHADER, vertexSource)
         val fragmentShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragmentSource)
@@ -615,11 +701,14 @@ internal object MgcCapturedJpegRenderer {
                 EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
             }
             releaseOutputFramebuffer()
+            MgcCapturedJpegSpatialEffects.release()
+            recipeTextureBindings.release()
             val textures = intArrayOf(
                 inputTextureId,
                 lutTextureId,
                 dummyLutTextureId,
                 dummyCurveTextureId,
+                jpegInputToneCurveTextureId,
             ).filter { it != 0 }.toIntArray()
             if (textures.isNotEmpty()) {
                 GLES30.glDeleteTextures(textures.size, textures, 0)
@@ -653,6 +742,8 @@ internal object MgcCapturedJpegRenderer {
         lutTextureId = 0
         dummyLutTextureId = 0
         dummyCurveTextureId = 0
+        jpegInputToneCurveTextureId = 0
+        jpegInputToneCurveSize = 0
         uploadedSnapshotVersion = -1
         maxTextureSize = 0
         readbackBuffer = null
@@ -743,4 +834,6 @@ internal object MgcCapturedJpegRenderer {
             .asShortBuffer()
             .put(values)
             .apply { position(0) }
+
+    private const val EFFECT_EPSILON = 0.001f
 }

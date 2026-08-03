@@ -3,6 +3,8 @@ package com.hinnka.mycamera.previewhook.api
 import android.app.Application
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.CameraRawCalibrationMatrix
+import com.hinnka.mycamera.lut.CurveUtils
 import com.hinnka.mycamera.lut.PreviewColorShader
 import com.hinnka.mycamera.lut.PreviewColorShaderVariant
 import com.hinnka.mycamera.lut.PreviewColorTextureSource
@@ -29,6 +31,8 @@ object MgcVfeLutRuntime {
 
     private val capturedJpegShaderVariant = previewShaderVariant.copy(
         textureSource = PreviewColorTextureSource.TEXTURE_2D,
+        includeJpegInputToneCurve = true,
+        includeSpatialRecipeEffects = true,
     )
 
     private val previewFragmentShader: String by lazy {
@@ -182,7 +186,7 @@ object MgcVfeLutRuntime {
         invalidateSnapshot()
     }
 
-    private fun currentApplication(): Application? {
+    internal fun currentApplication(): Application? {
         return try {
             val clazz = Class.forName("android.app.AppGlobals")
             val method = clazz.getDeclaredMethod("getInitialApplication")
@@ -210,6 +214,23 @@ object MgcVfeLutRuntime {
         cachedSnapshot?.let { return it }
         val lutConfig = activeLutConfig
         val effectiveParams = ColorPaletteMapper.mergeIntoEffectiveParams(activeRecipeParams)
+        val curveActive = !CurveUtils.isIdentity(
+            effectiveParams.masterCurvePoints,
+            effectiveParams.redCurvePoints,
+            effectiveParams.greenCurvePoints,
+            effectiveParams.blueCurvePoints,
+        )
+        val curvePayload = if (curveActive) {
+            val buffer = CurveUtils.buildCurveTextureBuffer(
+                effectiveParams.masterCurvePoints,
+                effectiveParams.redCurvePoints,
+                effectiveParams.greenCurvePoints,
+                effectiveParams.blueCurvePoints,
+            )
+            ByteArray(buffer.remaining()).also(buffer::get)
+        } else {
+            null
+        }
         return MgcVfeLutSnapshot(
             lutPayload = lutConfig?.takeIf { it.isValid() }?.toByteBuffer()?.let { buffer ->
                 ByteArray(buffer.remaining()).also { bytes -> buffer.get(bytes) }
@@ -233,12 +254,32 @@ object MgcVfeLutRuntime {
             toneToe = effectiveParams.toneToe,
             toneShoulder = effectiveParams.toneShoulder,
             tonePivot = effectiveParams.tonePivot,
+            basicToneAmount = ColorPaletteMapper.basicToneAmount(effectiveParams),
             filmGrain = effectiveParams.filmGrain,
             vignette = effectiveParams.vignette,
+            flash = effectiveParams.flash,
             bleachBypass = effectiveParams.bleachBypass,
+            bloom = effectiveParams.bloom,
+            softLight = effectiveParams.softLight,
+            redHalation = effectiveParams.redHalation,
             chromaticAberration = effectiveParams.chromaticAberration,
             noise = effectiveParams.noise,
             lowRes = effectiveParams.lowRes,
+            gradingHues = floatArrayOf(
+                effectiveParams.gradingShadowHue,
+                effectiveParams.gradingMidtoneHue,
+                effectiveParams.gradingHighlightHue,
+            ),
+            gradingAmounts = floatArrayOf(
+                effectiveParams.gradingShadowAmount,
+                effectiveParams.gradingMidtoneAmount,
+                effectiveParams.gradingHighlightAmount,
+            ),
+            gradingBalance = effectiveParams.gradingBalance,
+            gradingBlending = effectiveParams.gradingBlending,
+            primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(effectiveParams),
+            curvePayload = curvePayload,
+            curveEnabled = curveActive,
             lchHueAdjustments = floatArrayOf(
                 effectiveParams.skinHue,
                 effectiveParams.redHue,

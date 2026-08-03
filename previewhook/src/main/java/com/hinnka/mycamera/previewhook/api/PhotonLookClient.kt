@@ -180,8 +180,12 @@ object PhotonLookClient {
                 paletteDensity = obj.optFloat("paletteDensity", 1f),
                 filmGrain = obj.optFloat("filmGrain", 0f),
                 vignette = obj.optFloat("vignette", 0f),
+                flash = obj.optFloat("flash", 0f),
                 bleachBypass = obj.optFloat("bleachBypass", 0f),
+                bloom = obj.optFloat("bloom", 0f),
+                softLight = obj.optFloat("softLight", 0f),
                 halation = obj.optFloat("halation", 0f),
+                redHalation = obj.optFloat("redHalation", 0f),
                 chromaticAberration = obj.optFloat("chromaticAberration", 0f),
                 noise = obj.optFloat("noise", 0f),
                 lowRes = obj.optFloat("lowRes", 0f),
@@ -221,8 +225,20 @@ object PhotonLookClient {
                 primaryBlueHue = obj.optFloat("primaryBlueHue", 0f),
                 primaryBlueSaturation = obj.optFloat("primaryBlueSaturation", 0f),
                 primaryBlueLightness = obj.optFloat("primaryBlueLightness", 0f),
+                gradingShadowHue = obj.optFloat("gradingShadowHue", 0f),
+                gradingShadowAmount = obj.optFloat("gradingShadowAmount", 0f),
+                gradingMidtoneHue = obj.optFloat("gradingMidtoneHue", 0f),
+                gradingMidtoneAmount = obj.optFloat("gradingMidtoneAmount", 0f),
+                gradingHighlightHue = obj.optFloat("gradingHighlightHue", 0f),
+                gradingHighlightAmount = obj.optFloat("gradingHighlightAmount", 0f),
+                gradingBalance = obj.optFloat("gradingBalance", 0f),
+                gradingBlending = obj.optFloat("gradingBlending", 0.5f),
                 lutIntensity = obj.optFloat("lutIntensity", 1f),
                 remarks = obj.optString("remarks", ""),
+                masterCurvePoints = obj.optFloatArray("masterCurvePoints"),
+                redCurvePoints = obj.optFloatArray("redCurvePoints"),
+                greenCurvePoints = obj.optFloatArray("greenCurvePoints"),
+                blueCurvePoints = obj.optFloatArray("blueCurvePoints"),
             )
         }.getOrElse {
             Log.e(TAG, "failed to parse Photon recipe", it)
@@ -235,6 +251,14 @@ object PhotonLookClient {
             optDouble(name, defaultValue.toDouble()).toFloat()
         } else {
             defaultValue
+        }
+    }
+
+    private fun JSONObject.optFloatArray(name: String): FloatArray? {
+        if (!has(name) || isNull(name)) return null
+        val array = optJSONArray(name) ?: return null
+        return FloatArray(array.length()) { index ->
+            array.optDouble(index, 0.0).toFloat()
         }
     }
 

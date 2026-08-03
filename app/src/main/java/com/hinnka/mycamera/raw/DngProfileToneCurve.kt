@@ -8,6 +8,7 @@ internal object DngProfileToneCurve {
     private const val POINT_TOLERANCE = 2e-4f
     private const val LUT_TOLERANCE = 2e-3f
     private const val DNG_PROFILE_TONE_CURVE_POINT_COUNT = 257
+    private const val JPG_TONE_CURVE_MIDDLE_GRAY = 0.18f
 
     private val LINEAR_TONE_CURVE_POINTS = floatArrayOf(0f, 0f, 1f, 1f)
 
@@ -111,6 +112,11 @@ internal object DngProfileToneCurve {
         DcpToneCurve(photonPgtmToneCurvePoints()).toLut(256)
     }
 
+    private val GOOGLE_TO_PHOTON_MIDDLE_GRAY_INPUT by lazy {
+        val googleMiddleGrayOutput = googleHdrToneCurveOutput(JPG_TONE_CURVE_MIDDLE_GRAY)
+        photonPgtmInputForOutput(googleMiddleGrayOutput)
+    }
+
     fun googleHdrToneCurvePoints(): FloatArray {
         return FloatArray(GOOGLE_HDR_TONE_CURVE_Y.size * 2) { index ->
             val pointIndex = index / 2
@@ -168,21 +174,121 @@ internal object DngProfileToneCurve {
 
     internal fun photonPgtmInputForOutput(output: Float): Float {
         val target = output.coerceIn(0f, 1f)
-        val lut = PHOTON_PGTM_TONE_CURVE_LUT
-        if (target <= lut.first()) return 0f
-        if (target >= lut.last()) return 1f
-        for (index in 1 until lut.size) {
-            val upper = lut[index]
-            if (upper < target) continue
-            val lower = lut[index - 1]
-            val amount = if (upper > lower) {
-                (target - lower) / (upper - lower)
+        if (target <= 0f) return 0f
+        if (target >= 1f) return 1f
+
+        var lower = 0.0
+        var upper = 1.0
+        repeat(32) {
+            val input = (lower + upper) * 0.5
+            if (photonPgtmToneCurve(input) < target) {
+                lower = input
             } else {
-                0f
+                upper = input
             }
-            return (index - 1 + amount) / (lut.size - 1f)
         }
-        return 1f
+        return ((lower + upper) * 0.5).toFloat()
+    }
+
+    /**
+     * Builds the input transform used before Photon LUT rendering for MGC-produced JPEGs.
+     *
+     * MGC's JPEG is sRGB-encoded after Google's profile tone curve. Each sample follows this
+     * exact sequence:
+     * sRGB -> linear -> inverse Google curve -> middle-gray alignment -> Photon curve -> sRGB.
+     *
+     * Middle-gray alignment is piecewise linear around 18% gray. It maps Google's linear
+     * middle-gray output to the same Photon output while preserving black and white exactly.
+     */
+    fun googleToPhotonJpegToneCurveLut(sampleCount: Int = 4096): FloatArray {
+        require(sampleCount >= 2) { "sampleCount must be at least 2" }
+        return FloatArray(sampleCount) { index ->
+            val encoded = index / (sampleCount - 1f)
+            applyGoogleToPhotonJpegToneCurve(encoded)
+        }
+    }
+
+    internal fun applyGoogleToPhotonJpegToneCurve(encoded: Float): Float {
+        val googleOutputLinear = srgbToLinear(encoded.coerceIn(0f, 1f))
+        val googleInputLinear = inverseUniformCurve(
+            curve = GOOGLE_HDR_TONE_CURVE_Y,
+            output = googleOutputLinear,
+        )
+        val photonInputLinear = googleInputLinear * 2f.pow(-0.3f) //alignGoogleAndPhotonMiddleGray(googleInputLinear)
+        val photonOutputLinear = photonPgtmToneCurve(photonInputLinear.toDouble()).toFloat()
+        return linearToSrgb(photonOutputLinear).coerceIn(0f, 1f)
+    }
+
+    internal fun googleHdrToneCurveOutput(input: Float): Float {
+        return sampleUniformCurve(GOOGLE_HDR_TONE_CURVE_Y, input)
+    }
+
+    internal fun googleToPhotonMiddleGrayInput(): Float {
+        return GOOGLE_TO_PHOTON_MIDDLE_GRAY_INPUT
+    }
+
+    private fun alignGoogleAndPhotonMiddleGray(input: Float): Float {
+        val sourceMiddleGray = JPG_TONE_CURVE_MIDDLE_GRAY
+        val targetMiddleGray = googleToPhotonMiddleGrayInput()
+        val clamped = input.coerceIn(0f, 1f)
+        return if (clamped <= sourceMiddleGray) {
+            clamped * targetMiddleGray / sourceMiddleGray
+        } else {
+            targetMiddleGray +
+                (clamped - sourceMiddleGray) *
+                (1f - targetMiddleGray) /
+                (1f - sourceMiddleGray)
+        }.coerceIn(0f, 1f)
+    }
+
+    private fun sampleUniformCurve(curve: FloatArray, input: Float): Float {
+        val position = input.coerceIn(0f, 1f) * (curve.size - 1)
+        val lowerIndex = position.toInt().coerceIn(0, curve.lastIndex)
+        val upperIndex = (lowerIndex + 1).coerceAtMost(curve.lastIndex)
+        return curve[lowerIndex] +
+            (curve[upperIndex] - curve[lowerIndex]) * (position - lowerIndex)
+    }
+
+    private fun inverseUniformCurve(curve: FloatArray, output: Float): Float {
+        val target = output.coerceIn(0f, 1f)
+        if (target <= curve.first()) return 0f
+        if (target >= curve.last()) return 1f
+
+        var lowerIndex = 0
+        var upperIndex = curve.lastIndex
+        while (lowerIndex + 1 < upperIndex) {
+            val middleIndex = (lowerIndex + upperIndex) ushr 1
+            if (curve[middleIndex] < target) {
+                lowerIndex = middleIndex
+            } else {
+                upperIndex = middleIndex
+            }
+        }
+        val lower = curve[lowerIndex]
+        val upper = curve[upperIndex]
+        val amount = if (upper > lower) {
+            (target - lower) / (upper - lower)
+        } else {
+            0f
+        }
+        return (lowerIndex + amount) / curve.lastIndex.toFloat()
+    }
+
+    private fun srgbToLinear(value: Float): Float {
+        return if (value <= 0.04045f) {
+            value / 12.92f
+        } else {
+            ((value + 0.055f) / 1.055f).toDouble().pow(2.4).toFloat()
+        }
+    }
+
+    private fun linearToSrgb(value: Float): Float {
+        val clamped = value.coerceAtLeast(0f)
+        return if (clamped <= 0.0031308f) {
+            clamped * 12.92f
+        } else {
+            (1.055 * clamped.toDouble().pow(1.0 / 2.4) - 0.055).toFloat()
+        }
     }
 
     fun oppoEmbeddedToneCurvePoints(): FloatArray {

@@ -5,6 +5,9 @@ plugins {
 
 val syncedSourceDir = layout.buildDirectory.dir("generated/previewhook/syncedSrc")
 val freshMgcClasses4 = layout.projectDirectory.file("../MGC/MGC_9.6.080_V24_MGC/classes4.dex")
+val fixedMgcBasicToneAssets = layout.projectDirectory.dir(
+    "../MGC/MGC_9.6.080_V24_MGC/assets/internal/basic_tone"
+)
 
 android {
     namespace = "com.hinnka.mycamera.previewhook"
@@ -36,6 +39,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     compileOnly(libs.androidx.material.icons.core)
+    testImplementation(libs.junit)
 }
 
 val syncPreviewhookSources by tasks.registering(Sync::class) {
@@ -43,6 +47,9 @@ val syncPreviewhookSources by tasks.registering(Sync::class) {
     from(appSrc) {
         include("com/hinnka/mycamera/color/TransferCurve.kt")
         include("com/hinnka/mycamera/lut/Shaders.kt")
+        include("com/hinnka/mycamera/lut/BloomLdrSettings.kt")
+        include("com/hinnka/mycamera/lut/CameraRawCalibrationMatrix.kt")
+        include("com/hinnka/mycamera/lut/CurveUtils.kt")
         include("com/hinnka/mycamera/lut/PreviewColorShader.kt")
         include("com/hinnka/mycamera/lut/PreviewColorShaderModules.kt")
         include("com/hinnka/mycamera/lut/PreviewShadowsHighlightsShader.kt")
@@ -52,6 +59,9 @@ val syncPreviewhookSources by tasks.registering(Sync::class) {
         include("com/hinnka/mycamera/model/ColorPaletteMapper.kt")
         include("com/hinnka/mycamera/model/ColorPaletteState.kt")
         include("com/hinnka/mycamera/raw/ColorSpace.kt")
+        include("com/hinnka/mycamera/raw/DcpToneCurve.kt")
+        include("com/hinnka/mycamera/raw/DngProfileToneCurve.kt")
+        include("com/hinnka/mycamera/raw/RawProfileToneMapMode.kt")
     }
     into(syncedSourceDir)
 }
@@ -64,10 +74,18 @@ tasks.named("preBuild") {
     dependsOn(syncPreviewhookSources)
 }
 
+val syncMgcBasicToneAssets by tasks.registering(Sync::class) {
+    from(layout.projectDirectory.dir("../app/src/main/assets/internal/basic_tone")) {
+        include("low_key_32f.bin")
+        include("high_key_32f.bin")
+    }
+    into(fixedMgcBasicToneAssets)
+}
+
 val assembleStandaloneDexRelease by tasks.registering {
     group = "build"
     description = "Assemble standalone dex for preview hook release"
-    dependsOn(previewhookClassesJar)
+    dependsOn(previewhookClassesJar, syncMgcBasicToneAssets)
 
     val outputDir = layout.buildDirectory.dir("outputs/standalone-dex/release")
     val outputDex = outputDir.map { it.file("classes.dex") }

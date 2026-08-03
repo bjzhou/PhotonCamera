@@ -145,11 +145,6 @@ object MgcSurfaceProxyPreviewRenderer {
                 0f, 0f, 1f, 0f,
                 0f, 0f, 0f, 1f,
             )
-            private val IDENTITY_MATRIX3 = floatArrayOf(
-                1f, 0f, 0f,
-                0f, 1f, 0f,
-                0f, 0f, 1f,
-            )
             private val VERTICES = floatArrayOf(
                 -1f, -1f,
                 1f, -1f,
@@ -179,6 +174,7 @@ object MgcSurfaceProxyPreviewRenderer {
         private var uploadedSnapshotVersion = -1
         private var currentImage: ImageBinding? = null
         private val imageHistory = ArrayDeque<ImageBinding>()
+        private val recipeTextureBindings = MgcRecipeTextureBindings()
 
         init {
             start()
@@ -328,8 +324,8 @@ object MgcSurfaceProxyPreviewRenderer {
                     GLES30.glUseProgram(programId)
                     bindInputTexture()
                     bindLutTexture(snapshot)
-                    bindBasicToneTexture()
-                    bindCurveTexture()
+                    bindBasicToneTexture(snapshot)
+                    bindCurveTexture(snapshot)
                     bindMatricesAndGeometry(params)
                     bindSnapshotUniforms(snapshot, params.buffer, viewWidth, viewHeight)
                     drawQuad(params.rotationDegrees, params.transformFlags)
@@ -385,18 +381,22 @@ object MgcSurfaceProxyPreviewRenderer {
             uniform1i("uLutTexture", 1)
         }
 
-        private fun bindBasicToneTexture() {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, dummyLutTextureId)
-            uniform1i("uBasicToneLut", 2)
-            uniform1f("uBasicToneIntensity", 0f)
+        private fun bindBasicToneTexture(snapshot: MgcVfeLutSnapshot) {
+            recipeTextureBindings.bindBasicTone(
+                programId = programId,
+                snapshot = snapshot,
+                textureUnit = 2,
+                dummyTextureId = dummyLutTextureId,
+            )
         }
 
-        private fun bindCurveTexture() {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, dummyCurveTextureId)
-            uniform1i("uCurveTexture", 3)
-            uniform1i("uCurveEnabled", 0)
+        private fun bindCurveTexture(snapshot: MgcVfeLutSnapshot) {
+            recipeTextureBindings.bindCurve(
+                programId = programId,
+                snapshot = snapshot,
+                textureUnit = 3,
+                dummyTextureId = dummyCurveTextureId,
+            )
         }
 
         private fun bindMatricesAndGeometry(params: RenderParams) {
@@ -456,11 +456,21 @@ object MgcSurfaceProxyPreviewRenderer {
             uniform1f("uLowRes", snapshot.lowRes)
             uniform1f("uAspectRatio", viewWidth.toFloat() / viewHeight.coerceAtLeast(1).toFloat())
             uniform1f("uFlash", 0f)
-            uniform3f("uGradingHues", 0f, 0f, 0f)
-            uniform3f("uGradingAmounts", 0f, 0f, 0f)
-            uniform1f("uGradingBalance", 0f)
-            uniform1f("uGradingBlending", 0f)
-            uniformMatrix3("uPrimaryCalibrationMatrix", IDENTITY_MATRIX3)
+            uniform3f(
+                "uGradingHues",
+                snapshot.gradingHues[0],
+                snapshot.gradingHues[1],
+                snapshot.gradingHues[2],
+            )
+            uniform3f(
+                "uGradingAmounts",
+                snapshot.gradingAmounts[0],
+                snapshot.gradingAmounts[1],
+                snapshot.gradingAmounts[2],
+            )
+            uniform1f("uGradingBalance", snapshot.gradingBalance)
+            uniform1f("uGradingBlending", snapshot.gradingBlending)
+            uniformMatrix3("uPrimaryCalibrationMatrix", snapshot.primaryCalibrationMatrix)
             uniform1fArray("uLchHueAdjustments[0]", snapshot.lchHueAdjustments)
             uniform1fArray("uLchChromaAdjustments[0]", snapshot.lchChromaAdjustments)
             uniform1fArray("uLchLightnessAdjustments[0]", snapshot.lchLightnessAdjustments)
@@ -574,6 +584,7 @@ object MgcSurfaceProxyPreviewRenderer {
                     while (imageHistory.isNotEmpty()) {
                         imageHistory.removeFirst().close()
                     }
+                    recipeTextureBindings.release()
                     if (inputTextureId != 0) {
                         GLES30.glDeleteTextures(1, intArrayOf(inputTextureId), 0)
                         inputTextureId = 0
