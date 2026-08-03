@@ -80,6 +80,7 @@ object PhotonLookClient {
             val snapshot = readSnapshot(appContext, authority) ?: continue
             registerObserver(appContext, authority)
             lastSuccessfulAuthority = authority
+            MgcPhotonLookStore.write(appContext, snapshot.cacheRecord)
             val changed = MgcVfeLutRuntime.applyPhotonLook(
                 signature = snapshot.signature,
                 lutConfig = snapshot.lutConfig,
@@ -94,7 +95,23 @@ object PhotonLookClient {
             }
             return true
         }
-        Log.d(TAG, "Photon look provider unavailable")
+        val cachedSnapshot = readCachedSnapshot(appContext)
+        if (cachedSnapshot != null) {
+            val changed = MgcVfeLutRuntime.applyPhotonLook(
+                signature = cachedSnapshot.signature,
+                lutConfig = cachedSnapshot.lutConfig,
+                recipeParams = cachedSnapshot.recipeParams,
+            )
+            if (changed) {
+                Log.d(
+                    TAG,
+                    "restored persisted Photon look lut=${cachedSnapshot.lutId ?: "none"} " +
+                        "size=${cachedSnapshot.lutConfig?.size ?: 0}",
+                )
+            }
+            return true
+        }
+        Log.d(TAG, "Photon look provider and persisted cache unavailable")
         return false
     }
 
@@ -123,9 +140,35 @@ object PhotonLookClient {
         }
 
         val lutId = bundle.getString(EXTRA_LUT_ID)
+        val lutTitle = bundle.getString(EXTRA_LUT_TITLE).orEmpty()
+        val lutSize = bundle.getInt(EXTRA_LUT_SIZE, 0)
+        val lutDataType = bundle.getInt(
+            EXTRA_LUT_DATA_TYPE,
+            LutConfig.CONFIG_DATA_TYPE_UINT8,
+        )
+        val lutCurveShaderId = bundle.getInt(
+            EXTRA_LUT_CURVE_ORDINAL,
+            TransferCurve.SRGB.shaderId,
+        )
+        val lutColorSpaceOrdinal = bundle.getInt(
+            EXTRA_LUT_COLOR_SPACE_ORDINAL,
+            ColorSpace.SRGB.ordinal,
+        )
         val payload = bundle.getByteArray(EXTRA_LUT_PAYLOAD)
-        val lutConfig = buildLutConfig(bundle, payload)
-        val recipe = parseRecipe(bundle.getString(EXTRA_RECIPE_JSON))
+        val recipeJson = bundle.getString(EXTRA_RECIPE_JSON).orEmpty()
+        val lutConfig = buildLutConfig(
+            size = lutSize,
+            payload = payload,
+            dataType = lutDataType,
+            title = lutTitle,
+            curveShaderId = lutCurveShaderId,
+            colorSpaceOrdinal = lutColorSpaceOrdinal,
+        )
+        if ((lutSize > 0 || payload != null) && lutConfig == null) {
+            Log.e(TAG, "Photon look contains an invalid LUT authority=$authority")
+            return null
+        }
+        val recipe = parseRecipe(recipeJson)
         val signature = bundle.getString(EXTRA_LOOK_SIGNATURE)
             ?: buildFallbackSignature(lutId, lutConfig, payload, recipe)
 
@@ -134,17 +177,53 @@ object PhotonLookClient {
             lutId = lutId,
             lutConfig = lutConfig,
             recipeParams = recipe,
+            cacheRecord = PhotonLookCacheRecord(
+                signature = signature,
+                lutId = lutId,
+                lutTitle = lutTitle,
+                lutSize = lutSize,
+                lutDataType = lutDataType,
+                lutCurveShaderId = lutCurveShaderId,
+                lutColorSpaceOrdinal = lutColorSpaceOrdinal,
+                lutPayload = payload,
+                recipeJson = recipeJson,
+            ),
         )
     }
 
-    private fun buildLutConfig(bundle: Bundle, payload: ByteArray?): LutConfig? {
-        val size = bundle.getInt(EXTRA_LUT_SIZE, 0)
+    private fun readCachedSnapshot(context: Context): PhotonLookSnapshot? {
+        val record = MgcPhotonLookStore.read(context) ?: return null
+        val lutConfig = buildLutConfig(
+            size = record.lutSize,
+            payload = record.lutPayload,
+            dataType = record.lutDataType,
+            title = record.lutTitle,
+            curveShaderId = record.lutCurveShaderId,
+            colorSpaceOrdinal = record.lutColorSpaceOrdinal,
+        )
+        if (record.lutSize > 0 && lutConfig == null) {
+            Log.e(TAG, "persisted Photon look contains an invalid LUT")
+            return null
+        }
+        return PhotonLookSnapshot(
+            signature = record.signature,
+            lutId = record.lutId,
+            lutConfig = lutConfig,
+            recipeParams = parseRecipe(record.recipeJson),
+            cacheRecord = record,
+        )
+    }
+
+    private fun buildLutConfig(
+        size: Int,
+        payload: ByteArray?,
+        dataType: Int,
+        title: String,
+        curveShaderId: Int,
+        colorSpaceOrdinal: Int,
+    ): LutConfig? {
         if (size <= 0 || payload == null || payload.isEmpty()) return null
 
-        val dataType = bundle.getInt(EXTRA_LUT_DATA_TYPE, LutConfig.CONFIG_DATA_TYPE_UINT8)
-        val title = bundle.getString(EXTRA_LUT_TITLE).orEmpty()
-        val curveShaderId = bundle.getInt(EXTRA_LUT_CURVE_ORDINAL, TransferCurve.SRGB.shaderId)
-        val colorSpaceOrdinal = bundle.getInt(EXTRA_LUT_COLOR_SPACE_ORDINAL, ColorSpace.SRGB.ordinal)
         return LutConfig(
             size = size,
             byteBuffer = ByteBuffer.allocateDirect(payload.size)
@@ -302,5 +381,6 @@ object PhotonLookClient {
         val lutId: String?,
         val lutConfig: LutConfig?,
         val recipeParams: ColorRecipeParams,
+        val cacheRecord: PhotonLookCacheRecord,
     )
 }
