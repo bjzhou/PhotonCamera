@@ -4,11 +4,24 @@ object RawHdrReferenceMath {
     const val ACR3_BLEND_START = 0.09f
     const val LINEAR_GAIN_START = 0.18f
 
-    fun exposureEv(baselineExposureEv: Float): Float =
-        DngBaselineExposure.sanitize(baselineExposureEv)
+    fun exposureEv(
+        baselineExposureEv: Float,
+        rawExposureCompensationEv: Float,
+    ): Float {
+        val baselineEv = DngBaselineExposure.sanitize(baselineExposureEv)
+        val userEv = rawExposureCompensationEv.takeIf(Float::isFinite) ?: 0f
+        return baselineEv + userEv
+    }
 
-    fun exposureGain(baselineExposureEv: Float): Float =
-        DngBaselineExposure.exactGain(baselineExposureEv)
+    fun exposureGain(
+        baselineExposureEv: Float,
+        rawExposureCompensationEv: Float,
+    ): Float = DngBaselineExposure.exactGain(
+        exposureEv(
+            baselineExposureEv = baselineExposureEv,
+            rawExposureCompensationEv = rawExposureCompensationEv,
+        )
+    )
 
     fun toneValue(value: Float, curve: FloatArray = ACR3Curve.samples()): Float {
         val safeValue = value.coerceAtLeast(0f)

@@ -14,6 +14,7 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
@@ -1027,6 +1028,7 @@ class RawDemosaicProcessor {
         val outputSourceBounds: Rect,
         val rotation: Int,
         val includeHdrReference: Boolean,
+        val rawExposureCompensation: Float,
         val chromaDenoiseValue: Float?,
         val denoiseValue: Float?,
         val sharpeningValue: Float,
@@ -2516,6 +2518,7 @@ class RawDemosaicProcessor {
                         outputSourceBounds = outputSourceBounds,
                         rotation = actualRotation,
                         includeHdrReference = includeHdrReference,
+                        rawExposureCompensation = effectiveExposureCompensation,
                         chromaDenoiseValue = chromaDenoiseValue,
                         denoiseValue = denoiseValue,
                         sharpeningValue = sharpeningValue,
@@ -2555,13 +2558,16 @@ class RawDemosaicProcessor {
             }
 
             // The HDR reference branches directly from undenoised, demosaicked camera RGB.
-            // It intentionally excludes denoise, ProfileGainMap, edit exposure, rendering engines,
-            // their additional tone mapping, and output sharpening. The complete ACR3 reference
-            // curve is applied. Its output contract is linear extended sRGB.
+            // It intentionally excludes denoise, ProfileGainMap, rendering engines, their
+            // additional tone mapping, and output sharpening. Explicit user RAW exposure is
+            // retained so the HDR reference stays exposure-aligned with the rendered SDR base.
+            // The complete ACR3 reference curve is applied. Its output contract is linear extended
+            // sRGB.
             val hdrReferenceBitmap = if (includeHdrReference) {
                 setupHdrReferenceFramebuffer(actualWidth, actualHeight)
                 renderHdrReferencePass(
                     metadata = actualMetadata,
+                    rawExposureCompensation = effectiveExposureCompensation,
                     inputTextureId = demosaicTextureId,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     cameraWhite = linearCameraWhite,
@@ -2979,6 +2985,7 @@ class RawDemosaicProcessor {
                     setupHdrReferenceFramebuffer(workWidth, workHeight)
                     renderHdrReferencePass(
                         metadata = config.metadata,
+                        rawExposureCompensation = config.rawExposureCompensation,
                         inputTextureId = demosaicTextureId,
                         colorCorrectionMatrix = config.linearColorCorrectionMatrix,
                         cameraWhite = config.linearCameraWhite,
@@ -10483,6 +10490,7 @@ class RawDemosaicProcessor {
 
     private fun renderHdrReferencePass(
         metadata: RawMetadata,
+        rawExposureCompensation: Float,
         inputTextureId: Int,
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray,
@@ -10522,7 +10530,10 @@ class RawDemosaicProcessor {
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(hdrReferenceProgram, "uExposureGain"),
-            RawHdrReferenceMath.exposureGain(metadata.baselineExposure),
+            RawHdrReferenceMath.exposureGain(
+                baselineExposureEv = metadata.baselineExposure,
+                rawExposureCompensationEv = rawExposureCompensation,
+            ),
         )
         val acr3Curve = ACR3Curve.samples()
         bindCurveCombinedResource(hdrReferenceProgram, acr3Curve)

@@ -4,10 +4,10 @@ package com.hinnka.mycamera.raw
  * Produces the engine-independent RAW HDR reference.
  *
  * Input is the undenoised, demosaicked camera RGB texture. The pass performs only the base
- * camera/profile color work, applies the DCP HueSatMap when present, applies the exact DNG
- * BaselineExposure, applies ACR3 completely through 0.09, blends to an unnormalized linear gain
- * through 0.18, and keeps that gain for midtones and extended highlights before converting to
- * linear sRGB.
+ * camera/profile color work, applies the DCP HueSatMap when present, applies the exact combined
+ * DNG BaselineExposure and explicit user RAW exposure compensation, applies ACR3 completely
+ * through 0.09, blends to an unnormalized linear gain through 0.18, and keeps that gain for
+ * midtones and extended highlights before converting to linear sRGB.
  */
 object RawHdrReferenceShaders {
     val FRAGMENT_SHADER = """

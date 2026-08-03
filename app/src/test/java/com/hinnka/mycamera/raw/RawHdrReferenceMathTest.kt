@@ -6,21 +6,31 @@ import org.junit.Test
 
 class RawHdrReferenceMathTest {
     @Test
-    fun usesOnlyBaselineExposure() {
-        assertEquals(0f, RawHdrReferenceMath.exposureEv(0f), 0.0001f)
-        assertEquals(-0.7f, RawHdrReferenceMath.exposureEv(-0.7f), 0.0001f)
+    fun combinesBaselineAndUserExposure() {
+        assertEquals(0f, RawHdrReferenceMath.exposureEv(0f, 0f), 0.0001f)
+        assertEquals(-0.7f, RawHdrReferenceMath.exposureEv(-0.7f, 0f), 0.0001f)
+        assertEquals(0.55f, RawHdrReferenceMath.exposureEv(-0.7f, 1.25f), 0.0001f)
     }
 
     @Test
-    fun convertsBaselineExposureToExactLinearGain() {
-        assertEquals(1f, RawHdrReferenceMath.exposureGain(0f), 0.0001f)
-        assertEquals(Math.pow(2.0, -0.7).toFloat(), RawHdrReferenceMath.exposureGain(-0.7f), 0.0001f)
+    fun convertsCombinedExposureToExactLinearGain() {
+        assertEquals(1f, RawHdrReferenceMath.exposureGain(0f, 0f), 0.0001f)
+        assertEquals(
+            Math.pow(2.0, 0.55).toFloat(),
+            RawHdrReferenceMath.exposureGain(-0.7f, 1.25f),
+            0.0001f,
+        )
     }
 
     @Test
-    fun sanitizesNonFiniteBaseline() {
-        assertEquals(0f, RawHdrReferenceMath.exposureEv(Float.NaN), 0.0001f)
-        assertEquals(0f, RawHdrReferenceMath.exposureEv(Float.POSITIVE_INFINITY), 0.0001f)
+    fun sanitizesNonFiniteExposureInputsIndependently() {
+        assertEquals(1.25f, RawHdrReferenceMath.exposureEv(Float.NaN, 1.25f), 0.0001f)
+        assertEquals(-0.7f, RawHdrReferenceMath.exposureEv(-0.7f, Float.NaN), 0.0001f)
+        assertEquals(
+            0f,
+            RawHdrReferenceMath.exposureEv(Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY),
+            0.0001f,
+        )
     }
 
     @Test
